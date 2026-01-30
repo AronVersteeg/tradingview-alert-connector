@@ -80,26 +80,44 @@ export class DydxV4Client extends AbstractDexClient {
 	}
 
 	async placeOrder(alertMessage: AlertObject) {
-		const orderParams = await this.buildOrderParams(alertMessage);
-		const { client, subaccount } = await this.buildCompositeClient();
+	const clientId = this.generateDeterministicClientId(alertMessage);
+console.log('Client ID: ', clientId);
 
-		const market = orderParams.market;
-		const type = OrderType.MARKET;
-		const side = orderParams.side;
-		const timeInForce = OrderTimeInForce.GTT;
-		const execution = OrderExecution.DEFAULT;
-		const slippagePercentage = 0.05;
-		const price =
-			side == OrderSide.BUY
-				? orderParams.price * (1 + slippagePercentage)
-				: orderParams.price * (1 - slippagePercentage);
-		const size = orderParams.size;
-		const postOnly = false;
-		const reduceOnly = alertMessage.order === 'close';
-		const triggerPrice = null;
-		let count = 0;
-		const maxTries = 3;
-		const fillWaitTime = 60000; // 1 minute
+const tx = await client.placeOrder(
+  subaccount,
+  market,
+  type,
+  side,
+  price,
+  size,
+  clientId,
+  timeInForce,
+  120000,
+  execution,
+  postOnly,
+  reduceOnly,
+  triggerPrice
+);
+
+console.log('Transaction Result: ', tx);
+
+// 👉 MARKET order: acceptatie = succes
+const orderResult: OrderResult = {
+  side: orderParams.side,
+  size: orderParams.size,
+  orderId: String(clientId)
+};
+
+await this.exportOrder(
+  'DydxV4',
+  alertMessage.strategy,
+  orderResult,
+  alertMessage.price,
+  alertMessage.market
+);
+
+return orderResult;
+	}
 		
 
 	private buildCompositeClient = async () => {
