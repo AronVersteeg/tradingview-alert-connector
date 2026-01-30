@@ -98,7 +98,7 @@ export class DydxV4Client extends AbstractDexClient {
 		const reduceOnly = false;
 		const triggerPrice = null;
 		let count = 0;
-		const maxTries = 0;
+		const maxTries = 3;
 		const fillWaitTime = 60000; // 1 minute
 		while (count <= maxTries) {
 			try {
