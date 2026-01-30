@@ -100,57 +100,7 @@ export class DydxV4Client extends AbstractDexClient {
 		let count = 0;
 		const maxTries = 3;
 		const fillWaitTime = 60000; // 1 minute
-		while (count <= maxTries) {
-			try {
-				const clientId = this.generateDeterministicClientId(alertMessage);
-				console.log('Client ID: ', clientId);
-
-				const tx = await client.placeOrder(
-					subaccount,
-					market,
-					type,
-					side,
-					price,
-					size,
-					clientId,
-					timeInForce,
-					120000, // 2 minute
-					execution,
-					postOnly,
-					reduceOnly,
-					triggerPrice
-				);
-				console.log('Transaction Result: ', tx);
-				await _sleep(fillWaitTime);
-
-				const isFilled = await this.isOrderFilled(String(clientId));
-				if (!isFilled)
-					throw new Error(
-						'Order is not found/filled. Retry again, count: ' + count
-					);
-				const orderResult: OrderResult = {
-					side: orderParams.side,
-					size: orderParams.size,
-					orderId: String(clientId)
-				};
-				await this.exportOrder(
-					'DydxV4',
-					alertMessage.strategy,
-					orderResult,
-					alertMessage.price,
-					alertMessage.market
-				);
-
-				return orderResult;
-			} catch (error) {
-				console.error(error);
-				console.log('Retry again, count: ' + count);
-				count++;
-
-				await _sleep(5000);
-			}
-		}
-	}
+		
 
 	private buildCompositeClient = async () => {
 		const validatorConfig = new ValidatorConfig(
