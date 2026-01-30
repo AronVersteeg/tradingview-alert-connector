@@ -1,6 +1,33 @@
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+
 import express, { Router } from 'express';
 import { validateAlert } from '../services';
 import { DexRegistry } from '../services/dexRegistry';
+
+const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
+
+function loadStore(): Record<string, boolean> {
+  try {
+    return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveStore(store: Record<string, boolean>) {
+  fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
+  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
+}
+
+function alertHash(body: any): string {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(body))
+    .digest('hex');
+}
+
 
 const router: Router = express.Router();
 
@@ -36,6 +63,20 @@ router.get('/accounts', async (req, res) => {
 
 router.post('/', async (req, res) => {
 	console.log('Recieved Tradingview strategy alert:', req.body);
+
+	  // ---------- IDEMPOTENCY CHECK ----------
+  const store = loadStore();
+  const hash = alertHash(req.body);
+
+  if (store[hash]) {
+    console.log('⏭ Duplicate TradingView alert genegeerd');
+    return res.send('duplicate');
+  }
+
+  // Markeer meteen als verwerkt (beschermt tegen race conditions)
+  store[hash] = true;
+  saveStore(store);
+
 
 	const validated = await validateAlert(req.body);
 	if (!validated) {
