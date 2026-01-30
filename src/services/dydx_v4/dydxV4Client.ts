@@ -17,6 +17,8 @@ import { _sleep, doubleSizeIfReverseOrder } from '../../helper';
 import 'dotenv/config';
 import config from 'config';
 import { AbstractDexClient } from '../abstractDexClient';
+import crypto from 'crypto';
+
 
 export class DydxV4Client extends AbstractDexClient {
 	async getIsAccountReady() {
@@ -100,7 +102,7 @@ export class DydxV4Client extends AbstractDexClient {
 		const fillWaitTime = 60000; // 1 minute
 		while (count <= maxTries) {
 			try {
-				const clientId = this.generateRandomInt32();
+				const clientId = this.generateDeterministicClientId(alertMessage);
 				console.log('Client ID: ', clientId);
 
 				const tx = await client.placeOrder(
@@ -236,4 +238,23 @@ export class DydxV4Client extends AbstractDexClient {
 
 		return await client.account.getSubaccountOrders(localWallet.address, 0);
 	};
+
+	private generateDeterministicClientId(alert: AlertObject): number {
+	const baseString = [
+		alert.strategy,
+		alert.market,
+		alert.order,
+		alert.size,
+		alert.price
+	].join('|');
+
+	const hash = crypto
+		.createHash('sha256')
+		.update(baseString)
+		.digest('hex');
+
+	// dYdX clientId moet int32 zijn
+	return parseInt(hash.slice(0, 8), 16);
+}
+
 }
