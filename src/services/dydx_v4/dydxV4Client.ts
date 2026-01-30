@@ -230,12 +230,14 @@ async placeOrder(alertMessage: AlertObject) {
 
 	private generateDeterministicClientId(alert: AlertObject): number {
 	const baseString = [
-		alert.strategy,
-		alert.market,
-		alert.order,
-		alert.position,
-		alert.size
-	].join('|');
+  alert.strategy,
+  alert.market,
+  alert.order,
+  alert.position,
+  alert.size,
+  alert.price
+].join('|');
+
 
 	const hash = crypto
 		.createHash('sha256')
