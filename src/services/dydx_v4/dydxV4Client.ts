@@ -19,8 +19,6 @@ import config from 'config';
 import { AbstractDexClient } from '../abstractDexClient';
 import crypto from 'crypto';
 
-const STOP_LOSS_PCT = 0.01; // 1%
-
 
 export class DydxV4Client extends AbstractDexClient {
 	async getIsAccountReady() {
@@ -122,39 +120,6 @@ async placeOrder(alertMessage: AlertObject) {
   );
 
   console.log('Transaction Result:', tx);
-
-	// ---------- STOP-LOSS (market close, reduce-only) ----------
-
-const stopSide =
-  side === OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
-
-const stopPrice =
-  side === OrderSide.BUY
-    ? orderParams.price * (1 - STOP_LOSS_PCT) // 1% onder entry (long)
-    : orderParams.price * (1 + STOP_LOSS_PCT); // 1% boven entry (short)
-
-
-const stopClientId = this.generateRandomInt32();
-
-await client.placeOrder(
-  subaccount,
-  market,
-  OrderType.MARKET,       // market close
-  stopSide,
-  stopPrice,
-  size,                   // volledige positie
-  stopClientId,
-  OrderTimeInForce.GTT,
-  120000,
-  execution,
-  false,                  // postOnly
-  true,                   // 🔥 reduceOnly
-  stopPrice               // 🔥 triggerPrice
-);
-
-console.log('Stop-loss geplaatst op', stopPrice);
-
-	
 
   // MARKET order: acceptatie = succes
   const orderResult: OrderResult = {
