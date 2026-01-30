@@ -19,6 +19,8 @@ import config from 'config';
 import { AbstractDexClient } from '../abstractDexClient';
 import crypto from 'crypto';
 
+const STOP_LOSS_PCT = 0.01; // 1%
+
 
 export class DydxV4Client extends AbstractDexClient {
 	async getIsAccountReady() {
@@ -128,8 +130,9 @@ const stopSide =
 
 const stopPrice =
   side === OrderSide.BUY
-    ? orderParams.price * (1 - 0.01)   // 1% onder entry (long)
-    : orderParams.price * (1 + 0.01);  // 1% boven entry (short)
+    ? orderParams.price * (1 - STOP_LOSS_PCT) // 1% onder entry (long)
+    : orderParams.price * (1 + STOP_LOSS_PCT); // 1% boven entry (short)
+
 
 const stopClientId = this.generateRandomInt32();
 
