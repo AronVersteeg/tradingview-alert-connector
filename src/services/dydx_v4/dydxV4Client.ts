@@ -95,7 +95,7 @@ export class DydxV4Client extends AbstractDexClient {
 				: orderParams.price * (1 - slippagePercentage);
 		const size = orderParams.size;
 		const postOnly = false;
-		const reduceOnly = false;
+		const reduceOnly = alertMessage.order === 'close';
 		const triggerPrice = null;
 		let count = 0;
 		const maxTries = 3;
@@ -244,8 +244,8 @@ export class DydxV4Client extends AbstractDexClient {
 		alert.strategy,
 		alert.market,
 		alert.order,
-		alert.size,
-		alert.price
+		alert.position,
+		alert.size
 	].join('|');
 
 	const hash = crypto
@@ -253,8 +253,8 @@ export class DydxV4Client extends AbstractDexClient {
 		.update(baseString)
 		.digest('hex');
 
-	// dYdX clientId moet int32 zijn
 	return parseInt(hash.slice(0, 8), 16);
 }
+
 
 }
