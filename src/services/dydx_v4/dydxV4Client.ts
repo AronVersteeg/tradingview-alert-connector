@@ -1,118 +1,252 @@
 import {
-  BECH32_PREFIX,
-  IndexerClient,
-  CompositeClient,
-  Network,
-  SubaccountClient,
-  ValidatorConfig,
-  LocalWallet,
-  OrderExecution,
-  OrderSide,
-  OrderTimeInForce,
-  OrderType,
-  IndexerConfig
+	BECH32_PREFIX,
+	IndexerClient,
+	CompositeClient,
+	Network,
+	SubaccountClient,
+	ValidatorConfig,
+	LocalWallet,
+	OrderExecution,
+	OrderSide,
+	OrderTimeInForce,
+	OrderType,
+	IndexerConfig
 } from '@dydxprotocol/v4-client-js';
-
 import { dydxV4OrderParams, AlertObject, OrderResult } from '../../types';
-import { doubleSizeIfReverseOrder } from '../../helper';
+import { _sleep, doubleSizeIfReverseOrder } from '../../helper';
 import 'dotenv/config';
 import config from 'config';
 import { AbstractDexClient } from '../abstractDexClient';
 import crypto from 'crypto';
 
+
 export class DydxV4Client extends AbstractDexClient {
+	async getIsAccountReady() {
+		const subAccount = await this.getSubAccount();
+		if (!subAccount) return false;
 
-  /* ==================== REQUIRED ABSTRACT METHODS ==================== */
+		console.log('dydx v4 account: ' + JSON.stringify(subAccount, null, 2));
+		return (Number(subAccount.freeCollateral) > 0) as boolean;
+	}
 
-  async getIsAccountReady(): Promise<boolean> {
-    const subAccount = await this.getSubAccount();
-    if (!subAccount) return false;
-    return Number(subAccount.freeCollateral) > 0;
-  }
+	async getSubAccount() {
+		try {
+			const client = this.buildIndexerClient();
+			const localWallet = await this.generateLocalWallet();
+			if (!localWallet) return;
+			const response = await client.account.getSubaccount(
+				localWallet.address,
+				0
+			);
 
-  async placeOrder(alertMessage: AlertObject): Promise<OrderResult | void> {
-    const orderParams = await this.buildOrderParams(alertMessage);
-    const { client, subaccount } = await this.buildCompositeClient();
+			return response.subaccount;
+		} catch (error) {
+			console.error(error);
+		}
+	}
 
-    const market = orderParams.market;
-    const side = orderParams.side;
-    const size = orderParams.size;
+	async buildOrderParams(alertMessage: AlertObject) {
+		const orderSide =
+			alertMessage.order == 'buy' ? OrderSide.BUY : OrderSide.SELL;
 
-    /* ---------- POSITION GUARD (CRUCIAAL) ---------- */
+		const latestPrice = alertMessage.price;
+		console.log('latestPrice', latestPrice);
 
-    const currentPosition = await this.getCurrentPosition(market);
+		let orderSize: number;
+		if (alertMessage.sizeByLeverage) {
+			const account = await this.getSubAccount();
 
-    if (side === OrderSide.SELL) {
-      if (!currentPosition || Number(currentPosition.size) <= 0) {
-        console.log('Blocked SELL: no long position');
-        return;
-      }
-    }
+			orderSize =
+				(Number(account.equity) * Number(alertMessage.sizeByLeverage)) /
+				latestPrice;
+		} else if (alertMessage.sizeUsd) {
+			orderSize = Number(alertMessage.sizeUsd) / latestPrice;
+		} else {
+			orderSize = alertMessage.size;
+		}
 
-    if (side === OrderSide.BUY) {
-      if (currentPosition && Number(currentPosition.size) >= 0) {
-        console.log('Blocked BUY: no short position');
-        return;
-      }
-    }
+		orderSize = doubleSizeIfReverseOrder(alertMessage, orderSize);
 
-    /* ---------- ENTRY MARKET ORDER ---------- */
+		const market = alertMessage.market.replace(/_/g, '-');
 
-    const slippage = 0.05;
-    const price =
-      side === OrderSide.BUY
-        ? orderParams.price * (1 + slippage)
-        : orderParams.price * (1 - slippage);
+		const orderParams: dydxV4OrderParams = {
+			market,
+			side: orderSide,
+			size: Number(orderSize),
+			price: Number(alertMessage.price)
+		};
+		console.log('orderParams for dydx', orderParams);
+		return orderParams;
+	}
 
-    const clientId = this.generateDeterministicClientId(alertMessage);
-    console.log('Client ID:', clientId);
+async placeOrder(alertMessage: AlertObject) {
+  const orderParams = await this.buildOrderParams(alertMessage);
+  const { client, subaccount } = await this.buildCompositeClient();
 
-    const tx = await client.placeOrder(
-      subaccount,
-      market,
-      OrderType.MARKET,
-      side,
-      price,
-      size,
-      clientId,
-      OrderTimeInForce.GTT,
-      120000,
-      OrderExecution.DEFAULT,
-      false,
-      false,
-      null
-    );
+  const market = orderParams.market;
+  const type = OrderType.MARKET;
+  const side = orderParams.side;
+  const timeInForce = OrderTimeInForce.GTT;
+  const execution = OrderExecution.DEFAULT;
 
-    console.log('Transaction Result:', tx);
+  const slippagePercentage = 0.05;
+  const price =
+    side === OrderSide.BUY
+      ? orderParams.price * (1 + slippagePercentage)
+      : orderParams.price * (1 - slippagePercentage);
 
-    const result: OrderResult = {
-      side,
-      size,
-      orderId: String(clientId)
-    };
+  const size = orderParams.size;
+  const postOnly = false;
+  const reduceOnly = false;
+  const triggerPrice = null;
 
-    await this.exportOrder(
-      'DydxV4',
-      alertMessage.strategy,
-      result,
-      alertMessage.price,
-      alertMessage.market
-    );
+  const clientId = this.generateDeterministicClientId(alertMessage);
+  console.log('Client ID:', clientId);
 
-    return result;
-  }
+  const tx = await client.placeOrder(
+    subaccount,
+    market,
+    type,
+    side,
+    price,
+    size,
+    clientId,
+    timeInForce,
+    120000,
+    execution,
+    postOnly,
+    reduceOnly,
+    triggerPrice
+  );
 
-  /* ==================== POSITION & PARAMS ==================== */
+  console.log('Transaction Result:', tx);
 
-  async buildOrderParams(alertMessage: AlertObject): Promise<dydxV4OrderParams> {
-    const orderSide =
-      alertMessage.order === 'buy'
-        ? OrderSide.BUY
-        : OrderSide.SELL;
+  // MARKET order: acceptatie = succes
+  const orderResult: OrderResult = {
+    side: orderParams.side,
+    size: orderParams.size,
+    orderId: String(clientId)
+  };
 
-    let orderSize: number;
+  await this.exportOrder(
+    'DydxV4',
+    alertMessage.strategy,
+    orderResult,
+    alertMessage.price,
+    alertMessage.market
+  );
 
-    if (alertMessage.sizeByLeverage) {
-      const account = await
+  return orderResult;
+}
 
+		
+
+	private buildCompositeClient = async () => {
+		const validatorConfig = new ValidatorConfig(
+			config.get('DydxV4.ValidatorConfig.restEndpoint'),
+			'dydx-mainnet-1',
+			{
+				CHAINTOKEN_DENOM: 'adydx',
+				CHAINTOKEN_DECIMALS: 18,
+				USDC_DENOM:
+					'ibc/8E27BA2D5493AF5636760E354E46004562C46AB7EC0CC4C1CA14E9E20E2545B5',
+				USDC_GAS_DENOM: 'uusdc',
+				USDC_DECIMALS: 6
+			}
+		);
+		const network =
+			process.env.NODE_ENV == 'production'
+				? new Network('mainnet', this.getIndexerConfig(), validatorConfig)
+				: Network.testnet();
+		let client;
+		try {
+			client = await CompositeClient.connect(network);
+		} catch (e) {
+			console.error(e);
+			throw new Error('Failed to connect to dYdX v4 client');
+		}
+
+		const localWallet = await this.generateLocalWallet();
+		const subaccount = new SubaccountClient(localWallet, 0);
+		return { client, subaccount };
+	};
+
+	private generateLocalWallet = async () => {
+		if (!process.env.DYDX_V4_MNEMONIC) {
+			console.log('DYDX_V4_MNEMONIC is not set as environment variable');
+			return;
+		}
+
+		const localWallet = await LocalWallet.fromMnemonic(
+			process.env.DYDX_V4_MNEMONIC,
+			BECH32_PREFIX
+		);
+		console.log('dYdX v4 Address:', localWallet.address);
+
+		return localWallet;
+	};
+
+	private buildIndexerClient = () => {
+		const mainnetIndexerConfig = this.getIndexerConfig();
+		const indexerConfig =
+			process.env.NODE_ENV !== 'production'
+				? Network.testnet().indexerConfig
+				: mainnetIndexerConfig;
+		return new IndexerClient(indexerConfig);
+	};
+
+	private getIndexerConfig = () => {
+		return new IndexerConfig(
+			config.get('DydxV4.IndexerConfig.httpsEndpoint'),
+			config.get('DydxV4.IndexerConfig.wssEndpoint')
+		);
+	};
+
+	private generateRandomInt32(): number {
+		const maxInt32 = 2147483647;
+		return Math.floor(Math.random() * (maxInt32 + 1));
+	}
+
+	private isOrderFilled = async (clientId: string): Promise<boolean> => {
+		const orders = await this.getOrders();
+
+		const order = orders.find((order) => {
+			return order.clientId == clientId;
+		});
+		if (!order) return false;
+
+		console.log('dYdX v4 Order ID: ', order.id);
+
+		return order.status == 'FILLED';
+	};
+
+	getOrders = async () => {
+		const client = this.buildIndexerClient();
+		const localWallet = await this.generateLocalWallet();
+		if (!localWallet) return;
+
+		return await client.account.getSubaccountOrders(localWallet.address, 0);
+	};
+
+	private generateDeterministicClientId(alert: AlertObject): number {
+	const baseString = [
+  alert.strategy,
+  alert.market,
+  alert.order,
+  alert.position,
+  alert.size,
+  alert.price
+].join('|');
+
+
+	const hash = crypto
+		.createHash('sha256')
+		.update(baseString)
+		.digest('hex');
+
+	return parseInt(hash.slice(0, 8), 16);
+}
+
+
+}
 
