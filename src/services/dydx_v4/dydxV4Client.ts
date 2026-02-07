@@ -179,11 +179,13 @@ export class DydxV4Client extends AbstractDexClient {
 
           // ✅ CORRECT cancel signature
           await client.cancelOrder(
-            subaccount,
-            state.market,
-            state.stopClientId,
-            undefined
+          subaccount,
+          state.stopClientId,
+          undefined,
+          undefined,
+          undefined
           );
+
 
           const newStopId = this.generateRandomInt32();
 
