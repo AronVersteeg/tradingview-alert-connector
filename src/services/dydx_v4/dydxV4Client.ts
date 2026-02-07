@@ -20,14 +20,42 @@ import config from 'config';
 import { AbstractDexClient } from '../abstractDexClient';
 import crypto from 'crypto';
 
-/* ================= CONFIG ================= */
+/* ===================== CONFIG ===================== */
 
-const STOP_LOSS_PCT = 0.01;        // 🔥 1% stop-loss
-const STOP_LIMIT_BUFFER = 0.001;   // 🔥 0.1% limit buffer
+// % afstand van stoploss t.o.v. entry
+const STOP_LOSS_PCT = 0.01;        // 1%
+
+// wanneer stoploss mag trailen
+const TRAIL_STEP_PCT = 0.005;      // 0.5%
+
+/* ================================================== */
 
 export class DydxV4Client extends AbstractDexClient {
 
-  /* -------------------- ACCOUNT -------------------- */
+  /* ===================== REQUIRED ABSTRACT METHODS ===================== */
+
+  async getIsAccountReady(): Promise<boolean> {
+    try {
+      const sub = await this.getSubAccount();
+      return !!sub && Number(sub.freeCollateral) > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  async cancelOrder(market: string, orderId: number): Promise<void> {
+    const { client, subaccount } = await this.buildCompositeClient();
+    await client.cancelOrder(subaccount, market, orderId);
+  }
+
+  async getOrders() {
+    const client = this.buildIndexerClient();
+    const wallet = await this.generateLocalWallet();
+    if (!wallet) return [];
+    return client.account.getSubaccountOrders(wallet.address, 0);
+  }
+
+  /* ===================== ACCOUNT ===================== */
 
   async getSubAccount() {
     const client = this.buildIndexerClient();
@@ -37,7 +65,7 @@ export class DydxV4Client extends AbstractDexClient {
     return res.subaccount;
   }
 
-  /* -------------------- ORDER PARAMS -------------------- */
+  /* ===================== ORDER PARAMS ===================== */
 
   async buildOrderParams(alert: AlertObject): Promise<dydxV4OrderParams> {
     const side =
@@ -54,7 +82,7 @@ export class DydxV4Client extends AbstractDexClient {
     };
   }
 
-  /* -------------------- MAIN ENTRY -------------------- */
+  /* ===================== MAIN ENTRY ===================== */
 
   async placeOrder(alert: AlertObject) {
     const order = await this.buildOrderParams(alert);
@@ -69,8 +97,8 @@ export class DydxV4Client extends AbstractDexClient {
         ? order.price * 1.05
         : order.price * 0.95;
 
-    const clientId = this.generateDeterministicClientId(alert);
-    console.log('ENTRY Client ID:', clientId);
+    const entryClientId = this.generateDeterministicClientId(alert);
+    console.log('ENTRY clientId:', entryClientId);
 
     /* ---------- ENTRY MARKET ORDER ---------- */
 
@@ -81,7 +109,7 @@ export class DydxV4Client extends AbstractDexClient {
       side,
       entryPrice,
       size,
-      clientId,
+      entryClientId,
       OrderTimeInForce.GTT,
       120000,
       OrderExecution.DEFAULT,
@@ -90,50 +118,83 @@ export class DydxV4Client extends AbstractDexClient {
       null
     );
 
-    console.log('ENTRY placed');
-
-    /* ---------- LIMIT STOP-LOSS ---------- */
+    /* ---------- INITIAL LIMIT STOP-LOSS ---------- */
 
     const stopSide =
       side === OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
 
-    const triggerPrice =
+    let stopPrice =
       side === OrderSide.BUY
         ? order.price * (1 - STOP_LOSS_PCT)
         : order.price * (1 + STOP_LOSS_PCT);
 
-    const limitPrice =
-      side === OrderSide.BUY
-        ? triggerPrice * (1 - STOP_LIMIT_BUFFER)
-        : triggerPrice * (1 + STOP_LIMIT_BUFFER);
-
-    const slClientId = this.generateRandomInt32();
-    console.log('STOP Client ID:', slClientId);
+    let stopClientId = this.generateRandomInt32();
 
     await client.placeOrder(
       subaccount,
       market,
-      OrderType.LIMIT,          // ✅ LIMIT stop-loss
+      OrderType.LIMIT,
       stopSide,
-      limitPrice,               // ✅ limit price
+      stopPrice,
       size,
-      slClientId,
+      stopClientId,
       OrderTimeInForce.GTT,
-      120000,
+      24 * 60 * 60 * 1000,
       OrderExecution.DEFAULT,
       false,
-      true,                     // ✅ reduceOnly
-      triggerPrice              // ✅ trigger
+      true,           // reduceOnly
+      stopPrice       // triggerPrice
     );
 
-    console.log(
-      `STOP-LOSS placed | trigger=${triggerPrice} | limit=${limitPrice}`
-    );
+    console.log('STOP placed at', stopPrice);
+
+    /* ---------- TRAILING LOGIC (LIGHT STATE) ---------- */
+
+    const trailIfNeeded = async (latestPrice: number) => {
+      let newStop =
+        side === OrderSide.BUY
+          ? latestPrice * (1 - STOP_LOSS_PCT)
+          : latestPrice * (1 + STOP_LOSS_PCT);
+
+      const movedEnough =
+        side === OrderSide.BUY
+          ? newStop > stopPrice * (1 + TRAIL_STEP_PCT)
+          : newStop < stopPrice * (1 - TRAIL_STEP_PCT);
+
+      if (!movedEnough) return;
+
+      console.log('TRAIL stop from', stopPrice, 'to', newStop);
+
+      await this.cancelOrder(market, stopClientId);
+
+      stopClientId = this.generateRandomInt32();
+      stopPrice = newStop;
+
+      await client.placeOrder(
+        subaccount,
+        market,
+        OrderType.LIMIT,
+        stopSide,
+        stopPrice,
+        size,
+        stopClientId,
+        OrderTimeInForce.GTT,
+        24 * 60 * 60 * 1000,
+        OrderExecution.DEFAULT,
+        false,
+        true,
+        stopPrice
+      );
+    };
+
+    // optioneel: hier later indexer / price feed aan hangen
+
+    /* ---------- EXPORT ---------- */
 
     const result: OrderResult = {
       side,
       size,
-      orderId: String(clientId)
+      orderId: String(entryClientId)
     };
 
     await this.exportOrder(
@@ -147,7 +208,7 @@ export class DydxV4Client extends AbstractDexClient {
     return result;
   }
 
-  /* -------------------- CLIENT BUILDERS -------------------- */
+  /* ===================== CLIENT BUILDERS ===================== */
 
   private buildCompositeClient = async () => {
     const validator = new ValidatorConfig(
@@ -198,7 +259,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   };
 
-  /* -------------------- IDS -------------------- */
+  /* ===================== IDS ===================== */
 
   private generateDeterministicClientId(alert: AlertObject): number {
     const base = [
