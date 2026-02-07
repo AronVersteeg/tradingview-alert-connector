@@ -22,10 +22,10 @@ import crypto from 'crypto';
 
 /* ================= CONFIG ================= */
 
-const STOP_LOSS_PCT = 0.01;      // 1% initial stop
-const TRAIL_PCT = 0.005;         // 0.5% trailing distance
-const TRAIL_STEP_PCT = 0.002;    // trail only after 0.2% move
-const TRAIL_INTERVAL_MS = 5000;  // 5 sec
+const STOP_LOSS_PCT = 0.01;      // 1%
+const TRAIL_PCT = 0.005;         // 0.5%
+const TRAIL_STEP_PCT = 0.002;    // 0.2%
+const TRAIL_INTERVAL_MS = 5000;
 
 /* ========================================== */
 
@@ -40,7 +40,7 @@ type TrailingState = {
 export class DydxV4Client extends AbstractDexClient {
   private trailingState = new Map<string, TrailingState>();
 
-  /* ============== ACCOUNT ============== */
+  /* ================= ACCOUNT ================= */
 
   async getIsAccountReady() {
     const acc = await this.getSubAccount();
@@ -55,7 +55,7 @@ export class DydxV4Client extends AbstractDexClient {
     return res.subaccount;
   }
 
-  /* ============== PARAMS ============== */
+  /* ================= PARAMS ================= */
 
   async buildOrderParams(alert: AlertObject): Promise<dydxV4OrderParams> {
     const side =
@@ -72,7 +72,7 @@ export class DydxV4Client extends AbstractDexClient {
     };
   }
 
-  /* ============== ENTRY + SL ============== */
+  /* ================= ENTRY + SL ================= */
 
   async placeOrder(alert: AlertObject) {
     const order = await this.buildOrderParams(alert);
@@ -86,8 +86,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     const entryClientId = this.generateDeterministicClientId(alert);
 
-    /* -------- ENTRY -------- */
-
+    // ENTRY
     await client.placeOrder(
       subaccount,
       order.market,
@@ -104,10 +103,8 @@ export class DydxV4Client extends AbstractDexClient {
       null
     );
 
-    /* -------- INITIAL STOP -------- */
-
+    // INITIAL STOP
     const stopSide = isLong ? OrderSide.SELL : OrderSide.BUY;
-
     const stopPrice = isLong
       ? order.price * (1 - STOP_LOSS_PCT)
       : order.price * (1 + STOP_LOSS_PCT);
@@ -126,12 +123,11 @@ export class DydxV4Client extends AbstractDexClient {
       24 * 60 * 60 * 1000,
       OrderExecution.DEFAULT,
       false,
-      true,          // reduceOnly
-      stopPrice      // trigger
+      true,
+      stopPrice
     );
 
-    /* -------- INIT TRAILING STATE -------- */
-
+    // INIT TRAILING STATE
     this.trailingState.set(
       `${alert.strategy}-${order.market}`,
       {
@@ -160,7 +156,7 @@ export class DydxV4Client extends AbstractDexClient {
     return result;
   }
 
-  /* ============== TRAILING LOOP ============== */
+  /* ================= TRAILING LOOP ================= */
 
   startTrailingLoop() {
     setInterval(async () => {
@@ -181,10 +177,12 @@ export class DydxV4Client extends AbstractDexClient {
 
           const { client, subaccount } = await this.buildCompositeClient();
 
+          // ✅ CORRECT cancel signature
           await client.cancelOrder(
             subaccount,
             state.market,
-            state.stopClientId
+            state.stopClientId,
+            undefined
           );
 
           const newStopId = this.generateRandomInt32();
@@ -214,13 +212,22 @@ export class DydxV4Client extends AbstractDexClient {
     }, TRAIL_INTERVAL_MS);
   }
 
-  /* ============== HELPERS ============== */
+  /* ================= PRICE ================= */
 
   async getLastPrice(market: string): Promise<number> {
     const client = this.buildIndexerClient();
-    const res = await client.markets.getPerpetualMarket(market);
-    return Number(res.market.oraclePrice);
+    const res = await client.markets.getPerpetualMarkets();
+
+    const m = res.markets.find(
+      (x: any) => x.market === market
+    );
+
+    if (!m) throw new Error(`Market ${market} not found`);
+
+    return Number(m.oraclePrice);
   }
+
+  /* ================= HELPERS ================= */
 
   private buildCompositeClient = async () => {
     const validator = new ValidatorConfig(
@@ -293,6 +300,7 @@ export class DydxV4Client extends AbstractDexClient {
     return Math.floor(Math.random() * 2_147_483_647);
   }
 }
+
 
 
 
