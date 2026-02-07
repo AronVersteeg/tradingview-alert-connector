@@ -22,40 +22,17 @@ import crypto from 'crypto';
 
 /* ===================== CONFIG ===================== */
 
-// % afstand van stoploss t.o.v. entry
-const STOP_LOSS_PCT = 0.01;        // 1%
+const STOP_LOSS_PCT = 0.01;   // 1% stop
+const SLIPPAGE_PCT = 0.05;
 
-// wanneer stoploss mag trailen
-const TRAIL_STEP_PCT = 0.005;      // 0.5%
-
-/* ================================================== */
+/* ================================================= */
 
 export class DydxV4Client extends AbstractDexClient {
 
-  /* ===================== REQUIRED ABSTRACT METHODS ===================== */
-
   async getIsAccountReady(): Promise<boolean> {
-    try {
-      const sub = await this.getSubAccount();
-      return !!sub && Number(sub.freeCollateral) > 0;
-    } catch {
-      return false;
-    }
+    const sub = await this.getSubAccount();
+    return !!sub && Number(sub.freeCollateral) > 0;
   }
-
-  async cancelOrder(market: string, orderId: number): Promise<void> {
-    const { client, subaccount } = await this.buildCompositeClient();
-    await client.cancelOrder(subaccount, market, orderId);
-  }
-
-  async getOrders() {
-    const client = this.buildIndexerClient();
-    const wallet = await this.generateLocalWallet();
-    if (!wallet) return [];
-    return client.account.getSubaccountOrders(wallet.address, 0);
-  }
-
-  /* ===================== ACCOUNT ===================== */
 
   async getSubAccount() {
     const client = this.buildIndexerClient();
@@ -64,8 +41,6 @@ export class DydxV4Client extends AbstractDexClient {
     const res = await client.account.getSubaccount(wallet.address, 0);
     return res.subaccount;
   }
-
-  /* ===================== ORDER PARAMS ===================== */
 
   async buildOrderParams(alert: AlertObject): Promise<dydxV4OrderParams> {
     const side =
@@ -82,8 +57,6 @@ export class DydxV4Client extends AbstractDexClient {
     };
   }
 
-  /* ===================== MAIN ENTRY ===================== */
-
   async placeOrder(alert: AlertObject) {
     const order = await this.buildOrderParams(alert);
     const { client, subaccount } = await this.buildCompositeClient();
@@ -94,13 +67,13 @@ export class DydxV4Client extends AbstractDexClient {
 
     const entryPrice =
       side === OrderSide.BUY
-        ? order.price * 1.05
-        : order.price * 0.95;
+        ? order.price * (1 + SLIPPAGE_PCT)
+        : order.price * (1 - SLIPPAGE_PCT);
 
     const entryClientId = this.generateDeterministicClientId(alert);
     console.log('ENTRY clientId:', entryClientId);
 
-    /* ---------- ENTRY MARKET ORDER ---------- */
+    /* ---------- ENTRY ---------- */
 
     await client.placeOrder(
       subaccount,
@@ -118,17 +91,18 @@ export class DydxV4Client extends AbstractDexClient {
       null
     );
 
-    /* ---------- INITIAL LIMIT STOP-LOSS ---------- */
+    /* ---------- STOP LOSS (LIMIT + TRIGGER) ---------- */
 
     const stopSide =
       side === OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
 
-    let stopPrice =
+    const stopPrice =
       side === OrderSide.BUY
         ? order.price * (1 - STOP_LOSS_PCT)
         : order.price * (1 + STOP_LOSS_PCT);
 
-    let stopClientId = this.generateRandomInt32();
+    const stopClientId = this.generateRandomInt32();
+    console.log('STOP clientId:', stopClientId);
 
     await client.placeOrder(
       subaccount,
@@ -142,54 +116,9 @@ export class DydxV4Client extends AbstractDexClient {
       24 * 60 * 60 * 1000,
       OrderExecution.DEFAULT,
       false,
-      true,           // reduceOnly
-      stopPrice       // triggerPrice
+      true,        // reduceOnly
+      stopPrice    // trigger
     );
-
-    console.log('STOP placed at', stopPrice);
-
-    /* ---------- TRAILING LOGIC (LIGHT STATE) ---------- */
-
-    const trailIfNeeded = async (latestPrice: number) => {
-      let newStop =
-        side === OrderSide.BUY
-          ? latestPrice * (1 - STOP_LOSS_PCT)
-          : latestPrice * (1 + STOP_LOSS_PCT);
-
-      const movedEnough =
-        side === OrderSide.BUY
-          ? newStop > stopPrice * (1 + TRAIL_STEP_PCT)
-          : newStop < stopPrice * (1 - TRAIL_STEP_PCT);
-
-      if (!movedEnough) return;
-
-      console.log('TRAIL stop from', stopPrice, 'to', newStop);
-
-      await this.cancelOrder(market, stopClientId);
-
-      stopClientId = this.generateRandomInt32();
-      stopPrice = newStop;
-
-      await client.placeOrder(
-        subaccount,
-        market,
-        OrderType.LIMIT,
-        stopSide,
-        stopPrice,
-        size,
-        stopClientId,
-        OrderTimeInForce.GTT,
-        24 * 60 * 60 * 1000,
-        OrderExecution.DEFAULT,
-        false,
-        true,
-        stopPrice
-      );
-    };
-
-    // optioneel: hier later indexer / price feed aan hangen
-
-    /* ---------- EXPORT ---------- */
 
     const result: OrderResult = {
       side,
@@ -208,7 +137,7 @@ export class DydxV4Client extends AbstractDexClient {
     return result;
   }
 
-  /* ===================== CLIENT BUILDERS ===================== */
+  /* ===================== CLIENT ===================== */
 
   private buildCompositeClient = async () => {
     const validator = new ValidatorConfig(
@@ -259,8 +188,6 @@ export class DydxV4Client extends AbstractDexClient {
     );
   };
 
-  /* ===================== IDS ===================== */
-
   private generateDeterministicClientId(alert: AlertObject): number {
     const base = [
       alert.strategy,
@@ -283,4 +210,5 @@ export class DydxV4Client extends AbstractDexClient {
     return Math.floor(Math.random() * 2_147_483_647);
   }
 }
+
 
