@@ -20,18 +20,31 @@ import config from 'config';
 import { AbstractDexClient } from '../abstractDexClient';
 import crypto from 'crypto';
 
-/* ===================== CONFIG ===================== */
+/* ================= CONFIG ================= */
 
-const STOP_LOSS_PCT = 0.01;   // 1% stop
-const SLIPPAGE_PCT = 0.05;
+const STOP_LOSS_PCT = 0.01;      // 1% initial stop
+const TRAIL_PCT = 0.005;         // 0.5% trailing distance
+const TRAIL_STEP_PCT = 0.002;    // trail only after 0.2% move
+const TRAIL_INTERVAL_MS = 5000;  // 5 sec
 
-/* ================================================= */
+/* ========================================== */
+
+type TrailingState = {
+  market: string;
+  side: OrderSide;
+  size: number;
+  bestPrice: number;
+  stopClientId: number;
+};
 
 export class DydxV4Client extends AbstractDexClient {
+  private trailingState = new Map<string, TrailingState>();
 
-  async getIsAccountReady(): Promise<boolean> {
-    const sub = await this.getSubAccount();
-    return !!sub && Number(sub.freeCollateral) > 0;
+  /* ============== ACCOUNT ============== */
+
+  async getIsAccountReady() {
+    const acc = await this.getSubAccount();
+    return !!acc && Number(acc.freeCollateral) > 0;
   }
 
   async getSubAccount() {
@@ -41,6 +54,8 @@ export class DydxV4Client extends AbstractDexClient {
     const res = await client.account.getSubaccount(wallet.address, 0);
     return res.subaccount;
   }
+
+  /* ============== PARAMS ============== */
 
   async buildOrderParams(alert: AlertObject): Promise<dydxV4OrderParams> {
     const side =
@@ -57,31 +72,29 @@ export class DydxV4Client extends AbstractDexClient {
     };
   }
 
+  /* ============== ENTRY + SL ============== */
+
   async placeOrder(alert: AlertObject) {
     const order = await this.buildOrderParams(alert);
     const { client, subaccount } = await this.buildCompositeClient();
 
-    const side = order.side;
-    const market = order.market;
-    const size = order.size;
+    const isLong = order.side === OrderSide.BUY;
 
-    const entryPrice =
-      side === OrderSide.BUY
-        ? order.price * (1 + SLIPPAGE_PCT)
-        : order.price * (1 - SLIPPAGE_PCT);
+    const entryPrice = isLong
+      ? order.price * 1.05
+      : order.price * 0.95;
 
     const entryClientId = this.generateDeterministicClientId(alert);
-    console.log('ENTRY clientId:', entryClientId);
 
-    /* ---------- ENTRY ---------- */
+    /* -------- ENTRY -------- */
 
     await client.placeOrder(
       subaccount,
-      market,
+      order.market,
       OrderType.MARKET,
-      side,
+      order.side,
       entryPrice,
-      size,
+      order.size,
       entryClientId,
       OrderTimeInForce.GTT,
       120000,
@@ -91,38 +104,48 @@ export class DydxV4Client extends AbstractDexClient {
       null
     );
 
-    /* ---------- STOP LOSS (LIMIT + TRIGGER) ---------- */
+    /* -------- INITIAL STOP -------- */
 
-    const stopSide =
-      side === OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
+    const stopSide = isLong ? OrderSide.SELL : OrderSide.BUY;
 
-    const stopPrice =
-      side === OrderSide.BUY
-        ? order.price * (1 - STOP_LOSS_PCT)
-        : order.price * (1 + STOP_LOSS_PCT);
+    const stopPrice = isLong
+      ? order.price * (1 - STOP_LOSS_PCT)
+      : order.price * (1 + STOP_LOSS_PCT);
 
     const stopClientId = this.generateRandomInt32();
-    console.log('STOP clientId:', stopClientId);
 
     await client.placeOrder(
       subaccount,
-      market,
+      order.market,
       OrderType.LIMIT,
       stopSide,
       stopPrice,
-      size,
+      order.size,
       stopClientId,
       OrderTimeInForce.GTT,
       24 * 60 * 60 * 1000,
       OrderExecution.DEFAULT,
       false,
-      true,        // reduceOnly
-      stopPrice    // trigger
+      true,          // reduceOnly
+      stopPrice      // trigger
+    );
+
+    /* -------- INIT TRAILING STATE -------- */
+
+    this.trailingState.set(
+      `${alert.strategy}-${order.market}`,
+      {
+        market: order.market,
+        side: order.side,
+        size: order.size,
+        bestPrice: order.price,
+        stopClientId
+      }
     );
 
     const result: OrderResult = {
-      side,
-      size,
+      side: order.side,
+      size: order.size,
       orderId: String(entryClientId)
     };
 
@@ -137,7 +160,67 @@ export class DydxV4Client extends AbstractDexClient {
     return result;
   }
 
-  /* ===================== CLIENT ===================== */
+  /* ============== TRAILING LOOP ============== */
+
+  startTrailingLoop() {
+    setInterval(async () => {
+      for (const state of this.trailingState.values()) {
+        try {
+          const price = await this.getLastPrice(state.market);
+          const isLong = state.side === OrderSide.BUY;
+
+          const improved = isLong
+            ? price > state.bestPrice * (1 + TRAIL_STEP_PCT)
+            : price < state.bestPrice * (1 - TRAIL_STEP_PCT);
+
+          if (!improved) continue;
+
+          const newStop = isLong
+            ? price * (1 - TRAIL_PCT)
+            : price * (1 + TRAIL_PCT);
+
+          const { client, subaccount } = await this.buildCompositeClient();
+
+          await client.cancelOrder(
+            subaccount,
+            state.market,
+            state.stopClientId
+          );
+
+          const newStopId = this.generateRandomInt32();
+
+          await client.placeOrder(
+            subaccount,
+            state.market,
+            OrderType.LIMIT,
+            isLong ? OrderSide.SELL : OrderSide.BUY,
+            newStop,
+            state.size,
+            newStopId,
+            OrderTimeInForce.GTT,
+            24 * 60 * 60 * 1000,
+            OrderExecution.DEFAULT,
+            false,
+            true,
+            newStop
+          );
+
+          state.bestPrice = price;
+          state.stopClientId = newStopId;
+        } catch (e) {
+          console.error('Trailing error:', e);
+        }
+      }
+    }, TRAIL_INTERVAL_MS);
+  }
+
+  /* ============== HELPERS ============== */
+
+  async getLastPrice(market: string): Promise<number> {
+    const client = this.buildIndexerClient();
+    const res = await client.markets.getPerpetualMarket(market);
+    return Number(res.market.oraclePrice);
+  }
 
   private buildCompositeClient = async () => {
     const validator = new ValidatorConfig(
@@ -210,5 +293,6 @@ export class DydxV4Client extends AbstractDexClient {
     return Math.floor(Math.random() * 2_147_483_647);
   }
 }
+
 
 
