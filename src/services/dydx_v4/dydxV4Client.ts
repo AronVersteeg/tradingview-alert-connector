@@ -1,306 +1,227 @@
 import {
-  BECH32_PREFIX,
-  IndexerClient,
-  CompositeClient,
-  Network,
-  SubaccountClient,
-  ValidatorConfig,
-  LocalWallet,
-  OrderExecution,
-  OrderSide,
-  OrderTimeInForce,
-  OrderType,
-  IndexerConfig
+	BECH32_PREFIX,
+	IndexerClient,
+	CompositeClient,
+	Network,
+	SubaccountClient,
+	ValidatorConfig,
+	LocalWallet,
+	OrderExecution,
+	OrderSide,
+	OrderTimeInForce,
+	OrderType,
+	IndexerConfig
 } from '@dydxprotocol/v4-client-js';
-
 import { dydxV4OrderParams, AlertObject, OrderResult } from '../../types';
-import { doubleSizeIfReverseOrder } from '../../helper';
+import { _sleep, doubleSizeIfReverseOrder } from '../../helper';
 import 'dotenv/config';
 import config from 'config';
-import { AbstractDexClient } from '../abstractDexClient';
 import crypto from 'crypto';
-
-/* ================= CONFIG ================= */
-
-const STOP_LOSS_PCT = 0.01;      // 1%
-const TRAIL_PCT = 0.005;         // 0.5%
-const TRAIL_STEP_PCT = 0.002;    // 0.2%
-const TRAIL_INTERVAL_MS = 5000;
-
-/* ========================================== */
-
-type TrailingState = {
-  market: string;
-  side: OrderSide;
-  size: number;
-  bestPrice: number;
-  stopClientId: number;
-};
+import { AbstractDexClient } from '../abstractDexClient';
 
 export class DydxV4Client extends AbstractDexClient {
-  private trailingState = new Map<string, TrailingState>();
 
-  /* ================= ACCOUNT ================= */
+	// =========================
+	// ACCOUNT
+	// =========================
 
-  async getIsAccountReady() {
-    const acc = await this.getSubAccount();
-    return !!acc && Number(acc.freeCollateral) > 0;
-  }
+	async getIsAccountReady() {
+		const subAccount = await this.getSubAccount();
+		if (!subAccount) return false;
+		return Number(subAccount.freeCollateral) > 0;
+	}
 
-  async getSubAccount() {
-    const client = this.buildIndexerClient();
-    const wallet = await this.generateLocalWallet();
-    if (!wallet) return;
-    const res = await client.account.getSubaccount(wallet.address, 0);
-    return res.subaccount;
-  }
+	async getSubAccount() {
+		try {
+			const client = this.buildIndexerClient();
+			const localWallet = await this.generateLocalWallet();
+			if (!localWallet) return;
+			const response = await client.account.getSubaccount(localWallet.address, 0);
+			return response.subaccount;
+		} catch (error) {
+			console.error(error);
+		}
+	}
 
-  /* ================= PARAMS ================= */
+	// =========================
+	// ORDER PARAMS
+	// =========================
 
-  async buildOrderParams(alert: AlertObject): Promise<dydxV4OrderParams> {
-    const side =
-      alert.order === 'buy' ? OrderSide.BUY : OrderSide.SELL;
+	async buildOrderParams(alertMessage: AlertObject) {
+		const orderSide =
+			alertMessage.order === 'buy' ? OrderSide.BUY : OrderSide.SELL;
 
-    let size = Number(alert.size);
-    size = doubleSizeIfReverseOrder(alert, size);
+		const latestPrice = Number(alertMessage.price);
 
-    return {
-      market: alert.market.replace(/_/g, '-'),
-      side,
-      size,
-      price: Number(alert.price)
-    };
-  }
+		let orderSize: number;
+		if (alertMessage.sizeByLeverage) {
+			const account = await this.getSubAccount();
+			orderSize =
+				(Number(account.equity) * Number(alertMessage.sizeByLeverage)) /
+				latestPrice;
+		} else if (alertMessage.sizeUsd) {
+			orderSize = Number(alertMessage.sizeUsd) / latestPrice;
+		} else {
+			orderSize = Number(alertMessage.size);
+		}
 
-  /* ================= ENTRY + SL ================= */
+		orderSize = doubleSizeIfReverseOrder(alertMessage, orderSize);
 
-  async placeOrder(alert: AlertObject) {
-    const order = await this.buildOrderParams(alert);
-    const { client, subaccount } = await this.buildCompositeClient();
+		return {
+			market: alertMessage.market.replace(/_/g, '-'),
+			side: orderSide,
+			size: Number(orderSize),
+			price: latestPrice
+		} as dydxV4OrderParams;
+	}
 
-    const isLong = order.side === OrderSide.BUY;
+	// =========================
+	// MAIN ORDER FUNCTION
+	// =========================
 
-    const entryPrice = isLong
-      ? order.price * 1.05
-      : order.price * 0.95;
+	async placeOrder(alertMessage: AlertObject) {
+		const orderParams = await this.buildOrderParams(alertMessage);
+		const { client, subaccount } = await this.buildCompositeClient();
 
-    const entryClientId = this.generateDeterministicClientId(alert);
+		const clientId = this.generateDeterministicClientId(alertMessage);
+		console.log('Deterministic Client ID:', clientId);
 
-    // ENTRY
-    await client.placeOrder(
-      subaccount,
-      order.market,
-      OrderType.MARKET,
-      order.side,
-      entryPrice,
-      order.size,
-      entryClientId,
-      OrderTimeInForce.GTT,
-      120000,
-      OrderExecution.DEFAULT,
-      false,
-      false,
-      null
-    );
+		const price =
+			orderParams.side === OrderSide.BUY
+				? orderParams.price * 1.05
+				: orderParams.price * 0.95;
 
-    // INITIAL STOP
-    const stopSide = isLong ? OrderSide.SELL : OrderSide.BUY;
-    const stopPrice = isLong
-      ? order.price * (1 - STOP_LOSS_PCT)
-      : order.price * (1 + STOP_LOSS_PCT);
+		const maxTries = 3;
+		const fillWaitTime = 60000;
+		let count = 0;
 
-    const stopClientId = this.generateRandomInt32();
+		while (count <= maxTries) {
+			try {
+				const tx = await client.placeOrder(
+					subaccount,
+					orderParams.market,
+					OrderType.MARKET,
+					orderParams.side,
+					price,
+					orderParams.size,
+					clientId,
+					OrderTimeInForce.GTT,
+					120000,
+					OrderExecution.DEFAULT,
+					false,
+					false,
+					null
+				);
 
-    await client.placeOrder(
-      subaccount,
-      order.market,
-      OrderType.LIMIT,
-      stopSide,
-      stopPrice,
-      order.size,
-      stopClientId,
-      OrderTimeInForce.GTT,
-      24 * 60 * 60 * 1000,
-      OrderExecution.DEFAULT,
-      false,
-      true,
-      stopPrice
-    );
+				console.log('Transaction Result:', tx);
+				await _sleep(fillWaitTime);
 
-    // INIT TRAILING STATE
-    this.trailingState.set(
-      `${alert.strategy}-${order.market}`,
-      {
-        market: order.market,
-        side: order.side,
-        size: order.size,
-        bestPrice: order.price,
-        stopClientId
-      }
-    );
+				const isFilled = await this.isOrderFilled(String(clientId));
+				if (!isFilled)
+					throw new Error('Order not filled yet');
 
-    const result: OrderResult = {
-      side: order.side,
-      size: order.size,
-      orderId: String(entryClientId)
-    };
+				const orderResult: OrderResult = {
+					side: orderParams.side,
+					size: orderParams.size,
+					orderId: String(clientId)
+				};
 
-    await this.exportOrder(
-      'DydxV4',
-      alert.strategy,
-      result,
-      alert.price,
-      alert.market
-    );
+				await this.exportOrder(
+					'DydxV4',
+					alertMessage.strategy,
+					orderResult,
+					alertMessage.price,
+					alertMessage.market
+				);
 
-    return result;
-  }
+				return orderResult;
 
-  /* ================= TRAILING LOOP ================= */
+			} catch (error) {
+				console.error(error);
+				count++;
+				if (count > maxTries) throw error;
+				await _sleep(5000);
+			}
+		}
+	}
 
-  startTrailingLoop() {
-    setInterval(async () => {
-      for (const state of this.trailingState.values()) {
-        try {
-          const price = await this.getLastPrice(state.market);
-          const isLong = state.side === OrderSide.BUY;
+	// =========================
+	// CLIENT BUILDERS
+	// =========================
 
-          const improved = isLong
-            ? price > state.bestPrice * (1 + TRAIL_STEP_PCT)
-            : price < state.bestPrice * (1 - TRAIL_STEP_PCT);
+	private buildCompositeClient = async () => {
+		const validatorConfig = new ValidatorConfig(
+			config.get('DydxV4.ValidatorConfig.restEndpoint'),
+			'dydx-mainnet-1',
+			{
+				CHAINTOKEN_DENOM: 'adydx',
+				CHAINTOKEN_DECIMALS: 18,
+				USDC_DENOM: config.get('DydxV4.USDC_DENOM'),
+				USDC_GAS_DENOM: 'uusdc',
+				USDC_DECIMALS: 6
+			}
+		);
 
-          if (!improved) continue;
+		const network =
+			process.env.NODE_ENV === 'production'
+				? new Network('mainnet', this.getIndexerConfig(), validatorConfig)
+				: Network.testnet();
 
-          const newStop = isLong
-            ? price * (1 - TRAIL_PCT)
-            : price * (1 + TRAIL_PCT);
+		const client = await CompositeClient.connect(network);
+		const localWallet = await this.generateLocalWallet();
+		const subaccount = new SubaccountClient(localWallet, 0);
 
-          const { client, subaccount } = await this.buildCompositeClient();
+		return { client, subaccount };
+	};
 
-          // ✅ CORRECT cancel signature
-          await client.cancelOrder(
-          subaccount,
-          state.stopClientId,
-          undefined,
-          undefined,
-          undefined
-          );
+	private generateLocalWallet = async () => {
+		if (!process.env.DYDX_V4_MNEMONIC) return;
+		return LocalWallet.fromMnemonic(
+			process.env.DYDX_V4_MNEMONIC,
+			BECH32_PREFIX
+		);
+	};
 
+	private buildIndexerClient = () => {
+		const cfg =
+			process.env.NODE_ENV === 'production'
+				? this.getIndexerConfig()
+				: Network.testnet().indexerConfig;
+		return new IndexerClient(cfg);
+	};
 
-          const newStopId = this.generateRandomInt32();
+	private getIndexerConfig = () =>
+		new IndexerConfig(
+			config.get('DydxV4.IndexerConfig.httpsEndpoint'),
+			config.get('DydxV4.IndexerConfig.wssEndpoint')
+		);
 
-          await client.placeOrder(
-            subaccount,
-            state.market,
-            OrderType.LIMIT,
-            isLong ? OrderSide.SELL : OrderSide.BUY,
-            newStop,
-            state.size,
-            newStopId,
-            OrderTimeInForce.GTT,
-            24 * 60 * 60 * 1000,
-            OrderExecution.DEFAULT,
-            false,
-            true,
-            newStop
-          );
+	// =========================
+	// 🔑 DETERMINISTIC CLIENT ID
+	// =========================
 
-          state.bestPrice = price;
-          state.stopClientId = newStopId;
-        } catch (e) {
-          console.error('Trailing error:', e);
-        }
-      }
-    }, TRAIL_INTERVAL_MS);
-  }
+	private generateDeterministicClientId(alert: AlertObject): number {
+		const raw = `${alert.strategy}|${alert.market}|${alert.order}|${alert.time}`;
+		const hash = crypto.createHash('sha256').update(raw).digest('hex');
+		return parseInt(hash.substring(0, 8), 16);
+	}
 
-  /* ================= PRICE ================= */
+	// =========================
+	// ORDER CHECKS
+	// =========================
 
-  async getLastPrice(market: string): Promise<number> {
-    const client = this.buildIndexerClient();
-    const res = await client.markets.getPerpetualMarkets();
+	private isOrderFilled = async (clientId: string): Promise<boolean> => {
+		const orders = await this.getOrders();
+		const order = orders.find(o => o.clientId === clientId);
+		return order?.status === 'FILLED';
+	};
 
-    const m = res.markets.find(
-      (x: any) => x.market === market
-    );
-
-    if (!m) throw new Error(`Market ${market} not found`);
-
-    return Number(m.oraclePrice);
-  }
-
-  /* ================= HELPERS ================= */
-
-  private buildCompositeClient = async () => {
-    const validator = new ValidatorConfig(
-      config.get('DydxV4.ValidatorConfig.restEndpoint'),
-      'dydx-mainnet-1',
-      {
-        CHAINTOKEN_DENOM: 'adydx',
-        CHAINTOKEN_DECIMALS: 18,
-        USDC_DENOM:
-          'ibc/8E27BA2D5493AF5636760E354E46004562C46AB7EC0CC4C1CA14E9E20E2545B5',
-        USDC_GAS_DENOM: 'uusdc',
-        USDC_DECIMALS: 6
-      }
-    );
-
-    const network = new Network(
-      'mainnet',
-      this.getIndexerConfig(),
-      validator
-    );
-
-    const client = await CompositeClient.connect(network);
-    const wallet = await this.generateLocalWallet();
-    const subaccount = new SubaccountClient(wallet!, 0);
-
-    return { client, subaccount };
-  };
-
-  private generateLocalWallet = async () => {
-    if (!process.env.DYDX_V4_MNEMONIC) {
-      throw new Error('DYDX_V4_MNEMONIC not set');
-    }
-
-    return LocalWallet.fromMnemonic(
-      process.env.DYDX_V4_MNEMONIC,
-      BECH32_PREFIX
-    );
-  };
-
-  private buildIndexerClient = () => {
-    return new IndexerClient(this.getIndexerConfig());
-  };
-
-  private getIndexerConfig = () => {
-    return new IndexerConfig(
-      config.get('DydxV4.IndexerConfig.httpsEndpoint'),
-      config.get('DydxV4.IndexerConfig.wssEndpoint')
-    );
-  };
-
-  private generateDeterministicClientId(alert: AlertObject): number {
-    const base = [
-      alert.strategy,
-      alert.market,
-      alert.order,
-      alert.position,
-      alert.size,
-      alert.price
-    ].join('|');
-
-    const hash = crypto
-      .createHash('sha256')
-      .update(base)
-      .digest('hex');
-
-    return parseInt(hash.slice(0, 8), 16);
-  }
-
-  private generateRandomInt32(): number {
-    return Math.floor(Math.random() * 2_147_483_647);
-  }
+	getOrders = async () => {
+		const client = this.buildIndexerClient();
+		const wallet = await this.generateLocalWallet();
+		if (!wallet) return [];
+		return client.account.getSubaccountOrders(wallet.address, 0);
+	};
 }
 
 
