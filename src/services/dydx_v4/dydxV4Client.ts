@@ -36,7 +36,10 @@ export class DydxV4Client extends AbstractDexClient {
 			const client = this.buildIndexerClient();
 			const localWallet = await this.generateLocalWallet();
 			if (!localWallet) return;
-			const response = await client.account.getSubaccount(localWallet.address, 0);
+			const response = await client.account.getSubaccount(
+				localWallet.address,
+				0
+			);
 			return response.subaccount;
 		} catch (error) {
 			console.error(error);
@@ -47,99 +50,100 @@ export class DydxV4Client extends AbstractDexClient {
 	// ORDER PARAMS
 	// =========================
 
-	async buildOrderParams(alertMessage: AlertObject) {
-		const orderSide =
-			alertMessage.order === 'buy' ? OrderSide.BUY : OrderSide.SELL;
+	async buildOrderParams(alert: AlertObject) {
+		const side =
+			alert.order === 'buy' ? OrderSide.BUY : OrderSide.SELL;
 
-		const latestPrice = Number(alertMessage.price);
+		const price = Number(alert.price);
 
-		let orderSize: number;
-		if (alertMessage.sizeByLeverage) {
+		let size: number;
+		if (alert.sizeByLeverage) {
 			const account = await this.getSubAccount();
-			orderSize =
-				(Number(account.equity) * Number(alertMessage.sizeByLeverage)) /
-				latestPrice;
-		} else if (alertMessage.sizeUsd) {
-			orderSize = Number(alertMessage.sizeUsd) / latestPrice;
+			size =
+				(Number(account.equity) * Number(alert.sizeByLeverage)) /
+				price;
+		} else if (alert.sizeUsd) {
+			size = Number(alert.sizeUsd) / price;
 		} else {
-			orderSize = Number(alertMessage.size);
+			size = Number(alert.size);
 		}
 
-		orderSize = doubleSizeIfReverseOrder(alertMessage, orderSize);
+		size = doubleSizeIfReverseOrder(alert, size);
 
 		return {
-			market: alertMessage.market.replace(/_/g, '-'),
-			side: orderSide,
-			size: Number(orderSize),
-			price: latestPrice
+			market: alert.market.replace(/_/g, '-'),
+			side,
+			size,
+			price
 		} as dydxV4OrderParams;
 	}
 
 	// =========================
-	// MAIN ORDER FUNCTION
+	// PLACE ORDER (IDEMPOTENT)
 	// =========================
 
-	async placeOrder(alertMessage: AlertObject) {
-		const orderParams = await this.buildOrderParams(alertMessage);
+	async placeOrder(alert: AlertObject) {
+		const params = await this.buildOrderParams(alert);
 		const { client, subaccount } = await this.buildCompositeClient();
 
-		const clientId = this.generateDeterministicClientId(alertMessage);
-		console.log('Deterministic Client ID:', clientId);
+		// 🔑 DETERMINISTIC CLIENT ID
+		const clientId = this.generateDeterministicClientId(alert);
+		console.log('ClientId (deterministic):', clientId);
 
-		const price =
-			orderParams.side === OrderSide.BUY
-				? orderParams.price * 1.05
-				: orderParams.price * 0.95;
+		const slippage = 0.05;
+		const execPrice =
+			params.side === OrderSide.BUY
+				? params.price * (1 + slippage)
+				: params.price * (1 - slippage);
 
 		const maxTries = 3;
-		const fillWaitTime = 60000;
-		let count = 0;
+		let attempt = 0;
 
-		while (count <= maxTries) {
+		while (attempt <= maxTries) {
 			try {
 				const tx = await client.placeOrder(
 					subaccount,
-					orderParams.market,
+					params.market,
 					OrderType.MARKET,
-					orderParams.side,
-					price,
-					orderParams.size,
+					params.side,
+					execPrice,
+					params.size,
 					clientId,
 					OrderTimeInForce.GTT,
 					120000,
 					OrderExecution.DEFAULT,
-					false,
-					false,
+					false, // postOnly
+					false, // reduceOnly
 					null
 				);
 
-				console.log('Transaction Result:', tx);
-				await _sleep(fillWaitTime);
+				console.log('TX result:', tx);
 
-				const isFilled = await this.isOrderFilled(String(clientId));
-				if (!isFilled)
-					throw new Error('Order not filled yet');
+				await _sleep(60000);
 
-				const orderResult: OrderResult = {
-					side: orderParams.side,
-					size: orderParams.size,
+				const filled = await this.isOrderFilled(String(clientId));
+				if (!filled) throw new Error('Order not filled yet');
+
+				const result: OrderResult = {
+					side: params.side,
+					size: params.size,
 					orderId: String(clientId)
 				};
 
 				await this.exportOrder(
 					'DydxV4',
-					alertMessage.strategy,
-					orderResult,
-					alertMessage.price,
-					alertMessage.market
+					alert.strategy,
+					result,
+					alert.price,
+					alert.market
 				);
 
-				return orderResult;
+				return result;
 
-			} catch (error) {
-				console.error(error);
-				count++;
-				if (count > maxTries) throw error;
+			} catch (err) {
+				console.error(err);
+				attempt++;
+				if (attempt > maxTries) throw err;
 				await _sleep(5000);
 			}
 		}
@@ -168,14 +172,16 @@ export class DydxV4Client extends AbstractDexClient {
 				: Network.testnet();
 
 		const client = await CompositeClient.connect(network);
-		const localWallet = await this.generateLocalWallet();
-		const subaccount = new SubaccountClient(localWallet, 0);
+		const wallet = await this.generateLocalWallet();
+		const subaccount = new SubaccountClient(wallet, 0);
 
 		return { client, subaccount };
 	};
 
 	private generateLocalWallet = async () => {
-		if (!process.env.DYDX_V4_MNEMONIC) return;
+		if (!process.env.DYDX_V4_MNEMONIC) {
+			throw new Error('DYDX_V4_MNEMONIC not set');
+		}
 		return LocalWallet.fromMnemonic(
 			process.env.DYDX_V4_MNEMONIC,
 			BECH32_PREFIX
@@ -197,7 +203,7 @@ export class DydxV4Client extends AbstractDexClient {
 		);
 
 	// =========================
-	// 🔑 DETERMINISTIC CLIENT ID
+	// 🔑 CLIENT ID (KEY FIX)
 	// =========================
 
 	private generateDeterministicClientId(alert: AlertObject): number {
@@ -219,10 +225,10 @@ export class DydxV4Client extends AbstractDexClient {
 	getOrders = async () => {
 		const client = this.buildIndexerClient();
 		const wallet = await this.generateLocalWallet();
-		if (!wallet) return [];
 		return client.account.getSubaccountOrders(wallet.address, 0);
 	};
 }
+
 
 
 
