@@ -22,11 +22,9 @@ function saveStore(store: Record<string, boolean>) {
 }
 
 function alertHash(body: any): string {
-  return crypto
-    .createHash('sha256')
-    .update(JSON.stringify(body))
-    .digest('hex');
+  return `${body.strategy}_${body.market}_${body.time}`;
 }
+
 
 
 const router: Router = express.Router();
