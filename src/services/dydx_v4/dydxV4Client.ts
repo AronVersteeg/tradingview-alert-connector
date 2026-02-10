@@ -12,7 +12,7 @@ import {
 	OrderType,
 	IndexerConfig
 } from '@dydxprotocol/v4-client-js';
-import { AlertObject, OrderResult } from '../../types';
+import { AlertObject } from '../../types';
 import { _sleep } from '../../helper';
 import 'dotenv/config';
 import config from 'config';
@@ -23,9 +23,12 @@ const processedSignals = new Set<string>();
 
 export class DydxV4Client extends AbstractDexClient {
 
-	// =========================
-	// MAIN ENTRY
-	// =========================
+	// ===== REQUIRED BY AbstractDexClient =====
+	async getIsAccountReady(): Promise<boolean> {
+		return true;
+	}
+
+	// ===== MAIN ENTRY POINT =====
 	async placeOrder(alert: AlertObject) {
 
 		// ---------- IDEMPOTENCY ----------
@@ -44,28 +47,25 @@ export class DydxV4Client extends AbstractDexClient {
 
 		// ---------- CURRENT POSITION ----------
 		const orders = await indexer.account.getSubaccountOrders(wallet.address, 0);
-		const openOrder = orders.find(o => o.status === 'OPEN');
+		const open = orders.find(o => o.status === 'OPEN');
 
-		let currentPosition: 'LONG' | 'SHORT' | 'FLAT' = 'FLAT';
-		if (openOrder) {
-			currentPosition = openOrder.side === 'BUY' ? 'LONG' : 'SHORT';
-		}
+		let current: 'LONG' | 'SHORT' | 'FLAT' = 'FLAT';
+		if (open) current = open.side === 'BUY' ? 'LONG' : 'SHORT';
 
 		const desired = alert.desired_position;
-
-		if (currentPosition === desired) {
-			console.log('No action needed, already in position:', desired);
+		if (current === desired) {
+			console.log('Already in desired position:', desired);
 			return;
 		}
 
 		// ---------- EXIT ----------
-		if (currentPosition !== 'FLAT') {
+		if (current !== 'FLAT' && open) {
 			await this.sendOrder({
 				alert,
 				client,
 				subaccount,
-				side: currentPosition === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
-				size: Math.abs(openOrder?.size || 0),
+				side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
+				size: Math.abs(open.size),
 				reduceOnly: true
 			});
 		}
@@ -83,17 +83,8 @@ export class DydxV4Client extends AbstractDexClient {
 		}
 	}
 
-	// =========================
-	// ORDER SENDER
-	// =========================
-	private async sendOrder({
-		alert,
-		client,
-		subaccount,
-		side,
-		size,
-		reduceOnly
-	}: {
+	// ===== ORDER SENDER =====
+	private async sendOrder(params: {
 		alert: AlertObject;
 		client: CompositeClient;
 		subaccount: SubaccountClient;
@@ -101,6 +92,7 @@ export class DydxV4Client extends AbstractDexClient {
 		size: number;
 		reduceOnly: boolean;
 	}) {
+		const { alert, client, subaccount, side, size, reduceOnly } = params;
 		const clientId = this.deterministicClientId(alert, side);
 
 		await client.placeOrder(
@@ -122,9 +114,7 @@ export class DydxV4Client extends AbstractDexClient {
 		await _sleep(1000);
 	}
 
-	// =========================
-	// HELPERS
-	// =========================
+	// ===== HELPERS =====
 	private deterministicClientId(alert: AlertObject, side: OrderSide): number {
 		const raw = `${alert.strategy}|${alert.market}|${alert.time}|${side}`;
 		return parseInt(
@@ -133,7 +123,7 @@ export class DydxV4Client extends AbstractDexClient {
 		);
 	}
 
-	private buildCompositeClient = async () => {
+	private async buildCompositeClient() {
 		const validatorConfig = new ValidatorConfig(
 			config.get('DydxV4.ValidatorConfig.restEndpoint'),
 			'dydx-mainnet-1',
@@ -153,30 +143,33 @@ export class DydxV4Client extends AbstractDexClient {
 
 		const client = await CompositeClient.connect(network);
 		const wallet = await this.generateLocalWallet();
+		if (!wallet) throw new Error('Wallet not found');
+
 		const subaccount = new SubaccountClient(wallet, 0);
-
 		return { client, subaccount };
-	};
+	}
 
-	private generateLocalWallet = async () => {
+	private async generateLocalWallet() {
 		if (!process.env.DYDX_V4_MNEMONIC) return;
 		return LocalWallet.fromMnemonic(process.env.DYDX_V4_MNEMONIC, BECH32_PREFIX);
-	};
+	}
 
-	private buildIndexerClient = () => {
+	private buildIndexerClient() {
 		const cfg =
 			process.env.NODE_ENV === 'production'
 				? this.getIndexerConfig()
 				: Network.testnet().indexerConfig;
 		return new IndexerClient(cfg);
-	};
+	}
 
-	private getIndexerConfig = () =>
-		new IndexerConfig(
+	private getIndexerConfig() {
+		return new IndexerConfig(
 			config.get('DydxV4.IndexerConfig.httpsEndpoint'),
 			config.get('DydxV4.IndexerConfig.wssEndpoint')
 		);
+	}
 }
+
 
 
 
