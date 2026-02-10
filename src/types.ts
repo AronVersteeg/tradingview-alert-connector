@@ -8,21 +8,25 @@ import { PositionSide } from '@perp/sdk-curie';
 import { gmxOrderType } from './services/gmx/constants';
 import { OrderSide as v4OrderSide } from '@dydxprotocol/v4-client-js';
 
+// =======================
+// ALERT OBJECT (INTENT-BASED)
+// =======================
 export type AlertObject = {
 	exchange: string;
 	strategy: string;
 	market: string;
+	price: number;
 	size?: number;
 	sizeUsd?: number;
 	sizeByLeverage?: number;
-	order: string;
-	price: number;
-	position: string;
-	reverse: boolean;
+	time: number;
+	desired_position: 'LONG' | 'SHORT' | 'FLAT';
 	passphrase?: string;
-	collateral?: string;
 };
 
+// =======================
+// DYDX V3
+// =======================
 export type dydxOrderParams = {
 	market: Market;
 	side: OrderSide;
@@ -35,6 +39,9 @@ export type dydxOrderParams = {
 	expiration: string;
 };
 
+// =======================
+// DYDX V4
+// =======================
 export type dydxV4OrderParams = {
 	market: string;
 	side: v4OrderSide;
@@ -42,6 +49,9 @@ export type dydxV4OrderParams = {
 	price: number;
 };
 
+// =======================
+// PERP
+// =======================
 export type perpOrderParams = {
 	tickerSymbol: string;
 	side: PositionSide;
@@ -50,6 +60,9 @@ export type perpOrderParams = {
 	referralCode: string;
 };
 
+// =======================
+// GMX
+// =======================
 export type gmxOrderParams = {
 	marketAddress: string;
 	isLong: boolean;
@@ -71,8 +84,12 @@ export type GmxPositionResponse = {
 	collateralAmount?: number;
 };
 
+// =======================
+// GENERIC RESULT
+// =======================
 export interface OrderResult {
 	size: number;
 	side: string;
 	orderId: string;
 }
+
