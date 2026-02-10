@@ -12,15 +12,28 @@ import { OrderSide as v4OrderSide } from '@dydxprotocol/v4-client-js';
 // ALERT OBJECT (INTENT-BASED)
 // =======================
 export type AlertObject = {
+	// ===== COMMON =====
 	exchange: string;
 	strategy: string;
 	market: string;
 	price: number;
+
+	// ===== SIZING =====
 	size?: number;
 	sizeUsd?: number;
 	sizeByLeverage?: number;
-	time: number;
-	desired_position: 'LONG' | 'SHORT' | 'FLAT';
+
+	// ===== LEGACY EVENT-BASED (KEEP!) =====
+	order?: string;
+	position?: string;
+	reverse?: boolean;
+	collateral?: string;
+
+	// ===== NEW INTENT-BASED =====
+	time?: number;
+	desired_position?: 'LONG' | 'SHORT' | 'FLAT';
+
+	// ===== MISC =====
 	passphrase?: string;
 };
 
