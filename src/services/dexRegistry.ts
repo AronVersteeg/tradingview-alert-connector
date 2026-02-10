@@ -2,16 +2,20 @@ import { AbstractDexClient } from './abstractDexClient';
 import { DydxV4Client } from './dydx_v4/dydxV4Client';
 
 export class DexRegistry {
-	getDex(dexKey: string): AbstractDexClient {
-		if (dexKey === 'dydxv4') {
-			return new DydxV4Client();
-		}
+  private registeredDexs: Map<string, AbstractDexClient>;
 
-		throw new Error(`Exchange ${dexKey} is not supported`);
-	}
+  constructor() {
+    this.registeredDexs = new Map();
+    this.registeredDexs.set('dydxv4', new DydxV4Client());
+  }
 
-	getAllDexKeys(): string[] {
-		return ['dydxv4'];
-	}
+  getDex(dexKey: string): AbstractDexClient {
+    return this.registeredDexs.get(dexKey);
+  }
+
+  getAllDexKeys(): string[] {
+    return ['dydxv4'];
+  }
 }
+
 
