@@ -3,90 +3,107 @@ import { getStrategiesDB } from '../helper';
 import { DexRegistry } from './dexRegistry';
 
 export const validateAlert = async (
-	alertMessage: AlertObject
+  alertMessage: AlertObject
 ): Promise<boolean> => {
-	// check correct alert JSON format
-	if (!Object.keys(alertMessage).length) {
-		console.error('Tradingview alert is not JSON format.');
-		return false;
-	}
 
-	// check passphrase
-	if (process.env.TRADINGVIEW_PASSPHRASE && !alertMessage.passphrase) {
-		console.error('Passphrase is not set on alert message.');
-		return false;
-	}
-	if (
-		alertMessage.passphrase &&
-		alertMessage.passphrase != process.env.TRADINGVIEW_PASSPHRASE
-	) {
-		console.error('Passphrase from tradingview alert does not match to config');
-		return false;
-	}
+  // ---------- BASIC CHECK ----------
+  if (!Object.keys(alertMessage).length) {
+    console.error('Tradingview alert is empty or not JSON.');
+    return false;
+  }
 
-	// check exchange
-	if (alertMessage.exchange) {
-		const validExchanges = new DexRegistry().getAllDexKeys();
-		if (!validExchanges.includes(alertMessage.exchange)) {
-			console.error('Exchange name must be dydx or perpetual or gmx or dydxv4');
-			return false;
-		}
-	}
+  // ---------- PASSPHRASE ----------
+  if (process.env.TRADINGVIEW_PASSPHRASE) {
+    if (!alertMessage.passphrase) {
+      console.error('Passphrase is missing in alert message.');
+      return false;
+    }
+    if (alertMessage.passphrase !== process.env.TRADINGVIEW_PASSPHRASE) {
+      console.error('Tradingview passphrase does not match.');
+      return false;
+    }
+  }
 
-	// check strategy name
-	if (!alertMessage.strategy) {
-		console.error('Strategy field of tradingview alert must not be empty');
-		return false;
-	}
+  // ---------- EXCHANGE ----------
+  if (alertMessage.exchange) {
+    const validExchanges = new DexRegistry().getAllDexKeys();
+    if (!validExchanges.includes(alertMessage.exchange)) {
+      console.error('Exchange is not supported:', alertMessage.exchange);
+      return false;
+    }
+  }
 
-	// check orderSide
-	if (alertMessage.order != 'buy' && alertMessage.order != 'sell') {
-		console.error(
-			'Side field of tradingview alert is not correct. Must be buy or sell'
-		);
-		return false;
-	}
+  // ---------- STRATEGY ----------
+  if (!alertMessage.strategy) {
+    console.error('Strategy field must not be empty.');
+    return false;
+  }
 
-	//check position
-	if (
-		alertMessage.position != 'long' &&
-		alertMessage.position != 'short' &&
-		alertMessage.position != 'flat'
-	) {
-		console.error('Position field of tradingview alert is not correct.');
-		return false;
-	}
+  // =====================================================
+  // ✅ INTENT-BASED ALERT (NEW LOGIC)
+  // =====================================================
+  if (alertMessage.desired_position) {
+    const allowed = ['LONG', 'SHORT', 'FLAT'];
+    if (!allowed.includes(alertMessage.desired_position)) {
+      console.error(
+        'desired_position must be one of LONG | SHORT | FLAT'
+      );
+      return false;
+    }
 
-	//check reverse
-	if (typeof alertMessage.reverse != 'boolean') {
-		console.error(
-			'Reverse field of tradingview alert is not correct. Must be true or false.'
-		);
-		return false;
-	}
+    // intent-alerts zijn altijd geldig
+    return true;
+  }
 
-	const [db, rootData] = getStrategiesDB();
-	console.log('strategyData', rootData[alertMessage.strategy]);
+  // =====================================================
+  // ⚠️ LEGACY ORDER-BASED ALERT (OLD LOGIC)
+  // =====================================================
 
-	const rootPath = '/' + alertMessage.strategy;
+  // check order side
+  if (alertMessage.order !== 'buy' && alertMessage.order !== 'sell') {
+    console.error(
+      'Side field of tradingview alert is not correct. Must be buy or sell'
+    );
+    return false;
+  }
 
-	if (!rootData[alertMessage.strategy]) {
-		const reversePath = rootPath + '/reverse';
-		db.push(reversePath, alertMessage.reverse);
+  // check position
+  if (
+    alertMessage.position !== 'long' &&
+    alertMessage.position !== 'short' &&
+    alertMessage.position !== 'flat'
+  ) {
+    console.error('Position field of tradingview alert is not correct.');
+    return false;
+  }
 
-		const isFirstOrderPath = rootPath + '/isFirstOrder';
-		db.push(isFirstOrderPath, 'true');
-	}
+  // check reverse
+  if (typeof alertMessage.reverse !== 'boolean') {
+    console.error(
+      'Reverse field of tradingview alert must be boolean.'
+    );
+    return false;
+  }
 
-	if (
-		alertMessage.position == 'flat' &&
-		rootData[alertMessage.strategy].isFirstOrder == 'true'
-	) {
-		console.log(
-			'this alert is first and close order, so does not create a new order.'
-		);
-		return false;
-	}
+  // ---------- STRATEGY STATE (LEGACY) ----------
+  const [db, rootData] = getStrategiesDB();
+  const rootPath = '/' + alertMessage.strategy;
 
-	return true;
+  if (!rootData[alertMessage.strategy]) {
+    db.push(rootPath + '/reverse', alertMessage.reverse);
+    db.push(rootPath + '/isFirstOrder', 'true');
+  }
+
+  if (
+    alertMessage.position === 'flat' &&
+    rootData[alertMessage.strategy]?.isFirstOrder === 'true'
+  ) {
+    console.log(
+      'First alert is flat → ignoring close without open.'
+    );
+    return false;
+  }
+
+  return true;
 };
+
