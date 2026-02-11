@@ -30,30 +30,26 @@ export class DydxV4Client extends AbstractDexClient {
   private client!: CompositeClient;
   private subaccount!: SubaccountClient;
   private indexer!: IndexerClient;
-
-  constructor() {
-    super();
-    this.initialize();
-  }
+  private initialized = false;
 
   // ================= INIT =================
 
-  private async initialize() {
+  async init(): Promise<void> {
     console.log("Initializing dYdX V4 client...");
 
     if (!process.env.DYDX_V4_MNEMONIC) {
       throw new Error("DYDX_V4_MNEMONIC missing in environment variables");
     }
 
-    // Create wallet once
-    this.wallet = LocalWallet.fromMnemonic(
+    // ----- WALLET -----
+    this.wallet = await LocalWallet.fromMnemonic(
       process.env.DYDX_V4_MNEMONIC,
       BECH32_PREFIX
     );
 
-    console.log("Wallet created:", this.wallet.address);
+    console.log("Wallet address:", this.wallet.address);
 
-    // Validator config
+    // ----- VALIDATOR CONFIG -----
     const validatorConfig = new ValidatorConfig(
       config.get('DydxV4.ValidatorConfig.restEndpoint'),
       'dydx-mainnet-1',
@@ -66,14 +62,17 @@ export class DydxV4Client extends AbstractDexClient {
       }
     );
 
+    // ----- NETWORK -----
     const network =
       process.env.NODE_ENV === 'production'
         ? new Network('mainnet', this.getIndexerConfig(), validatorConfig)
         : Network.testnet();
 
+    // ----- CLIENT -----
     this.client = await CompositeClient.connect(network);
     this.subaccount = new SubaccountClient(this.wallet, 0);
 
+    // ----- INDEXER -----
     const indexerConfig =
       process.env.NODE_ENV === 'production'
         ? this.getIndexerConfig()
@@ -81,31 +80,33 @@ export class DydxV4Client extends AbstractDexClient {
 
     this.indexer = new IndexerClient(indexerConfig);
 
-    console.log("dYdX client initialized successfully.");
+    this.initialized = true;
+    console.log("dYdX V4 client initialized successfully.");
   }
 
   async getIsAccountReady(): Promise<boolean> {
-    return !!this.wallet && !!this.client;
+    return this.initialized;
   }
 
-  // ================= MAIN ENTRY =================
+  // ================= MAIN ORDER ENTRY =================
 
-  async placeOrder(alert: AlertObject) {
+  async placeOrder(alert: AlertObject): Promise<void> {
 
-    if (!this.client || !this.wallet) {
-      throw new Error("Client not initialized");
+    if (!this.initialized) {
+      throw new Error("Client not initialized. Call init() first.");
     }
 
     const signalId = `${alert.strategy}|${alert.market}|${alert.time}`;
+
     if (processedSignals.has(signalId)) {
-      console.log('Duplicate signal ignored:', signalId);
+      console.log("Duplicate signal ignored:", signalId);
       return;
     }
     processedSignals.add(signalId);
 
     console.log("Processing signal:", signalId);
 
-    // ----- CURRENT POSITION -----
+    // ----- FETCH OPEN ORDERS -----
     const orders = await this.indexer.account.getSubaccountOrders(
       this.wallet.address,
       0
@@ -114,17 +115,20 @@ export class DydxV4Client extends AbstractDexClient {
     const open = orders.find(o => o.status === 'OPEN');
 
     let current: 'LONG' | 'SHORT' | 'FLAT' = 'FLAT';
-    if (open) current = open.side === 'BUY' ? 'LONG' : 'SHORT';
+    if (open) {
+      current = open.side === 'BUY' ? 'LONG' : 'SHORT';
+    }
 
     const desired = alert.desired_position;
 
     if (current === desired) {
-      console.log('Already in desired position:', desired);
+      console.log("Already in desired position:", desired);
       return;
     }
 
-    // ----- EXIT -----
+    // ----- EXIT POSITION -----
     if (current !== 'FLAT' && open) {
+      console.log("Closing existing position...");
       await this.sendOrder({
         alert,
         side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
@@ -133,8 +137,9 @@ export class DydxV4Client extends AbstractDexClient {
       });
     }
 
-    // ----- ENTRY -----
+    // ----- ENTER NEW POSITION -----
     if (desired !== 'FLAT') {
+      console.log("Opening new position:", desired);
       await this.sendOrder({
         alert,
         side: desired === 'LONG' ? OrderSide.BUY : OrderSide.SELL,
@@ -151,7 +156,7 @@ export class DydxV4Client extends AbstractDexClient {
     side: OrderSide;
     size: number;
     reduceOnly: boolean;
-  }) {
+  }): Promise<void> {
 
     const { alert, side, size, reduceOnly } = params;
 
@@ -190,18 +195,22 @@ export class DydxV4Client extends AbstractDexClient {
   private deterministicClientId(alert: AlertObject, side: OrderSide): number {
     const raw = `${alert.strategy}|${alert.market}|${alert.time}|${side}`;
     return parseInt(
-      crypto.createHash('sha256').update(raw).digest('hex').slice(0, 8),
+      crypto.createHash('sha256')
+        .update(raw)
+        .digest('hex')
+        .slice(0, 8),
       16
     );
   }
 
-  private getIndexerConfig() {
+  private getIndexerConfig(): IndexerConfig {
     return new IndexerConfig(
       config.get('DydxV4.IndexerConfig.httpsEndpoint'),
       config.get('DydxV4.IndexerConfig.wssEndpoint')
     );
   }
 }
+
 
 
 
