@@ -25,44 +25,74 @@ function alertHash(body: any): string {
   return `${body.strategy}_${body.market}_${body.time}`;
 }
 
+// ================= GLOBAL REGISTRY =================
 
+const dexRegistry = new DexRegistry();
+
+// ================= INITIALIZATION =================
+
+async function initializeExchanges() {
+  console.log("Initializing exchanges...");
+
+  const exchanges = ['dydxv4']; // voeg hier evt andere exchanges toe
+
+  for (const name of exchanges) {
+    const client = dexRegistry.getDex(name);
+
+    if (client && typeof (client as any).init === 'function') {
+      console.log(`Initializing ${name}...`);
+      await (client as any).init();
+      console.log(`${name} initialized.`);
+    }
+  }
+
+  console.log("All exchanges initialized.");
+}
+
+// Immediately initialize on server boot
+initializeExchanges().catch((err) => {
+  console.error("Exchange initialization failed:", err);
+  process.exit(1);
+});
+
+// ================= ROUTER =================
 
 const router: Router = express.Router();
 
 router.get('/', async (req, res) => {
-	res.send('OK');
+  res.send('OK');
 });
 
 router.get('/accounts', async (req, res) => {
-	console.log('Received GET request.');
+  console.log('Received GET /accounts request.');
 
-	const dexRegistry = new DexRegistry();
-	const dexNames = ['dydxv3', 'dydxv4', 'perpetual', 'gmx', 'bluefin'];
-	const dexClients = dexNames.map((name) => dexRegistry.getDex(name));
+  const dexNames = ['dydxv3', 'dydxv4', 'perpetual', 'gmx', 'bluefin'];
+  const dexClients = dexNames.map((name) => dexRegistry.getDex(name));
 
-	try {
-		const accountStatuses = await Promise.all(
-			dexClients.map((client) => client.getIsAccountReady())
-		);
+  try {
+    const accountStatuses = await Promise.all(
+      dexClients.map((client) => client.getIsAccountReady())
+    );
 
-		const message = {
-			dYdX_v3: accountStatuses[0], // dydxv3
-			dYdX_v4: accountStatuses[1], // dydxv4
-			PerpetualProtocol: accountStatuses[2], // perpetual
-			GMX: accountStatuses[3], // gmx
-			Bluefin: accountStatuses[4] // bluefin
-		};
-		res.send(message);
-	} catch (error) {
-		console.error('Failed to get account readiness:', error);
-		res.status(500).send('Internal server error');
-	}
+    const message = {
+      dYdX_v3: accountStatuses[0],
+      dYdX_v4: accountStatuses[1],
+      PerpetualProtocol: accountStatuses[2],
+      GMX: accountStatuses[3],
+      Bluefin: accountStatuses[4]
+    };
+
+    res.send(message);
+  } catch (error) {
+    console.error('Failed to get account readiness:', error);
+    res.status(500).send('Internal server error');
+  }
 });
 
 router.post('/', async (req, res) => {
-	console.log('Recieved Tradingview strategy alert:', req.body);
+  console.log('Received TradingView strategy alert:', req.body);
 
-	  // ---------- IDEMPOTENCY CHECK ----------
+  // ---------- IDEMPOTENCY ----------
   const store = loadStore();
   const hash = alertHash(req.body);
 
@@ -71,41 +101,33 @@ router.post('/', async (req, res) => {
     return res.send('duplicate');
   }
 
-  // Markeer meteen als verwerkt (beschermt tegen race conditions)
   store[hash] = true;
   saveStore(store);
 
+  const validated = await validateAlert(req.body);
+  if (!validated) {
+    return res.send('Error. alert message is not valid');
+  }
 
-	const validated = await validateAlert(req.body);
-	if (!validated) {
-		res.send('Error. alert message is not valid');
-		return;
-	}
-		
-	// set dydxv3 by default for backwards compatibility
-	const exchange = req.body['exchange']?.toLowerCase() || 'dydxv3';
+  const exchange = req.body['exchange']?.toLowerCase() || 'dydxv3';
 
-	const dexClient = new DexRegistry().getDex(exchange);
+  const dexClient = dexRegistry.getDex(exchange);
 
-	if (!dexClient) {
-		res.send(`Error. Exchange: ${exchange} is not supported`);
-		return;
-	}
+  if (!dexClient) {
+    return res.send(`Error. Exchange: ${exchange} is not supported`);
+  }
 
-	// TODO: add check if dex client isReady 
-
-	try {
-		const result = await dexClient.placeOrder(req.body);
-
-		res.send('OK');
-		// checkAfterPosition(req.body);
-	} catch (e) {
-		res.send('error');
-	}
+  try {
+    await dexClient.placeOrder(req.body);
+    res.send('OK');
+  } catch (e) {
+    console.error('Order placement failed:', e);
+    res.status(500).send('error');
+  }
 });
 
 router.get('/debug-sentry', function mainHandler(req, res) {
-	throw new Error('My first Sentry error!');
+  throw new Error('My first Sentry error!');
 });
 
 export default router;
