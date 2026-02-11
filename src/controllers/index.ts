@@ -34,12 +34,17 @@ const dexRegistry = new DexRegistry();
 async function initializeExchanges() {
   console.log("Initializing exchanges...");
 
-  const exchanges = ['dydxv4']; // voeg hier evt andere exchanges toe
+  const exchanges = ['dydxv4']; // momenteel alleen v4 actief
 
   for (const name of exchanges) {
     const client = dexRegistry.getDex(name);
 
-    if (client && typeof (client as any).init === 'function') {
+    if (!client) {
+      console.warn(`Exchange ${name} not found in registry.`);
+      continue;
+    }
+
+    if (typeof (client as any).init === 'function') {
       console.log(`Initializing ${name}...`);
       await (client as any).init();
       console.log(`${name} initialized.`);
@@ -49,7 +54,7 @@ async function initializeExchanges() {
   console.log("All exchanges initialized.");
 }
 
-// Immediately initialize on server boot
+// Initialize on server boot
 initializeExchanges().catch((err) => {
   console.error("Exchange initialization failed:", err);
   process.exit(1);
@@ -63,31 +68,29 @@ router.get('/', async (req, res) => {
   res.send('OK');
 });
 
+// ================= SAFE ACCOUNTS ROUTE =================
+
 router.get('/accounts', async (req, res) => {
   console.log('Received GET /accounts request.');
 
-  const dexNames = ['dydxv3', 'dydxv4', 'perpetual', 'gmx', 'bluefin'];
-  const dexClients = dexNames.map((name) => dexRegistry.getDex(name));
-
   try {
-    const accountStatuses = await Promise.all(
-      dexClients.map((client) => client.getIsAccountReady())
-    );
+    const client = dexRegistry.getDex('dydxv4');
 
-    const message = {
-      dYdX_v3: accountStatuses[0],
-      dYdX_v4: accountStatuses[1],
-      PerpetualProtocol: accountStatuses[2],
-      GMX: accountStatuses[3],
-      Bluefin: accountStatuses[4]
-    };
+    if (!client) {
+      return res.status(500).send({ dydxv4: false, error: 'Client not found' });
+    }
 
-    res.send(message);
+    const ready = await client.getIsAccountReady();
+
+    res.send({ dydxv4: ready });
+
   } catch (error) {
     console.error('Failed to get account readiness:', error);
     res.status(500).send('Internal server error');
   }
 });
+
+// ================= ALERT HANDLER =================
 
 router.post('/', async (req, res) => {
   console.log('Received TradingView strategy alert:', req.body);
@@ -109,7 +112,7 @@ router.post('/', async (req, res) => {
     return res.send('Error. alert message is not valid');
   }
 
-  const exchange = req.body['exchange']?.toLowerCase() || 'dydxv3';
+  const exchange = req.body['exchange']?.toLowerCase() || 'dydxv4';
 
   const dexClient = dexRegistry.getDex(exchange);
 
@@ -126,8 +129,11 @@ router.post('/', async (req, res) => {
   }
 });
 
+// ================= DEBUG =================
+
 router.get('/debug-sentry', function mainHandler(req, res) {
   throw new Error('My first Sentry error!');
 });
 
 export default router;
+
