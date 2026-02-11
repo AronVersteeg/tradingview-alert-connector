@@ -36,8 +36,11 @@ const dexRegistry = new DexRegistry();
 async function initializeExchanges() {
   console.log("Initializing exchanges...");
 
-  const exchanges = ['dydxv4'];
+  saveStore({});
+  console.log("Idempotency store reset.");
 
+  const exchanges = ['dydxv4'];
+ 
   for (const name of exchanges) {
     const client = dexRegistry.getDex(name);
 
