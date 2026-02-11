@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -7,6 +6,8 @@ import { validateAlert } from '../services';
 import { DexRegistry } from '../services/dexRegistry';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
+
+// ================= STORE HELPERS =================
 
 function loadStore(): Record<string, boolean> {
   try {
@@ -21,6 +22,7 @@ function saveStore(store: Record<string, boolean>) {
   fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
 }
 
+// Only hash VALID alerts
 function alertHash(body: any): string {
   return `${body.strategy}_${body.market}_${body.time}`;
 }
@@ -34,7 +36,7 @@ const dexRegistry = new DexRegistry();
 async function initializeExchanges() {
   console.log("Initializing exchanges...");
 
-  const exchanges = ['dydxv4']; // momenteel alleen v4 actief
+  const exchanges = ['dydxv4'];
 
   for (const name of exchanges) {
     const client = dexRegistry.getDex(name);
@@ -54,7 +56,6 @@ async function initializeExchanges() {
   console.log("All exchanges initialized.");
 }
 
-// Initialize on server boot
 initializeExchanges().catch((err) => {
   console.error("Exchange initialization failed:", err);
   process.exit(1);
@@ -64,11 +65,12 @@ initializeExchanges().catch((err) => {
 
 const router: Router = express.Router();
 
+// Health check
 router.get('/', async (req, res) => {
   res.send('OK');
 });
 
-// ================= SAFE ACCOUNTS ROUTE =================
+// ================= ACCOUNTS =================
 
 router.get('/accounts', async (req, res) => {
   console.log('Received GET /accounts request.');
@@ -95,7 +97,15 @@ router.get('/accounts', async (req, res) => {
 router.post('/', async (req, res) => {
   console.log('Received TradingView strategy alert:', req.body);
 
-  // ---------- IDEMPOTENCY ----------
+  // ---------- VALIDATION FIRST ----------
+  const validated = await validateAlert(req.body);
+
+  if (!validated) {
+    console.log('❌ Invalid alert received');
+    return res.send('Error. alert message is not valid');
+  }
+
+  // ---------- IDEMPOTENCY AFTER VALIDATION ----------
   const store = loadStore();
   const hash = alertHash(req.body);
 
@@ -107,13 +117,7 @@ router.post('/', async (req, res) => {
   store[hash] = true;
   saveStore(store);
 
-  const validated = await validateAlert(req.body);
-  if (!validated) {
-    return res.send('Error. alert message is not valid');
-  }
-
   const exchange = req.body['exchange']?.toLowerCase() || 'dydxv4';
-
   const dexClient = dexRegistry.getDex(exchange);
 
   if (!dexClient) {
@@ -136,4 +140,5 @@ router.get('/debug-sentry', function mainHandler(req, res) {
 });
 
 export default router;
+
 
