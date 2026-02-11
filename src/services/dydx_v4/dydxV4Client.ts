@@ -51,16 +51,17 @@ export class DydxV4Client extends AbstractDexClient {
 
     // ----- VALIDATOR CONFIG -----
     const validatorConfig = new ValidatorConfig(
-      config.get('DydxV4.ValidatorConfig.restEndpoint'),
-      'dydx-mainnet-1',
-      {
-        CHAINTOKEN_DENOM: 'adydx',
-        CHAINTOKEN_DECIMALS: 18,
-        USDC_DENOM: config.get('DydxV4.USDC_DENOM'),
-        USDC_GAS_DENOM: 'uusdc',
-        USDC_DECIMALS: 6
-      }
-    );
+  config.get('DydxV4.ValidatorConfig.restEndpoint'),
+  'dydx-mainnet-1',
+  {
+    CHAINTOKEN_DENOM: 'adydx',
+    CHAINTOKEN_DECIMALS: 18,
+    USDC_DENOM: 'uusdc',
+    USDC_GAS_DENOM: 'uusdc',
+    USDC_DECIMALS: 6
+  }
+);
+
 
     // ----- NETWORK -----
     const network =
