@@ -87,7 +87,6 @@ export class DydxV4Client extends AbstractDexClient {
 
     const positions = response?.positions || [];
 
-    // 🔥 Alleen OPEN positions met size ≠ 0
     const openPosition = positions.find((p: any) =>
       p.market === market &&
       p.status === 'OPEN' &&
@@ -106,71 +105,9 @@ export class DydxV4Client extends AbstractDexClient {
     console.log("Detected current:", current, "Size:", currentSize);
 
     if (current === desired) {
-      console.log("Already in desired position. No action.");
+      console.log("Already correct direction.");
       return;
     }
 
-    // ===== CLOSE EXISTING =====
-    if (current !== 'FLAT') {
-      console.log("Closing existing position...");
+    i
 
-      await this.sendOrder({
-        market,
-        side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
-        size: Math.abs(currentSize),
-        reduceOnly: true
-      });
-
-      await _sleep(1000);
-    }
-
-    // ===== OPEN NEW =====
-    if (desired !== 'FLAT') {
-      console.log("Opening new position:", desired);
-
-      await this.sendOrder({
-        market,
-        side: desired === 'LONG' ? OrderSide.BUY : OrderSide.SELL,
-        size: alert.size,
-        reduceOnly: false
-      });
-    }
-  }
-
-  private async sendOrder(params: {
-    market: string;
-    side: OrderSide;
-    size: number;
-    reduceOnly: boolean;
-  }) {
-
-    const { market, side, size, reduceOnly } = params;
-
-    console.log("Sending order:", { market, side, size, reduceOnly });
-
-    const result = await this.client.placeOrder(
-      this.subaccount,
-      market,
-      OrderType.MARKET,
-      side,
-      0,
-      size,
-      parseInt(crypto.randomBytes(4).toString('hex'), 16),
-      OrderTimeInForce.GTT,
-      120000,
-      OrderExecution.DEFAULT,
-      false,
-      reduceOnly,
-      null
-    );
-
-    console.log("Order result:", result);
-  }
-
-  private getIndexerConfig(): IndexerConfig {
-    return new IndexerConfig(
-      config.get('DydxV4.IndexerConfig.httpsEndpoint'),
-      config.get('DydxV4.IndexerConfig.wssEndpoint')
-    );
-  }
-}
