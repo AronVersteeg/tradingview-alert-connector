@@ -77,9 +77,6 @@ export class DydxV4Client extends AbstractDexClient {
     const market = alert.market.replace(/_/g, '-');
     const desired = alert.desired_position;
 
-    console.log("===== NEW SIGNAL =====");
-    console.log("Alert:", alert);
-
     const response = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
       0
@@ -114,7 +111,8 @@ export class DydxV4Client extends AbstractDexClient {
         market,
         side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
         size: Math.abs(currentSize),
-        reduceOnly: true
+        reduceOnly: true,
+        price: alert.price
       });
 
       await _sleep(500);
@@ -125,7 +123,8 @@ export class DydxV4Client extends AbstractDexClient {
         market,
         side: desired === 'LONG' ? OrderSide.BUY : OrderSide.SELL,
         size: alert.size,
-        reduceOnly: false
+        reduceOnly: false,
+        price: alert.price
       });
     }
   }
@@ -135,22 +134,23 @@ export class DydxV4Client extends AbstractDexClient {
     side: OrderSide;
     size: number;
     reduceOnly: boolean;
+    price: number;
   }) {
 
-    const { market, side, size, reduceOnly } = params;
+    const { market, side, size, reduceOnly, price } = params;
 
-    console.log("Sending order:", { market, side, size, reduceOnly });
+    console.log("Sending order:", { market, side, size, reduceOnly, price });
 
     const result = await this.client.placeOrder(
       this.subaccount,
       market,
       OrderType.MARKET,
       side,
-      0,
+      price,                    // 🔥 FIX: NO MORE ZERO
       size,
       parseInt(crypto.randomBytes(4).toString('hex'), 16),
-      OrderTimeInForce.IOC,   // 🔥 FIXED
-      0,                      // 🔥 FIXED
+      OrderTimeInForce.IOC,
+      0,
       OrderExecution.DEFAULT,
       false,
       reduceOnly,
@@ -167,5 +167,6 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
