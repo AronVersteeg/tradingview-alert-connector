@@ -28,17 +28,11 @@ export class DydxV4Client extends AbstractDexClient {
   private indexer!: IndexerClient;
   private initialized = false;
 
-  // ================= INIT =================
-
   async init(): Promise<void> {
     console.log("Initializing dYdX V4 client...");
 
-    if (!process.env.DYDX_V4_MNEMONIC) {
-      throw new Error("DYDX_V4_MNEMONIC missing");
-    }
-
     this.wallet = await LocalWallet.fromMnemonic(
-      process.env.DYDX_V4_MNEMONIC,
+      process.env.DYDX_V4_MNEMONIC!,
       BECH32_PREFIX
     );
 
@@ -64,12 +58,11 @@ export class DydxV4Client extends AbstractDexClient {
     this.client = await CompositeClient.connect(network);
     this.subaccount = new SubaccountClient(this.wallet, 0);
 
-    const indexerConfig =
+    this.indexer = new IndexerClient(
       process.env.NODE_ENV === 'production'
         ? this.getIndexerConfig()
-        : Network.testnet().indexerConfig;
-
-    this.indexer = new IndexerClient(indexerConfig);
+        : Network.testnet().indexerConfig
+    );
 
     this.initialized = true;
     console.log("dYdX V4 client initialized.");
@@ -79,51 +72,44 @@ export class DydxV4Client extends AbstractDexClient {
     return this.initialized;
   }
 
-  // ================= MAIN ORDER LOGIC =================
-
   async placeOrder(alert: AlertObject): Promise<void> {
-
-    if (!this.initialized) {
-      throw new Error("Client not initialized");
-    }
 
     const market = alert.market.replace(/_/g, '-');
     const desired = alert.desired_position;
 
-    console.log("Processing signal:", alert);
-
-    // ===== GET CURRENT PERP POSITION =====
+    console.log("===== NEW SIGNAL =====");
+    console.log("Alert:", alert);
 
     const response = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
       0
     );
 
+    console.log("RAW POSITION RESPONSE:", JSON.stringify(response, null, 2));
+
     const positions = response?.positions || [];
 
-    const position = positions.find(
-      (p: any) => p.market === market
-    );
+    const position = positions.find((p: any) => p.market === market);
+
+    console.log("Matched position:", position);
 
     let current: 'LONG' | 'SHORT' | 'FLAT' = 'FLAT';
     let currentSize = 0;
 
     if (position) {
       currentSize = Number(position.size);
+      console.log("Parsed size:", currentSize);
+
       if (currentSize > 0) current = 'LONG';
       if (currentSize < 0) current = 'SHORT';
     }
 
-    console.log("Current position:", current, "Size:", currentSize);
-
-    // ===== NO CHANGE =====
+    console.log("Current detected:", current);
 
     if (current === desired) {
-      console.log("Already in desired position:", desired);
+      console.log("Already correct direction. No action.");
       return;
     }
-
-    // ===== CLOSE EXISTING =====
 
     if (current !== 'FLAT') {
       console.log("Closing existing position...");
@@ -138,8 +124,6 @@ export class DydxV4Client extends AbstractDexClient {
       await _sleep(1000);
     }
 
-    // ===== OPEN NEW =====
-
     if (desired !== 'FLAT') {
       console.log("Opening new position:", desired);
 
@@ -152,28 +136,16 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
-  // ================= ORDER SENDER =================
-
   private async sendOrder(params: {
     market: string;
     side: OrderSide;
     size: number;
     reduceOnly: boolean;
-  }): Promise<void> {
+  }) {
 
     const { market, side, size, reduceOnly } = params;
 
-    const clientId = parseInt(
-      crypto.randomBytes(4).toString('hex'),
-      16
-    );
-
-    console.log("Sending order:", {
-      market,
-      side,
-      size,
-      reduceOnly
-    });
+    console.log("Sending order:", { market, side, size, reduceOnly });
 
     const result = await this.client.placeOrder(
       this.subaccount,
@@ -182,7 +154,7 @@ export class DydxV4Client extends AbstractDexClient {
       side,
       0,
       size,
-      clientId,
+      parseInt(crypto.randomBytes(4).toString('hex'), 16),
       OrderTimeInForce.GTT,
       120000,
       OrderExecution.DEFAULT,
@@ -201,5 +173,3 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
-
-
