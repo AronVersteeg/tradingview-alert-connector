@@ -183,13 +183,19 @@ export class DydxV4Client extends AbstractDexClient {
       clientId,
       OrderTimeInForce.GTT,
       120000,
-      OrderExec
+      OrderExecution.DEFAULT,
+      false,
+      reduceOnly,
+      null
+    );
 
+    console.log("Order result:", result);
+  }
 
-
-
-
-
-
-
-
+  private getIndexerConfig(): IndexerConfig {
+    return new IndexerConfig(
+      config.get('DydxV4.IndexerConfig.httpsEndpoint'),
+      config.get('DydxV4.IndexerConfig.wssEndpoint')
+    );
+  }
+}
