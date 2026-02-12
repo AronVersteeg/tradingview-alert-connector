@@ -109,5 +109,63 @@ export class DydxV4Client extends AbstractDexClient {
       return;
     }
 
-    i
+    if (current !== 'FLAT') {
+      await this.sendOrder({
+        market,
+        side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
+        size: Math.abs(currentSize),
+        reduceOnly: true
+      });
+
+      await _sleep(500);
+    }
+
+    if (desired !== 'FLAT') {
+      await this.sendOrder({
+        market,
+        side: desired === 'LONG' ? OrderSide.BUY : OrderSide.SELL,
+        size: alert.size,
+        reduceOnly: false
+      });
+    }
+  }
+
+  private async sendOrder(params: {
+    market: string;
+    side: OrderSide;
+    size: number;
+    reduceOnly: boolean;
+  }) {
+
+    const { market, side, size, reduceOnly } = params;
+
+    console.log("Sending order:", { market, side, size, reduceOnly });
+
+    const result = await this.client.placeOrder(
+      this.subaccount,
+      market,
+      OrderType.MARKET,
+      side,
+      0,
+      size,
+      parseInt(crypto.randomBytes(4).toString('hex'), 16),
+      OrderTimeInForce.IOC,   // 🔥 FIXED
+      0,                      // 🔥 FIXED
+      OrderExecution.DEFAULT,
+      false,
+      reduceOnly,
+      null
+    );
+
+    console.log("Order result:", result);
+  }
+
+  private getIndexerConfig(): IndexerConfig {
+    return new IndexerConfig(
+      config.get('DydxV4.IndexerConfig.httpsEndpoint'),
+      config.get('DydxV4.IndexerConfig.wssEndpoint')
+    );
+  }
+}
+
 
