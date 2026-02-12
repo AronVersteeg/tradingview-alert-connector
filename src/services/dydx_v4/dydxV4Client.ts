@@ -85,32 +85,32 @@ export class DydxV4Client extends AbstractDexClient {
       0
     );
 
-    console.log("RAW POSITION RESPONSE:", JSON.stringify(response, null, 2));
-
     const positions = response?.positions || [];
 
-    const position = positions.find((p: any) => p.market === market);
-
-    console.log("Matched position:", position);
+    // 🔥 Alleen OPEN positions met size ≠ 0
+    const openPosition = positions.find((p: any) =>
+      p.market === market &&
+      p.status === 'OPEN' &&
+      Number(p.size) !== 0
+    );
 
     let current: 'LONG' | 'SHORT' | 'FLAT' = 'FLAT';
     let currentSize = 0;
 
-    if (position) {
-      currentSize = Number(position.size);
-      console.log("Parsed size:", currentSize);
-
+    if (openPosition) {
+      currentSize = Number(openPosition.size);
       if (currentSize > 0) current = 'LONG';
       if (currentSize < 0) current = 'SHORT';
     }
 
-    console.log("Current detected:", current);
+    console.log("Detected current:", current, "Size:", currentSize);
 
     if (current === desired) {
-      console.log("Already correct direction. No action.");
+      console.log("Already in desired position. No action.");
       return;
     }
 
+    // ===== CLOSE EXISTING =====
     if (current !== 'FLAT') {
       console.log("Closing existing position...");
 
@@ -124,6 +124,7 @@ export class DydxV4Client extends AbstractDexClient {
       await _sleep(1000);
     }
 
+    // ===== OPEN NEW =====
     if (desired !== 'FLAT') {
       console.log("Opening new position:", desired);
 
