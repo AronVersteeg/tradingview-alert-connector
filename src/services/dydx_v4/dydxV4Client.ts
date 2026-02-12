@@ -14,7 +14,6 @@ import {
 } from '@dydxprotocol/v4-client-js';
 
 import { AlertObject } from '../../types';
-import { _sleep } from '../../helper';
 import 'dotenv/config';
 import config from 'config';
 import crypto from 'crypto';
@@ -29,14 +28,11 @@ export class DydxV4Client extends AbstractDexClient {
   private initialized = false;
 
   async init(): Promise<void> {
-    console.log("Initializing dYdX V4 client...");
 
     this.wallet = await LocalWallet.fromMnemonic(
       process.env.DYDX_V4_MNEMONIC!,
       BECH32_PREFIX
     );
-
-    console.log("Wallet address:", this.wallet.address);
 
     const validatorConfig = new ValidatorConfig(
       config.get('DydxV4.ValidatorConfig.restEndpoint'),
@@ -65,7 +61,6 @@ export class DydxV4Client extends AbstractDexClient {
     );
 
     this.initialized = true;
-    console.log("dYdX V4 client initialized.");
   }
 
   async getIsAccountReady(): Promise<boolean> {
@@ -76,6 +71,62 @@ export class DydxV4Client extends AbstractDexClient {
 
     const market = alert.market.replace(/_/g, '-');
     const desired = alert.desired_position;
+
+    const { current, currentSize } = await this.getCurrentPosition(market);
+
+    console.log("Current:", current, "Size:", currentSize);
+
+    if (current === desired) {
+      console.log("Already correct direction.");
+      return;
+    }
+
+    // CLOSE EXISTING
+    if (current !== 'FLAT') {
+
+      await this.sendOrder({
+        market,
+        side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
+        size: Math.abs(currentSize),
+        reduceOnly: true,
+        price: alert.price
+      });
+
+      // 🔥 WAIT UNTIL FLAT
+      await this.waitUntilFlat(market);
+    }
+
+    // OPEN NEW
+    if (desired !== 'FLAT') {
+
+      await this.sendOrder({
+        market,
+        side: desired === 'LONG' ? OrderSide.BUY : OrderSide.SELL,
+        size: alert.size,
+        reduceOnly: false,
+        price: alert.price
+      });
+    }
+  }
+
+  private async waitUntilFlat(market: string) {
+
+    for (let i = 0; i < 10; i++) {
+
+      const { current } = await this.getCurrentPosition(market);
+
+      if (current === 'FLAT') {
+        console.log("Position confirmed closed.");
+        return;
+      }
+
+      await new Promise(res => setTimeout(res, 1000));
+    }
+
+    console.log("Warning: position did not close in time.");
+  }
+
+  private async getCurrentPosition(market: string) {
 
     const response = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
@@ -99,34 +150,7 @@ export class DydxV4Client extends AbstractDexClient {
       if (currentSize < 0) current = 'SHORT';
     }
 
-    console.log("Detected current:", current, "Size:", currentSize);
-
-    if (current === desired) {
-      console.log("Already correct direction.");
-      return;
-    }
-
-    if (current !== 'FLAT') {
-      await this.sendOrder({
-        market,
-        side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
-        size: Math.abs(currentSize),
-        reduceOnly: true,
-        price: alert.price
-      });
-
-      await _sleep(500);
-    }
-
-    if (desired !== 'FLAT') {
-      await this.sendOrder({
-        market,
-        side: desired === 'LONG' ? OrderSide.BUY : OrderSide.SELL,
-        size: alert.size,
-        reduceOnly: false,
-        price: alert.price
-      });
-    }
+    return { current, currentSize };
   }
 
   private async sendOrder(params: {
@@ -139,14 +163,14 @@ export class DydxV4Client extends AbstractDexClient {
 
     const { market, side, size, reduceOnly, price } = params;
 
-    console.log("Sending order:", { market, side, size, reduceOnly, price });
+    console.log("Sending:", { market, side, size, reduceOnly });
 
-    const result = await this.client.placeOrder(
+    await this.client.placeOrder(
       this.subaccount,
       market,
       OrderType.MARKET,
       side,
-      price,                    // 🔥 FIX: NO MORE ZERO
+      price,
       size,
       parseInt(crypto.randomBytes(4).toString('hex'), 16),
       OrderTimeInForce.IOC,
@@ -156,8 +180,6 @@ export class DydxV4Client extends AbstractDexClient {
       reduceOnly,
       null
     );
-
-    console.log("Order result:", result);
   }
 
   private getIndexerConfig(): IndexerConfig {
