@@ -1,5 +1,3 @@
-// FILE: dydxV4Client.ts
-
 import {
   BECH32_PREFIX,
   IndexerClient,
@@ -94,14 +92,16 @@ export class DydxV4Client extends AbstractDexClient {
 
     console.log("Processing signal:", alert);
 
-    // ===== GET CURRENT POSITION =====
+    // ===== GET CURRENT PERP POSITION =====
 
-    const positions = await this.indexer.account.getSubaccountPositions(
+    const positions = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
       0
     );
 
-    const position = positions.find(p => p.market === market);
+    const position = positions.find(
+      (p: any) => p.market === market
+    );
 
     let current: 'LONG' | 'SHORT' | 'FLAT' = 'FLAT';
     let currentSize = 0;
@@ -178,7 +178,7 @@ export class DydxV4Client extends AbstractDexClient {
       market,
       OrderType.MARKET,
       side,
-      0, // price ignored for market
+      0, // market order
       size,
       clientId,
       OrderTimeInForce.GTT,
