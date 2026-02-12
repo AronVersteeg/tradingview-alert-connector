@@ -94,10 +94,12 @@ export class DydxV4Client extends AbstractDexClient {
 
     // ===== GET CURRENT PERP POSITION =====
 
-    const positions = await this.indexer.account.getSubaccountPerpetualPositions(
+    const response = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
       0
     );
+
+    const positions = response?.positions || [];
 
     const position = positions.find(
       (p: any) => p.market === market
@@ -178,7 +180,7 @@ export class DydxV4Client extends AbstractDexClient {
       market,
       OrderType.MARKET,
       side,
-      0, // market order
+      0,
       size,
       clientId,
       OrderTimeInForce.GTT,
@@ -199,3 +201,5 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
+
