@@ -92,7 +92,6 @@ export class DydxV4Client extends AbstractDexClient {
         price: alert.price
       });
 
-      // 🔥 WAIT UNTIL FLAT
       await this.waitUntilFlat(market);
     }
 
@@ -116,14 +115,14 @@ export class DydxV4Client extends AbstractDexClient {
       const { current } = await this.getCurrentPosition(market);
 
       if (current === 'FLAT') {
-        console.log("Position confirmed closed.");
+        console.log("Position confirmed flat.");
         return;
       }
 
       await new Promise(res => setTimeout(res, 1000));
     }
 
-    console.log("Warning: position did not close in time.");
+    console.log("Timeout waiting for flat.");
   }
 
   private async getCurrentPosition(market: string) {
@@ -135,19 +134,19 @@ export class DydxV4Client extends AbstractDexClient {
 
     const positions = response?.positions || [];
 
-    const openPosition = positions.find((p: any) =>
-      p.market === market &&
-      p.status === 'OPEN' &&
-      Number(p.size) !== 0
+    const position = positions.find((p: any) =>
+      p.market === market
     );
 
     let current: 'LONG' | 'SHORT' | 'FLAT' = 'FLAT';
     let currentSize = 0;
 
-    if (openPosition) {
-      currentSize = Number(openPosition.size);
+    if (position) {
+      currentSize = Number(position.size);
+
       if (currentSize > 0) current = 'LONG';
       if (currentSize < 0) current = 'SHORT';
+      if (currentSize === 0) current = 'FLAT';
     }
 
     return { current, currentSize };
@@ -189,6 +188,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
