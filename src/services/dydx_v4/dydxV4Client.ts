@@ -19,6 +19,8 @@ import config from 'config';
 import crypto from 'crypto';
 import { AbstractDexClient } from '../abstractDexClient';
 
+type PositionState = 'LONG' | 'SHORT' | 'FLAT';
+
 export class DydxV4Client extends AbstractDexClient {
 
   private wallet!: LocalWallet;
@@ -27,8 +29,8 @@ export class DydxV4Client extends AbstractDexClient {
   private indexer!: IndexerClient;
   private initialized = false;
 
-  // 🔒 MARKET LOCK
   private processingMarkets = new Set<string>();
+  private marketState = new Map<string, PositionState>();
 
   async init(): Promise<void> {
 
@@ -74,38 +76,45 @@ export class DydxV4Client extends AbstractDexClient {
 
     const market = alert.market.replace(/_/g, '-');
 
-    // 🔒 WAIT IF BUSY
     while (this.processingMarkets.has(market)) {
-      await new Promise(res => setTimeout(res, 100));
+      await new Promise(res => setTimeout(res, 50));
     }
 
     this.processingMarkets.add(market);
 
     try {
 
-      const desired = alert.desired_position;
-      const { current, currentSize } = await this.getCurrentPosition(market);
+      const desired = alert.desired_position as PositionState;
 
-      console.log("Current:", current, "Size:", currentSize);
+      let current = this.marketState.get(market);
+
+      if (!current) {
+        current = await this.getCurrentPositionFromIndexer(market);
+        this.marketState.set(market, current);
+      }
+
+      console.log("Current (state-driven):", current);
 
       if (current === desired) {
         console.log("Already correct direction.");
         return;
       }
 
+      // CLOSE
       if (current !== 'FLAT') {
 
         await this.sendOrder({
           market,
           side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
-          size: Math.abs(currentSize),
+          size: alert.size,
           reduceOnly: true,
           price: alert.price
         });
 
-        await this.waitUntilFlat(market);
+        this.marketState.set(market, 'FLAT');
       }
 
+      // OPEN
       if (desired !== 'FLAT') {
 
         await this.sendOrder({
@@ -115,32 +124,16 @@ export class DydxV4Client extends AbstractDexClient {
           reduceOnly: false,
           price: alert.price
         });
+
+        this.marketState.set(market, desired);
       }
 
     } finally {
-      // 🔓 UNLOCK
       this.processingMarkets.delete(market);
     }
   }
 
-  private async waitUntilFlat(market: string) {
-
-    for (let i = 0; i < 10; i++) {
-
-      const { current } = await this.getCurrentPosition(market);
-
-      if (current === 'FLAT') {
-        console.log("Position confirmed flat.");
-        return;
-      }
-
-      await new Promise(res => setTimeout(res, 500));
-    }
-
-    console.log("Timeout waiting for flat.");
-  }
-
-  private async getCurrentPosition(market: string) {
+  private async getCurrentPositionFromIndexer(market: string): Promise<PositionState> {
 
     const response = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
@@ -153,9 +146,7 @@ export class DydxV4Client extends AbstractDexClient {
       p.market === market
     );
 
-    if (marketPositions.length === 0) {
-      return { current: 'FLAT' as const, currentSize: 0 };
-    }
+    if (marketPositions.length === 0) return 'FLAT';
 
     marketPositions.sort(
       (a: any, b: any) =>
@@ -165,10 +156,10 @@ export class DydxV4Client extends AbstractDexClient {
     const latest = marketPositions[0];
     const size = Number(latest.size);
 
-    if (size > 0) return { current: 'LONG' as const, currentSize: size };
-    if (size < 0) return { current: 'SHORT' as const, currentSize: size };
+    if (size > 0) return 'LONG';
+    if (size < 0) return 'SHORT';
 
-    return { current: 'FLAT' as const, currentSize: 0 };
+    return 'FLAT';
   }
 
   private async sendOrder(params: {
@@ -207,6 +198,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
