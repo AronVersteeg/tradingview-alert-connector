@@ -134,22 +134,29 @@ export class DydxV4Client extends AbstractDexClient {
 
     const positions = response?.positions || [];
 
-    const position = positions.find((p: any) =>
+    // 🔥 Filter op market
+    const marketPositions = positions.filter((p: any) =>
       p.market === market
     );
 
-    let current: 'LONG' | 'SHORT' | 'FLAT' = 'FLAT';
-    let currentSize = 0;
-
-    if (position) {
-      currentSize = Number(position.size);
-
-      if (currentSize > 0) current = 'LONG';
-      if (currentSize < 0) current = 'SHORT';
-      if (currentSize === 0) current = 'FLAT';
+    if (marketPositions.length === 0) {
+      return { current: 'FLAT' as const, currentSize: 0 };
     }
 
-    return { current, currentSize };
+    // 🔥 Neem meest recente
+    marketPositions.sort(
+      (a: any, b: any) =>
+        Number(b.createdAtHeight) - Number(a.createdAtHeight)
+    );
+
+    const latest = marketPositions[0];
+
+    const size = Number(latest.size);
+
+    if (size > 0) return { current: 'LONG' as const, currentSize: size };
+    if (size < 0) return { current: 'SHORT' as const, currentSize: size };
+
+    return { current: 'FLAT' as const, currentSize: 0 };
   }
 
   private async sendOrder(params: {
