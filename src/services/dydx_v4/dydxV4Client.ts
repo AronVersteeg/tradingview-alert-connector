@@ -27,6 +27,9 @@ export class DydxV4Client extends AbstractDexClient {
   private indexer!: IndexerClient;
   private initialized = false;
 
+  // 🔒 MARKET LOCK
+  private processingMarkets = new Set<string>();
+
   async init(): Promise<void> {
 
     this.wallet = await LocalWallet.fromMnemonic(
@@ -70,41 +73,53 @@ export class DydxV4Client extends AbstractDexClient {
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
-    const desired = alert.desired_position;
 
-    const { current, currentSize } = await this.getCurrentPosition(market);
-
-    console.log("Current:", current, "Size:", currentSize);
-
-    if (current === desired) {
-      console.log("Already correct direction.");
-      return;
+    // 🔒 WAIT IF BUSY
+    while (this.processingMarkets.has(market)) {
+      await new Promise(res => setTimeout(res, 100));
     }
 
-    // CLOSE EXISTING
-    if (current !== 'FLAT') {
+    this.processingMarkets.add(market);
 
-      await this.sendOrder({
-        market,
-        side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
-        size: Math.abs(currentSize),
-        reduceOnly: true,
-        price: alert.price
-      });
+    try {
 
-      await this.waitUntilFlat(market);
-    }
+      const desired = alert.desired_position;
+      const { current, currentSize } = await this.getCurrentPosition(market);
 
-    // OPEN NEW
-    if (desired !== 'FLAT') {
+      console.log("Current:", current, "Size:", currentSize);
 
-      await this.sendOrder({
-        market,
-        side: desired === 'LONG' ? OrderSide.BUY : OrderSide.SELL,
-        size: alert.size,
-        reduceOnly: false,
-        price: alert.price
-      });
+      if (current === desired) {
+        console.log("Already correct direction.");
+        return;
+      }
+
+      if (current !== 'FLAT') {
+
+        await this.sendOrder({
+          market,
+          side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
+          size: Math.abs(currentSize),
+          reduceOnly: true,
+          price: alert.price
+        });
+
+        await this.waitUntilFlat(market);
+      }
+
+      if (desired !== 'FLAT') {
+
+        await this.sendOrder({
+          market,
+          side: desired === 'LONG' ? OrderSide.BUY : OrderSide.SELL,
+          size: alert.size,
+          reduceOnly: false,
+          price: alert.price
+        });
+      }
+
+    } finally {
+      // 🔓 UNLOCK
+      this.processingMarkets.delete(market);
     }
   }
 
@@ -119,7 +134,7 @@ export class DydxV4Client extends AbstractDexClient {
         return;
       }
 
-      await new Promise(res => setTimeout(res, 1000));
+      await new Promise(res => setTimeout(res, 500));
     }
 
     console.log("Timeout waiting for flat.");
@@ -134,7 +149,6 @@ export class DydxV4Client extends AbstractDexClient {
 
     const positions = response?.positions || [];
 
-    // 🔥 Filter op market
     const marketPositions = positions.filter((p: any) =>
       p.market === market
     );
@@ -143,14 +157,12 @@ export class DydxV4Client extends AbstractDexClient {
       return { current: 'FLAT' as const, currentSize: 0 };
     }
 
-    // 🔥 Neem meest recente
     marketPositions.sort(
       (a: any, b: any) =>
         Number(b.createdAtHeight) - Number(a.createdAtHeight)
     );
 
     const latest = marketPositions[0];
-
     const size = Number(latest.size);
 
     if (size > 0) return { current: 'LONG' as const, currentSize: size };
@@ -195,6 +207,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
