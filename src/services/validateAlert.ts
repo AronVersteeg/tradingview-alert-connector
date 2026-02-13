@@ -40,18 +40,28 @@ export const validateAlert = async (
   }
 
   // =====================================================
-  // ✅ INTENT-BASED ALERT (NEW LOGIC)
+  // ✅ INTENT-BASED ALERT (UPDATED)
   // =====================================================
+
   if (alertMessage.desired_position) {
-    const allowed = ['LONG', 'SHORT', 'FLAT'];
-    if (!allowed.includes(alertMessage.desired_position)) {
+
+    const pos = alertMessage.desired_position.toUpperCase();
+
+    const allowed = [
+      'LONG',
+      'SHORT',
+      'FLAT',
+      'BUY',
+      'SELL'
+    ];
+
+    if (!allowed.includes(pos)) {
       console.error(
-        'desired_position must be one of LONG | SHORT | FLAT'
+        'desired_position must be one of LONG | SHORT | FLAT | BUY | SELL'
       );
       return false;
     }
 
-    // intent-alerts zijn altijd geldig
     return true;
   }
 
@@ -59,7 +69,6 @@ export const validateAlert = async (
   // ⚠️ LEGACY ORDER-BASED ALERT (OLD LOGIC)
   // =====================================================
 
-  // check order side
   if (alertMessage.order !== 'buy' && alertMessage.order !== 'sell') {
     console.error(
       'Side field of tradingview alert is not correct. Must be buy or sell'
@@ -67,7 +76,6 @@ export const validateAlert = async (
     return false;
   }
 
-  // check position
   if (
     alertMessage.position !== 'long' &&
     alertMessage.position !== 'short' &&
@@ -77,7 +85,6 @@ export const validateAlert = async (
     return false;
   }
 
-  // check reverse
   if (typeof alertMessage.reverse !== 'boolean') {
     console.error(
       'Reverse field of tradingview alert must be boolean.'
@@ -85,7 +92,6 @@ export const validateAlert = async (
     return false;
   }
 
-  // ---------- STRATEGY STATE (LEGACY) ----------
   const [db, rootData] = getStrategiesDB();
   const rootPath = '/' + alertMessage.strategy;
 
@@ -106,4 +112,5 @@ export const validateAlert = async (
 
   return true;
 };
+
 
