@@ -148,7 +148,13 @@ export class DydxV4Client extends AbstractDexClient {
 
   private getTargetSize(alert: AlertObject, baseSize: number): number {
 
-    switch (alert.desired_position) {
+    const dir = alert.desired_position?.toUpperCase();
+
+    // 👇 NIEUW: support voor TradingView strategy order fills
+    if (dir === 'BUY') return Math.abs(baseSize);
+    if (dir === 'SELL') return -Math.abs(baseSize);
+
+    switch (dir) {
       case 'LONG':
         return Math.abs(baseSize);
       case 'SHORT':
@@ -167,7 +173,6 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
-
 
 
 
