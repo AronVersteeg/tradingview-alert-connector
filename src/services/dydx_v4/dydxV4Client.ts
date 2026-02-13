@@ -19,8 +19,6 @@ import config from 'config';
 import crypto from 'crypto';
 import { AbstractDexClient } from '../abstractDexClient';
 
-type PositionState = 'LONG' | 'SHORT' | 'FLAT';
-
 export class DydxV4Client extends AbstractDexClient {
 
   private wallet!: LocalWallet;
@@ -30,7 +28,6 @@ export class DydxV4Client extends AbstractDexClient {
   private initialized = false;
 
   private processingMarkets = new Set<string>();
-  private marketState = new Map<string, PositionState>();
 
   async init(): Promise<void> {
 
@@ -77,63 +74,56 @@ export class DydxV4Client extends AbstractDexClient {
     const market = alert.market.replace(/_/g, '-');
 
     while (this.processingMarkets.has(market)) {
-      await new Promise(res => setTimeout(res, 50));
+      await new Promise(res => setTimeout(res, 20));
     }
 
     this.processingMarkets.add(market);
 
     try {
 
-      const desired = alert.desired_position as PositionState;
+      const currentSize = await this.getCurrentSize(market);
+      const targetSize = this.getTargetSize(alert, alert.size);
 
-      let current = this.marketState.get(market);
+      const delta = targetSize - currentSize;
 
-      if (!current) {
-        current = await this.getCurrentPositionFromIndexer(market);
-        this.marketState.set(market, current);
-      }
+      console.log("Current size:", currentSize);
+      console.log("Target size:", targetSize);
+      console.log("Delta:", delta);
 
-      console.log("Current (state-driven):", current);
-
-      if (current === desired) {
-        console.log("Already correct direction.");
+      if (delta === 0) {
+        console.log("No action needed.");
         return;
       }
 
-      // CLOSE
-      if (current !== 'FLAT') {
+      const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
+      const size = Math.abs(delta);
 
-        await this.sendOrder({
-          market,
-          side: current === 'LONG' ? OrderSide.SELL : OrderSide.BUY,
-          size: alert.size,
-          reduceOnly: true,
-          price: alert.price
-        });
+      const price = side === OrderSide.BUY ? 999999 : 1;
 
-        this.marketState.set(market, 'FLAT');
-      }
+      console.log("Sending net order:", { market, side, size });
 
-      // OPEN
-      if (desired !== 'FLAT') {
-
-        await this.sendOrder({
-          market,
-          side: desired === 'LONG' ? OrderSide.BUY : OrderSide.SELL,
-          size: alert.size,
-          reduceOnly: false,
-          price: alert.price
-        });
-
-        this.marketState.set(market, desired);
-      }
+      await this.client.placeOrder(
+        this.subaccount,
+        market,
+        OrderType.MARKET,
+        side,
+        price,
+        size,
+        parseInt(crypto.randomBytes(4).toString('hex'), 16),
+        OrderTimeInForce.IOC,
+        0,
+        OrderExecution.DEFAULT,
+        false,
+        false,
+        null
+      );
 
     } finally {
       this.processingMarkets.delete(market);
     }
   }
 
-  private async getCurrentPositionFromIndexer(market: string): Promise<PositionState> {
+  private async getCurrentSize(market: string): Promise<number> {
 
     const response = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
@@ -146,49 +136,28 @@ export class DydxV4Client extends AbstractDexClient {
       p.market === market
     );
 
-    if (marketPositions.length === 0) return 'FLAT';
+    if (marketPositions.length === 0) return 0;
 
     marketPositions.sort(
       (a: any, b: any) =>
         Number(b.createdAtHeight) - Number(a.createdAtHeight)
     );
 
-    const latest = marketPositions[0];
-    const size = Number(latest.size);
-
-    if (size > 0) return 'LONG';
-    if (size < 0) return 'SHORT';
-
-    return 'FLAT';
+    return Number(marketPositions[0].size);
   }
 
-  private async sendOrder(params: {
-    market: string;
-    side: OrderSide;
-    size: number;
-    reduceOnly: boolean;
-    price: number;
-  }) {
+  private getTargetSize(alert: AlertObject, baseSize: number): number {
 
-    const { market, side, size, reduceOnly, price } = params;
-
-    console.log("Sending:", { market, side, size, reduceOnly });
-
-    await this.client.placeOrder(
-      this.subaccount,
-      market,
-      OrderType.MARKET,
-      side,
-      price,
-      size,
-      parseInt(crypto.randomBytes(4).toString('hex'), 16),
-      OrderTimeInForce.IOC,
-      0,
-      OrderExecution.DEFAULT,
-      false,
-      reduceOnly,
-      null
-    );
+    switch (alert.desired_position) {
+      case 'LONG':
+        return Math.abs(baseSize);
+      case 'SHORT':
+        return -Math.abs(baseSize);
+      case 'FLAT':
+        return 0;
+      default:
+        return 0;
+    }
   }
 
   private getIndexerConfig(): IndexerConfig {
@@ -198,6 +167,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
