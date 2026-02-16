@@ -72,6 +72,7 @@ export class DydxV4Client extends AbstractDexClient {
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
+    const dir = alert.desired_position?.toUpperCase();
 
     while (this.processingMarkets.has(market)) {
       await new Promise(res => setTimeout(res, 20));
@@ -81,9 +82,60 @@ export class DydxV4Client extends AbstractDexClient {
 
     try {
 
+      // ================= FORCE FLAT BRANCH =================
+
+      if (dir === 'FLAT') {
+
+        console.log("FORCE FLAT triggered");
+
+        const response = await this.indexer.account.getSubaccountPerpetualPositions(
+          this.wallet.address,
+          0
+        );
+
+        const positions = response?.positions || [];
+        const marketPositions = positions.filter((p: any) => p.market === market);
+
+        if (marketPositions.length === 0) {
+          console.log("No open position found for market.");
+          return;
+        }
+
+        for (const p of marketPositions) {
+
+          const rawSize = Number(p.size);
+          const size = Math.abs(rawSize);
+          if (size === 0) continue;
+
+          const side = rawSize > 0 ? OrderSide.SELL : OrderSide.BUY;
+          const price = side === OrderSide.BUY ? 999999 : 1;
+
+          console.log("Force closing:", { market, side, size });
+
+          await this.client.placeOrder(
+            this.subaccount,
+            market,
+            OrderType.MARKET,
+            side,
+            price,
+            size,
+            parseInt(crypto.randomBytes(4).toString('hex'), 16),
+            OrderTimeInForce.IOC,
+            0,
+            OrderExecution.DEFAULT,
+            false,
+            false,
+            null
+          );
+        }
+
+        return; // 🔥 Skip delta engine completely
+      }
+
+      // ================= NORMAL DELTA ENGINE =================
+
       const currentSize = await this.getCurrentSize(market);
       const targetSize = this.getTargetSize(alert, alert.size);
-
       const delta = targetSize - currentSize;
 
       console.log("Current size:", currentSize);
@@ -97,7 +149,6 @@ export class DydxV4Client extends AbstractDexClient {
 
       const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
       const size = Math.abs(delta);
-
       const price = side === OrderSide.BUY ? 999999 : 1;
 
       console.log("Sending net order:", { market, side, size });
@@ -132,9 +183,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     const positions = response?.positions || [];
 
-    const marketPositions = positions.filter((p: any) =>
-      p.market === market
-    );
+    const marketPositions = positions.filter((p: any) => p.market === market);
 
     if (marketPositions.length === 0) return 0;
 
@@ -150,7 +199,6 @@ export class DydxV4Client extends AbstractDexClient {
 
     const dir = alert.desired_position?.toUpperCase();
 
-    // 👇 NIEUW: support voor TradingView strategy order fills
     if (dir === 'BUY') return Math.abs(baseSize);
     if (dir === 'SELL') return -Math.abs(baseSize);
 
@@ -173,7 +221,6 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
-
 
 
 
