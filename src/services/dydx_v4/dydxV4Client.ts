@@ -9,6 +9,7 @@ import {
   OrderSide,
   OrderTimeInForce,
   OrderType,
+  OrderExecution,
   IndexerConfig
 } from '@dydxprotocol/v4-client-js';
 
@@ -28,9 +29,7 @@ export class DydxV4Client extends AbstractDexClient {
 
   private STOP_PERCENT = 1.0;
 
-  // =====================================================
-  // INIT
-  // =====================================================
+  // ================= INIT =================
 
   async init(): Promise<void> {
 
@@ -72,38 +71,30 @@ export class DydxV4Client extends AbstractDexClient {
     return this.initialized;
   }
 
-  // =====================================================
-  // MAIN ORDER LOGIC
-  // =====================================================
+  // ================= MAIN =================
 
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
 
-    // 1️⃣ Cancel oude conditional orders
     await this.cancelOpenOrders(market);
 
     const currentSize = await this.getCurrentSize(market);
     const targetSize = this.getTargetSize(alert, alert.size);
     const delta = targetSize - currentSize;
 
-    console.log("Current:", currentSize);
-    console.log("Target:", targetSize);
-    console.log("Delta:", delta);
-
-    // 2️⃣ MARKET EXECUTION
     if (delta !== 0) {
 
       const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
-      const size = Math.abs(delta);              // number
-      const price = side === OrderSide.BUY ? 999999 : 1; // number
+      const size = Math.abs(delta);
+      const price = side === OrderSide.BUY ? 999999 : 1;
 
       const clientId = parseInt(
         crypto.randomBytes(4).toString('hex'),
         16
       );
 
-      const response = await this.client.placeOrder(
+      await this.client.placeOrder(
         this.subaccount,
         market,
         OrderType.MARKET,
@@ -112,15 +103,14 @@ export class DydxV4Client extends AbstractDexClient {
         size,
         clientId,
         OrderTimeInForce.IOC,
-        0,        // goodTilBlock
-        false,    // reduceOnly
-        false     // postOnly
+        0,                      // goodTilBlock
+        OrderExecution.DEFAULT, // 🔥 required
+        false,                  // reduceOnly
+        false,                  // postOnly
+        undefined               // triggerPrice
       );
-
-      console.log("✅ Market order:", response);
     }
 
-    // 3️⃣ STOP LOSS PLAATSEN
     const newSize = await this.getCurrentSize(market);
 
     if (newSize !== 0) {
@@ -128,9 +118,7 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
-  // =====================================================
-  // STOP LOSS
-  // =====================================================
+  // ================= STOP =================
 
   private async placeStopLoss(market: string, positionSize: number) {
 
@@ -157,7 +145,7 @@ export class DydxV4Client extends AbstractDexClient {
       16
     );
 
-    const stopResponse = await this.client.placeOrder(
+    await this.client.placeOrder(
       this.subaccount,
       market,
       OrderType.STOP_MARKET,
@@ -166,17 +154,15 @@ export class DydxV4Client extends AbstractDexClient {
       size,
       clientId,
       OrderTimeInForce.GTT,
-      0,      // goodTilBlock
-      true,   // reduceOnly
-      false   // postOnly
+      0,
+      OrderExecution.DEFAULT, // 🔥 required
+      true,                   // reduceOnly
+      false,
+      triggerPrice            // 🔥 triggerPrice required for STOP
     );
-
-    console.log("🛑 Stop placed:", stopResponse);
   }
 
-  // =====================================================
-  // CANCEL CONDITIONAL ORDERS
-  // =====================================================
+  // ================= CANCEL =================
 
   private async cancelOpenOrders(market: string) {
 
@@ -195,15 +181,13 @@ export class DydxV4Client extends AbstractDexClient {
         this.subaccount,
         market,
         Number(order.clientId),
-        0,          // orderFlags
-        undefined   // goodTilBlock
+        0,
+        undefined
       );
     }
   }
 
-  // =====================================================
-  // HELPERS
-  // =====================================================
+  // ================= HELPERS =================
 
   private async getCurrentSize(market: string): Promise<number> {
 
@@ -241,6 +225,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
