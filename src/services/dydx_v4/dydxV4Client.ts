@@ -6,7 +6,6 @@ import {
   SubaccountClient,
   ValidatorConfig,
   LocalWallet,
-  OrderExecution,
   OrderSide,
   OrderTimeInForce,
   OrderType,
@@ -27,9 +26,7 @@ export class DydxV4Client extends AbstractDexClient {
   private indexer!: IndexerClient;
   private initialized = false;
 
-  private processingMarkets = new Set<string>();
-
-  private STOP_PERCENT: number = 1.0;
+  private STOP_PERCENT = 1.0;
 
   async init(): Promise<void> {
 
@@ -67,74 +64,47 @@ export class DydxV4Client extends AbstractDexClient {
     this.initialized = true;
   }
 
-  async getIsAccountReady(): Promise<boolean> {
-    return this.initialized;
-  }
-
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
 
-    while (this.processingMarkets.has(market)) {
-      await new Promise(res => setTimeout(res, 20));
+    await this.cancelOpenOrders(market);
+
+    const currentSize = await this.getCurrentSize(market);
+    const targetSize = this.getTargetSize(alert, alert.size);
+    const delta = targetSize - currentSize;
+
+    if (delta !== 0) {
+
+      const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
+      const size = Math.abs(delta);
+      const price = side === OrderSide.BUY ? 999999 : 1;
+
+      const clientId = parseInt(
+        crypto.randomBytes(4).toString('hex'),
+        16
+      );
+
+      await this.client.placeOrder(
+        this.subaccount,
+        market,
+        OrderType.MARKET,
+        side,
+        price,
+        size,
+        clientId,
+        OrderTimeInForce.IOC,
+        false, // reduceOnly
+        false  // postOnly
+      );
     }
 
-    this.processingMarkets.add(market);
+    const newSize = await this.getCurrentSize(market);
 
-    try {
-
-      await this.cancelOpenOrders(market);
-
-      const currentSize = await this.getCurrentSize(market);
-      const targetSize = this.getTargetSize(alert, alert.size);
-      const delta = targetSize - currentSize;
-
-      console.log("Current:", currentSize);
-      console.log("Target:", targetSize);
-      console.log("Delta:", delta);
-
-      if (delta !== 0) {
-
-        const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
-        const size = Math.abs(delta);     // ✅ number
-        const price = side === OrderSide.BUY ? 999999 : 1; // ✅ number
-
-        const clientId = parseInt(
-          crypto.randomBytes(4).toString('hex'),
-          16
-        );
-
-        const response = await this.client.placeOrder(
-          this.subaccount,
-          market,
-          OrderType.MARKET,
-          side,
-          price,
-          size,
-          clientId,
-          OrderTimeInForce.IOC,
-          0,
-          OrderExecution.DEFAULT,
-          false,
-          false,
-          undefined
-        );
-
-        console.log("✅ Market order:", response);
-      }
-
-      const newSize = await this.getCurrentSize(market);
-
-      if (newSize !== 0) {
-        await this.placeStopLoss(market, newSize);
-      }
-
-    } finally {
-      this.processingMarkets.delete(market);
+    if (newSize !== 0) {
+      await this.placeStopLoss(market, newSize);
     }
   }
-
-  // ================= STOP =================
 
   private async placeStopLoss(market: string, positionSize: number) {
 
@@ -161,26 +131,19 @@ export class DydxV4Client extends AbstractDexClient {
       16
     );
 
-    const stopResponse = await this.client.placeOrder(
+    await this.client.placeOrder(
       this.subaccount,
       market,
       OrderType.STOP_MARKET,
       side,
-      triggerPrice, // ✅ number
-      size,         // ✅ number
+      triggerPrice,
+      size,
       clientId,
       OrderTimeInForce.GTT,
-      0,
-      OrderExecution.DEFAULT,
-      true,
-      false,
-      undefined
+      true,  // reduceOnly
+      false
     );
-
-    console.log("🛑 Stop placed:", stopResponse);
   }
-
-  // ================= CANCEL =================
 
   private async cancelOpenOrders(market: string) {
 
@@ -198,9 +161,7 @@ export class DydxV4Client extends AbstractDexClient {
       await this.client.cancelOrder(
         this.subaccount,
         market,
-        Number(order.clientId), // ✅ number
-        0,
-        undefined
+        Number(order.clientId)
       );
     }
   }
@@ -240,6 +201,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
