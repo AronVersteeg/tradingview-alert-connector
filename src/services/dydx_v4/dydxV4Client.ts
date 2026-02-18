@@ -81,7 +81,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     const market = alert.market.replace(/_/g, '-');
 
-    // 1️⃣ Cancel bestaande conditional orders
+    // Cancel existing open orders
     await this.cancelOpenOrders(market);
 
     const currentSize = await this.getCurrentSize(market);
@@ -92,7 +92,7 @@ export class DydxV4Client extends AbstractDexClient {
     console.log("Target:", targetSize);
     console.log("Delta:", delta);
 
-    // 2️⃣ MARKET EXECUTION
+    // 1️⃣ MARKET EXECUTION
     if (delta !== 0) {
 
       const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
@@ -114,7 +114,7 @@ export class DydxV4Client extends AbstractDexClient {
         clientId,
         OrderTimeInForce.IOC,
         0,
-        OrderExecution.DEFAULT,  // MARKET mag DEFAULT gebruiken
+        OrderExecution.DEFAULT,
         false,
         false
       );
@@ -122,7 +122,7 @@ export class DydxV4Client extends AbstractDexClient {
       console.log("✅ Market order geplaatst");
     }
 
-    // 3️⃣ STOP LOSS
+    // 2️⃣ STOP LOSS
     const newSize = await this.getCurrentSize(market);
 
     if (newSize !== 0) {
@@ -167,10 +167,10 @@ export class DydxV4Client extends AbstractDexClient {
       triggerPrice,
       size,
       clientId,
-      OrderTimeInForce.GTT,
+      OrderTimeInForce.IOC,     // 🔥 belangrijk voor STOP_MARKET
       0,
-      OrderExecution.REDUCE_ONLY,  // 🔥 FIX: geen DEFAULT hier
-      true,                        // reduceOnly
+      OrderExecution.DEFAULT,   // DEFAULT is correct in 1.0.27
+      true,                     // reduceOnly
       false
     );
 
@@ -178,7 +178,7 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   // =====================================================
-  // CANCEL CONDITIONAL ORDERS
+  // CANCEL OPEN ORDERS
   // =====================================================
 
   private async cancelOpenOrders(market: string) {
@@ -192,62 +192,7 @@ export class DydxV4Client extends AbstractDexClient {
       o.market === market && o.status === 'OPEN'
     ) || [];
 
-    for (const order of openOrders) {
-
-      const clientId =
-        typeof order.clientId === 'number'
-          ? order.clientId
-          : parseInt(order.clientId, 10);
-
-      await this.client.cancelOrder(
-        this.subaccount,
-        clientId,
-        0,
-        undefined
-      );
-    }
-  }
-
-  // =====================================================
-  // HELPERS
-  // =====================================================
-
-  private async getCurrentSize(market: string): Promise<number> {
-
-    const response = await this.indexer.account.getSubaccountPerpetualPositions(
-      this.wallet.address,
-      0
-    );
-
-    const pos = response.positions.find((p: any) => p.market === market);
-
-    return pos ? Number(pos.size) : 0;
-  }
-
-  private getTargetSize(alert: AlertObject, baseSize: number): number {
-
-    const dir = alert.desired_position?.toUpperCase();
-
-    switch (dir) {
-      case 'BUY':
-      case 'LONG':
-        return Math.abs(baseSize);
-      case 'SELL':
-      case 'SHORT':
-        return -Math.abs(baseSize);
-      case 'FLAT':
-      default:
-        return 0;
-    }
-  }
-
-  private getIndexerConfig(): IndexerConfig {
-    return new IndexerConfig(
-      config.get('DydxV4.IndexerConfig.httpsEndpoint'),
-      config.get('DydxV4.IndexerConfig.wssEndpoint')
-    );
-  }
-}
+    for (const order o
 
 
 
