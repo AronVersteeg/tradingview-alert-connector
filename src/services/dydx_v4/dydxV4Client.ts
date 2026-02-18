@@ -29,6 +29,9 @@ export class DydxV4Client extends AbstractDexClient {
 
   private processingMarkets = new Set<string>();
 
+  // 🔥 PAS HIER JE STOP % AAN
+  private STOP_PERCENT = 1.0;
+
   async init(): Promise<void> {
 
     this.wallet = await LocalWallet.fromMnemonic(
@@ -82,57 +85,8 @@ export class DydxV4Client extends AbstractDexClient {
 
     try {
 
-      // ================= FORCE FLAT BRANCH =================
-
-      if (dir === 'FLAT') {
-
-        console.log("FORCE FLAT triggered");
-
-        const response = await this.indexer.account.getSubaccountPerpetualPositions(
-          this.wallet.address,
-          0
-        );
-
-        const positions = response?.positions || [];
-        const marketPositions = positions.filter((p: any) => p.market === market);
-
-        if (marketPositions.length === 0) {
-          console.log("No open position found for market.");
-          return;
-        }
-
-        for (const p of marketPositions) {
-
-          const rawSize = Number(p.size);
-          const size = Math.abs(rawSize);
-          if (size === 0) continue;
-
-          const side = rawSize > 0 ? OrderSide.SELL : OrderSide.BUY;
-          const price = side === OrderSide.BUY ? 999999 : 1;
-
-          console.log("Force closing:", { market, side, size });
-
-          await this.client.placeOrder(
-            this.subaccount,
-            market,
-            OrderType.MARKET,
-            side,
-            price,
-            size,
-            parseInt(crypto.randomBytes(4).toString('hex'), 16),
-            OrderTimeInForce.IOC,
-            0,
-            OrderExecution.DEFAULT,
-            false,
-            false,
-            null
-          );
-        }
-
-        return; // 🔥 Skip delta engine completely
-      }
-
-      // ================= NORMAL DELTA ENGINE =================
+      // 🔴 1️⃣ Cancel ALL open conditional orders first
+      await this.cancelOpenOrders(market);
 
       const currentSize = await this.getCurrentSize(market);
       const targetSize = this.getTargetSize(alert, alert.size);
@@ -142,35 +96,107 @@ export class DydxV4Client extends AbstractDexClient {
       console.log("Target size:", targetSize);
       console.log("Delta:", delta);
 
-      if (delta === 0) {
-        console.log("No action needed.");
-        return;
+      if (delta !== 0) {
+
+        const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
+        const size = Math.abs(delta);
+        const price = side === OrderSide.BUY ? 999999 : 1;
+
+        console.log("Sending market order:", { market, side, size });
+
+        await this.client.placeOrder(
+          this.subaccount,
+          market,
+          OrderType.MARKET,
+          side,
+          price,
+          size,
+          parseInt(crypto.randomBytes(4).toString('hex'), 16),
+          OrderTimeInForce.IOC,
+          0,
+          OrderExecution.DEFAULT,
+          false,
+          false,
+          null
+        );
       }
 
-      const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
-      const size = Math.abs(delta);
-      const price = side === OrderSide.BUY ? 999999 : 1;
+      // 🔵 2️⃣ After fill → place new stop if position exists
+      const newSize = await this.getCurrentSize(market);
 
-      console.log("Sending net order:", { market, side, size });
-
-      await this.client.placeOrder(
-        this.subaccount,
-        market,
-        OrderType.MARKET,
-        side,
-        price,
-        size,
-        parseInt(crypto.randomBytes(4).toString('hex'), 16),
-        OrderTimeInForce.IOC,
-        0,
-        OrderExecution.DEFAULT,
-        false,
-        false,
-        null
-      );
+      if (newSize !== 0) {
+        await this.placeStopLoss(market, newSize);
+      }
 
     } finally {
       this.processingMarkets.delete(market);
+    }
+  }
+
+  // ================= STOP LOGIC =================
+
+  private async placeStopLoss(market: string, positionSize: number) {
+
+    const positions = await this.indexer.account.getSubaccountPerpetualPositions(
+      this.wallet.address,
+      0
+    );
+
+    const pos = positions.positions.find((p: any) => p.market === market);
+    if (!pos) return;
+
+    const entryPrice = Number(pos.entryPrice);
+    const isLong = positionSize > 0;
+    const size = Math.abs(positionSize);
+
+    const triggerPrice = isLong
+      ? entryPrice * (1 - this.STOP_PERCENT / 100)
+      : entryPrice * (1 + this.STOP_PERCENT / 100);
+
+    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+
+    console.log("Placing STOP:", {
+      market,
+      side,
+      size,
+      triggerPrice
+    });
+
+    await this.client.placeOrder(
+      this.subaccount,
+      market,
+      OrderType.STOP_MARKET,
+      side,
+      triggerPrice,
+      size,
+      parseInt(crypto.randomBytes(4).toString('hex'), 16),
+      OrderTimeInForce.GTT,
+      0,
+      OrderExecution.DEFAULT,
+      true,   // reduceOnly = true
+      false,
+      null
+    );
+  }
+
+  private async cancelOpenOrders(market: string) {
+
+    const res = await this.indexer.account.getSubaccountOrders(
+      this.wallet.address,
+      0
+    );
+
+    const openOrders = res.orders?.filter((o: any) =>
+      o.market === market && o.status === 'OPEN'
+    ) || [];
+
+    for (const order of openOrders) {
+      console.log("Cancelling order:", order.clientId);
+      await this.client.cancelOrder(
+        this.subaccount,
+        market,
+        order.clientId
+      );
     }
   }
 
@@ -182,15 +208,9 @@ export class DydxV4Client extends AbstractDexClient {
     );
 
     const positions = response?.positions || [];
-
     const marketPositions = positions.filter((p: any) => p.market === market);
 
     if (marketPositions.length === 0) return 0;
-
-    marketPositions.sort(
-      (a: any, b: any) =>
-        Number(b.createdAtHeight) - Number(a.createdAtHeight)
-    );
 
     return Number(marketPositions[0].size);
   }
@@ -199,16 +219,14 @@ export class DydxV4Client extends AbstractDexClient {
 
     const dir = alert.desired_position?.toUpperCase();
 
-    if (dir === 'BUY') return Math.abs(baseSize);
-    if (dir === 'SELL') return -Math.abs(baseSize);
-
     switch (dir) {
+      case 'BUY':
       case 'LONG':
         return Math.abs(baseSize);
+      case 'SELL':
       case 'SHORT':
         return -Math.abs(baseSize);
       case 'FLAT':
-        return 0;
       default:
         return 0;
     }
@@ -221,8 +239,6 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
-
-
 
 
 
