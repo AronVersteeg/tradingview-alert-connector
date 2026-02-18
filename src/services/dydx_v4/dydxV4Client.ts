@@ -27,6 +27,13 @@ export class DydxV4Client extends AbstractDexClient {
   private indexer!: IndexerClient;
   private initialized = false;
 
+  private readonly TOLERANCE = 0.001;
+  private readonly MAX_ATTEMPTS = 5;
+
+  // =====================================================
+  // INIT
+  // =====================================================
+
   async init(): Promise<void> {
 
     this.wallet = await LocalWallet.fromMnemonic(
@@ -68,49 +75,48 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   // =====================================================
-  // MAIN SELF-HEALING ENGINE
+  // MAIN ENTRY POINT
   // =====================================================
 
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
-
     const targetSize = this.getTargetSize(alert, alert.size);
 
     console.log("🎯 Target position:", targetSize);
 
-    // 1️⃣ Cancel open orders first
     await this.cancelOpenOrders(market);
 
-    // 2️⃣ Try to reach target with self-healing loop
     await this.reachTargetPosition(market, targetSize);
   }
 
   // =====================================================
-  // CORE DELTA LOOP
+  // SELF-HEALING DELTA ENGINE
   // =====================================================
 
   private async reachTargetPosition(market: string, targetSize: number) {
 
-    for (let attempt = 1; attempt <= 5; attempt++) {
+    for (let attempt = 1; attempt <= this.MAX_ATTEMPTS; attempt++) {
 
-      await new Promise(res => setTimeout(res, 1000));
+      await this.sleep(1500);
 
       const currentSize = await this.getCurrentSize(market);
+      const diffRaw = targetSize - currentSize;
+      const diff = Number(diffRaw.toFixed(3));
 
-      console.log(`Attempt ${attempt} | Current: ${currentSize} | Target: ${targetSize}`);
+      console.log(
+        `Attempt ${attempt} | Current: ${currentSize} | Target: ${targetSize} | Diff: ${diff}`
+      );
 
-      if (currentSize === targetSize) {
-        console.log("✅ Target bereikt.");
+      // ✅ Binnen tolerance → klaar
+      if (Math.abs(diff) < this.TOLERANCE) {
+        console.log("✅ Target bereikt (binnen tolerance).");
         return;
       }
 
-      const delta = targetSize - currentSize;
+      const side = diff > 0 ? OrderSide.BUY : OrderSide.SELL;
+      const size = Math.abs(diff);
 
-      if (delta === 0) return;
-
-      const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
-      const size = Math.abs(delta);
       const price = side === OrderSide.BUY ? 999999 : 1;
 
       const clientId = parseInt(
@@ -134,6 +140,9 @@ export class DydxV4Client extends AbstractDexClient {
         false,
         false
       );
+
+      // extra stabilisatie-wacht
+      await this.sleep(2000);
     }
 
     console.log("⚠️ Max attempts bereikt — positie mogelijk inconsistent.");
@@ -201,6 +210,10 @@ export class DydxV4Client extends AbstractDexClient {
       default:
         return 0;
     }
+  }
+
+  private sleep(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   private getIndexerConfig(): IndexerConfig {
