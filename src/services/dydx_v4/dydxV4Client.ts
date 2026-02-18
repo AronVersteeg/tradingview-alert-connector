@@ -29,8 +29,7 @@ export class DydxV4Client extends AbstractDexClient {
 
   private processingMarkets = new Set<string>();
 
-  // 🔥 PAS STOP % HIER AAN
-  private STOP_PERCENT: number = 1.0;
+  private STOP_PERCENT = 1.0;
 
   async init(): Promise<void> {
 
@@ -84,36 +83,29 @@ export class DydxV4Client extends AbstractDexClient {
 
     try {
 
-      // 1️⃣ Cancel bestaande conditional orders
       await this.cancelOpenOrders(market);
 
       const currentSize = await this.getCurrentSize(market);
       const targetSize = this.getTargetSize(alert, alert.size);
       const delta = targetSize - currentSize;
 
-      console.log("Current size:", currentSize);
-      console.log("Target size:", targetSize);
-      console.log("Delta:", delta);
-
-      // 2️⃣ MARKET ORDER
       if (delta !== 0) {
 
         const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
-        const size = Number(Math.abs(delta));
-        const price = side === OrderSide.BUY ? 999999 : 1;
+        const size = Math.abs(delta).toString(); // 🔥 STRING
+        const price = side === OrderSide.BUY ? "999999" : "1"; // 🔥 STRING
 
-        const clientId = Number(
-          parseInt(crypto.randomBytes(4).toString('hex'), 16)
+        const clientId = parseInt(
+          crypto.randomBytes(4).toString('hex'),
+          16
         );
-
-        console.log("Sending MARKET order:", { market, side, size });
 
         const marketResponse = await this.client.placeOrder(
           this.subaccount,
           market,
           OrderType.MARKET,
           side,
-          Number(price),
+          price,
           size,
           clientId,
           OrderTimeInForce.IOC,
@@ -124,25 +116,19 @@ export class DydxV4Client extends AbstractDexClient {
           undefined
         );
 
-        console.log("✅ Market order placed:", marketResponse);
+        console.log("✅ Market order:", marketResponse);
       }
 
-      // 3️⃣ STOPLOSS plaatsen
       const newSize = await this.getCurrentSize(market);
 
       if (newSize !== 0) {
         await this.placeStopLoss(market, newSize);
       }
 
-    } catch (err) {
-      console.error("❌ Error in placeOrder:", err);
-      throw err;
     } finally {
       this.processingMarkets.delete(market);
     }
   }
-
-  // ================= STOP LOGIC =================
 
   private async placeStopLoss(market: string, positionSize: number) {
 
@@ -156,51 +142,37 @@ export class DydxV4Client extends AbstractDexClient {
 
     const entryPrice = Number(pos.entryPrice);
     const isLong = positionSize > 0;
-    const size = Number(Math.abs(positionSize));
 
     const triggerPrice = isLong
-      ? entryPrice * (1 - this.STOP_PERCENT / 100)
-      : entryPrice * (1 + this.STOP_PERCENT / 100);
+      ? (entryPrice * (1 - this.STOP_PERCENT / 100)).toString()
+      : (entryPrice * (1 + this.STOP_PERCENT / 100)).toString();
 
+    const size = Math.abs(positionSize).toString();
     const side = isLong ? OrderSide.SELL : OrderSide.BUY;
 
-    const clientId = Number(
-      parseInt(crypto.randomBytes(4).toString('hex'), 16)
+    const clientId = parseInt(
+      crypto.randomBytes(4).toString('hex'),
+      16
     );
 
-    console.log("Placing STOP:", {
+    const stopResponse = await this.client.placeOrder(
+      this.subaccount,
       market,
+      OrderType.STOP_MARKET,
       side,
-      size,
-      triggerPrice
-    });
+      triggerPrice, // 🔥 STRING
+      size,         // 🔥 STRING
+      clientId,
+      OrderTimeInForce.GTT,
+      0,
+      OrderExecution.DEFAULT,
+      true,
+      false,
+      undefined
+    );
 
-    try {
-
-      const stopResponse = await this.client.placeOrder(
-        this.subaccount,
-        market,
-        OrderType.STOP_MARKET,
-        side,
-        Number(triggerPrice),
-        size,
-        clientId,
-        OrderTimeInForce.GTT,
-        0,
-        OrderExecution.DEFAULT,
-        true,   // reduceOnly
-        false,
-        undefined
-      );
-
-      console.log("🛑 Stop order placed:", stopResponse);
-
-    } catch (err) {
-      console.error("❌ Failed to place stop:", err);
-    }
+    console.log("🛑 Stop order:", stopResponse);
   }
-
-  // ================= CANCEL CONDITIONALS =================
 
   private async cancelOpenOrders(market: string) {
 
@@ -215,19 +187,15 @@ export class DydxV4Client extends AbstractDexClient {
 
     for (const order of openOrders) {
 
-      console.log("Cancelling order:", order.clientId);
-
       await this.client.cancelOrder(
         this.subaccount,
         market,
-        Number(order.clientId),
+        Number(order.clientId), // number
         0,
         undefined
       );
     }
   }
-
-  // ================= HELPERS =================
 
   private async getCurrentSize(market: string): Promise<number> {
 
@@ -236,12 +204,9 @@ export class DydxV4Client extends AbstractDexClient {
       0
     );
 
-    const positions = response?.positions || [];
-    const marketPos = positions.find((p: any) => p.market === market);
+    const pos = response.positions.find((p: any) => p.market === market);
 
-    if (!marketPos) return 0;
-
-    return Number(marketPos.size);
+    return pos ? Number(pos.size) : 0;
   }
 
   private getTargetSize(alert: AlertObject, baseSize: number): number {
@@ -255,7 +220,6 @@ export class DydxV4Client extends AbstractDexClient {
       case 'SELL':
       case 'SHORT':
         return -Math.abs(baseSize);
-      case 'FLAT':
       default:
         return 0;
     }
@@ -268,6 +232,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
