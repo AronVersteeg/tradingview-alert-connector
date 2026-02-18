@@ -29,7 +29,7 @@ export class DydxV4Client extends AbstractDexClient {
 
   private processingMarkets = new Set<string>();
 
-  // 🔥 PAS HIER JE STOP % AAN
+  // 🔥 PAS JE STOP HIER AAN
   private STOP_PERCENT = 1.0;
 
   async init(): Promise<void> {
@@ -75,7 +75,6 @@ export class DydxV4Client extends AbstractDexClient {
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
-    const dir = alert.desired_position?.toUpperCase();
 
     while (this.processingMarkets.has(market)) {
       await new Promise(res => setTimeout(res, 20));
@@ -85,7 +84,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     try {
 
-      // 🔴 1️⃣ Cancel ALL open conditional orders first
+      // 1️⃣ Cancel alle bestaande conditional orders
       await this.cancelOpenOrders(market);
 
       const currentSize = await this.getCurrentSize(market);
@@ -96,15 +95,16 @@ export class DydxV4Client extends AbstractDexClient {
       console.log("Target size:", targetSize);
       console.log("Delta:", delta);
 
+      // 2️⃣ MARKET ORDER (delta engine)
       if (delta !== 0) {
 
         const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
         const size = Math.abs(delta);
         const price = side === OrderSide.BUY ? 999999 : 1;
 
-        console.log("Sending market order:", { market, side, size });
+        console.log("Sending MARKET order:", { market, side, size });
 
-        await this.client.placeOrder(
+        const marketResponse = await this.client.placeOrder(
           this.subaccount,
           market,
           OrderType.MARKET,
@@ -119,15 +119,20 @@ export class DydxV4Client extends AbstractDexClient {
           false,
           null
         );
+
+        console.log("✅ Market order placed:", marketResponse);
       }
 
-      // 🔵 2️⃣ After fill → place new stop if position exists
+      // 3️⃣ STOPLOSS PLAATSEN (indien positie open)
       const newSize = await this.getCurrentSize(market);
 
       if (newSize !== 0) {
         await this.placeStopLoss(market, newSize);
       }
 
+    } catch (err) {
+      console.error("❌ Error in placeOrder:", err);
+      throw err;
     } finally {
       this.processingMarkets.delete(market);
     }
@@ -162,22 +167,32 @@ export class DydxV4Client extends AbstractDexClient {
       triggerPrice
     });
 
-    await this.client.placeOrder(
-      this.subaccount,
-      market,
-      OrderType.STOP_MARKET,
-      side,
-      triggerPrice,
-      size,
-      parseInt(crypto.randomBytes(4).toString('hex'), 16),
-      OrderTimeInForce.GTT,
-      0,
-      OrderExecution.DEFAULT,
-      true,   // reduceOnly = true
-      false,
-      null
-    );
+    try {
+
+      const stopResponse = await this.client.placeOrder(
+        this.subaccount,
+        market,
+        OrderType.STOP_MARKET,
+        side,
+        triggerPrice,
+        size,
+        parseInt(crypto.randomBytes(4).toString('hex'), 16),
+        OrderTimeInForce.GTT,
+        0,
+        OrderExecution.DEFAULT,
+        true,   // reduceOnly = true
+        false,
+        null
+      );
+
+      console.log("🛑 Stop order placed:", stopResponse);
+
+    } catch (err) {
+      console.error("❌ Failed to place stop:", err);
+    }
   }
+
+  // ================= CANCEL CONDITIONALS =================
 
   private async cancelOpenOrders(market: string) {
 
@@ -191,14 +206,20 @@ export class DydxV4Client extends AbstractDexClient {
     ) || [];
 
     for (const order of openOrders) {
+
       console.log("Cancelling order:", order.clientId);
+
       await this.client.cancelOrder(
         this.subaccount,
         market,
-        order.clientId
+        order.clientId,
+        0,      // orderFlags
+        null    // goodTilBlock
       );
     }
   }
+
+  // ================= HELPERS =================
 
   private async getCurrentSize(market: string): Promise<number> {
 
@@ -208,11 +229,11 @@ export class DydxV4Client extends AbstractDexClient {
     );
 
     const positions = response?.positions || [];
-    const marketPositions = positions.filter((p: any) => p.market === market);
+    const marketPos = positions.find((p: any) => p.market === market);
 
-    if (marketPositions.length === 0) return 0;
+    if (!marketPos) return 0;
 
-    return Number(marketPositions[0].size);
+    return Number(marketPos.size);
   }
 
   private getTargetSize(alert: AlertObject, baseSize: number): number {
@@ -239,6 +260,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
