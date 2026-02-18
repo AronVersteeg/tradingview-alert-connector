@@ -195,15 +195,14 @@ export class DydxV4Client extends AbstractDexClient {
           ? order.clientId
           : parseInt(order.clientId, 10);
 
-      // Correct order for SDK 1.0.27:
-      // (subaccount, clientId, orderFlags, goodTilBlock?, market?)
+      // Correct signature for SDK 1.0.27:
+      // cancelOrder(subaccount, clientId, orderFlags, goodTilBlock?)
 
       await this.client.cancelOrder(
         this.subaccount,
         clientId,
         0,          // OrderFlags
-        undefined,  // goodTilBlock
-        market
+        undefined   // goodTilBlock
       );
     }
   }
@@ -248,6 +247,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
