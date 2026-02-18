@@ -81,7 +81,6 @@ export class DydxV4Client extends AbstractDexClient {
 
     const market = alert.market.replace(/_/g, '-');
 
-    // Cancel existing open orders
     await this.cancelOpenOrders(market);
 
     const currentSize = await this.getCurrentSize(market);
@@ -92,7 +91,6 @@ export class DydxV4Client extends AbstractDexClient {
     console.log("Target:", targetSize);
     console.log("Delta:", delta);
 
-    // 1️⃣ MARKET EXECUTION
     if (delta !== 0) {
 
       const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
@@ -122,11 +120,25 @@ export class DydxV4Client extends AbstractDexClient {
       console.log("✅ Market order geplaatst");
     }
 
-    // 2️⃣ STOP LOSS
-    const newSize = await this.getCurrentSize(market);
+    // 🔥 WACHT TOT POSITIE ECHT BESTAAT (max 5 sec)
+
+    let newSize = 0;
+
+    for (let i = 0; i < 5; i++) {
+
+      await new Promise(res => setTimeout(res, 1000));
+
+      newSize = await this.getCurrentSize(market);
+
+      console.log("Checking position after fill:", newSize);
+
+      if (newSize !== 0) break;
+    }
 
     if (newSize !== 0) {
       await this.placeStopLoss(market, newSize);
+    } else {
+      console.log("⚠️ Stop niet geplaatst — positie niet gevonden.");
     }
   }
 
@@ -142,7 +154,10 @@ export class DydxV4Client extends AbstractDexClient {
     );
 
     const pos = positions.positions.find((p: any) => p.market === market);
-    if (!pos) return;
+    if (!pos) {
+      console.log("⚠️ Geen positie gevonden voor stop.");
+      return;
+    }
 
     const entryPrice = Number(pos.entryPrice);
     const isLong = positionSize > 0;
@@ -159,6 +174,8 @@ export class DydxV4Client extends AbstractDexClient {
       16
     );
 
+    console.log("🛑 Stop trigger:", triggerPrice);
+
     await this.client.placeOrder(
       this.subaccount,
       market,
@@ -167,10 +184,10 @@ export class DydxV4Client extends AbstractDexClient {
       triggerPrice,
       size,
       clientId,
-      OrderTimeInForce.IOC,     // 🔥 belangrijk voor STOP_MARKET
+      OrderTimeInForce.IOC,
       0,
-      OrderExecution.DEFAULT,   // DEFAULT is correct in 1.0.27
-      true,                     // reduceOnly
+      OrderExecution.DEFAULT,
+      true,
       false
     );
 
