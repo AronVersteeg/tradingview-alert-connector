@@ -71,17 +71,22 @@ export class DydxV4Client extends AbstractDexClient {
     return this.initialized;
   }
 
-  // ================= MAIN =================
+  // ================= MAIN ORDER =================
 
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
 
+    // 1️⃣ Cancel open conditional orders
     await this.cancelOpenOrders(market);
 
     const currentSize = await this.getCurrentSize(market);
     const targetSize = this.getTargetSize(alert, alert.size);
     const delta = targetSize - currentSize;
+
+    console.log("Current:", currentSize);
+    console.log("Target:", targetSize);
+    console.log("Delta:", delta);
 
     if (delta !== 0) {
 
@@ -103,11 +108,10 @@ export class DydxV4Client extends AbstractDexClient {
         size,
         clientId,
         OrderTimeInForce.IOC,
-        0,                      // goodTilBlock
-        OrderExecution.DEFAULT, // 🔥 required
-        false,                  // reduceOnly
-        false,                  // postOnly
-        undefined               // triggerPrice
+        0,                        // goodTilBlock
+        OrderExecution.DEFAULT,   // required
+        false,                    // reduceOnly
+        false                     // postOnly
       );
     }
 
@@ -118,7 +122,7 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
-  // ================= STOP =================
+  // ================= STOP LOSS =================
 
   private async placeStopLoss(market: string, positionSize: number) {
 
@@ -150,15 +154,14 @@ export class DydxV4Client extends AbstractDexClient {
       market,
       OrderType.STOP_MARKET,
       side,
-      triggerPrice,
+      triggerPrice,              // price acts as trigger in v1.0.27
       size,
       clientId,
       OrderTimeInForce.GTT,
       0,
-      OrderExecution.DEFAULT, // 🔥 required
-      true,                   // reduceOnly
-      false,
-      triggerPrice            // 🔥 triggerPrice required for STOP
+      OrderExecution.DEFAULT,
+      true,                      // reduceOnly
+      false                      // postOnly
     );
   }
 
