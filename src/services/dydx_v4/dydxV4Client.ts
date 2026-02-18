@@ -29,7 +29,7 @@ export class DydxV4Client extends AbstractDexClient {
 
   private processingMarkets = new Set<string>();
 
-  // 🔥 PAS JE STOP HIER AAN
+  // 🔥 PAS STOP % HIER AAN
   private STOP_PERCENT = 1.0;
 
   async init(): Promise<void> {
@@ -123,7 +123,7 @@ export class DydxV4Client extends AbstractDexClient {
         console.log("✅ Market order placed:", marketResponse);
       }
 
-      // 3️⃣ STOPLOSS PLAATSEN (indien positie open)
+      // 3️⃣ STOPLOSS PLAATSEN
       const newSize = await this.getCurrentSize(market);
 
       if (newSize !== 0) {
@@ -180,7 +180,7 @@ export class DydxV4Client extends AbstractDexClient {
         OrderTimeInForce.GTT,
         0,
         OrderExecution.DEFAULT,
-        true,   // reduceOnly = true
+        true,   // reduceOnly
         false,
         null
       );
@@ -212,9 +212,9 @@ export class DydxV4Client extends AbstractDexClient {
       await this.client.cancelOrder(
         this.subaccount,
         market,
-        order.clientId,
-        0,      // orderFlags
-        null    // goodTilBlock
+        Number(order.clientId),  // 🔥 FIXED TYPE
+        0,
+        null
       );
     }
   }
@@ -260,6 +260,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
