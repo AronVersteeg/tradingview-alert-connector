@@ -28,6 +28,10 @@ export class DydxV4Client extends AbstractDexClient {
 
   private STOP_PERCENT = 1.0;
 
+  // =====================================================
+  // INIT
+  // =====================================================
+
   async init(): Promise<void> {
 
     this.wallet = await LocalWallet.fromMnemonic(
@@ -64,28 +68,42 @@ export class DydxV4Client extends AbstractDexClient {
     this.initialized = true;
   }
 
+  async getIsAccountReady(): Promise<boolean> {
+    return this.initialized;
+  }
+
+  // =====================================================
+  // MAIN ORDER LOGIC
+  // =====================================================
+
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
 
+    // 1️⃣ Cancel oude conditional orders
     await this.cancelOpenOrders(market);
 
     const currentSize = await this.getCurrentSize(market);
     const targetSize = this.getTargetSize(alert, alert.size);
     const delta = targetSize - currentSize;
 
+    console.log("Current:", currentSize);
+    console.log("Target:", targetSize);
+    console.log("Delta:", delta);
+
+    // 2️⃣ MARKET EXECUTION
     if (delta !== 0) {
 
       const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
-      const size = Math.abs(delta);
-      const price = side === OrderSide.BUY ? 999999 : 1;
+      const size = Math.abs(delta);              // number
+      const price = side === OrderSide.BUY ? 999999 : 1; // number
 
       const clientId = parseInt(
         crypto.randomBytes(4).toString('hex'),
         16
       );
 
-      await this.client.placeOrder(
+      const response = await this.client.placeOrder(
         this.subaccount,
         market,
         OrderType.MARKET,
@@ -94,17 +112,25 @@ export class DydxV4Client extends AbstractDexClient {
         size,
         clientId,
         OrderTimeInForce.IOC,
-        false, // reduceOnly
-        false  // postOnly
+        0,        // goodTilBlock
+        false,    // reduceOnly
+        false     // postOnly
       );
+
+      console.log("✅ Market order:", response);
     }
 
+    // 3️⃣ STOP LOSS PLAATSEN
     const newSize = await this.getCurrentSize(market);
 
     if (newSize !== 0) {
       await this.placeStopLoss(market, newSize);
     }
   }
+
+  // =====================================================
+  // STOP LOSS
+  // =====================================================
 
   private async placeStopLoss(market: string, positionSize: number) {
 
@@ -131,7 +157,7 @@ export class DydxV4Client extends AbstractDexClient {
       16
     );
 
-    await this.client.placeOrder(
+    const stopResponse = await this.client.placeOrder(
       this.subaccount,
       market,
       OrderType.STOP_MARKET,
@@ -140,10 +166,17 @@ export class DydxV4Client extends AbstractDexClient {
       size,
       clientId,
       OrderTimeInForce.GTT,
-      true,  // reduceOnly
-      false
+      0,      // goodTilBlock
+      true,   // reduceOnly
+      false   // postOnly
     );
+
+    console.log("🛑 Stop placed:", stopResponse);
   }
+
+  // =====================================================
+  // CANCEL CONDITIONAL ORDERS
+  // =====================================================
 
   private async cancelOpenOrders(market: string) {
 
@@ -161,10 +194,16 @@ export class DydxV4Client extends AbstractDexClient {
       await this.client.cancelOrder(
         this.subaccount,
         market,
-        Number(order.clientId)
+        Number(order.clientId),
+        0,          // orderFlags
+        undefined   // goodTilBlock
       );
     }
   }
+
+  // =====================================================
+  // HELPERS
+  // =====================================================
 
   private async getCurrentSize(market: string): Promise<number> {
 
@@ -189,6 +228,7 @@ export class DydxV4Client extends AbstractDexClient {
       case 'SELL':
       case 'SHORT':
         return -Math.abs(baseSize);
+      case 'FLAT':
       default:
         return 0;
     }
@@ -201,6 +241,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
