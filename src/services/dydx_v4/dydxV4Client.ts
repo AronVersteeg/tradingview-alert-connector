@@ -29,7 +29,7 @@ export class DydxV4Client extends AbstractDexClient {
 
   private processingMarkets = new Set<string>();
 
-  private STOP_PERCENT = 1.0;
+  private STOP_PERCENT: number = 1.0;
 
   async init(): Promise<void> {
 
@@ -89,18 +89,22 @@ export class DydxV4Client extends AbstractDexClient {
       const targetSize = this.getTargetSize(alert, alert.size);
       const delta = targetSize - currentSize;
 
+      console.log("Current:", currentSize);
+      console.log("Target:", targetSize);
+      console.log("Delta:", delta);
+
       if (delta !== 0) {
 
         const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
-        const size = Math.abs(delta).toString(); // 🔥 STRING
-        const price = side === OrderSide.BUY ? "999999" : "1"; // 🔥 STRING
+        const size = Math.abs(delta);     // ✅ number
+        const price = side === OrderSide.BUY ? 999999 : 1; // ✅ number
 
         const clientId = parseInt(
           crypto.randomBytes(4).toString('hex'),
           16
         );
 
-        const marketResponse = await this.client.placeOrder(
+        const response = await this.client.placeOrder(
           this.subaccount,
           market,
           OrderType.MARKET,
@@ -116,7 +120,7 @@ export class DydxV4Client extends AbstractDexClient {
           undefined
         );
 
-        console.log("✅ Market order:", marketResponse);
+        console.log("✅ Market order:", response);
       }
 
       const newSize = await this.getCurrentSize(market);
@@ -129,6 +133,8 @@ export class DydxV4Client extends AbstractDexClient {
       this.processingMarkets.delete(market);
     }
   }
+
+  // ================= STOP =================
 
   private async placeStopLoss(market: string, positionSize: number) {
 
@@ -144,10 +150,10 @@ export class DydxV4Client extends AbstractDexClient {
     const isLong = positionSize > 0;
 
     const triggerPrice = isLong
-      ? (entryPrice * (1 - this.STOP_PERCENT / 100)).toString()
-      : (entryPrice * (1 + this.STOP_PERCENT / 100)).toString();
+      ? entryPrice * (1 - this.STOP_PERCENT / 100)
+      : entryPrice * (1 + this.STOP_PERCENT / 100);
 
-    const size = Math.abs(positionSize).toString();
+    const size = Math.abs(positionSize);
     const side = isLong ? OrderSide.SELL : OrderSide.BUY;
 
     const clientId = parseInt(
@@ -160,8 +166,8 @@ export class DydxV4Client extends AbstractDexClient {
       market,
       OrderType.STOP_MARKET,
       side,
-      triggerPrice, // 🔥 STRING
-      size,         // 🔥 STRING
+      triggerPrice, // ✅ number
+      size,         // ✅ number
       clientId,
       OrderTimeInForce.GTT,
       0,
@@ -171,8 +177,10 @@ export class DydxV4Client extends AbstractDexClient {
       undefined
     );
 
-    console.log("🛑 Stop order:", stopResponse);
+    console.log("🛑 Stop placed:", stopResponse);
   }
+
+  // ================= CANCEL =================
 
   private async cancelOpenOrders(market: string) {
 
@@ -190,7 +198,7 @@ export class DydxV4Client extends AbstractDexClient {
       await this.client.cancelOrder(
         this.subaccount,
         market,
-        Number(order.clientId), // number
+        Number(order.clientId), // ✅ number
         0,
         undefined
       );
