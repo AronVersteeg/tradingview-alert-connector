@@ -27,12 +27,6 @@ export class DydxV4Client extends AbstractDexClient {
   private indexer!: IndexerClient;
   private initialized = false;
 
-  private STOP_PERCENT = 1.0;
-
-  // =====================================================
-  // INIT
-  // =====================================================
-
   async init(): Promise<void> {
 
     this.wallet = await LocalWallet.fromMnemonic(
@@ -74,24 +68,46 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   // =====================================================
-  // MAIN ORDER LOGIC
+  // MAIN SELF-HEALING ENGINE
   // =====================================================
 
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
 
+    const targetSize = this.getTargetSize(alert, alert.size);
+
+    console.log("🎯 Target position:", targetSize);
+
+    // 1️⃣ Cancel open orders first
     await this.cancelOpenOrders(market);
 
-    const currentSize = await this.getCurrentSize(market);
-    const targetSize = this.getTargetSize(alert, alert.size);
-    const delta = targetSize - currentSize;
+    // 2️⃣ Try to reach target with self-healing loop
+    await this.reachTargetPosition(market, targetSize);
+  }
 
-    console.log("Current:", currentSize);
-    console.log("Target:", targetSize);
-    console.log("Delta:", delta);
+  // =====================================================
+  // CORE DELTA LOOP
+  // =====================================================
 
-    if (delta !== 0) {
+  private async reachTargetPosition(market: string, targetSize: number) {
+
+    for (let attempt = 1; attempt <= 5; attempt++) {
+
+      await new Promise(res => setTimeout(res, 1000));
+
+      const currentSize = await this.getCurrentSize(market);
+
+      console.log(`Attempt ${attempt} | Current: ${currentSize} | Target: ${targetSize}`);
+
+      if (currentSize === targetSize) {
+        console.log("✅ Target bereikt.");
+        return;
+      }
+
+      const delta = targetSize - currentSize;
+
+      if (delta === 0) return;
 
       const side = delta > 0 ? OrderSide.BUY : OrderSide.SELL;
       const size = Math.abs(delta);
@@ -101,6 +117,8 @@ export class DydxV4Client extends AbstractDexClient {
         crypto.randomBytes(4).toString('hex'),
         16
       );
+
+      console.log("🔄 Correctie order:", { side, size });
 
       await this.client.placeOrder(
         this.subaccount,
@@ -116,82 +134,9 @@ export class DydxV4Client extends AbstractDexClient {
         false,
         false
       );
-
-      console.log("✅ Market order geplaatst");
     }
 
-    // 🔥 WACHT TOT POSITIE ECHT BESTAAT (max 5 sec)
-
-    let newSize = 0;
-
-    for (let i = 0; i < 5; i++) {
-
-      await new Promise(res => setTimeout(res, 1000));
-
-      newSize = await this.getCurrentSize(market);
-
-      console.log("Checking position after fill:", newSize);
-
-      if (newSize !== 0) break;
-    }
-
-    if (newSize !== 0) {
-      await this.placeStopLoss(market, newSize);
-    } else {
-      console.log("⚠️ Stop niet geplaatst — positie niet gevonden.");
-    }
-  }
-
-  // =====================================================
-  // STOP LOSS
-  // =====================================================
-
-  private async placeStopLoss(market: string, positionSize: number) {
-
-    const positions = await this.indexer.account.getSubaccountPerpetualPositions(
-      this.wallet.address,
-      0
-    );
-
-    const pos = positions.positions.find((p: any) => p.market === market);
-    if (!pos) {
-      console.log("⚠️ Geen positie gevonden voor stop.");
-      return;
-    }
-
-    const entryPrice = Number(pos.entryPrice);
-    const isLong = positionSize > 0;
-
-    const triggerPrice = isLong
-      ? entryPrice * (1 - this.STOP_PERCENT / 100)
-      : entryPrice * (1 + this.STOP_PERCENT / 100);
-
-    const size = Math.abs(positionSize);
-    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
-
-    const clientId = parseInt(
-      crypto.randomBytes(4).toString('hex'),
-      16
-    );
-
-    console.log("🛑 Stop trigger:", triggerPrice);
-
-    await this.client.placeOrder(
-      this.subaccount,
-      market,
-      OrderType.STOP_MARKET,
-      side,
-      triggerPrice,
-      size,
-      clientId,
-      OrderTimeInForce.IOC,
-      0,
-      OrderExecution.DEFAULT,
-      true,
-      false
-    );
-
-    console.log("🛑 Stop loss geplaatst");
+    console.log("⚠️ Max attempts bereikt — positie mogelijk inconsistent.");
   }
 
   // =====================================================
@@ -265,6 +210,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
