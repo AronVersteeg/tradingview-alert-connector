@@ -81,7 +81,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     const market = alert.market.replace(/_/g, '-');
 
-    // 1️⃣ Cancel open conditional orders
+    // 1️⃣ Cancel bestaande conditional orders
     await this.cancelOpenOrders(market);
 
     const currentSize = await this.getCurrentSize(market);
@@ -113,11 +113,13 @@ export class DydxV4Client extends AbstractDexClient {
         size,
         clientId,
         OrderTimeInForce.IOC,
-        0,                        // goodTilBlock
-        OrderExecution.DEFAULT,   // required in 1.0.27
-        false,                    // reduceOnly
-        false                     // postOnly
+        0,
+        OrderExecution.DEFAULT,  // MARKET mag DEFAULT gebruiken
+        false,
+        false
       );
+
+      console.log("✅ Market order geplaatst");
     }
 
     // 3️⃣ STOP LOSS
@@ -167,10 +169,12 @@ export class DydxV4Client extends AbstractDexClient {
       clientId,
       OrderTimeInForce.GTT,
       0,
-      OrderExecution.DEFAULT,
-      true,   // reduceOnly
+      OrderExecution.REDUCE_ONLY,  // 🔥 FIX: geen DEFAULT hier
+      true,                        // reduceOnly
       false
     );
+
+    console.log("🛑 Stop loss geplaatst");
   }
 
   // =====================================================
@@ -195,14 +199,11 @@ export class DydxV4Client extends AbstractDexClient {
           ? order.clientId
           : parseInt(order.clientId, 10);
 
-      // Correct signature for SDK 1.0.27:
-      // cancelOrder(subaccount, clientId, orderFlags, goodTilBlock?)
-
       await this.client.cancelOrder(
         this.subaccount,
         clientId,
-        0,          // OrderFlags
-        undefined   // goodTilBlock
+        0,
+        undefined
       );
     }
   }
@@ -247,6 +248,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
 
 
