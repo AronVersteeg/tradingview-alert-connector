@@ -192,7 +192,63 @@ export class DydxV4Client extends AbstractDexClient {
       o.market === market && o.status === 'OPEN'
     ) || [];
 
-    for (const order o
+    for (const order of openOrders) {
+
+      const clientId =
+        typeof order.clientId === 'number'
+          ? order.clientId
+          : parseInt(order.clientId, 10);
+
+      await this.client.cancelOrder(
+        this.subaccount,
+        clientId,
+        0,
+        undefined
+      );
+    }
+  }
+
+  // =====================================================
+  // HELPERS
+  // =====================================================
+
+  private async getCurrentSize(market: string): Promise<number> {
+
+    const response = await this.indexer.account.getSubaccountPerpetualPositions(
+      this.wallet.address,
+      0
+    );
+
+    const pos = response.positions.find((p: any) => p.market === market);
+
+    return pos ? Number(pos.size) : 0;
+  }
+
+  private getTargetSize(alert: AlertObject, baseSize: number): number {
+
+    const dir = alert.desired_position?.toUpperCase();
+
+    switch (dir) {
+      case 'BUY':
+      case 'LONG':
+        return Math.abs(baseSize);
+      case 'SELL':
+      case 'SHORT':
+        return -Math.abs(baseSize);
+      case 'FLAT':
+      default:
+        return 0;
+    }
+  }
+
+  private getIndexerConfig(): IndexerConfig {
+    return new IndexerConfig(
+      config.get('DydxV4.IndexerConfig.httpsEndpoint'),
+      config.get('DydxV4.IndexerConfig.wssEndpoint')
+    );
+  }
+}
+
 
 
 
