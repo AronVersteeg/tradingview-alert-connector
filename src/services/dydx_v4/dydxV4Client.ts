@@ -135,7 +135,7 @@ export class DydxV4Client extends AbstractDexClient {
         size,
         clientId,
         OrderTimeInForce.IOC,
-        0,
+        20,
         OrderExecution.DEFAULT,
         false,
         false
