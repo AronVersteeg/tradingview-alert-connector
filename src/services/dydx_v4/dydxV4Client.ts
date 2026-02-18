@@ -29,10 +29,7 @@ export class DydxV4Client extends AbstractDexClient {
 
   private readonly TOLERANCE = 0.001;
   private readonly MAX_ATTEMPTS = 5;
-
-  // =====================================================
-  // INIT
-  // =====================================================
+  private readonly GTB_OFFSET = 20; // 🔥 20 blocks validity
 
   async init(): Promise<void> {
 
@@ -70,14 +67,6 @@ export class DydxV4Client extends AbstractDexClient {
     this.initialized = true;
   }
 
-  async getIsAccountReady(): Promise<boolean> {
-    return this.initialized;
-  }
-
-  // =====================================================
-  // MAIN ENTRY POINT
-  // =====================================================
-
   async placeOrder(alert: AlertObject): Promise<void> {
 
     const market = alert.market.replace(/_/g, '-');
@@ -89,10 +78,6 @@ export class DydxV4Client extends AbstractDexClient {
 
     await this.reachTargetPosition(market, targetSize);
   }
-
-  // =====================================================
-  // SELF-HEALING DELTA ENGINE
-  // =====================================================
 
   private async reachTargetPosition(market: string, targetSize: number) {
 
@@ -108,7 +93,6 @@ export class DydxV4Client extends AbstractDexClient {
         `Attempt ${attempt} | Current: ${currentSize} | Target: ${targetSize} | Diff: ${diff}`
       );
 
-      // ✅ Binnen tolerance → klaar
       if (Math.abs(diff) < this.TOLERANCE) {
         console.log("✅ Target bereikt (binnen tolerance).");
         return;
@@ -116,7 +100,6 @@ export class DydxV4Client extends AbstractDexClient {
 
       const side = diff > 0 ? OrderSide.BUY : OrderSide.SELL;
       const size = Math.abs(diff);
-
       const price = side === OrderSide.BUY ? 999999 : 1;
 
       const clientId = parseInt(
@@ -126,31 +109,41 @@ export class DydxV4Client extends AbstractDexClient {
 
       console.log("🔄 Correctie order:", { side, size });
 
-      await this.client.placeOrder(
-        this.subaccount,
-        market,
-        OrderType.MARKET,
-        side,
-        price,
-        size,
-        clientId,
-        OrderTimeInForce.IOC,
-        0,
-        OrderExecution.DEFAULT,
-        false,
-        false
-      );
+      try {
 
-      // extra stabilisatie-wacht
+        await this.client.placeOrder(
+          this.subaccount,
+          market,
+          OrderType.MARKET,
+          side,
+          price,
+          size,
+          clientId,
+          OrderTimeInForce.IOC,
+          this.GTB_OFFSET,          // 🔥 FIXED HERE
+          OrderExecution.DEFAULT,
+          false,
+          false
+        );
+
+      } catch (error: any) {
+
+        if (error?.message?.includes("GoodTilBlock")) {
+          console.log("⚠️ GoodTilBlock verlopen — retrying...");
+          await this.sleep(1000);
+          attempt--;
+          continue;
+        }
+
+        console.log("❌ Order placement failed:", error);
+        throw error;
+      }
+
       await this.sleep(2000);
     }
 
     console.log("⚠️ Max attempts bereikt — positie mogelijk inconsistent.");
   }
-
-  // =====================================================
-  // CANCEL OPEN ORDERS
-  // =====================================================
 
   private async cancelOpenOrders(market: string) {
 
@@ -179,10 +172,6 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
-  // =====================================================
-  // HELPERS
-  // =====================================================
-
   private async getCurrentSize(market: string): Promise<number> {
 
     const response = await this.indexer.account.getSubaccountPerpetualPositions(
@@ -206,7 +195,6 @@ export class DydxV4Client extends AbstractDexClient {
       case 'SELL':
       case 'SHORT':
         return -Math.abs(baseSize);
-      case 'FLAT':
       default:
         return 0;
     }
