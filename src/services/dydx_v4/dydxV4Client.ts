@@ -19,8 +19,14 @@ import config from 'config';
 import crypto from 'crypto';
 import { AbstractDexClient } from '../abstractDexClient';
 
-export class DydxV4Client extends AbstractDexClient {
+type ProgressResult =
+  | { kind: 'target'; currentSize: number }
+  | { kind: 'flat'; currentSize: number }
+  | { kind: 'progress'; currentSize: number }
+  | { kind: 'unchanged'; currentSize: number }
+  | { kind: 'flipped'; currentSize: number };
 
+export class DydxV4Client extends AbstractDexClient {
   private wallet!: LocalWallet;
   private client!: CompositeClient;
   private subaccount!: SubaccountClient;
@@ -29,13 +35,12 @@ export class DydxV4Client extends AbstractDexClient {
 
   private readonly TOLERANCE = 0.001;
   private readonly MAX_ATTEMPTS = 5;
-
-  // =====================================================
-  // INIT
-  // =====================================================
+  private readonly FLAT_MAX_ATTEMPTS = 3;
+  private readonly PROGRESS_POLLS = 8;
+  private readonly POLL_DELAY_MS = 1500;
+  private readonly POST_ORDER_SETTLE_MS = 2500;
 
   async init(): Promise<void> {
-
     this.wallet = await LocalWallet.fromMnemonic(
       process.env.DYDX_V4_MNEMONIC!,
       BECH32_PREFIX
@@ -74,31 +79,147 @@ export class DydxV4Client extends AbstractDexClient {
     return this.initialized;
   }
 
-  // =====================================================
-  // MAIN ENTRY POINT
-  // =====================================================
-
   async placeOrder(alert: AlertObject): Promise<void> {
-
     const market = alert.market.replace(/_/g, '-');
     const targetSize = this.getTargetSize(alert, alert.size);
 
-    console.log("🎯 Target position:", targetSize);
+    console.log('🎯 Target position:', targetSize);
 
     await this.cancelOpenOrders(market);
 
-    await this.reachTargetPosition(market, targetSize);
+    if (Math.abs(targetSize) < this.TOLERANCE) {
+      await this.flattenPositionSafely(market);
+      return;
+    }
+
+    await this.reachTargetPositionSafely(market, targetSize);
   }
 
   // =====================================================
-  // SELF-HEALING DELTA ENGINE
+  // SAFE FLATTEN
   // =====================================================
 
-  private async reachTargetPosition(market: string, targetSize: number) {
+  private async flattenPositionSafely(market: string): Promise<void> {
+    let currentSize = await this.getCurrentSize(market);
 
+    console.log('🛑 Flatten requested | Current size:', currentSize);
+
+    if (Math.abs(currentSize) < this.TOLERANCE) {
+      console.log('✅ Already flat.');
+      return;
+    }
+
+    for (let attempt = 1; attempt <= this.FLAT_MAX_ATTEMPTS; attempt++) {
+      const startSize = currentSize;
+      const side = startSize > 0 ? OrderSide.SELL : OrderSide.BUY;
+      const size = Math.abs(startSize);
+
+      console.log(`🛑 Flatten attempt ${attempt} | Start: ${startSize} | Sending: ${side} ${size}`);
+
+      await this.placeCorrectionOrder(market, side, size);
+      await this.sleep(this.POST_ORDER_SETTLE_MS);
+
+      const progress = await this.waitForFlattenProgress(market, startSize);
+
+      if (progress.kind === 'flat') {
+        console.log('✅ Position fully flattened.');
+        return;
+      }
+
+      if (progress.kind === 'flipped') {
+        console.error('🚨 Position flipped during flatten. Starting emergency flatten.', {
+          previousSize: startSize,
+          currentSize: progress.currentSize
+        });
+
+        await this.emergencyFlattenOppositePosition(market, progress.currentSize);
+        return;
+      }
+
+      if (progress.kind === 'progress') {
+        currentSize = progress.currentSize;
+        console.log('↘️ Flatten progress observed, remaining size:', currentSize);
+        continue;
+      }
+
+      if (progress.kind === 'unchanged') {
+        currentSize = progress.currentSize;
+        console.warn('⚠️ No visible flatten progress yet; retrying cautiously.', {
+          currentSize
+        });
+        continue;
+      }
+    }
+
+    throw new Error(`Flatten failed for ${market}: max attempts reached without reaching flat.`);
+  }
+
+  private async emergencyFlattenOppositePosition(market: string, currentSize: number): Promise<void> {
+    if (Math.abs(currentSize) < this.TOLERANCE) {
+      console.log('✅ Emergency check: already flat.');
+      return;
+    }
+
+    const side = currentSize > 0 ? OrderSide.SELL : OrderSide.BUY;
+    const size = Math.abs(currentSize);
+
+    console.warn('🚨 Emergency flatten order:', { market, side, size, currentSize });
+
+    await this.placeCorrectionOrder(market, side, size);
+    await this.sleep(this.POST_ORDER_SETTLE_MS);
+
+    const finalSize = await this.getCurrentSize(market);
+
+    if (Math.abs(finalSize) < this.TOLERANCE) {
+      console.log('✅ Emergency flatten successful.');
+      return;
+    }
+
+    throw new Error(
+      `Emergency flatten failed for ${market}. Current size after emergency attempt: ${finalSize}`
+    );
+  }
+
+  private async waitForFlattenProgress(
+    market: string,
+    initialSize: number
+  ): Promise<ProgressResult> {
+    let lastSeen = initialSize;
+
+    for (let i = 1; i <= this.PROGRESS_POLLS; i++) {
+      await this.sleep(this.POLL_DELAY_MS);
+
+      const currentSize = await this.getCurrentSize(market);
+      lastSeen = currentSize;
+
+      console.log(`🔎 Flatten poll ${i}/${this.PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize}`);
+
+      if (Math.abs(currentSize) < this.TOLERANCE) {
+        return { kind: 'flat', currentSize };
+      }
+
+      const initialSign = Math.sign(initialSize);
+      const currentSign = Math.sign(currentSize);
+
+      if (currentSign !== 0 && initialSign !== 0 && currentSign !== initialSign) {
+        return { kind: 'flipped', currentSize };
+      }
+
+      if (Math.abs(currentSize) < Math.abs(initialSize) - this.TOLERANCE) {
+        return { kind: 'progress', currentSize };
+      }
+    }
+
+    return { kind: 'unchanged', currentSize: lastSeen };
+  }
+
+  // =====================================================
+  // SAFE TARGET ENGINE
+  // =====================================================
+
+  private async reachTargetPositionSafely(market: string, targetSize: number): Promise<void> {
     for (let attempt = 1; attempt <= this.MAX_ATTEMPTS; attempt++) {
-
-      await this.sleep(1500);
+      await this.sleep(this.POLL_DELAY_MS);
 
       const currentSize = await this.getCurrentSize(market);
       const diffRaw = targetSize - currentSize;
@@ -108,52 +229,123 @@ export class DydxV4Client extends AbstractDexClient {
         `Attempt ${attempt} | Current: ${currentSize} | Target: ${targetSize} | Diff: ${diff}`
       );
 
-      // ✅ Binnen tolerance → klaar
       if (Math.abs(diff) < this.TOLERANCE) {
-        console.log("✅ Target bereikt (binnen tolerance).");
+        console.log('✅ Target reached (within tolerance).');
         return;
       }
 
       const side = diff > 0 ? OrderSide.BUY : OrderSide.SELL;
       const size = Math.abs(diff);
 
-      const price = side === OrderSide.BUY ? 999999 : 1;
+      await this.placeCorrectionOrder(market, side, size);
+      await this.sleep(this.POST_ORDER_SETTLE_MS);
 
-      const clientId = parseInt(
-        crypto.randomBytes(4).toString('hex'),
-        16
-      );
+      const progress = await this.waitForTargetProgress(market, currentSize, targetSize);
 
-      console.log("🔄 Correctie order:", { side, size });
+      if (progress.kind === 'target') {
+        console.log('✅ Target reached after correction.');
+        return;
+      }
 
-      await this.client.placeOrder(
-        this.subaccount,
-        market,
-        OrderType.MARKET,
-        side,
-        price,
-        size,
-        clientId,
-        OrderTimeInForce.IOC,
-        20,
-        OrderExecution.DEFAULT,
-        false,
-        false
-      );
+      if (progress.kind === 'progress') {
+        console.log('↔️ Position moved toward target, continuing if needed.', {
+          currentSize: progress.currentSize
+        });
+        continue;
+      }
 
-      // extra stabilisatie-wacht
-      await this.sleep(2000);
+      if (progress.kind === 'flipped') {
+        throw new Error(
+          `Dangerous overshoot detected for ${market}. Current size flipped unexpectedly to ${progress.currentSize}`
+        );
+      }
+
+      console.warn('⚠️ No visible progress yet after correction; retrying cautiously.');
     }
 
-    console.log("⚠️ Max attempts bereikt — positie mogelijk inconsistent.");
+    throw new Error(`Target correction failed for ${market}: max attempts reached.`);
+  }
+
+  private async waitForTargetProgress(
+    market: string,
+    initialSize: number,
+    targetSize: number
+  ): Promise<ProgressResult> {
+    let lastSeen = initialSize;
+    const initialDistance = Math.abs(targetSize - initialSize);
+
+    for (let i = 1; i <= this.PROGRESS_POLLS; i++) {
+      await this.sleep(this.POLL_DELAY_MS);
+
+      const currentSize = await this.getCurrentSize(market);
+      lastSeen = currentSize;
+
+      const currentDistance = Math.abs(targetSize - currentSize);
+
+      console.log(
+        `🔎 Target poll ${i}/${this.PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize} | Target: ${targetSize}`
+      );
+
+      if (currentDistance < this.TOLERANCE) {
+        return { kind: 'target', currentSize };
+      }
+
+      if (Math.sign(targetSize - initialSize) !== 0 && Math.sign(targetSize - currentSize) !== 0) {
+        const initialDiffSign = Math.sign(targetSize - initialSize);
+        const currentDiffSign = Math.sign(targetSize - currentSize);
+
+        if (initialDiffSign !== currentDiffSign && currentDistance > this.TOLERANCE) {
+          return { kind: 'flipped', currentSize };
+        }
+      }
+
+      if (currentDistance < initialDistance - this.TOLERANCE) {
+        return { kind: 'progress', currentSize };
+      }
+    }
+
+    return { kind: 'unchanged', currentSize: lastSeen };
+  }
+
+  // =====================================================
+  // ORDER PLACEMENT
+  // =====================================================
+
+  private async placeCorrectionOrder(
+    market: string,
+    side: OrderSide,
+    size: number
+  ): Promise<void> {
+    const price = side === OrderSide.BUY ? 999999 : 1;
+
+    const clientId = parseInt(
+      crypto.randomBytes(4).toString('hex'),
+      16
+    );
+
+    console.log('🔄 Correction order:', { market, side, size, clientId });
+
+    await this.client.placeOrder(
+      this.subaccount,
+      market,
+      OrderType.MARKET,
+      side,
+      price,
+      size,
+      clientId,
+      OrderTimeInForce.IOC,
+      20,
+      OrderExecution.DEFAULT,
+      false,
+      false
+    );
   }
 
   // =====================================================
   // CANCEL OPEN ORDERS
   // =====================================================
 
-  private async cancelOpenOrders(market: string) {
-
+  private async cancelOpenOrders(market: string): Promise<void> {
     const res = await this.indexer.account.getSubaccountOrders(
       this.wallet.address,
       0
@@ -164,7 +356,6 @@ export class DydxV4Client extends AbstractDexClient {
     ) || [];
 
     for (const order of openOrders) {
-
       const clientId =
         typeof order.clientId === 'number'
           ? order.clientId
@@ -184,7 +375,6 @@ export class DydxV4Client extends AbstractDexClient {
   // =====================================================
 
   private async getCurrentSize(market: string): Promise<number> {
-
     const response = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
       0
@@ -196,7 +386,6 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   private getTargetSize(alert: AlertObject, baseSize: number): number {
-
     const dir = alert.desired_position?.toUpperCase();
 
     switch (dir) {
@@ -212,7 +401,7 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
-  private sleep(ms: number) {
+  private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
@@ -223,7 +412,6 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
-
 
 
 
