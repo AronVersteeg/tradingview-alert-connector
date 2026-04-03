@@ -34,11 +34,17 @@ export class DydxV4Client extends AbstractDexClient {
   private initialized = false;
 
   private readonly TOLERANCE = 0.001;
+
   private readonly MAX_ATTEMPTS = 5;
-  private readonly FLAT_MAX_ATTEMPTS = 3;
-  private readonly PROGRESS_POLLS = 8;
-  private readonly POLL_DELAY_MS = 1500;
-  private readonly POST_ORDER_SETTLE_MS = 2500;
+  private readonly FLAT_MAX_ATTEMPTS = 5;
+
+  private readonly TARGET_PROGRESS_POLLS = 8;
+  private readonly FLAT_PROGRESS_POLLS = 10;
+
+  private readonly TARGET_POLL_DELAY_MS = 1500;
+  private readonly FLAT_POLL_DELAY_MS = 1000;
+
+  private readonly POST_ORDER_SETTLE_MS = 2000;
 
   async init(): Promise<void> {
     this.wallet = await LocalWallet.fromMnemonic(
@@ -96,7 +102,7 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   // =====================================================
-  // SAFE FLATTEN
+  // SAFE FLATTEN - AGGRESSIVE BUT REDUCE-ONLY
   // =====================================================
 
   private async flattenPositionSafely(market: string): Promise<void> {
@@ -114,7 +120,9 @@ export class DydxV4Client extends AbstractDexClient {
       const side = startSize > 0 ? OrderSide.SELL : OrderSide.BUY;
       const size = Math.abs(startSize);
 
-      console.log(`🛑 Flatten attempt ${attempt} | Start: ${startSize} | Sending: ${side} ${size} | reduceOnly=true`);
+      console.log(
+        `🛑 Flatten attempt ${attempt}/${this.FLAT_MAX_ATTEMPTS} | Start: ${startSize} | Sending: ${side} ${size} | reduceOnly=true`
+      );
 
       await this.placeCorrectionOrder(market, side, size, true);
       await this.sleep(this.POST_ORDER_SETTLE_MS);
@@ -144,7 +152,7 @@ export class DydxV4Client extends AbstractDexClient {
 
       if (progress.kind === 'unchanged') {
         currentSize = progress.currentSize;
-        console.warn('⚠️ No visible flatten progress yet; retrying cautiously.', {
+        console.warn('⚠️ No visible flatten progress yet; retrying reduce-only.', {
           currentSize
         });
         continue;
@@ -192,13 +200,15 @@ export class DydxV4Client extends AbstractDexClient {
   ): Promise<ProgressResult> {
     let lastSeen = initialSize;
 
-    for (let i = 1; i <= this.PROGRESS_POLLS; i++) {
-      await this.sleep(this.POLL_DELAY_MS);
+    for (let i = 1; i <= this.FLAT_PROGRESS_POLLS; i++) {
+      await this.sleep(this.FLAT_POLL_DELAY_MS);
 
       const currentSize = await this.getCurrentSize(market);
       lastSeen = currentSize;
 
-      console.log(`🔎 Flatten poll ${i}/${this.PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize}`);
+      console.log(
+        `🔎 Flatten poll ${i}/${this.FLAT_PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize}`
+      );
 
       if (Math.abs(currentSize) < this.TOLERANCE) {
         return { kind: 'flat', currentSize };
@@ -225,14 +235,14 @@ export class DydxV4Client extends AbstractDexClient {
 
   private async reachTargetPositionSafely(market: string, targetSize: number): Promise<void> {
     for (let attempt = 1; attempt <= this.MAX_ATTEMPTS; attempt++) {
-      await this.sleep(this.POLL_DELAY_MS);
+      await this.sleep(this.TARGET_POLL_DELAY_MS);
 
       const currentSize = await this.getCurrentSize(market);
       const diffRaw = targetSize - currentSize;
       const diff = Number(diffRaw.toFixed(3));
 
       console.log(
-        `Attempt ${attempt} | Current: ${currentSize} | Target: ${targetSize} | Diff: ${diff}`
+        `🎯 Attempt ${attempt}/${this.MAX_ATTEMPTS} | Current: ${currentSize} | Target: ${targetSize} | Diff: ${diff}`
       );
 
       if (Math.abs(diff) < this.TOLERANCE) {
@@ -280,8 +290,8 @@ export class DydxV4Client extends AbstractDexClient {
     let lastSeen = initialSize;
     const initialDistance = Math.abs(targetSize - initialSize);
 
-    for (let i = 1; i <= this.PROGRESS_POLLS; i++) {
-      await this.sleep(this.POLL_DELAY_MS);
+    for (let i = 1; i <= this.TARGET_PROGRESS_POLLS; i++) {
+      await this.sleep(this.TARGET_POLL_DELAY_MS);
 
       const currentSize = await this.getCurrentSize(market);
       lastSeen = currentSize;
@@ -289,7 +299,7 @@ export class DydxV4Client extends AbstractDexClient {
       const currentDistance = Math.abs(targetSize - currentSize);
 
       console.log(
-        `🔎 Target poll ${i}/${this.PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize} | Target: ${targetSize}`
+        `🔎 Target poll ${i}/${this.TARGET_PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize} | Target: ${targetSize}`
       );
 
       if (currentDistance < this.TOLERANCE) {
@@ -426,13 +436,3 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
-
-
-
-
-
-
-
-
-
-
