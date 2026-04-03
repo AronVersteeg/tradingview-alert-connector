@@ -114,9 +114,9 @@ export class DydxV4Client extends AbstractDexClient {
       const side = startSize > 0 ? OrderSide.SELL : OrderSide.BUY;
       const size = Math.abs(startSize);
 
-      console.log(`🛑 Flatten attempt ${attempt} | Start: ${startSize} | Sending: ${side} ${size}`);
+      console.log(`🛑 Flatten attempt ${attempt} | Start: ${startSize} | Sending: ${side} ${size} | reduceOnly=true`);
 
-      await this.placeCorrectionOrder(market, side, size);
+      await this.placeCorrectionOrder(market, side, size, true);
       await this.sleep(this.POST_ORDER_SETTLE_MS);
 
       const progress = await this.waitForFlattenProgress(market, startSize);
@@ -163,9 +163,15 @@ export class DydxV4Client extends AbstractDexClient {
     const side = currentSize > 0 ? OrderSide.SELL : OrderSide.BUY;
     const size = Math.abs(currentSize);
 
-    console.warn('🚨 Emergency flatten order:', { market, side, size, currentSize });
+    console.warn('🚨 Emergency flatten order:', {
+      market,
+      side,
+      size,
+      currentSize,
+      reduceOnly: true
+    });
 
-    await this.placeCorrectionOrder(market, side, size);
+    await this.placeCorrectionOrder(market, side, size, true);
     await this.sleep(this.POST_ORDER_SETTLE_MS);
 
     const finalSize = await this.getCurrentSize(market);
@@ -237,7 +243,7 @@ export class DydxV4Client extends AbstractDexClient {
       const side = diff > 0 ? OrderSide.BUY : OrderSide.SELL;
       const size = Math.abs(diff);
 
-      await this.placeCorrectionOrder(market, side, size);
+      await this.placeCorrectionOrder(market, side, size, false);
       await this.sleep(this.POST_ORDER_SETTLE_MS);
 
       const progress = await this.waitForTargetProgress(market, currentSize, targetSize);
@@ -314,7 +320,8 @@ export class DydxV4Client extends AbstractDexClient {
   private async placeCorrectionOrder(
     market: string,
     side: OrderSide,
-    size: number
+    size: number,
+    reduceOnly: boolean
   ): Promise<void> {
     const price = side === OrderSide.BUY ? 999999 : 1;
 
@@ -323,7 +330,13 @@ export class DydxV4Client extends AbstractDexClient {
       16
     );
 
-    console.log('🔄 Correction order:', { market, side, size, clientId });
+    console.log('🔄 Correction order:', {
+      market,
+      side,
+      size,
+      clientId,
+      reduceOnly
+    });
 
     await this.client.placeOrder(
       this.subaccount,
@@ -336,8 +349,9 @@ export class DydxV4Client extends AbstractDexClient {
       OrderTimeInForce.IOC,
       20,
       OrderExecution.DEFAULT,
-      false,
-      false
+      false,       // postOnly
+      reduceOnly,  // reduceOnly
+      undefined    // triggerPrice
     );
   }
 
@@ -412,7 +426,6 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
-
 
 
 
