@@ -555,6 +555,7 @@ export class DydxV4Client extends AbstractDexClient {
         this.subaccount,
         clientId,
         orderFlags,
+        market,
         goodTilBlockTime
       );
     }
