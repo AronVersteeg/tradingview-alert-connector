@@ -46,6 +46,23 @@ export class DydxV4Client extends AbstractDexClient {
 
   private readonly POST_ORDER_SETTLE_MS = 2000;
 
+  private readonly SAFETY_STOP_PCT = Number(
+    process.env.DYDX_V4_STATIC_STOP_PCT ?? '0.003'
+  );
+
+  private readonly SAFETY_STOP_SLIPPAGE_PCT = Number(
+    process.env.DYDX_V4_SAFETY_STOP_SLIPPAGE_PCT ?? '0.01'
+  );
+
+  private readonly SAFETY_STOP_LIFETIME_SECONDS = Number(
+    process.env.DYDX_V4_SAFETY_STOP_LIFETIME_SECONDS ?? `${60 * 60 * 24 * 30}`
+  );
+
+  private readonly SAFETY_STOP_VERIFY_POLLS = 5;
+  private readonly SAFETY_STOP_VERIFY_DELAY_MS = 1000;
+
+  private readonly CONDITIONAL_ORDER_FLAGS = 32;
+
   async init(): Promise<void> {
     this.wallet = await LocalWallet.fromMnemonic(
       process.env.DYDX_V4_MNEMONIC!,
@@ -89,7 +106,7 @@ export class DydxV4Client extends AbstractDexClient {
     const market = alert.market.replace(/_/g, '-');
     const targetSize = this.getTargetSize(alert, alert.size);
 
-    console.log('🎯 Target position:', targetSize);
+    console.log('Target position:', targetSize);
 
     await this.cancelOpenOrders(market);
 
@@ -99,19 +116,16 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     await this.reachTargetPositionSafely(market, targetSize);
+    await this.placeStaticSafetyStopAfterEntry(market, targetSize, alert);
   }
-
-  // =====================================================
-  // SAFE FLATTEN - AGGRESSIVE BUT REDUCE-ONLY
-  // =====================================================
 
   private async flattenPositionSafely(market: string): Promise<void> {
     let currentSize = await this.getCurrentSize(market);
 
-    console.log('🛑 Flatten requested | Current size:', currentSize);
+    console.log('Flatten requested | Current size:', currentSize);
 
     if (Math.abs(currentSize) < this.TOLERANCE) {
-      console.log('✅ Already flat.');
+      console.log('Already flat.');
       return;
     }
 
@@ -121,7 +135,7 @@ export class DydxV4Client extends AbstractDexClient {
       const size = Math.abs(startSize);
 
       console.log(
-        `🛑 Flatten attempt ${attempt}/${this.FLAT_MAX_ATTEMPTS} | Start: ${startSize} | Sending: ${side} ${size} | reduceOnly=true`
+        `Flatten attempt ${attempt}/${this.FLAT_MAX_ATTEMPTS} | Start: ${startSize} | Sending: ${side} ${size} | reduceOnly=true`
       );
 
       await this.placeCorrectionOrder(market, side, size, true);
@@ -130,12 +144,12 @@ export class DydxV4Client extends AbstractDexClient {
       const progress = await this.waitForFlattenProgress(market, startSize);
 
       if (progress.kind === 'flat') {
-        console.log('✅ Position fully flattened.');
+        console.log('Position fully flattened.');
         return;
       }
 
       if (progress.kind === 'flipped') {
-        console.error('🚨 Position flipped during flatten. Starting emergency flatten.', {
+        console.error('Position flipped during flatten. Starting emergency flatten.', {
           previousSize: startSize,
           currentSize: progress.currentSize
         });
@@ -144,19 +158,8 @@ export class DydxV4Client extends AbstractDexClient {
         return;
       }
 
-      if (progress.kind === 'progress') {
-        currentSize = progress.currentSize;
-        console.log('↘️ Flatten progress observed, remaining size:', currentSize);
-        continue;
-      }
-
-      if (progress.kind === 'unchanged') {
-        currentSize = progress.currentSize;
-        console.warn('⚠️ No visible flatten progress yet; retrying reduce-only.', {
-          currentSize
-        });
-        continue;
-      }
+      currentSize = progress.currentSize;
+      console.log('Flatten not complete yet; retrying.', { currentSize, kind: progress.kind });
     }
 
     throw new Error(`Flatten failed for ${market}: max attempts reached without reaching flat.`);
@@ -164,14 +167,14 @@ export class DydxV4Client extends AbstractDexClient {
 
   private async emergencyFlattenOppositePosition(market: string, currentSize: number): Promise<void> {
     if (Math.abs(currentSize) < this.TOLERANCE) {
-      console.log('✅ Emergency check: already flat.');
+      console.log('Emergency check: already flat.');
       return;
     }
 
     const side = currentSize > 0 ? OrderSide.SELL : OrderSide.BUY;
     const size = Math.abs(currentSize);
 
-    console.warn('🚨 Emergency flatten order:', {
+    console.warn('Emergency flatten order:', {
       market,
       side,
       size,
@@ -185,7 +188,7 @@ export class DydxV4Client extends AbstractDexClient {
     const finalSize = await this.getCurrentSize(market);
 
     if (Math.abs(finalSize) < this.TOLERANCE) {
-      console.log('✅ Emergency flatten successful.');
+      console.log('Emergency flatten successful.');
       return;
     }
 
@@ -207,7 +210,7 @@ export class DydxV4Client extends AbstractDexClient {
       lastSeen = currentSize;
 
       console.log(
-        `🔎 Flatten poll ${i}/${this.FLAT_PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize}`
+        `Flatten poll ${i}/${this.FLAT_PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize}`
       );
 
       if (Math.abs(currentSize) < this.TOLERANCE) {
@@ -229,10 +232,6 @@ export class DydxV4Client extends AbstractDexClient {
     return { kind: 'unchanged', currentSize: lastSeen };
   }
 
-  // =====================================================
-  // SAFE TARGET ENGINE
-  // =====================================================
-
   private async reachTargetPositionSafely(market: string, targetSize: number): Promise<void> {
     for (let attempt = 1; attempt <= this.MAX_ATTEMPTS; attempt++) {
       await this.sleep(this.TARGET_POLL_DELAY_MS);
@@ -242,11 +241,11 @@ export class DydxV4Client extends AbstractDexClient {
       const diff = Number(diffRaw.toFixed(3));
 
       console.log(
-        `🎯 Attempt ${attempt}/${this.MAX_ATTEMPTS} | Current: ${currentSize} | Target: ${targetSize} | Diff: ${diff}`
+        `Attempt ${attempt}/${this.MAX_ATTEMPTS} | Current: ${currentSize} | Target: ${targetSize} | Diff: ${diff}`
       );
 
       if (Math.abs(diff) < this.TOLERANCE) {
-        console.log('✅ Target reached (within tolerance).');
+        console.log('Target reached within tolerance.');
         return;
       }
 
@@ -259,12 +258,12 @@ export class DydxV4Client extends AbstractDexClient {
       const progress = await this.waitForTargetProgress(market, currentSize, targetSize);
 
       if (progress.kind === 'target') {
-        console.log('✅ Target reached after correction.');
+        console.log('Target reached after correction.');
         return;
       }
 
       if (progress.kind === 'progress') {
-        console.log('↔️ Position moved toward target, continuing if needed.', {
+        console.log('Position moved toward target, continuing if needed.', {
           currentSize: progress.currentSize
         });
         continue;
@@ -276,7 +275,7 @@ export class DydxV4Client extends AbstractDexClient {
         );
       }
 
-      console.warn('⚠️ No visible progress yet after correction; retrying cautiously.');
+      console.warn('No visible progress yet after correction; retrying cautiously.');
     }
 
     throw new Error(`Target correction failed for ${market}: max attempts reached.`);
@@ -299,7 +298,7 @@ export class DydxV4Client extends AbstractDexClient {
       const currentDistance = Math.abs(targetSize - currentSize);
 
       console.log(
-        `🔎 Target poll ${i}/${this.TARGET_PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize} | Target: ${targetSize}`
+        `Target poll ${i}/${this.TARGET_PROGRESS_POLLS} | Initial: ${initialSize} | Current: ${currentSize} | Target: ${targetSize}`
       );
 
       if (currentDistance < this.TOLERANCE) {
@@ -323,10 +322,6 @@ export class DydxV4Client extends AbstractDexClient {
     return { kind: 'unchanged', currentSize: lastSeen };
   }
 
-  // =====================================================
-  // ORDER PLACEMENT
-  // =====================================================
-
   private async placeCorrectionOrder(
     market: string,
     side: OrderSide,
@@ -334,13 +329,9 @@ export class DydxV4Client extends AbstractDexClient {
     reduceOnly: boolean
   ): Promise<void> {
     const price = side === OrderSide.BUY ? 999999 : 1;
+    const clientId = this.createClientId();
 
-    const clientId = parseInt(
-      crypto.randomBytes(4).toString('hex'),
-      16
-    );
-
-    console.log('🔄 Correction order:', {
+    console.log('Correction order:', {
       market,
       side,
       size,
@@ -359,15 +350,166 @@ export class DydxV4Client extends AbstractDexClient {
       OrderTimeInForce.IOC,
       20,
       OrderExecution.DEFAULT,
-      false,       // postOnly
-      reduceOnly,  // reduceOnly
-      undefined    // triggerPrice
+      false,
+      reduceOnly,
+      undefined
     );
   }
 
-  // =====================================================
-  // CANCEL OPEN ORDERS
-  // =====================================================
+  private async placeStaticSafetyStopAfterEntry(
+    market: string,
+    targetSize: number,
+    alert: AlertObject
+  ): Promise<void> {
+    const position = await this.getCurrentPosition(market);
+
+    if (Math.abs(position.size) < this.TOLERANCE) {
+      throw new Error(`Safety stop not placed for ${market}: position is flat after entry.`);
+    }
+
+    if (Math.sign(position.size) !== Math.sign(targetSize)) {
+      throw new Error(
+        `Safety stop not placed for ${market}: position direction mismatch. Current=${position.size}, target=${targetSize}`
+      );
+    }
+
+    const entryReferencePrice = this.getSafetyStopReferencePrice(alert, position.entryPrice);
+    const isLong = position.size > 0;
+
+    const triggerPrice = isLong
+      ? entryReferencePrice * (1 - this.SAFETY_STOP_PCT)
+      : entryReferencePrice * (1 + this.SAFETY_STOP_PCT);
+
+    const executionPrice = isLong
+      ? triggerPrice * (1 - this.SAFETY_STOP_SLIPPAGE_PCT)
+      : triggerPrice * (1 + this.SAFETY_STOP_SLIPPAGE_PCT);
+
+    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+    const size = Math.abs(position.size);
+
+    console.log('Placing static safety stop:', {
+      market,
+      positionSize: position.size,
+      entryReferencePrice,
+      triggerPrice,
+      executionPrice,
+      side,
+      size,
+      reduceOnly: true
+    });
+
+    await this.placeStaticSafetyStopOrder(
+      market,
+      side,
+      size,
+      triggerPrice,
+      executionPrice
+    );
+
+    await this.waitForSafetyStopVisible(market, side, triggerPrice);
+  }
+
+  private async placeStaticSafetyStopOrder(
+    market: string,
+    side: OrderSide,
+    size: number,
+    triggerPrice: number,
+    executionPrice: number
+  ): Promise<void> {
+    const clientId = this.createClientId();
+
+    await this.client.placeOrder(
+      this.subaccount,
+      market,
+      OrderType.STOP_MARKET,
+      side,
+      executionPrice,
+      size,
+      clientId,
+      OrderTimeInForce.IOC,
+      this.SAFETY_STOP_LIFETIME_SECONDS,
+      OrderExecution.IOC,
+      false,
+      true,
+      triggerPrice
+    );
+  }
+
+  private async waitForSafetyStopVisible(
+    market: string,
+    side: OrderSide,
+    triggerPrice: number
+  ): Promise<void> {
+    for (let i = 1; i <= this.SAFETY_STOP_VERIFY_POLLS; i++) {
+      await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
+
+      const stopOrder = await this.findSafetyStopOrder(market, side, triggerPrice);
+
+      if (stopOrder) {
+        console.log('Static safety stop visible on dYdX:', {
+          market,
+          side,
+          triggerPrice,
+          status: stopOrder.status,
+          clientId: stopOrder.clientId
+        });
+        return;
+      }
+
+      console.log(`Safety stop verify poll ${i}/${this.SAFETY_STOP_VERIFY_POLLS}`);
+    }
+
+    throw new Error(
+      `Safety stop placement could not be verified for ${market} at trigger ${triggerPrice}.`
+    );
+  }
+
+  private async findSafetyStopOrder(
+    market: string,
+    side: OrderSide,
+    triggerPrice: number
+  ): Promise<any | undefined> {
+    const res = await this.indexer.account.getSubaccountOrders(
+      this.wallet.address,
+      0
+    );
+
+    const protectiveStatuses = new Set([
+      'OPEN',
+      'UNTRIGGERED',
+      'BEST_EFFORT_OPENED'
+    ]);
+
+    return res.orders?.find((order: any) => {
+      const orderMarket = order.market === market;
+      const orderStatus = protectiveStatuses.has(String(order.status).toUpperCase());
+      const orderSide = String(order.side).toUpperCase() === String(side).toUpperCase();
+      const orderType = String(order.type || order.orderType || '').toUpperCase();
+      const reduceOnly =
+        order.reduceOnly === true ||
+        String(order.reduceOnly).toLowerCase() === 'true';
+
+      const rawTrigger =
+        order.triggerPrice ??
+        order.trigger_price ??
+        order.conditionalOrderTriggerPrice ??
+        order.conditional_order_trigger_price;
+
+      const parsedTrigger = Number(rawTrigger);
+      const triggerMatches =
+        Number.isFinite(parsedTrigger) &&
+        Math.abs(parsedTrigger - triggerPrice) / triggerPrice < 0.002;
+
+      return (
+        orderMarket &&
+        orderStatus &&
+        orderSide &&
+        reduceOnly &&
+        orderType.includes('STOP') &&
+        triggerMatches
+      );
+    });
+  }
 
   private async cancelOpenOrders(market: string): Promise<void> {
     const res = await this.indexer.account.getSubaccountOrders(
@@ -375,8 +517,15 @@ export class DydxV4Client extends AbstractDexClient {
       0
     );
 
+    const cancellableStatuses = new Set([
+      'OPEN',
+      'UNTRIGGERED',
+      'BEST_EFFORT_OPENED'
+    ]);
+
     const openOrders = res.orders?.filter((o: any) =>
-      o.market === market && o.status === 'OPEN'
+      o.market === market &&
+      cancellableStatuses.has(String(o.status).toUpperCase())
     ) || [];
 
     for (const order of openOrders) {
@@ -385,20 +534,40 @@ export class DydxV4Client extends AbstractDexClient {
           ? order.clientId
           : parseInt(order.clientId, 10);
 
+      if (!Number.isFinite(clientId)) {
+        console.warn('Skipping cancel because clientId is invalid:', order);
+        continue;
+      }
+
+      const orderFlags = this.getOrderFlags(order);
+      const goodTilBlockTime = this.getOrderGoodTilBlockTime(order);
+
+      console.log('Cancelling open order:', {
+        market,
+        clientId,
+        orderFlags,
+        status: order.status,
+        type: order.type,
+        goodTilBlockTime
+      });
+
       await this.client.cancelOrder(
         this.subaccount,
         clientId,
-        0,
-        undefined
+        orderFlags,
+        goodTilBlockTime
       );
     }
   }
 
-  // =====================================================
-  // HELPERS
-  // =====================================================
-
   private async getCurrentSize(market: string): Promise<number> {
+    const position = await this.getCurrentPosition(market);
+    return position.size;
+  }
+
+  private async getCurrentPosition(
+    market: string
+  ): Promise<{ size: number; entryPrice?: number }> {
     const response = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
       0
@@ -406,7 +575,19 @@ export class DydxV4Client extends AbstractDexClient {
 
     const pos = response.positions.find((p: any) => p.market === market);
 
-    return pos ? Number(pos.size) : 0;
+    if (!pos) {
+      return { size: 0 };
+    }
+
+    return {
+      size: Number(pos.size),
+      entryPrice: this.parsePositiveNumber(
+        pos.entryPrice ??
+        pos.entry_price ??
+        pos.averageEntryPrice ??
+        pos.average_entry_price
+      )
+    };
   }
 
   private getTargetSize(alert: AlertObject, baseSize: number): number {
@@ -425,6 +606,79 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
+  private getSafetyStopReferencePrice(alert: AlertObject, positionEntryPrice?: number): number {
+    if (positionEntryPrice && positionEntryPrice > 0) {
+      return positionEntryPrice;
+    }
+
+    const alertPrice = this.parsePositiveNumber((alert as any).price);
+
+    if (alertPrice && alertPrice > 0) {
+      return alertPrice;
+    }
+
+    throw new Error('Cannot place safety stop: missing entry reference price.');
+  }
+
+  private parsePositiveNumber(value: unknown): number | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const parsed = Number(value);
+
+    return Number.isFinite(parsed) && parsed > 0
+      ? parsed
+      : undefined;
+  }
+
+  private getOrderFlags(order: any): number {
+    const raw =
+      order.orderFlags ??
+      order.order_flags ??
+      order.orderId?.orderFlags ??
+      order.order_id?.order_flags;
+
+    const parsed = Number(raw);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+
+    const type = String(order.type || order.orderType || '').toUpperCase();
+
+    if (
+      type.includes('STOP') ||
+      type.includes('TAKE_PROFIT') ||
+      type.includes('TAKE-PROFIT')
+    ) {
+      return this.CONDITIONAL_ORDER_FLAGS;
+    }
+
+    return 0;
+  }
+
+  private getOrderGoodTilBlockTime(order: any): number | undefined {
+    const raw =
+      order.goodTilBlockTime ??
+      order.good_til_block_time ??
+      order.goodTilBlockTimeSeconds ??
+      order.good_til_block_time_seconds;
+
+    const parsed = Number(raw);
+
+    return Number.isFinite(parsed) && parsed > 0
+      ? parsed
+      : undefined;
+  }
+
+  private createClientId(): number {
+    return parseInt(
+      crypto.randomBytes(4).toString('hex'),
+      16
+    );
+  }
+
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
@@ -436,3 +690,4 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
