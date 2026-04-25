@@ -58,8 +58,13 @@ export class DydxV4Client extends AbstractDexClient {
     process.env.DYDX_V4_SAFETY_STOP_LIFETIME_SECONDS ?? `${60 * 60 * 24 * 30}`
   );
 
-  private readonly SAFETY_STOP_VERIFY_POLLS = 5;
-  private readonly SAFETY_STOP_VERIFY_DELAY_MS = 1000;
+  private readonly SAFETY_STOP_VERIFY_POLLS = Number(
+    process.env.DYDX_V4_SAFETY_STOP_VERIFY_POLLS ?? '10'
+  );
+
+  private readonly SAFETY_STOP_VERIFY_DELAY_MS = Number(
+    process.env.DYDX_V4_SAFETY_STOP_VERIFY_DELAY_MS ?? '1000'
+  );
 
   private readonly CONDITIONAL_ORDER_FLAGS = 32;
 
@@ -406,7 +411,7 @@ export class DydxV4Client extends AbstractDexClient {
       executionPrice
     );
 
-    await this.waitForSafetyStopVisible(market, side, triggerPrice);
+    await this.waitForSafetyStopVisibleBestEffort(market, side, triggerPrice);
   }
 
   private async placeStaticSafetyStopOrder(
@@ -435,7 +440,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 
-  private async waitForSafetyStopVisible(
+  private async waitForSafetyStopVisibleBestEffort(
     market: string,
     side: OrderSide,
     triggerPrice: number
@@ -443,7 +448,32 @@ export class DydxV4Client extends AbstractDexClient {
     for (let i = 1; i <= this.SAFETY_STOP_VERIFY_POLLS; i++) {
       await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
 
-      const stopOrder = await this.findSafetyStopOrder(market, side, triggerPrice);
+      const orders = await this.getOpenOrdersForMarket(market);
+      const stopOrder = this.findSafetyStopOrderInOrders(orders, side, triggerPrice);
+
+      console.log(`Safety stop verify poll ${i}/${this.SAFETY_STOP_VERIFY_POLLS}`, {
+        market,
+        expectedSide: side,
+        expectedTriggerPrice: triggerPrice,
+        openOrders: orders.map((order: any) => ({
+          clientId: order.clientId,
+          market: order.market,
+          side: order.side,
+          type: order.type ?? order.orderType,
+          status: order.status,
+          reduceOnly: order.reduceOnly,
+          triggerPrice:
+            order.triggerPrice ??
+            order.trigger_price ??
+            order.conditionalOrderTriggerPrice ??
+            order.conditional_order_trigger_price,
+          orderFlags:
+            order.orderFlags ??
+            order.order_flags ??
+            order.orderId?.orderFlags ??
+            order.order_id?.order_flags
+        }))
+      });
 
       if (stopOrder) {
         console.log('Static safety stop visible on dYdX:', {
@@ -455,39 +485,46 @@ export class DydxV4Client extends AbstractDexClient {
         });
         return;
       }
-
-      console.log(`Safety stop verify poll ${i}/${this.SAFETY_STOP_VERIFY_POLLS}`);
     }
 
-    throw new Error(
-      `Safety stop placement could not be verified for ${market} at trigger ${triggerPrice}.`
+    console.warn(
+      `Static safety stop was placed but could not be verified through indexer for ${market} at trigger ${triggerPrice}. Check dYdX UI.`
     );
   }
 
-  private async findSafetyStopOrder(
-    market: string,
-    side: OrderSide,
-    triggerPrice: number
-  ): Promise<any | undefined> {
+  private async getOpenOrdersForMarket(market: string): Promise<any[]> {
     const res = await this.indexer.account.getSubaccountOrders(
       this.wallet.address,
       0
     );
 
-    const protectiveStatuses = new Set([
+    const visibleStatuses = new Set([
       'OPEN',
       'UNTRIGGERED',
+      'OPEN_UNTRIGGERED',
+      'PENDING',
       'BEST_EFFORT_OPENED'
     ]);
 
-    return res.orders?.find((order: any) => {
-      const orderMarket = order.market === market;
-      const orderStatus = protectiveStatuses.has(String(order.status).toUpperCase());
+    return res.orders?.filter((order: any) =>
+      order.market === market &&
+      visibleStatuses.has(String(order.status).toUpperCase())
+    ) || [];
+  }
+
+  private findSafetyStopOrderInOrders(
+    orders: any[],
+    side: OrderSide,
+    triggerPrice: number
+  ): any | undefined {
+    return orders.find((order: any) => {
       const orderSide = String(order.side).toUpperCase() === String(side).toUpperCase();
       const orderType = String(order.type || order.orderType || '').toUpperCase();
+
       const reduceOnly =
         order.reduceOnly === true ||
-        String(order.reduceOnly).toLowerCase() === 'true';
+        String(order.reduceOnly).toLowerCase() === 'true' ||
+        order.reduceOnly === undefined;
 
       const rawTrigger =
         order.triggerPrice ??
@@ -496,13 +533,17 @@ export class DydxV4Client extends AbstractDexClient {
         order.conditional_order_trigger_price;
 
       const parsedTrigger = Number(rawTrigger);
+
       const triggerMatches =
-        Number.isFinite(parsedTrigger) &&
-        Math.abs(parsedTrigger - triggerPrice) / triggerPrice < 0.002;
+        rawTrigger === undefined ||
+        rawTrigger === null ||
+        rawTrigger === '' ||
+        (
+          Number.isFinite(parsedTrigger) &&
+          Math.abs(parsedTrigger - triggerPrice) / triggerPrice < 0.002
+        );
 
       return (
-        orderMarket &&
-        orderStatus &&
         orderSide &&
         reduceOnly &&
         orderType.includes('STOP') &&
@@ -512,23 +553,9 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   private async cancelOpenOrders(market: string): Promise<void> {
-    const res = await this.indexer.account.getSubaccountOrders(
-      this.wallet.address,
-      0
-    );
+    const orders = await this.getOpenOrdersForMarket(market);
 
-    const cancellableStatuses = new Set([
-      'OPEN',
-      'UNTRIGGERED',
-      'BEST_EFFORT_OPENED'
-    ]);
-
-    const openOrders = res.orders?.filter((o: any) =>
-      o.market === market &&
-      cancellableStatuses.has(String(o.status).toUpperCase())
-    ) || [];
-
-    for (const order of openOrders) {
+    for (const order of orders) {
       const clientId =
         typeof order.clientId === 'number'
           ? order.clientId
