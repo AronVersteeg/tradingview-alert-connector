@@ -167,19 +167,26 @@ export class DydxV4Client extends AbstractDexClient {
 
     const currentKnownStop = await this.getCurrentKnownStopTrigger(market, side, isLong);
 
-    if (currentKnownStop !== undefined) {
-      const improvesLong = isLong && trailTriggerPrice > currentKnownStop;
-      const improvesShort = !isLong && trailTriggerPrice < currentKnownStop;
+    if (currentKnownStop === undefined) {
+      console.warn('Trail update ignored because current dYdX stop could not be determined safely.', {
+        market,
+        direction: isLong ? 'LONG' : 'SHORT',
+        trailTriggerPrice
+      });
+      return;
+    }
 
-      if (!improvesLong && !improvesShort) {
-        console.log('Trail update ignored because it does not improve current stop.', {
-          market,
-          direction: isLong ? 'LONG' : 'SHORT',
-          currentKnownStop,
-          trailTriggerPrice
-        });
-        return;
-      }
+    const improvesLong = isLong && trailTriggerPrice > currentKnownStop;
+    const improvesShort = !isLong && trailTriggerPrice < currentKnownStop;
+
+    if (!improvesLong && !improvesShort) {
+      console.log('Trail update ignored because it does not improve current stop.', {
+        market,
+        direction: isLong ? 'LONG' : 'SHORT',
+        currentKnownStop,
+        trailTriggerPrice
+      });
+      return;
     }
 
     const size = Math.abs(position.size);
@@ -822,7 +829,8 @@ export class DydxV4Client extends AbstractDexClient {
           data.trailingSL,
           data.trail_stop,
           data.trailStop,
-          data.trail
+          data.trail,
+          data.price
         ]
       : [
           data.trailing_sl_short,
@@ -839,7 +847,8 @@ export class DydxV4Client extends AbstractDexClient {
           data.trailingSL,
           data.trail_stop,
           data.trailStop,
-          data.trail
+          data.trail,
+          data.price
         ];
 
     for (const candidate of candidates) {
