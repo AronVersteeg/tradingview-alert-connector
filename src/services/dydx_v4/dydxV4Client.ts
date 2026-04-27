@@ -36,6 +36,53 @@ type ManagedStop = {
   updatedAt: number;
 };
 
+type PositionSnapshot = {
+  size: number;
+  entryPrice?: number;
+};
+
+type TradingViewTelemetry = {
+  signal: string;
+  desiredPosition?: string;
+  alertPrice?: number;
+  currentPrice?: number;
+  entryPrice?: number;
+  trailStop?: number;
+  longTrailStop?: number;
+  shortTrailStop?: number;
+  staticStop?: number;
+  longStaticStop?: number;
+  shortStaticStop?: number;
+  topFractal?: number;
+  bottomFractal?: number;
+  floatingLongEntry?: number;
+  floatingShortEntry?: number;
+  barTime?: string;
+  rawTime?: string;
+};
+
+type MarketSnapshot = {
+  position: PositionSnapshot;
+  allMarketOrders: any[];
+  openOrders: any[];
+  protectiveStops: any[];
+  managedStop?: ManagedStop;
+};
+
+type StopResolution = {
+  triggerPrice?: number;
+  source: 'DYDX_OPEN_ORDER' | 'MANAGED_MEMORY' | 'UNKNOWN';
+  reason?: string;
+  order?: any;
+  matchingOrders: any[];
+};
+
+type PriceCandidate = {
+  path: string;
+  value: unknown;
+  parsed?: number;
+};
+
 export class DydxV4Client extends AbstractDexClient {
   private wallet!: LocalWallet;
   private client!: CompositeClient;
@@ -77,6 +124,17 @@ export class DydxV4Client extends AbstractDexClient {
   private readonly SAFETY_STOP_VERIFY_DELAY_MS = Number(
     process.env.DYDX_V4_SAFETY_STOP_VERIFY_DELAY_MS ?? '1000'
   );
+
+  private readonly STOP_TRIGGER_MATCH_TOLERANCE_PCT = Number(
+    process.env.DYDX_V4_STOP_TRIGGER_MATCH_TOLERANCE_PCT ?? '0.002'
+  );
+
+  private readonly MIN_TRAIL_IMPROVEMENT_PCT = Number(
+    process.env.DYDX_V4_MIN_TRAIL_IMPROVEMENT_PCT ?? '0'
+  );
+
+  private readonly LOG_RAW_ORDER_SNAPSHOTS =
+    String(process.env.DYDX_V4_LOG_RAW_ORDER_SNAPSHOTS ?? 'true').toLowerCase() !== 'false';
 
   private readonly CONDITIONAL_ORDER_FLAGS = 32;
 
@@ -120,15 +178,23 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   async placeOrder(alert: AlertObject): Promise<void> {
-    const market = alert.market.replace(/_/g, '-');
+    const market = this.normalizeMarket((alert as any).market);
     const signal = this.getSignal(alert);
+    const telemetry = this.getTradingViewTelemetry(alert);
+
+    console.log('dYdX alert intake:', {
+      market,
+      signal,
+      desiredPosition: telemetry.desiredPosition,
+      telemetry
+    });
 
     if (signal === 'TRAIL_UPDATE') {
       await this.handleTrailUpdate(market, alert);
       return;
     }
 
-    const targetSize = this.getTargetSize(alert, alert.size);
+    const targetSize = this.getTargetSize(alert, Number((alert as any).size ?? 0));
 
     console.log('Target position:', targetSize);
 
@@ -145,7 +211,8 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   private async handleTrailUpdate(market: string, alert: AlertObject): Promise<void> {
-    const position = await this.getCurrentPosition(market);
+    const snapshot = await this.getMarketSnapshot(market);
+    const position = snapshot.position;
 
     if (Math.abs(position.size) < this.TOLERANCE) {
       console.log('Trail update ignored because position is flat.', { market });
@@ -154,55 +221,71 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     const isLong = position.size > 0;
+    const direction = isLong ? 'LONG' : 'SHORT';
     const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+    const telemetry = this.getTradingViewTelemetry(alert, isLong);
     const trailTriggerPrice = this.getTrailStopFromAlert(alert, isLong);
+
+    this.logMarketSnapshot('TRAIL_UPDATE received', market, snapshot, telemetry);
 
     if (!trailTriggerPrice) {
       console.warn('Trail update ignored because no valid trail stop was supplied.', {
         market,
-        isLong
+        direction,
+        telemetry
       });
       return;
     }
 
-    const currentKnownStop = await this.getCurrentKnownStopTrigger(market, side, isLong);
+    const stopResolution = this.resolveCurrentProtectiveStop(snapshot, side, isLong);
 
-    if (currentKnownStop === undefined) {
+    if (stopResolution.triggerPrice === undefined) {
       console.warn('Trail update ignored because current dYdX stop could not be determined safely.', {
         market,
-        direction: isLong ? 'LONG' : 'SHORT',
-        trailTriggerPrice
+        direction,
+        trailTriggerPrice,
+        reason: stopResolution.reason,
+        matchingStopOrders: stopResolution.matchingOrders.map((order: any) =>
+          this.summarizeOrder(order)
+        )
       });
       return;
     }
 
-    const improvesLong = isLong && trailTriggerPrice > currentKnownStop;
-    const improvesShort = !isLong && trailTriggerPrice < currentKnownStop;
+    const currentKnownStop = stopResolution.triggerPrice;
+    const improves = this.stopImproves(isLong, trailTriggerPrice, currentKnownStop);
 
-    if (!improvesLong && !improvesShort) {
+    if (!improves) {
       console.log('Trail update ignored because it does not improve current stop.', {
         market,
-        direction: isLong ? 'LONG' : 'SHORT',
+        direction,
         currentKnownStop,
-        trailTriggerPrice
+        trailTriggerPrice,
+        currentStopSource: stopResolution.source,
+        minTrailImprovementPct: this.MIN_TRAIL_IMPROVEMENT_PCT
       });
       return;
     }
 
     const size = Math.abs(position.size);
     const executionPrice = this.getStopExecutionPrice(isLong, trailTriggerPrice);
-    const oldStopOrders = await this.getProtectiveStopOrders(market, side);
+    const oldStopOrders = snapshot.protectiveStops.filter((order: any) =>
+      this.orderSideMatches(order, side)
+    );
 
     console.log('Applying trail update:', {
       market,
-      direction: isLong ? 'LONG' : 'SHORT',
+      direction,
       positionSize: position.size,
       currentKnownStop,
+      currentStopSource: stopResolution.source,
       trailTriggerPrice,
       executionPrice,
       side,
       size,
-      oldStopCount: oldStopOrders.length
+      oldStopCount: oldStopOrders.length,
+      oldStops: oldStopOrders.map((order: any) => this.summarizeOrder(order)),
+      telemetry
     });
 
     const clientId = await this.placeSafetyStopOrder(
@@ -223,7 +306,24 @@ export class DydxV4Client extends AbstractDexClient {
       updatedAt: Date.now()
     });
 
-    await this.waitForSafetyStopVisibleBestEffort(market, side, trailTriggerPrice);
+    const verified = await this.waitForSafetyStopVisibleBestEffort(
+      market,
+      side,
+      trailTriggerPrice,
+      clientId
+    );
+
+    if (!verified) {
+      console.warn('New trail stop was submitted but not verified. Old stops will NOT be cancelled.', {
+        market,
+        direction,
+        clientId,
+        trailTriggerPrice,
+        oldStopCount: oldStopOrders.length
+      });
+      return;
+    }
+
     await this.cancelSpecificOrders(market, oldStopOrders);
   }
 
@@ -481,9 +581,16 @@ export class DydxV4Client extends AbstractDexClient {
       );
     }
 
+    const telemetry = this.getTradingViewTelemetry(alert, position.size > 0);
     const entryReferencePrice = this.getSafetyStopReferencePrice(alert, position.entryPrice);
     const isLong = position.size > 0;
-    const triggerPrice = this.getInitialSafetyStopTriggerPrice(alert, isLong, entryReferencePrice);
+    const staticStopFromAlert = this.getStaticStopFromAlert(alert, isLong);
+    const triggerPrice = this.getInitialSafetyStopTriggerPrice(
+      alert,
+      isLong,
+      entryReferencePrice,
+      staticStopFromAlert
+    );
     const executionPrice = this.getStopExecutionPrice(isLong, triggerPrice);
     const side = isLong ? OrderSide.SELL : OrderSide.BUY;
     const size = Math.abs(position.size);
@@ -497,7 +604,8 @@ export class DydxV4Client extends AbstractDexClient {
       side,
       size,
       reduceOnly: true,
-      source: this.getStaticStopFromAlert(alert, isLong) ? 'TRADINGVIEW_STATIC_SL' : 'ENV_FALLBACK'
+      source: staticStopFromAlert ? 'TRADINGVIEW_STATIC_SL' : 'ENV_FALLBACK',
+      telemetry
     });
 
     const clientId = await this.placeSafetyStopOrder(
@@ -518,7 +626,7 @@ export class DydxV4Client extends AbstractDexClient {
       updatedAt: Date.now()
     });
 
-    await this.waitForSafetyStopVisibleBestEffort(market, side, triggerPrice);
+    await this.waitForSafetyStopVisibleBestEffort(market, side, triggerPrice, clientId);
   }
 
   private async placeSafetyStopOrder(
@@ -529,6 +637,17 @@ export class DydxV4Client extends AbstractDexClient {
     executionPrice: number
   ): Promise<number> {
     const clientId = this.createClientId();
+
+    console.log('Submitting safety stop order:', {
+      market,
+      side,
+      size,
+      triggerPrice,
+      executionPrice,
+      clientId,
+      reduceOnly: true,
+      orderType: OrderType.STOP_MARKET
+    });
 
     await this.client.placeOrder(
       this.subaccount,
@@ -552,36 +671,26 @@ export class DydxV4Client extends AbstractDexClient {
   private async waitForSafetyStopVisibleBestEffort(
     market: string,
     side: OrderSide,
-    triggerPrice: number
-  ): Promise<void> {
+    triggerPrice: number,
+    expectedClientId?: number
+  ): Promise<boolean> {
     for (let i = 1; i <= this.SAFETY_STOP_VERIFY_POLLS; i++) {
       await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
 
       const orders = await this.getOpenOrdersForMarket(market);
-      const stopOrder = this.findSafetyStopOrderInOrders(orders, side, triggerPrice);
+      const stopOrder = this.findSafetyStopOrderInOrders(
+        orders,
+        side,
+        triggerPrice,
+        expectedClientId
+      );
 
       console.log(`Safety stop verify poll ${i}/${this.SAFETY_STOP_VERIFY_POLLS}`, {
         market,
         expectedSide: side,
         expectedTriggerPrice: triggerPrice,
-        openOrders: orders.map((order: any) => ({
-          clientId: order.clientId,
-          market: order.market,
-          side: order.side,
-          type: order.type ?? order.orderType,
-          status: order.status,
-          reduceOnly: order.reduceOnly,
-          triggerPrice:
-            order.triggerPrice ??
-            order.trigger_price ??
-            order.conditionalOrderTriggerPrice ??
-            order.conditional_order_trigger_price,
-          orderFlags:
-            order.orderFlags ??
-            order.order_flags ??
-            order.orderId?.orderFlags ??
-            order.order_id?.order_flags
-        }))
+        expectedClientId,
+        openOrders: orders.map((order: any) => this.summarizeOrder(order))
       });
 
       if (stopOrder) {
@@ -589,24 +698,173 @@ export class DydxV4Client extends AbstractDexClient {
           market,
           side,
           triggerPrice,
-          status: stopOrder.status,
-          clientId: stopOrder.clientId
+          expectedClientId,
+          matchedOrder: this.summarizeOrder(stopOrder)
         });
-        return;
+        return true;
       }
     }
 
     console.warn(
-      `Safety stop was placed but could not be verified through indexer for ${market} at trigger ${triggerPrice}. Check dYdX UI.`
+      `Safety stop was submitted but could not be verified through indexer for ${market} at trigger ${triggerPrice}. Check dYdX UI.`
     );
+
+    return false;
   }
 
-  private async getOpenOrdersForMarket(market: string): Promise<any[]> {
+  private async getMarketSnapshot(market: string): Promise<MarketSnapshot> {
+    const [position, allMarketOrders] = await Promise.all([
+      this.getCurrentPosition(market),
+      this.getAllOrdersForMarket(market)
+    ]);
+
+    const openOrders = allMarketOrders.filter((order: any) => this.isVisibleOpenOrder(order));
+    const protectiveStops = this.getProtectiveStopOrdersFromOrders(openOrders);
+    const managedStop = this.managedStops.get(market);
+
+    return {
+      position,
+      allMarketOrders,
+      openOrders,
+      protectiveStops,
+      managedStop
+    };
+  }
+
+  private logMarketSnapshot(
+    label: string,
+    market: string,
+    snapshot: MarketSnapshot,
+    telemetry?: TradingViewTelemetry
+  ): void {
+    const logPayload: any = {
+      label,
+      market,
+      position: snapshot.position,
+      managedStop: snapshot.managedStop,
+      telemetry,
+      allMarketOrderCount: snapshot.allMarketOrders.length,
+      openOrderCount: snapshot.openOrders.length,
+      protectiveStopCount: snapshot.protectiveStops.length,
+      openOrders: snapshot.openOrders.map((order: any) => this.summarizeOrder(order)),
+      protectiveStops: snapshot.protectiveStops.map((order: any) => this.summarizeOrder(order))
+    };
+
+    if (this.LOG_RAW_ORDER_SNAPSHOTS) {
+      logPayload.rawOpenOrders = snapshot.openOrders;
+      logPayload.rawProtectiveStops = snapshot.protectiveStops;
+    }
+
+    console.log('dYdX market snapshot:', logPayload);
+  }
+
+  private resolveCurrentProtectiveStop(
+    snapshot: MarketSnapshot,
+    side: OrderSide,
+    isLong: boolean
+  ): StopResolution {
+    const matchingOrders = snapshot.protectiveStops.filter((order: any) =>
+      this.orderSideMatches(order, side)
+    );
+
+    const ordersWithTriggers = matchingOrders
+      .map((order: any) => ({
+        order,
+        triggerPrice: this.getOrderTriggerPrice(order)
+      }))
+      .filter((item: { order: any; triggerPrice?: number }) => item.triggerPrice !== undefined);
+
+    if (ordersWithTriggers.length > 0) {
+      const selected = ordersWithTriggers.reduce((best, current) => {
+        if (best.triggerPrice === undefined) {
+          return current;
+        }
+
+        if (current.triggerPrice === undefined) {
+          return best;
+        }
+
+        return isLong
+          ? current.triggerPrice > best.triggerPrice ? current : best
+          : current.triggerPrice < best.triggerPrice ? current : best;
+      });
+
+      return {
+        triggerPrice: selected.triggerPrice,
+        source: 'DYDX_OPEN_ORDER',
+        order: selected.order,
+        matchingOrders
+      };
+    }
+
+    const managedStop = snapshot.managedStop;
+
+    if (managedStop && String(managedStop.side).toUpperCase() === String(side).toUpperCase()) {
+      const matchingManagedOrder = matchingOrders.find((order: any) =>
+        this.orderClientIdMatches(order, managedStop.clientId)
+      );
+
+      if (matchingOrders.length === 0 || matchingManagedOrder) {
+        return {
+          triggerPrice: managedStop.triggerPrice,
+          source: 'MANAGED_MEMORY',
+          reason:
+            matchingOrders.length === 0
+              ? 'No live protective stop was visible, using managed in-memory stop as fallback.'
+              : 'Managed in-memory stop matched a live dYdX order by clientId.',
+          order: matchingManagedOrder,
+          matchingOrders
+        };
+      }
+
+      return {
+        source: 'UNKNOWN',
+        reason:
+          'Live protective stop orders exist, but none expose a trigger price and none match the managed clientId. Refusing to use stale managed memory.',
+        matchingOrders
+      };
+    }
+
+    return {
+      source: 'UNKNOWN',
+      reason:
+        matchingOrders.length === 0
+          ? 'No matching protective stop orders found for this market/side.'
+          : 'Matching protective stop orders found, but no trigger price could be parsed.',
+      matchingOrders
+    };
+  }
+
+  private async getAllOrdersForMarket(market: string): Promise<any[]> {
     const res = await this.indexer.account.getSubaccountOrders(
       this.wallet.address,
       0
     );
 
+    return res.orders?.filter((order: any) => this.orderMarketMatches(order, market)) || [];
+  }
+
+  private async getOpenOrdersForMarket(market: string): Promise<any[]> {
+    const orders = await this.getAllOrdersForMarket(market);
+    return orders.filter((order: any) => this.isVisibleOpenOrder(order));
+  }
+
+  private async getProtectiveStopOrders(market: string, side?: OrderSide): Promise<any[]> {
+    const orders = await this.getOpenOrdersForMarket(market);
+    const protectiveStops = this.getProtectiveStopOrdersFromOrders(orders);
+
+    if (side === undefined) {
+      return protectiveStops;
+    }
+
+    return protectiveStops.filter((order: any) => this.orderSideMatches(order, side));
+  }
+
+  private getProtectiveStopOrdersFromOrders(orders: any[]): any[] {
+    return orders.filter((order: any) => this.isProtectiveStopOrder(order));
+  }
+
+  private isVisibleOpenOrder(order: any): boolean {
     const visibleStatuses = new Set([
       'OPEN',
       'UNTRIGGERED',
@@ -615,56 +873,53 @@ export class DydxV4Client extends AbstractDexClient {
       'BEST_EFFORT_OPENED'
     ]);
 
-    return res.orders?.filter((order: any) =>
-      order.market === market &&
-      visibleStatuses.has(String(order.status).toUpperCase())
-    ) || [];
+    return visibleStatuses.has(String(order.status).toUpperCase());
   }
 
-  private async getProtectiveStopOrders(market: string, side?: OrderSide): Promise<any[]> {
-    const orders = await this.getOpenOrdersForMarket(market);
+  private isProtectiveStopOrder(order: any): boolean {
+    const orderType = this.getOrderTypeText(order);
+    const reduceOnly = this.getOrderReduceOnly(order);
+    const hasTriggerPrice = this.getOrderTriggerPrice(order) !== undefined;
 
-    return orders.filter((order: any) => {
-      const orderSideMatches =
-        side === undefined ||
-        String(order.side).toUpperCase() === String(side).toUpperCase();
+    if (!reduceOnly) {
+      return false;
+    }
 
-      const orderType = String(order.type || order.orderType || '').toUpperCase();
+    if (orderType.includes('TAKE_PROFIT') || orderType.includes('TAKE-PROFIT')) {
+      return false;
+    }
 
-      const reduceOnly =
-        order.reduceOnly === true ||
-        String(order.reduceOnly).toLowerCase() === 'true' ||
-        order.reduceOnly === undefined;
+    if (orderType.includes('STOP')) {
+      return true;
+    }
 
-      return orderSideMatches && reduceOnly && orderType.includes('STOP');
-    });
+    return orderType === '' && hasTriggerPrice;
   }
 
   private findSafetyStopOrderInOrders(
     orders: any[],
     side: OrderSide,
-    triggerPrice: number
+    triggerPrice: number,
+    expectedClientId?: number
   ): any | undefined {
     return orders.find((order: any) => {
-      const orderSide = String(order.side).toUpperCase() === String(side).toUpperCase();
-      const orderType = String(order.type || order.orderType || '').toUpperCase();
+      if (!this.orderSideMatches(order, side)) {
+        return false;
+      }
 
-      const reduceOnly =
-        order.reduceOnly === true ||
-        String(order.reduceOnly).toLowerCase() === 'true' ||
-        order.reduceOnly === undefined;
+      if (!this.isProtectiveStopOrder(order)) {
+        return false;
+      }
+
+      if (expectedClientId !== undefined && this.orderClientIdMatches(order, expectedClientId)) {
+        return true;
+      }
 
       const parsedTrigger = this.getOrderTriggerPrice(order);
 
-      const triggerMatches =
-        parsedTrigger === undefined ||
-        Math.abs(parsedTrigger - triggerPrice) / triggerPrice < 0.002;
-
       return (
-        orderSide &&
-        reduceOnly &&
-        orderType.includes('STOP') &&
-        triggerMatches
+        parsedTrigger !== undefined &&
+        Math.abs(parsedTrigger - triggerPrice) / triggerPrice < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
       );
     });
   }
@@ -677,13 +932,10 @@ export class DydxV4Client extends AbstractDexClient {
 
   private async cancelSpecificOrders(market: string, orders: any[]): Promise<void> {
     for (const order of orders) {
-      const clientId =
-        typeof order.clientId === 'number'
-          ? order.clientId
-          : parseInt(order.clientId, 10);
+      const clientId = this.getOrderClientId(order);
 
       if (!Number.isFinite(clientId)) {
-        console.warn('Skipping cancel because clientId is invalid:', order);
+        console.warn('Skipping cancel because clientId is invalid:', this.summarizeOrder(order));
         continue;
       }
 
@@ -696,7 +948,8 @@ export class DydxV4Client extends AbstractDexClient {
         orderFlags,
         status: order.status,
         type: order.type,
-        goodTilBlockTime
+        goodTilBlockTime,
+        order: this.summarizeOrder(order)
       });
 
       await this.client.cancelOrder(
@@ -709,38 +962,24 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
-  private async getCurrentKnownStopTrigger(
-    market: string,
-    side: OrderSide,
-    isLong: boolean
-  ): Promise<number | undefined> {
-    const managedStop = this.managedStops.get(market);
-
-    if (managedStop && String(managedStop.side).toUpperCase() === String(side).toUpperCase()) {
-      return managedStop.triggerPrice;
-    }
-
-    const protectiveStops = await this.getProtectiveStopOrders(market, side);
-    const triggerPrices = protectiveStops
-      .map((order: any) => this.getOrderTriggerPrice(order))
-      .filter((value: number | undefined): value is number => value !== undefined);
-
-    if (triggerPrices.length === 0) {
-      return undefined;
+  private stopImproves(isLong: boolean, newStop: number, currentStop: number): boolean {
+    if (this.MIN_TRAIL_IMPROVEMENT_PCT <= 0) {
+      return isLong
+        ? newStop > currentStop
+        : newStop < currentStop;
     }
 
     return isLong
-      ? Math.max(...triggerPrices)
-      : Math.min(...triggerPrices);
+      ? newStop > currentStop * (1 + this.MIN_TRAIL_IMPROVEMENT_PCT)
+      : newStop < currentStop * (1 - this.MIN_TRAIL_IMPROVEMENT_PCT);
   }
 
   private getInitialSafetyStopTriggerPrice(
     alert: AlertObject,
     isLong: boolean,
-    entryReferencePrice: number
+    entryReferencePrice: number,
+    staticStopFromAlert?: number
   ): number {
-    const staticStopFromAlert = this.getStaticStopFromAlert(alert, isLong);
-
     if (staticStopFromAlert) {
       if (isLong && staticStopFromAlert >= entryReferencePrice) {
         throw new Error(
@@ -768,107 +1007,282 @@ export class DydxV4Client extends AbstractDexClient {
       : triggerPrice * (1 + this.SAFETY_STOP_SLIPPAGE_PCT);
   }
 
-  private getStaticStopFromAlert(alert: AlertObject, isLong: boolean): number | undefined {
+  private getTradingViewTelemetry(alert: AlertObject, isLong?: boolean): TradingViewTelemetry {
     const data = alert as any;
 
-    const candidates = isLong
-      ? [
-          data.static_sl_long,
-          data.staticSLLong,
-          data.staticLongSL,
-          data.static_long_sl,
-          data.long_static_sl,
-          data.longStaticSL,
-          data.static_sl,
-          data.staticSL,
-          data.stop_loss,
-          data.stopLoss,
-          data.stopPrice
-        ]
-      : [
-          data.static_sl_short,
-          data.staticSLShort,
-          data.staticShortSL,
-          data.static_short_sl,
-          data.short_static_sl,
-          data.shortStaticSL,
-          data.static_sl,
-          data.staticSL,
-          data.stop_loss,
-          data.stopLoss,
-          data.stopPrice
-        ];
+    const longTrailStop = this.getFirstPositiveNumber([
+      data.trailing_sl_long,
+      data.trailingSLLong,
+      data.trail_sl_long,
+      data.trailSLLong,
+      data.long_trailing_sl,
+      data.longTrailingSL,
+      data.long_trail_stop,
+      data.longTrailStop,
+      data.trail_stop_long,
+      data.trailStopLong
+    ]);
 
-    for (const candidate of candidates) {
-      const parsed = this.parsePositiveNumber(candidate);
+    const shortTrailStop = this.getFirstPositiveNumber([
+      data.trailing_sl_short,
+      data.trailingSLShort,
+      data.trail_sl_short,
+      data.trailSLShort,
+      data.short_trailing_sl,
+      data.shortTrailingSL,
+      data.short_trail_stop,
+      data.shortTrailStop,
+      data.trail_stop_short,
+      data.trailStopShort
+    ]);
 
-      if (parsed) {
-        return parsed;
-      }
-    }
+    const genericTrailStop = this.getFirstPositiveNumber([
+      data.trailing_sl,
+      data.trailingSL,
+      data.trail_sl,
+      data.trailSL,
+      data.trail_stop,
+      data.trailStop,
+      data.trail,
+      data.trail_stop_price,
+      data.trailStopPrice
+    ]);
 
-    return undefined;
+    const alertPrice = this.parsePositiveNumber(data.price);
+
+    return {
+      signal: this.getSignal(alert),
+      desiredPosition: String(data.desired_position ?? data.position ?? ''),
+      alertPrice,
+      currentPrice: this.getFirstPositiveNumber([
+        data.current_price,
+        data.currentPrice,
+        data.close,
+        data.close_price,
+        data.closePrice
+      ]),
+      entryPrice: this.getFirstPositiveNumber([
+        data.entry_price,
+        data.entryPrice,
+        data.entry
+      ]),
+      trailStop:
+        isLong === true
+          ? longTrailStop ?? genericTrailStop ?? alertPrice
+          : isLong === false
+            ? shortTrailStop ?? genericTrailStop ?? alertPrice
+            : genericTrailStop ?? longTrailStop ?? shortTrailStop ?? alertPrice,
+      longTrailStop: longTrailStop ?? genericTrailStop,
+      shortTrailStop: shortTrailStop ?? genericTrailStop,
+      staticStop: this.getFirstPositiveNumber([
+        data.static_sl,
+        data.staticSL,
+        data.stop_loss,
+        data.stopLoss,
+        data.stopPrice
+      ]),
+      longStaticStop: this.getFirstPositiveNumber([
+        data.static_sl_long,
+        data.staticSLLong,
+        data.staticLongSL,
+        data.static_long_sl,
+        data.long_static_sl,
+        data.longStaticSL
+      ]),
+      shortStaticStop: this.getFirstPositiveNumber([
+        data.static_sl_short,
+        data.staticSLShort,
+        data.staticShortSL,
+        data.static_short_sl,
+        data.short_static_sl,
+        data.shortStaticSL
+      ]),
+      topFractal: this.getFirstPositiveNumber([
+        data.top_fractal,
+        data.topFractal,
+        data.top_fractal_level,
+        data.topFractalLevel,
+        data.fractal_top,
+        data.fractalTop
+      ]),
+      bottomFractal: this.getFirstPositiveNumber([
+        data.bottom_fractal,
+        data.bottomFractal,
+        data.bottom_fractal_level,
+        data.bottomFractalLevel,
+        data.fractal_bottom,
+        data.fractalBottom
+      ]),
+      floatingLongEntry: this.getFirstPositiveNumber([
+        data.floating_long_entry,
+        data.floatingLongEntry,
+        data.float_long_entry,
+        data.floatLongEntry,
+        data.long_float,
+        data.longFloat
+      ]),
+      floatingShortEntry: this.getFirstPositiveNumber([
+        data.floating_short_entry,
+        data.floatingShortEntry,
+        data.float_short_entry,
+        data.floatShortEntry,
+        data.short_float,
+        data.shortFloat
+      ]),
+      barTime: data.bar_time ?? data.barTime,
+      rawTime: data.time
+    };
+  }
+
+  private getStaticStopFromAlert(alert: AlertObject, isLong: boolean): number | undefined {
+    const telemetry = this.getTradingViewTelemetry(alert, isLong);
+
+    return isLong
+      ? telemetry.longStaticStop ?? telemetry.staticStop
+      : telemetry.shortStaticStop ?? telemetry.staticStop;
   }
 
   private getTrailStopFromAlert(alert: AlertObject, isLong: boolean): number | undefined {
-    const data = alert as any;
+    const telemetry = this.getTradingViewTelemetry(alert, isLong);
 
-    const candidates = isLong
-      ? [
-          data.trailing_sl_long,
-          data.trailingSLLong,
-          data.trail_sl_long,
-          data.trailSLLong,
-          data.long_trailing_sl,
-          data.longTrailingSL,
-          data.long_trail_stop,
-          data.longTrailStop,
-          data.trail_stop_long,
-          data.trailStopLong,
-          data.trailing_sl,
-          data.trailingSL,
-          data.trail_stop,
-          data.trailStop,
-          data.trail,
-          data.price
-        ]
-      : [
-          data.trailing_sl_short,
-          data.trailingSLShort,
-          data.trail_sl_short,
-          data.trailSLShort,
-          data.short_trailing_sl,
-          data.shortTrailingSL,
-          data.short_trail_stop,
-          data.shortTrailStop,
-          data.trail_stop_short,
-          data.trailStopShort,
-          data.trailing_sl,
-          data.trailingSL,
-          data.trail_stop,
-          data.trailStop,
-          data.trail,
-          data.price
-        ];
+    return isLong
+      ? telemetry.longTrailStop ?? telemetry.trailStop ?? telemetry.alertPrice
+      : telemetry.shortTrailStop ?? telemetry.trailStop ?? telemetry.alertPrice;
+  }
+
+  private getOrderTriggerPrice(order: any): number | undefined {
+    const candidates = this.getOrderTriggerPriceCandidates(order);
 
     for (const candidate of candidates) {
-      const parsed = this.parsePositiveNumber(candidate);
-
-      if (parsed) {
-        return parsed;
+      if (candidate.parsed !== undefined) {
+        return candidate.parsed;
       }
     }
 
     return undefined;
   }
 
-  private getOrderTriggerPrice(order: any): number | undefined {
-    return this.parsePositiveNumber(
-      order.triggerPrice ??
-      order.trigger_price ??
-      order.conditionalOrderTriggerPrice ??
-      order.conditional_order_trigger_price
-    );
+  private getOrderTriggerPriceCandidates(order: any): PriceCandidate[] {
+    const candidates: PriceCandidate[] = [];
+    const seen = new Set<string>();
+
+    const pushCandidate = (path: string, value: unknown) => {
+      if (seen.has(path)) {
+        return;
+      }
+
+      seen.add(path);
+
+      if (value === undefined || value === null || value === '') {
+        return;
+      }
+
+      candidates.push({
+        path,
+        value,
+        parsed: this.parsePositiveNumber(value)
+      });
+    };
+
+    pushCandidate('triggerPrice', order.triggerPrice);
+    pushCandidate('trigger_price', order.trigger_price);
+    pushCandidate('conditionalOrderTriggerPrice', order.conditionalOrderTriggerPrice);
+    pushCandidate('conditional_order_trigger_price', order.conditional_order_trigger_price);
+    pushCandidate('stopPrice', order.stopPrice);
+    pushCandidate('stop_price', order.stop_price);
+    pushCandidate('activationPrice', order.activationPrice);
+    pushCandidate('activation_price', order.activation_price);
+    pushCandidate('order.triggerPrice', order.order?.triggerPrice);
+    pushCandidate('order.trigger_price', order.order?.trigger_price);
+    pushCandidate('order.conditionalOrderTriggerPrice', order.order?.conditionalOrderTriggerPrice);
+    pushCandidate('order.conditional_order_trigger_price', order.order?.conditional_order_trigger_price);
+    pushCandidate('order.stopPrice', order.order?.stopPrice);
+    pushCandidate('order.stop_price', order.order?.stop_price);
+
+    this.collectTriggerPriceCandidates(order, '', 0, candidates, seen, new Set<object>());
+
+    return candidates;
+  }
+
+  private collectTriggerPriceCandidates(
+    value: unknown,
+    path: string,
+    depth: number,
+    candidates: PriceCandidate[],
+    seenPaths: Set<string>,
+    seenObjects: Set<object>
+  ): void {
+    if (depth > 4 || value === null || typeof value !== 'object') {
+      return;
+    }
+
+    if (seenObjects.has(value as object)) {
+      return;
+    }
+
+    seenObjects.add(value as object);
+
+    for (const [key, childValue] of Object.entries(value as Record<string, unknown>)) {
+      const childPath = path ? `${path}.${key}` : key;
+      const normalizedKey = key.toLowerCase();
+
+      const looksLikeTriggerPrice =
+        (
+          normalizedKey.includes('trigger') ||
+          normalizedKey.includes('stop') ||
+          normalizedKey.includes('activation')
+        ) &&
+        normalizedKey.includes('price');
+
+      if (looksLikeTriggerPrice && !seenPaths.has(childPath)) {
+        seenPaths.add(childPath);
+
+        if (childValue !== undefined && childValue !== null && childValue !== '') {
+          candidates.push({
+            path: childPath,
+            value: childValue,
+            parsed: this.parsePositiveNumber(childValue)
+          });
+        }
+      }
+
+      if (typeof childValue === 'object' && childValue !== null) {
+        this.collectTriggerPriceCandidates(
+          childValue,
+          childPath,
+          depth + 1,
+          candidates,
+          seenPaths,
+          seenObjects
+        );
+      }
+    }
+  }
+
+  private summarizeOrder(order: any): any {
+    return {
+      id: order.id ?? order.orderId?.id ?? order.order_id?.id,
+      clientId: order.clientId ?? order.client_id ?? order.orderId?.clientId ?? order.order_id?.client_id,
+      market: order.market ?? order.ticker,
+      side: order.side,
+      type: order.type ?? order.orderType ?? order.order_type,
+      status: order.status,
+      reduceOnly: order.reduceOnly ?? order.reduce_only,
+      size: order.size,
+      totalFilled: order.totalFilled ?? order.total_filled,
+      price: order.price,
+      triggerPrice: this.getOrderTriggerPrice(order),
+      triggerCandidates: this.getOrderTriggerPriceCandidates(order),
+      orderFlags: this.getRawOrderFlags(order),
+      inferredOrderFlags: this.getOrderFlags(order),
+      goodTilBlockTime: this.getOrderGoodTilBlockTime(order),
+      goodTilBlock: order.goodTilBlock ?? order.good_til_block ?? order.orderId?.goodTilBlock,
+      timeInForce: order.timeInForce ?? order.time_in_force,
+      execution: order.execution,
+      postOnly: order.postOnly ?? order.post_only,
+      createdAt: order.createdAt ?? order.created_at,
+      updatedAt: order.updatedAt ?? order.updated_at
+    };
   }
 
   private async getCurrentSize(market: string): Promise<number> {
@@ -876,15 +1290,13 @@ export class DydxV4Client extends AbstractDexClient {
     return position.size;
   }
 
-  private async getCurrentPosition(
-    market: string
-  ): Promise<{ size: number; entryPrice?: number }> {
+  private async getCurrentPosition(market: string): Promise<PositionSnapshot> {
     const response = await this.indexer.account.getSubaccountPerpetualPositions(
       this.wallet.address,
       0
     );
 
-    const pos = response.positions.find((p: any) => p.market === market);
+    const pos = response.positions.find((p: any) => this.normalizeMarket(p.market) === market);
 
     if (!pos) {
       return { size: 0 };
@@ -902,7 +1314,8 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   private getTargetSize(alert: AlertObject, baseSize: number): number {
-    const dir = alert.desired_position?.toUpperCase();
+    const dir = String((alert as any).desired_position ?? (alert as any).position ?? '')
+      .toUpperCase();
 
     switch (dir) {
       case 'BUY':
@@ -922,7 +1335,11 @@ export class DydxV4Client extends AbstractDexClient {
       return positionEntryPrice;
     }
 
-    const alertPrice = this.parsePositiveNumber((alert as any).entry_price ?? (alert as any).price);
+    const alertPrice = this.parsePositiveNumber(
+      (alert as any).entry_price ??
+      (alert as any).entryPrice ??
+      (alert as any).price
+    );
 
     if (alertPrice && alertPrice > 0) {
       return alertPrice;
@@ -943,14 +1360,78 @@ export class DydxV4Client extends AbstractDexClient {
       return undefined;
     }
 
-    const parsed = Number(value);
+    const normalized =
+      typeof value === 'string'
+        ? value.replace(/[$,\s]/g, '')
+        : value;
+
+    const parsed = Number(normalized);
 
     return Number.isFinite(parsed) && parsed > 0
       ? parsed
       : undefined;
   }
 
-  private getOrderFlags(order: any): number {
+  private getFirstPositiveNumber(values: unknown[]): number | undefined {
+    for (const value of values) {
+      const parsed = this.parsePositiveNumber(value);
+
+      if (parsed !== undefined) {
+        return parsed;
+      }
+    }
+
+    return undefined;
+  }
+
+  private normalizeMarket(value: unknown): string {
+    return String(value ?? '')
+      .replace(/_/g, '-')
+      .toUpperCase();
+  }
+
+  private orderMarketMatches(order: any, market: string): boolean {
+    return this.normalizeMarket(order.market ?? order.ticker) === market;
+  }
+
+  private orderSideMatches(order: any, side: OrderSide): boolean {
+    return String(order.side).toUpperCase() === String(side).toUpperCase();
+  }
+
+  private orderClientIdMatches(order: any, clientId: number): boolean {
+    return this.getOrderClientId(order) === clientId;
+  }
+
+  private getOrderClientId(order: any): number {
+    const raw =
+      order.clientId ??
+      order.client_id ??
+      order.orderId?.clientId ??
+      order.order_id?.client_id;
+
+    const parsed = Number(raw);
+
+    return Number.isFinite(parsed)
+      ? parsed
+      : NaN;
+  }
+
+  private getOrderTypeText(order: any): string {
+    return String(order.type ?? order.orderType ?? order.order_type ?? '')
+      .toUpperCase();
+  }
+
+  private getOrderReduceOnly(order: any): boolean {
+    return (
+      order.reduceOnly === true ||
+      order.reduce_only === true ||
+      String(order.reduceOnly).toLowerCase() === 'true' ||
+      String(order.reduce_only).toLowerCase() === 'true' ||
+      (order.reduceOnly === undefined && order.reduce_only === undefined)
+    );
+  }
+
+  private getRawOrderFlags(order: any): number | undefined {
     const raw =
       order.orderFlags ??
       order.order_flags ??
@@ -959,16 +1440,25 @@ export class DydxV4Client extends AbstractDexClient {
 
     const parsed = Number(raw);
 
-    if (Number.isFinite(parsed)) {
-      return parsed;
+    return Number.isFinite(parsed)
+      ? parsed
+      : undefined;
+  }
+
+  private getOrderFlags(order: any): number {
+    const rawFlags = this.getRawOrderFlags(order);
+
+    if (rawFlags !== undefined) {
+      return rawFlags;
     }
 
-    const type = String(order.type || order.orderType || '').toUpperCase();
+    const type = this.getOrderTypeText(order);
 
     if (
       type.includes('STOP') ||
       type.includes('TAKE_PROFIT') ||
-      type.includes('TAKE-PROFIT')
+      type.includes('TAKE-PROFIT') ||
+      this.getOrderTriggerPrice(order) !== undefined
     ) {
       return this.CONDITIONAL_ORDER_FLAGS;
     }
@@ -1008,5 +1498,3 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
-
-
