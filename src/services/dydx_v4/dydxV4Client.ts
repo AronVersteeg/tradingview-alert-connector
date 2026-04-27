@@ -26,12 +26,24 @@ type ProgressResult =
   | { kind: 'unchanged'; currentSize: number }
   | { kind: 'flipped'; currentSize: number };
 
+type ManagedStop = {
+  market: string;
+  side: OrderSide;
+  triggerPrice: number;
+  clientId: number;
+  size: number;
+  source: 'STATIC' | 'TRAIL';
+  updatedAt: number;
+};
+
 export class DydxV4Client extends AbstractDexClient {
   private wallet!: LocalWallet;
   private client!: CompositeClient;
   private subaccount!: SubaccountClient;
   private indexer!: IndexerClient;
   private initialized = false;
+
+  private readonly managedStops = new Map<string, ManagedStop>();
 
   private readonly TOLERANCE = 0.001;
 
@@ -109,6 +121,13 @@ export class DydxV4Client extends AbstractDexClient {
 
   async placeOrder(alert: AlertObject): Promise<void> {
     const market = alert.market.replace(/_/g, '-');
+    const signal = this.getSignal(alert);
+
+    if (signal === 'TRAIL_UPDATE') {
+      await this.handleTrailUpdate(market, alert);
+      return;
+    }
+
     const targetSize = this.getTargetSize(alert, alert.size);
 
     console.log('Target position:', targetSize);
@@ -116,12 +135,89 @@ export class DydxV4Client extends AbstractDexClient {
     await this.cancelOpenOrders(market);
 
     if (Math.abs(targetSize) < this.TOLERANCE) {
+      this.managedStops.delete(market);
       await this.flattenPositionSafely(market);
       return;
     }
 
     await this.reachTargetPositionSafely(market, targetSize);
     await this.placeStaticSafetyStopAfterEntry(market, targetSize, alert);
+  }
+
+  private async handleTrailUpdate(market: string, alert: AlertObject): Promise<void> {
+    const position = await this.getCurrentPosition(market);
+
+    if (Math.abs(position.size) < this.TOLERANCE) {
+      console.log('Trail update ignored because position is flat.', { market });
+      this.managedStops.delete(market);
+      return;
+    }
+
+    const isLong = position.size > 0;
+    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+    const trailTriggerPrice = this.getTrailStopFromAlert(alert, isLong);
+
+    if (!trailTriggerPrice) {
+      console.warn('Trail update ignored because no valid trail stop was supplied.', {
+        market,
+        isLong
+      });
+      return;
+    }
+
+    const currentKnownStop = await this.getCurrentKnownStopTrigger(market, side, isLong);
+
+    if (currentKnownStop !== undefined) {
+      const improvesLong = isLong && trailTriggerPrice > currentKnownStop;
+      const improvesShort = !isLong && trailTriggerPrice < currentKnownStop;
+
+      if (!improvesLong && !improvesShort) {
+        console.log('Trail update ignored because it does not improve current stop.', {
+          market,
+          direction: isLong ? 'LONG' : 'SHORT',
+          currentKnownStop,
+          trailTriggerPrice
+        });
+        return;
+      }
+    }
+
+    const size = Math.abs(position.size);
+    const executionPrice = this.getStopExecutionPrice(isLong, trailTriggerPrice);
+    const oldStopOrders = await this.getProtectiveStopOrders(market, side);
+
+    console.log('Applying trail update:', {
+      market,
+      direction: isLong ? 'LONG' : 'SHORT',
+      positionSize: position.size,
+      currentKnownStop,
+      trailTriggerPrice,
+      executionPrice,
+      side,
+      size,
+      oldStopCount: oldStopOrders.length
+    });
+
+    const clientId = await this.placeSafetyStopOrder(
+      market,
+      side,
+      size,
+      trailTriggerPrice,
+      executionPrice
+    );
+
+    this.managedStops.set(market, {
+      market,
+      side,
+      triggerPrice: trailTriggerPrice,
+      clientId,
+      size,
+      source: 'TRAIL',
+      updatedAt: Date.now()
+    });
+
+    await this.waitForSafetyStopVisibleBestEffort(market, side, trailTriggerPrice);
+    await this.cancelSpecificOrders(market, oldStopOrders);
   }
 
   private async flattenPositionSafely(market: string): Promise<void> {
@@ -380,15 +476,8 @@ export class DydxV4Client extends AbstractDexClient {
 
     const entryReferencePrice = this.getSafetyStopReferencePrice(alert, position.entryPrice);
     const isLong = position.size > 0;
-
-    const triggerPrice = isLong
-      ? entryReferencePrice * (1 - this.SAFETY_STOP_PCT)
-      : entryReferencePrice * (1 + this.SAFETY_STOP_PCT);
-
-    const executionPrice = isLong
-      ? triggerPrice * (1 - this.SAFETY_STOP_SLIPPAGE_PCT)
-      : triggerPrice * (1 + this.SAFETY_STOP_SLIPPAGE_PCT);
-
+    const triggerPrice = this.getInitialSafetyStopTriggerPrice(alert, isLong, entryReferencePrice);
+    const executionPrice = this.getStopExecutionPrice(isLong, triggerPrice);
     const side = isLong ? OrderSide.SELL : OrderSide.BUY;
     const size = Math.abs(position.size);
 
@@ -400,10 +489,11 @@ export class DydxV4Client extends AbstractDexClient {
       executionPrice,
       side,
       size,
-      reduceOnly: true
+      reduceOnly: true,
+      source: this.getStaticStopFromAlert(alert, isLong) ? 'TRADINGVIEW_STATIC_SL' : 'ENV_FALLBACK'
     });
 
-    await this.placeStaticSafetyStopOrder(
+    const clientId = await this.placeSafetyStopOrder(
       market,
       side,
       size,
@@ -411,16 +501,26 @@ export class DydxV4Client extends AbstractDexClient {
       executionPrice
     );
 
+    this.managedStops.set(market, {
+      market,
+      side,
+      triggerPrice,
+      clientId,
+      size,
+      source: 'STATIC',
+      updatedAt: Date.now()
+    });
+
     await this.waitForSafetyStopVisibleBestEffort(market, side, triggerPrice);
   }
 
-  private async placeStaticSafetyStopOrder(
+  private async placeSafetyStopOrder(
     market: string,
     side: OrderSide,
     size: number,
     triggerPrice: number,
     executionPrice: number
-  ): Promise<void> {
+  ): Promise<number> {
     const clientId = this.createClientId();
 
     await this.client.placeOrder(
@@ -438,6 +538,8 @@ export class DydxV4Client extends AbstractDexClient {
       true,
       triggerPrice
     );
+
+    return clientId;
   }
 
   private async waitForSafetyStopVisibleBestEffort(
@@ -476,7 +578,7 @@ export class DydxV4Client extends AbstractDexClient {
       });
 
       if (stopOrder) {
-        console.log('Static safety stop visible on dYdX:', {
+        console.log('Safety stop visible on dYdX:', {
           market,
           side,
           triggerPrice,
@@ -488,7 +590,7 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     console.warn(
-      `Static safety stop was placed but could not be verified through indexer for ${market} at trigger ${triggerPrice}. Check dYdX UI.`
+      `Safety stop was placed but could not be verified through indexer for ${market} at trigger ${triggerPrice}. Check dYdX UI.`
     );
   }
 
@@ -512,6 +614,25 @@ export class DydxV4Client extends AbstractDexClient {
     ) || [];
   }
 
+  private async getProtectiveStopOrders(market: string, side?: OrderSide): Promise<any[]> {
+    const orders = await this.getOpenOrdersForMarket(market);
+
+    return orders.filter((order: any) => {
+      const orderSideMatches =
+        side === undefined ||
+        String(order.side).toUpperCase() === String(side).toUpperCase();
+
+      const orderType = String(order.type || order.orderType || '').toUpperCase();
+
+      const reduceOnly =
+        order.reduceOnly === true ||
+        String(order.reduceOnly).toLowerCase() === 'true' ||
+        order.reduceOnly === undefined;
+
+      return orderSideMatches && reduceOnly && orderType.includes('STOP');
+    });
+  }
+
   private findSafetyStopOrderInOrders(
     orders: any[],
     side: OrderSide,
@@ -526,22 +647,11 @@ export class DydxV4Client extends AbstractDexClient {
         String(order.reduceOnly).toLowerCase() === 'true' ||
         order.reduceOnly === undefined;
 
-      const rawTrigger =
-        order.triggerPrice ??
-        order.trigger_price ??
-        order.conditionalOrderTriggerPrice ??
-        order.conditional_order_trigger_price;
-
-      const parsedTrigger = Number(rawTrigger);
+      const parsedTrigger = this.getOrderTriggerPrice(order);
 
       const triggerMatches =
-        rawTrigger === undefined ||
-        rawTrigger === null ||
-        rawTrigger === '' ||
-        (
-          Number.isFinite(parsedTrigger) &&
-          Math.abs(parsedTrigger - triggerPrice) / triggerPrice < 0.002
-        );
+        parsedTrigger === undefined ||
+        Math.abs(parsedTrigger - triggerPrice) / triggerPrice < 0.002;
 
       return (
         orderSide &&
@@ -554,7 +664,11 @@ export class DydxV4Client extends AbstractDexClient {
 
   private async cancelOpenOrders(market: string): Promise<void> {
     const orders = await this.getOpenOrdersForMarket(market);
+    await this.cancelSpecificOrders(market, orders);
+    this.managedStops.delete(market);
+  }
 
+  private async cancelSpecificOrders(market: string, orders: any[]): Promise<void> {
     for (const order of orders) {
       const clientId =
         typeof order.clientId === 'number'
@@ -586,6 +700,166 @@ export class DydxV4Client extends AbstractDexClient {
         goodTilBlockTime
       );
     }
+  }
+
+  private async getCurrentKnownStopTrigger(
+    market: string,
+    side: OrderSide,
+    isLong: boolean
+  ): Promise<number | undefined> {
+    const managedStop = this.managedStops.get(market);
+
+    if (managedStop && String(managedStop.side).toUpperCase() === String(side).toUpperCase()) {
+      return managedStop.triggerPrice;
+    }
+
+    const protectiveStops = await this.getProtectiveStopOrders(market, side);
+    const triggerPrices = protectiveStops
+      .map((order: any) => this.getOrderTriggerPrice(order))
+      .filter((value: number | undefined): value is number => value !== undefined);
+
+    if (triggerPrices.length === 0) {
+      return undefined;
+    }
+
+    return isLong
+      ? Math.max(...triggerPrices)
+      : Math.min(...triggerPrices);
+  }
+
+  private getInitialSafetyStopTriggerPrice(
+    alert: AlertObject,
+    isLong: boolean,
+    entryReferencePrice: number
+  ): number {
+    const staticStopFromAlert = this.getStaticStopFromAlert(alert, isLong);
+
+    if (staticStopFromAlert) {
+      if (isLong && staticStopFromAlert >= entryReferencePrice) {
+        throw new Error(
+          `Invalid static_sl for LONG: ${staticStopFromAlert} must be below entry reference ${entryReferencePrice}.`
+        );
+      }
+
+      if (!isLong && staticStopFromAlert <= entryReferencePrice) {
+        throw new Error(
+          `Invalid static_sl for SHORT: ${staticStopFromAlert} must be above entry reference ${entryReferencePrice}.`
+        );
+      }
+
+      return staticStopFromAlert;
+    }
+
+    return isLong
+      ? entryReferencePrice * (1 - this.SAFETY_STOP_PCT)
+      : entryReferencePrice * (1 + this.SAFETY_STOP_PCT);
+  }
+
+  private getStopExecutionPrice(isLong: boolean, triggerPrice: number): number {
+    return isLong
+      ? triggerPrice * (1 - this.SAFETY_STOP_SLIPPAGE_PCT)
+      : triggerPrice * (1 + this.SAFETY_STOP_SLIPPAGE_PCT);
+  }
+
+  private getStaticStopFromAlert(alert: AlertObject, isLong: boolean): number | undefined {
+    const data = alert as any;
+
+    const candidates = isLong
+      ? [
+          data.static_sl_long,
+          data.staticSLLong,
+          data.staticLongSL,
+          data.static_long_sl,
+          data.long_static_sl,
+          data.longStaticSL,
+          data.static_sl,
+          data.staticSL,
+          data.stop_loss,
+          data.stopLoss,
+          data.stopPrice
+        ]
+      : [
+          data.static_sl_short,
+          data.staticSLShort,
+          data.staticShortSL,
+          data.static_short_sl,
+          data.short_static_sl,
+          data.shortStaticSL,
+          data.static_sl,
+          data.staticSL,
+          data.stop_loss,
+          data.stopLoss,
+          data.stopPrice
+        ];
+
+    for (const candidate of candidates) {
+      const parsed = this.parsePositiveNumber(candidate);
+
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    return undefined;
+  }
+
+  private getTrailStopFromAlert(alert: AlertObject, isLong: boolean): number | undefined {
+    const data = alert as any;
+
+    const candidates = isLong
+      ? [
+          data.trailing_sl_long,
+          data.trailingSLLong,
+          data.trail_sl_long,
+          data.trailSLLong,
+          data.long_trailing_sl,
+          data.longTrailingSL,
+          data.long_trail_stop,
+          data.longTrailStop,
+          data.trail_stop_long,
+          data.trailStopLong,
+          data.trailing_sl,
+          data.trailingSL,
+          data.trail_stop,
+          data.trailStop,
+          data.trail
+        ]
+      : [
+          data.trailing_sl_short,
+          data.trailingSLShort,
+          data.trail_sl_short,
+          data.trailSLShort,
+          data.short_trailing_sl,
+          data.shortTrailingSL,
+          data.short_trail_stop,
+          data.shortTrailStop,
+          data.trail_stop_short,
+          data.trailStopShort,
+          data.trailing_sl,
+          data.trailingSL,
+          data.trail_stop,
+          data.trailStop,
+          data.trail
+        ];
+
+    for (const candidate of candidates) {
+      const parsed = this.parsePositiveNumber(candidate);
+
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    return undefined;
+  }
+
+  private getOrderTriggerPrice(order: any): number | undefined {
+    return this.parsePositiveNumber(
+      order.triggerPrice ??
+      order.trigger_price ??
+      order.conditionalOrderTriggerPrice ??
+      order.conditional_order_trigger_price
+    );
   }
 
   private async getCurrentSize(market: string): Promise<number> {
@@ -639,13 +913,20 @@ export class DydxV4Client extends AbstractDexClient {
       return positionEntryPrice;
     }
 
-    const alertPrice = this.parsePositiveNumber((alert as any).price);
+    const alertPrice = this.parsePositiveNumber((alert as any).entry_price ?? (alert as any).price);
 
     if (alertPrice && alertPrice > 0) {
       return alertPrice;
     }
 
     throw new Error('Cannot place safety stop: missing entry reference price.');
+  }
+
+  private getSignal(alert: AlertObject): string {
+    return String((alert as any).signal ?? '')
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
   }
 
   private parsePositiveNumber(value: unknown): number | undefined {
@@ -718,4 +999,5 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
 
