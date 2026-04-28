@@ -83,6 +83,12 @@ type PriceCandidate = {
   parsed?: number;
 };
 
+type TakeProfitLevel = {
+  name: string;
+  distancePct: number;
+  sizePct: number;
+};
+
 export class DydxV4Client extends AbstractDexClient {
   private wallet!: LocalWallet;
   private client!: CompositeClient;
@@ -132,6 +138,38 @@ export class DydxV4Client extends AbstractDexClient {
   private readonly MIN_TRAIL_IMPROVEMENT_PCT = Number(
     process.env.DYDX_V4_MIN_TRAIL_IMPROVEMENT_PCT ?? '0'
   );
+
+  private readonly TAKE_PROFIT_ENABLED =
+    String(process.env.DYDX_V4_TP_ENABLED ?? 'false').toLowerCase() === 'true';
+
+  private readonly TAKE_PROFIT_STRATEGY_ALLOWLIST = String(
+    process.env.DYDX_V4_TP_STRATEGY_ALLOWLIST ?? ''
+  )
+    .split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean);
+
+  private readonly TAKE_PROFIT_LIFETIME_SECONDS = Number(
+    process.env.DYDX_V4_TP_LIFETIME_SECONDS ?? `${60 * 60 * 24 * 30}`
+  );
+
+  private readonly TAKE_PROFIT_LEVELS: TakeProfitLevel[] = [
+    {
+      name: 'TP1',
+      distancePct: Number(process.env.DYDX_V4_TP1_DISTANCE_PCT ?? '0'),
+      sizePct: Number(process.env.DYDX_V4_TP1_SIZE_PCT ?? '0')
+    },
+    {
+      name: 'TP2',
+      distancePct: Number(process.env.DYDX_V4_TP2_DISTANCE_PCT ?? '0'),
+      sizePct: Number(process.env.DYDX_V4_TP2_SIZE_PCT ?? '0')
+    },
+    {
+      name: 'TP3',
+      distancePct: Number(process.env.DYDX_V4_TP3_DISTANCE_PCT ?? '0'),
+      sizePct: Number(process.env.DYDX_V4_TP3_SIZE_PCT ?? '0')
+    }
+  ];
 
   private readonly LOG_RAW_ORDER_SNAPSHOTS =
     String(process.env.DYDX_V4_LOG_RAW_ORDER_SNAPSHOTS ?? 'true').toLowerCase() !== 'false';
@@ -208,6 +246,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     await this.reachTargetPositionSafely(market, targetSize);
     await this.placeStaticSafetyStopAfterEntry(market, targetSize, alert);
+    await this.placeTakeProfitOrdersAfterEntry(market, targetSize, alert);
   }
 
   private async handleTrailUpdate(market: string, alert: AlertObject): Promise<void> {
@@ -627,6 +666,146 @@ export class DydxV4Client extends AbstractDexClient {
     });
 
     await this.waitForSafetyStopVisibleBestEffort(market, side, triggerPrice, clientId);
+  }
+
+  private async placeTakeProfitOrdersAfterEntry(
+    market: string,
+    targetSize: number,
+    alert: AlertObject
+  ): Promise<void> {
+    if (!this.shouldPlaceTakeProfitOrders(alert)) {
+      return;
+    }
+
+    const levels = this.getConfiguredTakeProfitLevels();
+
+    if (levels.length === 0) {
+      console.log('Take profit orders skipped: no valid TP levels configured.');
+      return;
+    }
+
+    const totalSizePct = levels.reduce((sum, level) => sum + level.sizePct, 0);
+
+    if (totalSizePct > 1 + this.TOLERANCE) {
+      throw new Error(`Take profit size percentages exceed 100%. Total=${totalSizePct}`);
+    }
+
+    const position = await this.getCurrentPosition(market);
+
+    if (Math.abs(position.size) < this.TOLERANCE) {
+      console.log('Take profit orders skipped: position is flat after entry.', { market });
+      return;
+    }
+
+    if (Math.sign(position.size) !== Math.sign(targetSize)) {
+      throw new Error(
+        `Take profit orders not placed for ${market}: position direction mismatch. Current=${position.size}, target=${targetSize}`
+      );
+    }
+
+    const isLong = position.size > 0;
+    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+    const entryReferencePrice = this.getSafetyStopReferencePrice(alert, position.entryPrice);
+    const positionSize = Math.abs(position.size);
+
+    console.log('Placing take profit orders:', {
+      market,
+      positionSize: position.size,
+      entryReferencePrice,
+      side,
+      levels
+    });
+
+    for (const level of levels) {
+      const price = isLong
+        ? entryReferencePrice * (1 + level.distancePct)
+        : entryReferencePrice * (1 - level.distancePct);
+
+      const size = Number((positionSize * level.sizePct).toFixed(6));
+
+      if (size < this.TOLERANCE) {
+        console.log('Skipping TP level because size is below tolerance.', {
+          market,
+          level,
+          size
+        });
+        continue;
+      }
+
+      await this.placeTakeProfitOrder(market, side, size, price, level.name);
+    }
+  }
+
+  private shouldPlaceTakeProfitOrders(alert: AlertObject): boolean {
+    if (!this.TAKE_PROFIT_ENABLED) {
+      return false;
+    }
+
+    if (this.TAKE_PROFIT_STRATEGY_ALLOWLIST.length === 0) {
+      return true;
+    }
+
+    const strategy = String((alert as any).strategy ?? '')
+      .trim()
+      .toLowerCase();
+
+    return this.TAKE_PROFIT_STRATEGY_ALLOWLIST.includes(strategy);
+  }
+
+  private getConfiguredTakeProfitLevels(): TakeProfitLevel[] {
+    return this.TAKE_PROFIT_LEVELS.filter(level =>
+      Number.isFinite(level.distancePct) &&
+      Number.isFinite(level.sizePct) &&
+      level.distancePct > 0 &&
+      level.sizePct > 0
+    );
+  }
+
+  private async placeTakeProfitOrder(
+    market: string,
+    side: OrderSide,
+    size: number,
+    price: number,
+    levelName: string
+  ): Promise<void> {
+    const clientId = this.createClientId();
+
+    console.log('Submitting take profit order:', {
+      market,
+      side,
+      size,
+      price,
+      levelName,
+      clientId,
+      reduceOnly: true,
+      orderType: OrderType.LIMIT
+    });
+
+    await this.client.placeOrder(
+      this.subaccount,
+      market,
+      OrderType.LIMIT,
+      side,
+      price,
+      size,
+      clientId,
+      this.getRestingLimitTimeInForce(),
+      this.TAKE_PROFIT_LIFETIME_SECONDS,
+      OrderExecution.DEFAULT,
+      false,
+      true,
+      undefined
+    );
+  }
+
+  private getRestingLimitTimeInForce(): OrderTimeInForce {
+    const timeInForce = OrderTimeInForce as any;
+
+    return (
+      timeInForce.UNSPECIFIED ??
+      timeInForce.TIME_IN_FORCE_UNSPECIFIED ??
+      0
+    ) as OrderTimeInForce;
   }
 
   private async placeSafetyStopOrder(
@@ -1498,3 +1677,4 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
+
