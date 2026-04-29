@@ -69,14 +69,6 @@ type MarketSnapshot = {
   managedStop?: ManagedStop;
 };
 
-type StopResolution = {
-  triggerPrice?: number;
-  source: 'DYDX_OPEN_ORDER' | 'MANAGED_MEMORY' | 'UNKNOWN';
-  reason?: string;
-  order?: any;
-  matchingOrders: any[];
-};
-
 type PriceCandidate = {
   path: string;
   value: unknown;
@@ -135,8 +127,10 @@ export class DydxV4Client extends AbstractDexClient {
     process.env.DYDX_V4_STOP_TRIGGER_MATCH_TOLERANCE_PCT ?? '0.002'
   );
 
-  private readonly MIN_TRAIL_IMPROVEMENT_PCT = Number(
-    process.env.DYDX_V4_MIN_TRAIL_IMPROVEMENT_PCT ?? '0'
+  private readonly FRACTAL_TRAIL_BUFFER_PCT = Number(
+    process.env.DYDX_V4_FRACTAL_TRAIL_BUFFER_PCT ??
+    process.env.DYDX_V4_TRAIL_BUFFER_PCT ??
+    '0.001'
   );
 
   private readonly TAKE_PROFIT_ENABLED =
@@ -227,8 +221,17 @@ export class DydxV4Client extends AbstractDexClient {
       telemetry
     });
 
+    if (this.isFractalMovementSignal(signal)) {
+      await this.handleFractalMovementDebug(market, alert);
+      return;
+    }
+
     if (signal === 'TRAIL_UPDATE') {
-      await this.handleTrailUpdate(market, alert);
+      console.log('TRAIL_UPDATE ignored because Render trailing is disabled.', {
+        market,
+        signal,
+        telemetry
+      });
       return;
     }
 
@@ -249,121 +252,67 @@ export class DydxV4Client extends AbstractDexClient {
     await this.placeTakeProfitOrdersAfterEntry(market, targetSize, alert);
   }
 
-  private async handleTrailUpdate(market: string, alert: AlertObject): Promise<void> {
-    const snapshot = await this.getMarketSnapshot(market);
-    const position = snapshot.position;
-
-    if (Math.abs(position.size) < this.TOLERANCE) {
-      console.log('Trail update ignored because position is flat.', { market });
-      this.managedStops.delete(market);
-      return;
-    }
-
-    const isLong = position.size > 0;
-    const direction = isLong ? 'LONG' : 'SHORT';
-    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
-    const telemetry = this.getTradingViewTelemetry(alert, isLong);
-    const trailTriggerPrice = this.getTrailStopFromAlert(alert, isLong);
-
-    this.logMarketSnapshot('TRAIL_UPDATE received', market, snapshot, telemetry);
-
-    if (!trailTriggerPrice) {
-      console.warn('Trail update ignored because no valid trail stop was supplied.', {
-        market,
-        direction,
-        telemetry
-      });
-      return;
-    }
-
-    const stopResolution = this.resolveCurrentProtectiveStop(snapshot, side, isLong);
-
-    if (stopResolution.triggerPrice === undefined) {
-      console.warn('Trail update ignored because current dYdX stop could not be determined safely.', {
-        market,
-        direction,
-        trailTriggerPrice,
-        reason: stopResolution.reason,
-        matchingStopOrders: stopResolution.matchingOrders.map((order: any) =>
-          this.summarizeOrder(order)
-        )
-      });
-      return;
-    }
-
-    const currentKnownStop = stopResolution.triggerPrice;
-    const improves = this.stopImproves(isLong, trailTriggerPrice, currentKnownStop);
-
-    if (!improves) {
-      console.log('Trail update ignored because it does not improve current stop.', {
-        market,
-        direction,
-        currentKnownStop,
-        trailTriggerPrice,
-        currentStopSource: stopResolution.source,
-        minTrailImprovementPct: this.MIN_TRAIL_IMPROVEMENT_PCT
-      });
-      return;
-    }
-
-    const size = Math.abs(position.size);
-    const executionPrice = this.getStopExecutionPrice(isLong, trailTriggerPrice);
-    const oldStopOrders = snapshot.protectiveStops.filter((order: any) =>
-      this.orderSideMatches(order, side)
+  private isFractalMovementSignal(signal: string): boolean {
+    return (
+      signal === 'BOTTOM_FRACTAL_MOVING_UP' ||
+      signal === 'TOP_FRACTAL_MOVING_DOWN'
     );
+  }
 
-    console.log('Applying trail update:', {
+  private async handleFractalMovementDebug(
+    market: string,
+    alert: AlertObject
+  ): Promise<void> {
+    const signal = this.getSignal(alert);
+    const telemetry = this.getTradingViewTelemetry(alert);
+    const bufferPct = this.getFractalTrailBufferPct(alert);
+
+    const bottomFractal =
+      telemetry.bottomFractal ??
+      (signal === 'BOTTOM_FRACTAL_MOVING_UP' ? telemetry.alertPrice : undefined);
+
+    const topFractal =
+      telemetry.topFractal ??
+      (signal === 'TOP_FRACTAL_MOVING_DOWN' ? telemetry.alertPrice : undefined);
+
+    const longTrailPreview =
+      signal === 'BOTTOM_FRACTAL_MOVING_UP' && bottomFractal
+        ? bottomFractal * (1 - bufferPct)
+        : undefined;
+
+    const shortTrailPreview =
+      signal === 'TOP_FRACTAL_MOVING_DOWN' && topFractal
+        ? topFractal * (1 + bufferPct)
+        : undefined;
+
+    let snapshot: MarketSnapshot | undefined;
+
+    try {
+      snapshot = await this.getMarketSnapshot(market);
+      this.logMarketSnapshot('FRACTAL_MOVEMENT_DEBUG received', market, snapshot, telemetry);
+    } catch (error) {
+      console.warn('Fractal movement debug snapshot failed. No order action was taken.', {
+        market,
+        signal,
+        error
+      });
+    }
+
+    console.log('Fractal movement debug only:', {
       market,
-      direction,
-      positionSize: position.size,
-      currentKnownStop,
-      currentStopSource: stopResolution.source,
-      trailTriggerPrice,
-      executionPrice,
-      side,
-      size,
-      oldStopCount: oldStopOrders.length,
-      oldStops: oldStopOrders.map((order: any) => this.summarizeOrder(order)),
-      telemetry
+      signal,
+      bottomFractal,
+      topFractal,
+      bufferPct,
+      bufferPercent: bufferPct * 100,
+      longTrailPreview,
+      shortTrailPreview,
+      position: snapshot?.position,
+      message:
+        signal === 'BOTTOM_FRACTAL_MOVING_UP'
+          ? `FB up triggered. Price level=${bottomFractal}. Long trail preview=${longTrailPreview} (${bottomFractal} - ${bufferPct * 100}% buffer). No order placed.`
+          : `FT down triggered. Price level=${topFractal}. Short trail preview=${shortTrailPreview} (${topFractal} + ${bufferPct * 100}% buffer). No order placed.`
     });
-
-    const clientId = await this.placeSafetyStopOrder(
-      market,
-      side,
-      size,
-      trailTriggerPrice,
-      executionPrice
-    );
-
-    this.managedStops.set(market, {
-      market,
-      side,
-      triggerPrice: trailTriggerPrice,
-      clientId,
-      size,
-      source: 'TRAIL',
-      updatedAt: Date.now()
-    });
-
-    const verified = await this.waitForSafetyStopVisibleBestEffort(
-      market,
-      side,
-      trailTriggerPrice,
-      clientId
-    );
-
-    if (!verified) {
-      console.warn('New trail stop was submitted but not verified. Old stops will NOT be cancelled.', {
-        market,
-        direction,
-        clientId,
-        trailTriggerPrice,
-        oldStopCount: oldStopOrders.length
-      });
-      return;
-    }
-
-    await this.cancelSpecificOrders(market, oldStopOrders);
   }
 
   private async flattenPositionSafely(market: string): Promise<void> {
@@ -937,83 +886,6 @@ export class DydxV4Client extends AbstractDexClient {
     console.log('dYdX market snapshot:', logPayload);
   }
 
-  private resolveCurrentProtectiveStop(
-    snapshot: MarketSnapshot,
-    side: OrderSide,
-    isLong: boolean
-  ): StopResolution {
-    const matchingOrders = snapshot.protectiveStops.filter((order: any) =>
-      this.orderSideMatches(order, side)
-    );
-
-    const ordersWithTriggers = matchingOrders
-      .map((order: any) => ({
-        order,
-        triggerPrice: this.getOrderTriggerPrice(order)
-      }))
-      .filter((item: { order: any; triggerPrice?: number }) => item.triggerPrice !== undefined);
-
-    if (ordersWithTriggers.length > 0) {
-      const selected = ordersWithTriggers.reduce((best, current) => {
-        if (best.triggerPrice === undefined) {
-          return current;
-        }
-
-        if (current.triggerPrice === undefined) {
-          return best;
-        }
-
-        return isLong
-          ? current.triggerPrice > best.triggerPrice ? current : best
-          : current.triggerPrice < best.triggerPrice ? current : best;
-      });
-
-      return {
-        triggerPrice: selected.triggerPrice,
-        source: 'DYDX_OPEN_ORDER',
-        order: selected.order,
-        matchingOrders
-      };
-    }
-
-    const managedStop = snapshot.managedStop;
-
-    if (managedStop && String(managedStop.side).toUpperCase() === String(side).toUpperCase()) {
-      const matchingManagedOrder = matchingOrders.find((order: any) =>
-        this.orderClientIdMatches(order, managedStop.clientId)
-      );
-
-      if (matchingOrders.length === 0 || matchingManagedOrder) {
-        return {
-          triggerPrice: managedStop.triggerPrice,
-          source: 'MANAGED_MEMORY',
-          reason:
-            matchingOrders.length === 0
-              ? 'No live protective stop was visible, using managed in-memory stop as fallback.'
-              : 'Managed in-memory stop matched a live dYdX order by clientId.',
-          order: matchingManagedOrder,
-          matchingOrders
-        };
-      }
-
-      return {
-        source: 'UNKNOWN',
-        reason:
-          'Live protective stop orders exist, but none expose a trigger price and none match the managed clientId. Refusing to use stale managed memory.',
-        matchingOrders
-      };
-    }
-
-    return {
-      source: 'UNKNOWN',
-      reason:
-        matchingOrders.length === 0
-          ? 'No matching protective stop orders found for this market/side.'
-          : 'Matching protective stop orders found, but no trigger price could be parsed.',
-      matchingOrders
-    };
-  }
-
   private async getAllOrdersForMarket(market: string): Promise<any[]> {
     const res = await this.indexer.account.getSubaccountOrders(
       this.wallet.address,
@@ -1026,17 +898,6 @@ export class DydxV4Client extends AbstractDexClient {
   private async getOpenOrdersForMarket(market: string): Promise<any[]> {
     const orders = await this.getAllOrdersForMarket(market);
     return orders.filter((order: any) => this.isVisibleOpenOrder(order));
-  }
-
-  private async getProtectiveStopOrders(market: string, side?: OrderSide): Promise<any[]> {
-    const orders = await this.getOpenOrdersForMarket(market);
-    const protectiveStops = this.getProtectiveStopOrdersFromOrders(orders);
-
-    if (side === undefined) {
-      return protectiveStops;
-    }
-
-    return protectiveStops.filter((order: any) => this.orderSideMatches(order, side));
   }
 
   private getProtectiveStopOrdersFromOrders(orders: any[]): any[] {
@@ -1141,18 +1002,6 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
-  private stopImproves(isLong: boolean, newStop: number, currentStop: number): boolean {
-    if (this.MIN_TRAIL_IMPROVEMENT_PCT <= 0) {
-      return isLong
-        ? newStop > currentStop
-        : newStop < currentStop;
-    }
-
-    return isLong
-      ? newStop > currentStop * (1 + this.MIN_TRAIL_IMPROVEMENT_PCT)
-      : newStop < currentStop * (1 - this.MIN_TRAIL_IMPROVEMENT_PCT);
-  }
-
   private getInitialSafetyStopTriggerPrice(
     alert: AlertObject,
     isLong: boolean,
@@ -1184,6 +1033,55 @@ export class DydxV4Client extends AbstractDexClient {
     return isLong
       ? triggerPrice * (1 - this.SAFETY_STOP_SLIPPAGE_PCT)
       : triggerPrice * (1 + this.SAFETY_STOP_SLIPPAGE_PCT);
+  }
+
+  private getFractalTrailBufferPct(alert: AlertObject): number {
+    const data = alert as any;
+
+    const fractionBuffer = this.getFirstPositiveNumber([
+      data.trail_buffer_fraction,
+      data.trailBufferFraction,
+      data.fractal_trail_buffer_fraction,
+      data.fractalTrailBufferFraction
+    ]);
+
+    if (fractionBuffer !== undefined) {
+      return fractionBuffer;
+    }
+
+    const pctLikeBuffer = this.getFirstPositiveNumber([
+      data.trail_buffer_pct,
+      data.trailBufferPct,
+      data.fractal_trail_buffer_pct,
+      data.fractalTrailBufferPct,
+      data.stop_buffer_pct,
+      data.stopBufferPct,
+      data.buffer_pct,
+      data.bufferPct
+    ]);
+
+    if (pctLikeBuffer !== undefined) {
+      return pctLikeBuffer > 0.05
+        ? pctLikeBuffer / 100
+        : pctLikeBuffer;
+    }
+
+    const percentBuffer = this.getFirstPositiveNumber([
+      data.trail_buffer_percent,
+      data.trailBufferPercent,
+      data.trail_buffer_perc,
+      data.trailBufferPerc,
+      data.fractal_trail_buffer_percent,
+      data.fractalTrailBufferPercent,
+      data.fractal_trail_buffer_perc,
+      data.fractalTrailBufferPerc
+    ]);
+
+    if (percentBuffer !== undefined) {
+      return percentBuffer / 100;
+    }
+
+    return this.FRACTAL_TRAIL_BUFFER_PCT;
   }
 
   private getTradingViewTelemetry(alert: AlertObject, isLong?: boolean): TradingViewTelemetry {
@@ -1319,14 +1217,6 @@ export class DydxV4Client extends AbstractDexClient {
     return isLong
       ? telemetry.longStaticStop ?? telemetry.staticStop
       : telemetry.shortStaticStop ?? telemetry.staticStop;
-  }
-
-  private getTrailStopFromAlert(alert: AlertObject, isLong: boolean): number | undefined {
-    const telemetry = this.getTradingViewTelemetry(alert, isLong);
-
-    return isLong
-      ? telemetry.longTrailStop ?? telemetry.trailStop ?? telemetry.alertPrice
-      : telemetry.shortTrailStop ?? telemetry.trailStop ?? telemetry.alertPrice;
   }
 
   private getOrderTriggerPrice(order: any): number | undefined {
@@ -1677,4 +1567,3 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 }
-
