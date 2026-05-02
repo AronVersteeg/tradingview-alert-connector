@@ -32,8 +32,14 @@ type ManagedStop = {
   triggerPrice: number;
   clientId: number;
   size: number;
-  source: 'STATIC' | 'TRAIL';
+  source: 'STATIC' | 'TRAIL' | 'MANUAL';
   updatedAt: number;
+  goodTilBlockTime?: number;
+};
+
+type PlacedSafetyStop = {
+  clientId: number;
+  goodTilBlockTime?: number;
 };
 
 type PositionSnapshot = {
@@ -139,17 +145,20 @@ export class DydxV4Client extends AbstractDexClient {
     process.env.DYDX_V4_MIN_TRAIL_IMPROVEMENT_PCT ?? '0'
   );
 
+  private readonly FRACTAL_TRAIL_BUFFER_PCT = Number(
+    process.env.DYDX_V4_FRACTAL_TRAIL_BUFFER_PCT ??
+    process.env.DYDX_V4_TRAIL_BUFFER_PCT ??
+    '0.001'
+  );
+
   private readonly FRACTAL_TRAIL_ENABLED =
     String(process.env.DYDX_V4_FRACTAL_TRAIL_ENABLED ?? 'false').toLowerCase() === 'true';
 
   private readonly FRACTAL_TRAIL_BOOTSTRAP_IF_NO_STOP =
     String(process.env.DYDX_V4_FRACTAL_TRAIL_BOOTSTRAP_IF_NO_STOP ?? 'false').toLowerCase() === 'true';
 
-  private readonly FRACTAL_TRAIL_BUFFER_PCT = Number(
-    process.env.DYDX_V4_FRACTAL_TRAIL_BUFFER_PCT ??
-    process.env.DYDX_V4_TRAIL_BUFFER_PCT ??
-    '0.001'
-  );
+  private readonly CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT =
+    String(process.env.DYDX_V4_CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT ?? 'true').toLowerCase() !== 'false';
 
   private readonly TAKE_PROFIT_ENABLED =
     String(process.env.DYDX_V4_TP_ENABLED ?? 'false').toLowerCase() === 'true';
@@ -239,13 +248,18 @@ export class DydxV4Client extends AbstractDexClient {
       telemetry
     });
 
+    if (this.isManualStopSyncSignal(signal)) {
+      await this.handleManualStopSync(market, alert);
+      return;
+    }
+
     if (this.isFractalMovementSignal(signal)) {
       await this.handleFractalMovement(market, alert);
       return;
     }
 
     if (signal === 'TRAIL_UPDATE') {
-      console.log('TRAIL_UPDATE ignored because Render trailing is disabled.', {
+      console.log('TRAIL_UPDATE ignored because legacy Render trailing is disabled.', {
         market,
         signal,
         telemetry
@@ -277,189 +291,97 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 
+  private isManualStopSyncSignal(signal: string): boolean {
+    return (
+      signal === 'MANUAL_STOP_SYNC' ||
+      signal === 'SYNC_MANUAL_STOP'
+    );
+  }
+
+  private async handleManualStopSync(
+    market: string,
+    alert: AlertObject
+  ): Promise<void> {
+    const snapshot = await this.getMarketSnapshot(market);
+    const position = snapshot.position;
+    const telemetry = this.getTradingViewTelemetry(alert);
+    const manualStop = this.getFirstPositiveNumber([
+      (alert as any).manual_stop,
+      (alert as any).manualStop,
+      (alert as any).stop,
+      (alert as any).stop_loss,
+      (alert as any).stopLoss,
+      (alert as any).static_sl,
+      (alert as any).staticSL,
+      (alert as any).trail_stop,
+      (alert as any).trailStop,
+      (alert as any).price
+    ]);
+
+    this.logMarketSnapshot('MANUAL_STOP_SYNC received', market, snapshot, telemetry);
+
+    if (Math.abs(position.size) < this.TOLERANCE) {
+      this.managedStops.delete(market);
+      console.warn('Manual stop sync ignored because position is flat.', {
+        market,
+        position,
+        manualStop
+      });
+      return;
+    }
+
+    if (!manualStop) {
+      console.warn('Manual stop sync ignored because no valid stop price was supplied.', {
+        market,
+        telemetry
+      });
+      return;
+    }
+
+    const isLong = position.size > 0;
+    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+
+    if (isLong && manualStop >= (position.entryPrice ?? Number.POSITIVE_INFINITY)) {
+      console.warn('Manual LONG stop is above/equal entry reference. Syncing anyway, but please verify.', {
+        market,
+        position,
+        manualStop
+      });
+    }
+
+    if (!isLong && manualStop <= (position.entryPrice ?? 0)) {
+      console.warn('Manual SHORT stop is below/equal entry reference. Syncing anyway, but please verify.', {
+        market,
+        position,
+        manualStop
+      });
+    }
+
+    this.managedStops.set(market, {
+      market,
+      side,
+      triggerPrice: manualStop,
+      clientId: this.createClientId(),
+      size: Math.abs(position.size),
+      source: 'MANUAL',
+      updatedAt: Date.now()
+    });
+
+    console.log('Manual stop synced into Render memory. No dYdX order was placed or cancelled.', {
+      market,
+      direction: isLong ? 'LONG' : 'SHORT',
+      side,
+      triggerPrice: manualStop,
+      position
+    });
+  }
+
   private async handleFractalMovement(
     market: string,
     alert: AlertObject
   ): Promise<void> {
     const signal = this.getSignal(alert);
-    const isLongTrail = signal === 'BOTTOM_FRACTAL_MOVING_UP';
-    const isShortTrail = signal === 'TOP_FRACTAL_MOVING_DOWN';
-    const telemetry = this.getTradingViewTelemetry(alert, isLongTrail ? true : false);
-    const snapshot = await this.getMarketSnapshot(market);
-    const trailStop = telemetry.trailStop;
-
-    this.logMarketSnapshot('FRACTAL_TRAIL received', market, snapshot, telemetry);
-
-    const debugPreview = this.buildFractalTrailPreview(signal, telemetry, alert, snapshot);
-
-    if (!this.FRACTAL_TRAIL_ENABLED) {
-      console.log('Fractal movement debug only because DYDX_V4_FRACTAL_TRAIL_ENABLED is false:', {
-        ...debugPreview,
-        message: `${debugPreview.message} No order placed.`
-      });
-      return;
-    }
-
-    if (!trailStop) {
-      console.warn('Fractal trail ignored: missing valid trail_stop from TradingView.', {
-        market,
-        signal,
-        telemetry,
-        debugPreview
-      });
-      return;
-    }
-
-    if (isLongTrail && snapshot.position.size <= this.TOLERANCE) {
-      console.log('FB up ignored: dYdX position is not LONG.', {
-        market,
-        position: snapshot.position,
-        trailStop
-      });
-      return;
-    }
-
-    if (isShortTrail && snapshot.position.size >= -this.TOLERANCE) {
-      console.log('FT down ignored: dYdX position is not SHORT.', {
-        market,
-        position: snapshot.position,
-        trailStop
-      });
-      return;
-    }
-
-    const isLong = snapshot.position.size > 0;
-    const direction = isLong ? 'LONG' : 'SHORT';
-    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
-
-    const oldStopOrders = snapshot.protectiveStops.filter((order: any) =>
-      this.orderSideMatches(order, side)
-    );
-
-    const currentStop = this.resolveCurrentProtectiveStop(snapshot, side, isLong);
-
-    if (currentStop.triggerPrice === undefined && !this.FRACTAL_TRAIL_BOOTSTRAP_IF_NO_STOP) {
-      console.warn('Fractal trail ignored: current dYdX stop could not be determined safely.', {
-        market,
-        signal,
-        direction,
-        trailStop,
-        position: snapshot.position,
-        reason: currentStop.reason,
-        matchingStopOrders: currentStop.matchingOrders.map((order: any) =>
-          this.summarizeOrder(order)
-        ),
-        bootstrapIfNoStop: this.FRACTAL_TRAIL_BOOTSTRAP_IF_NO_STOP
-      });
-      return;
-    }
-
-    if (currentStop.triggerPrice !== undefined) {
-      const improves = this.stopImproves(isLong, trailStop, currentStop.triggerPrice);
-
-      if (!improves) {
-        console.log('Fractal trail ignored: new stop does not improve current stop.', {
-          market,
-          signal,
-          direction,
-          currentStop: currentStop.triggerPrice,
-          currentStopSource: currentStop.source,
-          trailStop,
-          minTrailImprovementPct: this.MIN_TRAIL_IMPROVEMENT_PCT
-        });
-        return;
-      }
-    }
-
-    const size = Math.abs(snapshot.position.size);
-    const executionPrice = this.getStopExecutionPrice(isLong, trailStop);
-
-    console.log('Applying fractal trail stop:', {
-      market,
-      signal,
-      direction,
-      positionSize: snapshot.position.size,
-      currentStop: currentStop.triggerPrice,
-      currentStopSource: currentStop.source,
-      trailStop,
-      executionPrice,
-      side,
-      size,
-      oldStopCount: oldStopOrders.length,
-      oldStops: oldStopOrders.map((order: any) => this.summarizeOrder(order)),
-      bootstrapIfNoStop: this.FRACTAL_TRAIL_BOOTSTRAP_IF_NO_STOP,
-      telemetry
-    });
-
-    const clientId = await this.placeSafetyStopOrder(
-      market,
-      side,
-      size,
-      trailStop,
-      executionPrice
-    );
-
-    this.managedStops.set(market, {
-      market,
-      side,
-      triggerPrice: trailStop,
-      clientId,
-      size,
-      source: 'TRAIL',
-      updatedAt: Date.now()
-    });
-
-    const verified = await this.waitForSafetyStopVisibleBestEffort(
-      market,
-      side,
-      trailStop,
-      clientId
-    );
-
-    if (!verified) {
-      console.warn('Fractal trail stop submitted but not verified. Old stops will NOT be cancelled.', {
-        market,
-        signal,
-        direction,
-        clientId,
-        trailStop,
-        oldStopCount: oldStopOrders.length
-      });
-      return;
-    }
-
-    if (oldStopOrders.length > 0 && currentStop.triggerPrice !== undefined) {
-      await this.cancelSpecificOrders(market, oldStopOrders);
-      return;
-    }
-
-    if (oldStopOrders.length > 0 && currentStop.triggerPrice === undefined) {
-      console.warn('New fractal trail stop verified, but old stops were NOT cancelled because current stop trigger was unknown.', {
-        market,
-        signal,
-        direction,
-        trailStop,
-        oldStopCount: oldStopOrders.length,
-        oldStops: oldStopOrders.map((order: any) => this.summarizeOrder(order))
-      });
-      return;
-    }
-
-    console.log('Fractal trail stop applied. No old protective stops needed cancellation.', {
-      market,
-      signal,
-      direction,
-      trailStop,
-      clientId
-    });
-  }
-
-  private buildFractalTrailPreview(
-    signal: string,
-    telemetry: TradingViewTelemetry,
-    alert: AlertObject,
-    snapshot?: MarketSnapshot
-  ): any {
+    const telemetry = this.getTradingViewTelemetry(alert);
     const bufferPct = this.getFractalTrailBufferPct(alert);
 
     const bottomFractal =
@@ -480,113 +402,307 @@ export class DydxV4Client extends AbstractDexClient {
         ? topFractal * (1 + bufferPct)
         : undefined;
 
-    return {
-      market: snapshot ? undefined : undefined,
-      signal,
-      bottomFractal,
-      topFractal,
-      bufferPct,
-      bufferPercent: bufferPct * 100,
-      longTrailPreview,
-      shortTrailPreview,
-      pineTrailStop: telemetry.trailStop,
-      position: snapshot?.position,
-      message:
-        signal === 'BOTTOM_FRACTAL_MOVING_UP'
-          ? `FB up triggered. Price level=${bottomFractal}. Pine trail_stop=${telemetry.trailStop}. Preview=${longTrailPreview} (${bottomFractal} - ${bufferPct * 100}% buffer).`
-          : `FT down triggered. Price level=${topFractal}. Pine trail_stop=${telemetry.trailStop}. Preview=${shortTrailPreview} (${topFractal} + ${bufferPct * 100}% buffer).`
-    };
-  }
+    const snapshot = await this.getMarketSnapshot(market);
+    const position = snapshot.position;
 
-  private resolveCurrentProtectiveStop(
-    snapshot: MarketSnapshot,
-    side: OrderSide,
-    isLong: boolean
-  ): StopResolution {
-    const matchingOrders = snapshot.protectiveStops.filter((order: any) =>
+    this.logMarketSnapshot('FRACTAL_TRAIL received', market, snapshot, telemetry);
+
+    if (!this.FRACTAL_TRAIL_ENABLED) {
+      console.log('Fractal trail debug only: live trailing is disabled.', {
+        market,
+        signal,
+        bottomFractal,
+        topFractal,
+        bufferPct,
+        bufferPercent: bufferPct * 100,
+        longTrailPreview,
+        shortTrailPreview,
+        position,
+        message:
+          signal === 'BOTTOM_FRACTAL_MOVING_UP'
+            ? `FB up triggered. Price level=${bottomFractal}. Long trail preview=${longTrailPreview}. No order placed.`
+            : `FT down triggered. Price level=${topFractal}. Short trail preview=${shortTrailPreview}. No order placed.`
+      });
+      return;
+    }
+
+    if (Math.abs(position.size) < this.TOLERANCE) {
+      this.managedStops.delete(market);
+
+      console.log(
+        signal === 'BOTTOM_FRACTAL_MOVING_UP'
+          ? 'FB up ignored: dYdX position is not LONG.'
+          : 'FT down ignored: dYdX position is not SHORT.',
+        {
+          market,
+          position,
+          trailStop: telemetry.trailStop,
+          managedStopCleared: true
+        }
+      );
+      return;
+    }
+
+    const isLongSignal = signal === 'BOTTOM_FRACTAL_MOVING_UP';
+    const isShortSignal = signal === 'TOP_FRACTAL_MOVING_DOWN';
+
+    if (isLongSignal && position.size <= this.TOLERANCE) {
+      console.log('FB up ignored: dYdX position is not LONG.', {
+        market,
+        position,
+        trailStop: telemetry.trailStop
+      });
+      return;
+    }
+
+    if (isShortSignal && position.size >= -this.TOLERANCE) {
+      console.log('FT down ignored: dYdX position is not SHORT.', {
+        market,
+        position,
+        trailStop: telemetry.trailStop
+      });
+      return;
+    }
+
+    const isLong = position.size > 0;
+    const direction = isLong ? 'LONG' : 'SHORT';
+    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+    const trailStop = telemetry.trailStop;
+
+    if (!trailStop) {
+      console.warn('Fractal trail ignored because no valid trail_stop was supplied.', {
+        market,
+        signal,
+        direction,
+        telemetry,
+        bottomFractal,
+        topFractal,
+        longTrailPreview,
+        shortTrailPreview
+      });
+      return;
+    }
+
+    const stopResolution = this.resolveCurrentProtectiveStop(snapshot, side, isLong);
+    const currentKnownStop = stopResolution.triggerPrice;
+    const oldManagedStop =
+      snapshot.managedStop &&
+      String(snapshot.managedStop.side).toUpperCase() === String(side).toUpperCase()
+        ? snapshot.managedStop
+        : undefined;
+
+    const oldStopOrders = snapshot.protectiveStops.filter((order: any) =>
       this.orderSideMatches(order, side)
     );
 
-    let selected: { order: any; triggerPrice: number } | undefined;
-
-    for (const order of matchingOrders) {
-      const triggerPrice = this.getOrderTriggerPrice(order);
-
-      if (triggerPrice === undefined) {
-        continue;
-      }
-
-      if (!selected) {
-        selected = { order, triggerPrice };
-        continue;
-      }
-
-      const isBetterProtectiveStop = isLong
-        ? triggerPrice > selected.triggerPrice
-        : triggerPrice < selected.triggerPrice;
-
-      if (isBetterProtectiveStop) {
-        selected = { order, triggerPrice };
-      }
+    if (currentKnownStop === undefined && !this.FRACTAL_TRAIL_BOOTSTRAP_IF_NO_STOP) {
+      console.warn('Fractal trail ignored because current protective stop could not be determined safely.', {
+        market,
+        signal,
+        direction,
+        trailStop,
+        reason: stopResolution.reason,
+        bootstrapIfNoStop: this.FRACTAL_TRAIL_BOOTSTRAP_IF_NO_STOP,
+        matchingStopOrders: stopResolution.matchingOrders.map((order: any) =>
+          this.summarizeOrder(order)
+        )
+      });
+      return;
     }
 
-    if (selected) {
-      return {
-        triggerPrice: selected.triggerPrice,
-        source: 'DYDX_OPEN_ORDER',
-        order: selected.order,
-        matchingOrders
-      };
+    if (
+      currentKnownStop !== undefined &&
+      !this.stopImproves(isLong, trailStop, currentKnownStop)
+    ) {
+      console.log('Fractal trail ignored: new stop does not improve current stop.', {
+        market,
+        signal,
+        direction,
+        currentStop: currentKnownStop,
+        currentStopSource: stopResolution.source,
+        trailStop,
+        minTrailImprovementPct: this.MIN_TRAIL_IMPROVEMENT_PCT
+      });
+      return;
     }
 
-    const managedStop = snapshot.managedStop;
+    const size = Math.abs(position.size);
+    const executionPrice = this.getStopExecutionPrice(isLong, trailStop);
 
-    if (managedStop && String(managedStop.side).toUpperCase() === String(side).toUpperCase()) {
-      const matchingManagedOrder = matchingOrders.find((order: any) =>
-        this.orderClientIdMatches(order, managedStop.clientId)
+    console.log('Applying fractal trail update:', {
+      market,
+      signal,
+      direction,
+      positionSize: position.size,
+      currentKnownStop,
+      currentStopSource: stopResolution.source,
+      trailStop,
+      executionPrice,
+      side,
+      size,
+      oldStopCount: oldStopOrders.length,
+      oldStops: oldStopOrders.map((order: any) => this.summarizeOrder(order)),
+      oldManagedStop,
+      bootstrapIfNoStop: this.FRACTAL_TRAIL_BOOTSTRAP_IF_NO_STOP,
+      cancelOldStopsAfterTrailSubmit: this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT,
+      telemetry
+    });
+
+    const placedStop = await this.placeSafetyStopOrder(
+      market,
+      side,
+      size,
+      trailStop,
+      executionPrice
+    );
+
+    this.managedStops.set(market, {
+      market,
+      side,
+      triggerPrice: trailStop,
+      clientId: placedStop.clientId,
+      size,
+      source: 'TRAIL',
+      updatedAt: Date.now(),
+      goodTilBlockTime: placedStop.goodTilBlockTime
+    });
+
+    const verified = await this.waitForSafetyStopVisibleBestEffort(
+      market,
+      side,
+      trailStop,
+      placedStop.clientId
+    );
+
+    if (!verified) {
+      console.warn('Fractal trail stop submitted but not verified through indexer.', {
+        market,
+        signal,
+        direction,
+        clientId: placedStop.clientId,
+        trailStop,
+        oldStopCount: oldStopOrders.length,
+        oldManagedStop,
+        cancelOldStopsAfterTrailSubmit: this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT
+      });
+    }
+
+    const shouldCancelOldStops = verified || this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT;
+
+    if (!shouldCancelOldStops) {
+      console.warn('Old stops left in place because new trail was not verified and cancel-on-submit is disabled.', {
+        market,
+        signal,
+        direction,
+        trailStop,
+        placedClientId: placedStop.clientId
+      });
+      return;
+    }
+
+    if (!verified && this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT) {
+      console.warn('Cancelling old Render-managed stops after unverified trail submit because config allows it.', {
+        market,
+        signal,
+        direction,
+        trailStop,
+        placedClientId: placedStop.clientId
+      });
+    }
+
+    await this.cancelSpecificOrders(market, oldStopOrders);
+
+    const oldManagedAlreadyVisible = oldManagedStop
+      ? oldStopOrders.some((order: any) =>
+          this.orderClientIdMatches(order, oldManagedStop.clientId)
+        )
+      : false;
+
+    if (oldManagedStop && !oldManagedAlreadyVisible) {
+      await this.cancelManagedStopBestEffort(
+        market,
+        oldManagedStop,
+        'Replacing old Render-managed stop with new fractal trail stop.'
       );
-
-      if (matchingOrders.length === 0 || matchingManagedOrder) {
-        return {
-          triggerPrice: managedStop.triggerPrice,
-          source: 'MANAGED_MEMORY',
-          reason:
-            matchingOrders.length === 0
-              ? 'No live protective stop was visible, using managed in-memory stop as fallback.'
-              : 'Managed in-memory stop matched a live dYdX order by clientId.',
-          order: matchingManagedOrder,
-          matchingOrders
-        };
-      }
-
-      return {
-        source: 'UNKNOWN',
-        reason:
-          'Live protective stop orders exist, but none expose a trigger price and none match the managed clientId. Refusing to use stale managed memory.',
-        matchingOrders
-      };
     }
 
-    return {
-      source: 'UNKNOWN',
-      reason:
-        matchingOrders.length === 0
-          ? 'No matching protective stop orders found for this market/side.'
-          : 'Matching protective stop orders found, but no trigger price could be parsed.',
-      matchingOrders
-    };
+    console.log('Fractal trail update complete.', {
+      market,
+      signal,
+      direction,
+      trailStop,
+      placedClientId: placedStop.clientId,
+      verified,
+      oldVisibleStopCount: oldStopOrders.length,
+      oldManagedStopCancelledBestEffort: Boolean(oldManagedStop && !oldManagedAlreadyVisible)
+    });
   }
 
-  private stopImproves(isLong: boolean, newStop: number, currentStop: number): boolean {
-    if (this.MIN_TRAIL_IMPROVEMENT_PCT <= 0) {
-      return isLong
-        ? newStop > currentStop
-        : newStop < currentStop;
+  private async cancelManagedStopBestEffort(
+    market: string,
+    stop: ManagedStop,
+    reason: string
+  ): Promise<void> {
+    if (stop.source === 'MANUAL') {
+      console.log('Skipping managed stop cancel because stop source is MANUAL.', {
+        market,
+        stop,
+        reason
+      });
+      return;
     }
 
-    return isLong
-      ? newStop > currentStop * (1 + this.MIN_TRAIL_IMPROVEMENT_PCT)
-      : newStop < currentStop * (1 - this.MIN_TRAIL_IMPROVEMENT_PCT);
+    const goodTilCandidates: Array<number | undefined> = [];
+
+    if (stop.goodTilBlockTime !== undefined) {
+      goodTilCandidates.push(stop.goodTilBlockTime);
+    }
+
+    goodTilCandidates.push(undefined);
+
+    for (const goodTilBlockTime of goodTilCandidates) {
+      try {
+        console.log('Cancelling Render-managed stop best-effort:', {
+          market,
+          clientId: stop.clientId,
+          orderFlags: this.CONDITIONAL_ORDER_FLAGS,
+          goodTilBlockTime,
+          stop,
+          reason
+        });
+
+        await this.client.cancelOrder(
+          this.subaccount,
+          stop.clientId,
+          this.CONDITIONAL_ORDER_FLAGS,
+          market,
+          goodTilBlockTime
+        );
+
+        console.log('Render-managed stop cancel submitted:', {
+          market,
+          clientId: stop.clientId,
+          goodTilBlockTime,
+          reason
+        });
+
+        return;
+      } catch (error) {
+        console.warn('Render-managed stop cancel attempt failed:', {
+          market,
+          clientId: stop.clientId,
+          goodTilBlockTime,
+          reason,
+          error
+        });
+      }
+    }
+
+    console.warn('Render-managed stop could not be cancelled best-effort. Check dYdX UI.', {
+      market,
+      stop,
+      reason
+    });
   }
 
   private async flattenPositionSafely(market: string): Promise<void> {
@@ -596,6 +712,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     if (Math.abs(currentSize) < this.TOLERANCE) {
       console.log('Already flat.');
+      this.managedStops.delete(market);
       return;
     }
 
@@ -614,6 +731,7 @@ export class DydxV4Client extends AbstractDexClient {
       const progress = await this.waitForFlattenProgress(market, startSize);
 
       if (progress.kind === 'flat') {
+        this.managedStops.delete(market);
         console.log('Position fully flattened.');
         return;
       }
@@ -637,6 +755,7 @@ export class DydxV4Client extends AbstractDexClient {
 
   private async emergencyFlattenOppositePosition(market: string, currentSize: number): Promise<void> {
     if (Math.abs(currentSize) < this.TOLERANCE) {
+      this.managedStops.delete(market);
       console.log('Emergency check: already flat.');
       return;
     }
@@ -658,6 +777,7 @@ export class DydxV4Client extends AbstractDexClient {
     const finalSize = await this.getCurrentSize(market);
 
     if (Math.abs(finalSize) < this.TOLERANCE) {
+      this.managedStops.delete(market);
       console.log('Emergency flatten successful.');
       return;
     }
@@ -870,7 +990,7 @@ export class DydxV4Client extends AbstractDexClient {
       telemetry
     });
 
-    const clientId = await this.placeSafetyStopOrder(
+    const placedStop = await this.placeSafetyStopOrder(
       market,
       side,
       size,
@@ -882,13 +1002,19 @@ export class DydxV4Client extends AbstractDexClient {
       market,
       side,
       triggerPrice,
-      clientId,
+      clientId: placedStop.clientId,
       size,
       source: 'STATIC',
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      goodTilBlockTime: placedStop.goodTilBlockTime
     });
 
-    await this.waitForSafetyStopVisibleBestEffort(market, side, triggerPrice, clientId);
+    await this.waitForSafetyStopVisibleBestEffort(
+      market,
+      side,
+      triggerPrice,
+      placedStop.clientId
+    );
   }
 
   private async placeTakeProfitOrdersAfterEntry(
@@ -1037,8 +1163,9 @@ export class DydxV4Client extends AbstractDexClient {
     size: number,
     triggerPrice: number,
     executionPrice: number
-  ): Promise<number> {
+  ): Promise<PlacedSafetyStop> {
     const clientId = this.createClientId();
+    const goodTilBlockTime = Math.floor(Date.now() / 1000) + this.SAFETY_STOP_LIFETIME_SECONDS;
 
     console.log('Submitting safety stop order:', {
       market,
@@ -1048,7 +1175,8 @@ export class DydxV4Client extends AbstractDexClient {
       executionPrice,
       clientId,
       reduceOnly: true,
-      orderType: OrderType.STOP_MARKET
+      orderType: OrderType.STOP_MARKET,
+      goodTilBlockTime
     });
 
     await this.client.placeOrder(
@@ -1067,7 +1195,10 @@ export class DydxV4Client extends AbstractDexClient {
       triggerPrice
     );
 
-    return clientId;
+    return {
+      clientId,
+      goodTilBlockTime
+    };
   }
 
   private async waitForSafetyStopVisibleBestEffort(
@@ -1158,6 +1289,66 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     console.log('dYdX market snapshot:', logPayload);
+  }
+
+  private resolveCurrentProtectiveStop(
+    snapshot: MarketSnapshot,
+    side: OrderSide,
+    isLong: boolean
+  ): StopResolution {
+    const matchingOrders = snapshot.protectiveStops.filter((order: any) =>
+      this.orderSideMatches(order, side)
+    );
+
+    const ordersWithTriggers = matchingOrders
+      .map((order: any) => ({
+        order,
+        triggerPrice: this.getOrderTriggerPrice(order)
+      }))
+      .filter((item: { order: any; triggerPrice?: number }) => item.triggerPrice !== undefined);
+
+    if (ordersWithTriggers.length > 0) {
+      const selected = ordersWithTriggers.reduce((best, current) => {
+        if (best.triggerPrice === undefined) {
+          return current;
+        }
+
+        if (current.triggerPrice === undefined) {
+          return best;
+        }
+
+        return isLong
+          ? current.triggerPrice > best.triggerPrice ? current : best
+          : current.triggerPrice < best.triggerPrice ? current : best;
+      });
+
+      return {
+        triggerPrice: selected.triggerPrice,
+        source: 'DYDX_OPEN_ORDER',
+        order: selected.order,
+        matchingOrders
+      };
+    }
+
+    const managedStop = snapshot.managedStop;
+
+    if (managedStop && String(managedStop.side).toUpperCase() === String(side).toUpperCase()) {
+      return {
+        triggerPrice: managedStop.triggerPrice,
+        source: 'MANAGED_MEMORY',
+        reason: 'No live protective stop was visible through indexer, using Render-managed memory as fallback.',
+        matchingOrders
+      };
+    }
+
+    return {
+      source: 'UNKNOWN',
+      reason:
+        matchingOrders.length === 0
+          ? 'No matching protective stop orders found for this market/side.'
+          : 'Matching protective stop orders found, but no trigger price could be parsed.',
+      matchingOrders
+    };
   }
 
   private async getAllOrdersForMarket(market: string): Promise<any[]> {
@@ -1274,6 +1465,18 @@ export class DydxV4Client extends AbstractDexClient {
         goodTilBlockTime
       );
     }
+  }
+
+  private stopImproves(isLong: boolean, newStop: number, currentStop: number): boolean {
+    if (this.MIN_TRAIL_IMPROVEMENT_PCT <= 0) {
+      return isLong
+        ? newStop > currentStop
+        : newStop < currentStop;
+    }
+
+    return isLong
+      ? newStop > currentStop * (1 + this.MIN_TRAIL_IMPROVEMENT_PCT)
+      : newStop < currentStop * (1 - this.MIN_TRAIL_IMPROVEMENT_PCT);
   }
 
   private getInitialSafetyStopTriggerPrice(
