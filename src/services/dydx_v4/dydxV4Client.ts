@@ -37,6 +37,17 @@ type ManagedStop = {
   goodTilBlockTime?: number;
 };
 
+type ManagedTakeProfit = {
+  market: string;
+  side: OrderSide;
+  price: number;
+  clientId: number;
+  size: number;
+  source: 'SAFETY';
+  updatedAt: number;
+  goodTilBlockTime?: number;
+};
+
 type PlacedSafetyStop = {
   clientId: number;
   goodTilBlockTime?: number;
@@ -73,6 +84,7 @@ type MarketSnapshot = {
   openOrders: any[];
   protectiveStops: any[];
   managedStop?: ManagedStop;
+  managedTakeProfit?: ManagedTakeProfit;
 };
 
 type StopResolution = {
@@ -89,12 +101,6 @@ type PriceCandidate = {
   parsed?: number;
 };
 
-type TakeProfitLevel = {
-  name: string;
-  distancePct: number;
-  sizePct: number;
-};
-
 export class DydxV4Client extends AbstractDexClient {
   private wallet!: LocalWallet;
   private client!: CompositeClient;
@@ -103,6 +109,7 @@ export class DydxV4Client extends AbstractDexClient {
   private initialized = false;
 
   private readonly managedStops = new Map<string, ManagedStop>();
+  private readonly managedTakeProfits = new Map<string, ManagedTakeProfit>();
 
   private readonly TOLERANCE = 0.001;
 
@@ -160,37 +167,28 @@ export class DydxV4Client extends AbstractDexClient {
   private readonly CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT =
     String(process.env.DYDX_V4_CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT ?? 'true').toLowerCase() !== 'false';
 
-  private readonly TAKE_PROFIT_ENABLED =
-    String(process.env.DYDX_V4_TP_ENABLED ?? 'false').toLowerCase() === 'true';
+  private readonly SAFETY_TP_ENABLED =
+    String(process.env.DYDX_V4_SAFETY_TP_ENABLED ?? 'false').toLowerCase() === 'true';
 
-  private readonly TAKE_PROFIT_STRATEGY_ALLOWLIST = String(
-    process.env.DYDX_V4_TP_STRATEGY_ALLOWLIST ?? ''
-  )
-    .split(',')
-    .map(value => value.trim().toLowerCase())
-    .filter(Boolean);
+  private readonly SAFETY_TP_SIZE_FRACTION = (() => {
+    const raw = Number(process.env.DYDX_V4_SAFETY_TP_SIZE_PCT ?? '0.5');
 
-  private readonly TAKE_PROFIT_LIFETIME_SECONDS = Number(
-    process.env.DYDX_V4_TP_LIFETIME_SECONDS ?? `${60 * 60 * 24 * 30}`
+    if (!Number.isFinite(raw) || raw <= 0) {
+      return 0.5;
+    }
+
+    return raw > 1
+      ? raw / 100
+      : raw;
+  })();
+
+  private readonly SAFETY_TP_RISK_MULTIPLIER = Number(
+    process.env.DYDX_V4_SAFETY_TP_RISK_MULTIPLIER ?? '1'
   );
 
-  private readonly TAKE_PROFIT_LEVELS: TakeProfitLevel[] = [
-    {
-      name: 'TP1',
-      distancePct: Number(process.env.DYDX_V4_TP1_DISTANCE_PCT ?? '0'),
-      sizePct: Number(process.env.DYDX_V4_TP1_SIZE_PCT ?? '0')
-    },
-    {
-      name: 'TP2',
-      distancePct: Number(process.env.DYDX_V4_TP2_DISTANCE_PCT ?? '0'),
-      sizePct: Number(process.env.DYDX_V4_TP2_SIZE_PCT ?? '0')
-    },
-    {
-      name: 'TP3',
-      distancePct: Number(process.env.DYDX_V4_TP3_DISTANCE_PCT ?? '0'),
-      sizePct: Number(process.env.DYDX_V4_TP3_SIZE_PCT ?? '0')
-    }
-  ];
+  private readonly SAFETY_TP_LIFETIME_SECONDS = Number(
+    process.env.DYDX_V4_SAFETY_TP_LIFETIME_SECONDS ?? `${60 * 60 * 24 * 30}`
+  );
 
   private readonly LOG_RAW_ORDER_SNAPSHOTS =
     String(process.env.DYDX_V4_LOG_RAW_ORDER_SNAPSHOTS ?? 'true').toLowerCase() !== 'false';
@@ -274,14 +272,25 @@ export class DydxV4Client extends AbstractDexClient {
     await this.cancelOpenOrders(market);
 
     if (Math.abs(targetSize) < this.TOLERANCE) {
-      this.managedStops.delete(market);
+      await this.clearManagedOrdersForFlatMarket(market, 'Target position is FLAT.');
       await this.flattenPositionSafely(market);
       return;
     }
 
     await this.reachTargetPositionSafely(market, targetSize);
-    await this.placeStaticSafetyStopAfterEntry(market, targetSize, alert);
-    await this.placeTakeProfitOrdersAfterEntry(market, targetSize, alert);
+
+    const safetyStop = await this.placeStaticSafetyStopAfterEntry(
+      market,
+      targetSize,
+      alert
+    );
+
+    await this.placeSafetyTakeProfitAfterEntry(
+      market,
+      targetSize,
+      alert,
+      safetyStop
+    );
   }
 
   private isFractalMovementSignal(signal: string): boolean {
@@ -321,7 +330,8 @@ export class DydxV4Client extends AbstractDexClient {
     this.logMarketSnapshot('MANUAL_STOP_SYNC received', market, snapshot, telemetry);
 
     if (Math.abs(position.size) < this.TOLERANCE) {
-      this.managedStops.delete(market);
+      await this.clearManagedOrdersForFlatMarket(market, 'Manual stop sync received while flat.');
+
       console.warn('Manual stop sync ignored because position is flat.', {
         market,
         position,
@@ -427,7 +437,7 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     if (Math.abs(position.size) < this.TOLERANCE) {
-      this.managedStops.delete(market);
+      await this.clearManagedOrdersForFlatMarket(market, 'Fractal movement received while flat.');
 
       console.log(
         signal === 'BOTTOM_FRACTAL_MOVING_UP'
@@ -437,7 +447,7 @@ export class DydxV4Client extends AbstractDexClient {
           market,
           position,
           trailStop: telemetry.trailStop,
-          managedStopCleared: true
+          managedOrdersCleared: true
         }
       );
       return;
@@ -638,6 +648,25 @@ export class DydxV4Client extends AbstractDexClient {
     });
   }
 
+  private async clearManagedOrdersForFlatMarket(
+    market: string,
+    reason: string
+  ): Promise<void> {
+    const managedStop = this.managedStops.get(market);
+    const managedTakeProfit = this.managedTakeProfits.get(market);
+
+    if (managedStop) {
+      await this.cancelManagedStopBestEffort(market, managedStop, reason);
+    }
+
+    if (managedTakeProfit) {
+      await this.cancelManagedTakeProfitBestEffort(market, managedTakeProfit, reason);
+    }
+
+    this.managedStops.delete(market);
+    this.managedTakeProfits.delete(market);
+  }
+
   private async cancelManagedStopBestEffort(
     market: string,
     stop: ManagedStop,
@@ -705,6 +734,64 @@ export class DydxV4Client extends AbstractDexClient {
     });
   }
 
+  private async cancelManagedTakeProfitBestEffort(
+    market: string,
+    takeProfit: ManagedTakeProfit,
+    reason: string
+  ): Promise<void> {
+    const goodTilCandidates: Array<number | undefined> = [];
+
+    if (takeProfit.goodTilBlockTime !== undefined) {
+      goodTilCandidates.push(takeProfit.goodTilBlockTime);
+    }
+
+    goodTilCandidates.push(undefined);
+
+    for (const goodTilBlockTime of goodTilCandidates) {
+      try {
+        console.log('Cancelling Render-managed safety TP best-effort:', {
+          market,
+          clientId: takeProfit.clientId,
+          orderFlags: 0,
+          goodTilBlockTime,
+          takeProfit,
+          reason
+        });
+
+        await this.client.cancelOrder(
+          this.subaccount,
+          takeProfit.clientId,
+          0,
+          market,
+          goodTilBlockTime
+        );
+
+        console.log('Render-managed safety TP cancel submitted:', {
+          market,
+          clientId: takeProfit.clientId,
+          goodTilBlockTime,
+          reason
+        });
+
+        return;
+      } catch (error) {
+        console.warn('Render-managed safety TP cancel attempt failed:', {
+          market,
+          clientId: takeProfit.clientId,
+          goodTilBlockTime,
+          reason,
+          error
+        });
+      }
+    }
+
+    console.warn('Render-managed safety TP could not be cancelled best-effort. Check dYdX UI.', {
+      market,
+      takeProfit,
+      reason
+    });
+  }
+
   private async flattenPositionSafely(market: string): Promise<void> {
     let currentSize = await this.getCurrentSize(market);
 
@@ -712,7 +799,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     if (Math.abs(currentSize) < this.TOLERANCE) {
       console.log('Already flat.');
-      this.managedStops.delete(market);
+      await this.clearManagedOrdersForFlatMarket(market, 'Flatten requested while already flat.');
       return;
     }
 
@@ -731,7 +818,7 @@ export class DydxV4Client extends AbstractDexClient {
       const progress = await this.waitForFlattenProgress(market, startSize);
 
       if (progress.kind === 'flat') {
-        this.managedStops.delete(market);
+        await this.clearManagedOrdersForFlatMarket(market, 'Position fully flattened.');
         console.log('Position fully flattened.');
         return;
       }
@@ -755,7 +842,7 @@ export class DydxV4Client extends AbstractDexClient {
 
   private async emergencyFlattenOppositePosition(market: string, currentSize: number): Promise<void> {
     if (Math.abs(currentSize) < this.TOLERANCE) {
-      this.managedStops.delete(market);
+      await this.clearManagedOrdersForFlatMarket(market, 'Emergency flatten found position already flat.');
       console.log('Emergency check: already flat.');
       return;
     }
@@ -777,7 +864,7 @@ export class DydxV4Client extends AbstractDexClient {
     const finalSize = await this.getCurrentSize(market);
 
     if (Math.abs(finalSize) < this.TOLERANCE) {
-      this.managedStops.delete(market);
+      await this.clearManagedOrdersForFlatMarket(market, 'Emergency flatten successful.');
       console.log('Emergency flatten successful.');
       return;
     }
@@ -950,7 +1037,7 @@ export class DydxV4Client extends AbstractDexClient {
     market: string,
     targetSize: number,
     alert: AlertObject
-  ): Promise<void> {
+  ): Promise<ManagedStop> {
     const position = await this.getCurrentPosition(market);
 
     if (Math.abs(position.size) < this.TOLERANCE) {
@@ -998,7 +1085,7 @@ export class DydxV4Client extends AbstractDexClient {
       executionPrice
     );
 
-    this.managedStops.set(market, {
+    const managedStop: ManagedStop = {
       market,
       side,
       triggerPrice,
@@ -1007,7 +1094,9 @@ export class DydxV4Client extends AbstractDexClient {
       source: 'STATIC',
       updatedAt: Date.now(),
       goodTilBlockTime: placedStop.goodTilBlockTime
-    });
+    };
+
+    this.managedStops.set(market, managedStop);
 
     await this.waitForSafetyStopVisibleBestEffort(
       market,
@@ -1015,40 +1104,44 @@ export class DydxV4Client extends AbstractDexClient {
       triggerPrice,
       placedStop.clientId
     );
+
+    return managedStop;
   }
 
-  private async placeTakeProfitOrdersAfterEntry(
+  private async placeSafetyTakeProfitAfterEntry(
     market: string,
     targetSize: number,
-    alert: AlertObject
+    alert: AlertObject,
+    safetyStop: ManagedStop
   ): Promise<void> {
-    if (!this.shouldPlaceTakeProfitOrders(alert)) {
+    if (!this.SAFETY_TP_ENABLED) {
       return;
     }
 
-    const levels = this.getConfiguredTakeProfitLevels();
+    const sizeFraction = Math.min(this.SAFETY_TP_SIZE_FRACTION, 1);
+    const riskMultiplier =
+      Number.isFinite(this.SAFETY_TP_RISK_MULTIPLIER) && this.SAFETY_TP_RISK_MULTIPLIER > 0
+        ? this.SAFETY_TP_RISK_MULTIPLIER
+        : 1;
 
-    if (levels.length === 0) {
-      console.log('Take profit orders skipped: no valid TP levels configured.');
+    if (!Number.isFinite(sizeFraction) || sizeFraction <= 0) {
+      console.warn('Safety TP skipped: invalid size fraction.', {
+        market,
+        safetyTpSizeFraction: this.SAFETY_TP_SIZE_FRACTION
+      });
       return;
-    }
-
-    const totalSizePct = levels.reduce((sum, level) => sum + level.sizePct, 0);
-
-    if (totalSizePct > 1 + this.TOLERANCE) {
-      throw new Error(`Take profit size percentages exceed 100%. Total=${totalSizePct}`);
     }
 
     const position = await this.getCurrentPosition(market);
 
     if (Math.abs(position.size) < this.TOLERANCE) {
-      console.log('Take profit orders skipped: position is flat after entry.', { market });
+      console.log('Safety TP skipped: position is flat after entry.', { market });
       return;
     }
 
     if (Math.sign(position.size) !== Math.sign(targetSize)) {
       throw new Error(
-        `Take profit orders not placed for ${market}: position direction mismatch. Current=${position.size}, target=${targetSize}`
+        `Safety TP not placed for ${market}: position direction mismatch. Current=${position.size}, target=${targetSize}`
       );
     }
 
@@ -1056,78 +1149,88 @@ export class DydxV4Client extends AbstractDexClient {
     const side = isLong ? OrderSide.SELL : OrderSide.BUY;
     const entryReferencePrice = this.getSafetyStopReferencePrice(alert, position.entryPrice);
     const positionSize = Math.abs(position.size);
+    const tpSize = Number((positionSize * sizeFraction).toFixed(6));
+    const riskPerUnit = Math.abs(entryReferencePrice - safetyStop.triggerPrice);
+    const riskToCover = riskPerUnit * positionSize * riskMultiplier;
+    const profitPerUnitNeeded = riskToCover / tpSize;
+    const price = isLong
+      ? entryReferencePrice + profitPerUnitNeeded
+      : entryReferencePrice - profitPerUnitNeeded;
 
-    console.log('Placing take profit orders:', {
+    if (tpSize < this.TOLERANCE) {
+      console.log('Safety TP skipped: TP size is below tolerance.', {
+        market,
+        positionSize,
+        sizeFraction,
+        tpSize
+      });
+      return;
+    }
+
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new Error(`Safety TP price invalid for ${market}. Calculated price=${price}`);
+    }
+
+    console.log('Placing safety take profit:', {
       market,
-      positionSize: position.size,
+      direction: isLong ? 'LONG' : 'SHORT',
+      positionSize,
       entryReferencePrice,
+      safetyStopPrice: safetyStop.triggerPrice,
+      safetyStopDistance: riskPerUnit,
+      riskToCover,
+      riskMultiplier,
+      sizeFraction,
+      tpSize,
       side,
-      levels
+      price,
+      reduceOnly: true
     });
 
-    for (const level of levels) {
-      const price = isLong
-        ? entryReferencePrice * (1 + level.distancePct)
-        : entryReferencePrice * (1 - level.distancePct);
+    const placedTakeProfit = await this.placeSafetyTakeProfitOrder(
+      market,
+      side,
+      tpSize,
+      price
+    );
 
-      const size = Number((positionSize * level.sizePct).toFixed(6));
+    this.managedTakeProfits.set(market, {
+      market,
+      side,
+      price,
+      clientId: placedTakeProfit.clientId,
+      size: tpSize,
+      source: 'SAFETY',
+      updatedAt: Date.now(),
+      goodTilBlockTime: placedTakeProfit.goodTilBlockTime
+    });
 
-      if (size < this.TOLERANCE) {
-        console.log('Skipping TP level because size is below tolerance.', {
-          market,
-          level,
-          size
-        });
-        continue;
-      }
-
-      await this.placeTakeProfitOrder(market, side, size, price, level.name);
-    }
-  }
-
-  private shouldPlaceTakeProfitOrders(alert: AlertObject): boolean {
-    if (!this.TAKE_PROFIT_ENABLED) {
-      return false;
-    }
-
-    if (this.TAKE_PROFIT_STRATEGY_ALLOWLIST.length === 0) {
-      return true;
-    }
-
-    const strategy = String((alert as any).strategy ?? '')
-      .trim()
-      .toLowerCase();
-
-    return this.TAKE_PROFIT_STRATEGY_ALLOWLIST.includes(strategy);
-  }
-
-  private getConfiguredTakeProfitLevels(): TakeProfitLevel[] {
-    return this.TAKE_PROFIT_LEVELS.filter(level =>
-      Number.isFinite(level.distancePct) &&
-      Number.isFinite(level.sizePct) &&
-      level.distancePct > 0 &&
-      level.sizePct > 0
+    await this.waitForSafetyTakeProfitVisibleBestEffort(
+      market,
+      side,
+      price,
+      placedTakeProfit.clientId
     );
   }
 
-  private async placeTakeProfitOrder(
+  private async placeSafetyTakeProfitOrder(
     market: string,
     side: OrderSide,
     size: number,
-    price: number,
-    levelName: string
-  ): Promise<void> {
+    price: number
+  ): Promise<PlacedSafetyStop> {
     const clientId = this.createClientId();
+    const goodTilBlockTime = Math.floor(Date.now() / 1000) + this.SAFETY_TP_LIFETIME_SECONDS;
 
-    console.log('Submitting take profit order:', {
+    console.log('Submitting safety take profit order:', {
       market,
       side,
       size,
       price,
-      levelName,
       clientId,
       reduceOnly: true,
-      orderType: OrderType.LIMIT
+      orderType: OrderType.LIMIT,
+      goodTilBlockTime
     });
 
     await this.client.placeOrder(
@@ -1139,18 +1242,102 @@ export class DydxV4Client extends AbstractDexClient {
       size,
       clientId,
       this.getRestingLimitTimeInForce(),
-      this.TAKE_PROFIT_LIFETIME_SECONDS,
+      this.SAFETY_TP_LIFETIME_SECONDS,
       OrderExecution.DEFAULT,
       false,
       true,
       undefined
     );
+
+    return {
+      clientId,
+      goodTilBlockTime
+    };
+  }
+
+  private async waitForSafetyTakeProfitVisibleBestEffort(
+    market: string,
+    side: OrderSide,
+    price: number,
+    expectedClientId?: number
+  ): Promise<boolean> {
+    for (let i = 1; i <= this.SAFETY_STOP_VERIFY_POLLS; i++) {
+      await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
+
+      const orders = await this.getOpenOrdersForMarket(market);
+      const takeProfitOrder = this.findSafetyTakeProfitOrderInOrders(
+        orders,
+        side,
+        price,
+        expectedClientId
+      );
+
+      console.log(`Safety TP verify poll ${i}/${this.SAFETY_STOP_VERIFY_POLLS}`, {
+        market,
+        expectedSide: side,
+        expectedPrice: price,
+        expectedClientId,
+        openOrders: orders.map((order: any) => this.summarizeOrder(order))
+      });
+
+      if (takeProfitOrder) {
+        console.log('Safety TP visible on dYdX:', {
+          market,
+          side,
+          price,
+          expectedClientId,
+          matchedOrder: this.summarizeOrder(takeProfitOrder)
+        });
+        return true;
+      }
+    }
+
+    console.warn(
+      `Safety TP was submitted but could not be verified through indexer for ${market} at price ${price}. Check dYdX UI.`
+    );
+
+    return false;
+  }
+
+  private findSafetyTakeProfitOrderInOrders(
+    orders: any[],
+    side: OrderSide,
+    price: number,
+    expectedClientId?: number
+  ): any | undefined {
+    return orders.find((order: any) => {
+      if (!this.orderSideMatches(order, side)) {
+        return false;
+      }
+
+      if (!this.getOrderReduceOnly(order)) {
+        return false;
+      }
+
+      const orderType = this.getOrderTypeText(order);
+
+      if (!orderType.includes('LIMIT')) {
+        return false;
+      }
+
+      if (expectedClientId !== undefined && this.orderClientIdMatches(order, expectedClientId)) {
+        return true;
+      }
+
+      const parsedPrice = this.getOrderPrice(order);
+
+      return (
+        parsedPrice !== undefined &&
+        Math.abs(parsedPrice - price) / price < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
+      );
+    });
   }
 
   private getRestingLimitTimeInForce(): OrderTimeInForce {
     const timeInForce = OrderTimeInForce as any;
 
     return (
+      timeInForce.GTT ??
       timeInForce.UNSPECIFIED ??
       timeInForce.TIME_IN_FORCE_UNSPECIFIED ??
       0
@@ -1254,13 +1441,15 @@ export class DydxV4Client extends AbstractDexClient {
     const openOrders = allMarketOrders.filter((order: any) => this.isVisibleOpenOrder(order));
     const protectiveStops = this.getProtectiveStopOrdersFromOrders(openOrders);
     const managedStop = this.managedStops.get(market);
+    const managedTakeProfit = this.managedTakeProfits.get(market);
 
     return {
       position,
       allMarketOrders,
       openOrders,
       protectiveStops,
-      managedStop
+      managedStop,
+      managedTakeProfit
     };
   }
 
@@ -1275,6 +1464,7 @@ export class DydxV4Client extends AbstractDexClient {
       market,
       position: snapshot.position,
       managedStop: snapshot.managedStop,
+      managedTakeProfit: snapshot.managedTakeProfit,
       telemetry,
       allMarketOrderCount: snapshot.allMarketOrders.length,
       openOrderCount: snapshot.openOrders.length,
@@ -1431,8 +1621,37 @@ export class DydxV4Client extends AbstractDexClient {
 
   private async cancelOpenOrders(market: string): Promise<void> {
     const orders = await this.getOpenOrdersForMarket(market);
+    const managedStop = this.managedStops.get(market);
+    const managedTakeProfit = this.managedTakeProfits.get(market);
+
     await this.cancelSpecificOrders(market, orders);
+
+    const managedStopAlreadyVisible = managedStop
+      ? orders.some((order: any) => this.orderClientIdMatches(order, managedStop.clientId))
+      : false;
+
+    const managedTakeProfitAlreadyVisible = managedTakeProfit
+      ? orders.some((order: any) => this.orderClientIdMatches(order, managedTakeProfit.clientId))
+      : false;
+
+    if (managedStop && !managedStopAlreadyVisible) {
+      await this.cancelManagedStopBestEffort(
+        market,
+        managedStop,
+        'Cancelling open orders before new target order.'
+      );
+    }
+
+    if (managedTakeProfit && !managedTakeProfitAlreadyVisible) {
+      await this.cancelManagedTakeProfitBestEffort(
+        market,
+        managedTakeProfit,
+        'Cancelling open orders before new target order.'
+      );
+    }
+
     this.managedStops.delete(market);
+    this.managedTakeProfits.delete(market);
   }
 
   private async cancelSpecificOrders(market: string, orders: any[]): Promise<void> {
@@ -1646,8 +1865,8 @@ export class DydxV4Client extends AbstractDexClient {
       shortStaticStop: this.getFirstPositiveNumber([
         data.static_sl_short,
         data.staticSLShort,
-        data.staticShortSL,
         data.static_short_sl,
+        data.staticShortSL,
         data.short_static_sl,
         data.shortStaticSL
       ]),
@@ -1829,6 +2048,17 @@ export class DydxV4Client extends AbstractDexClient {
       createdAt: order.createdAt ?? order.created_at,
       updatedAt: order.updatedAt ?? order.updated_at
     };
+  }
+
+  private getOrderPrice(order: any): number | undefined {
+    return this.parsePositiveNumber(
+      order.price ??
+      order.limitPrice ??
+      order.limit_price ??
+      order.order?.price ??
+      order.order?.limitPrice ??
+      order.order?.limit_price
+    );
   }
 
   private async getCurrentSize(market: string): Promise<number> {
