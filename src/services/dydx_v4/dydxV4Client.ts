@@ -109,6 +109,18 @@ type PriceCandidate = {
   parsed?: number;
 };
 
+type ExecutionProfileName = 'MANAGED' | 'SIGNAL_ONLY' | 'NO_TP';
+
+type ExecutionProfile = {
+  name: ExecutionProfileName;
+  placeStaticStop: boolean;
+  placeSafetyTp: boolean;
+  placeExtraTps: boolean;
+  allowFractalTrail: boolean;
+  allowManualStopSync: boolean;
+};
+
+
 const parseEnvFraction = (value: unknown, fallback = 0): number => {
   const parsed = Number(value);
 
@@ -254,6 +266,41 @@ export class DydxV4Client extends AbstractDexClient {
   private readonly LOG_RAW_ORDER_SNAPSHOTS =
     String(process.env.DYDX_V4_LOG_RAW_ORDER_SNAPSHOTS ?? 'true').toLowerCase() !== 'false';
 
+    private readonly DEFAULT_EXECUTION_PROFILE = this.normalizeExecutionProfileName(
+    process.env.DYDX_V4_DEFAULT_EXECUTION_PROFILE ?? 'MANAGED',
+    'MANAGED'
+  );
+
+  private readonly EXECUTION_PROFILES: Record<ExecutionProfileName, ExecutionProfile> = {
+    MANAGED: {
+      name: 'MANAGED',
+      placeStaticStop: true,
+      placeSafetyTp: this.SAFETY_TP_ENABLED,
+      placeExtraTps: this.EXTRA_TP_ENABLED,
+      allowFractalTrail: this.FRACTAL_TRAIL_ENABLED,
+      allowManualStopSync: true
+    },
+
+    SIGNAL_ONLY: {
+      name: 'SIGNAL_ONLY',
+      placeStaticStop: false,
+      placeSafetyTp: false,
+      placeExtraTps: false,
+      allowFractalTrail: false,
+      allowManualStopSync: false
+    },
+
+    NO_TP: {
+      name: 'NO_TP',
+      placeStaticStop: true,
+      placeSafetyTp: false,
+      placeExtraTps: false,
+      allowFractalTrail: this.FRACTAL_TRAIL_ENABLED,
+      allowManualStopSync: true
+    }
+  };
+
+
   private readonly CONDITIONAL_ORDER_FLAGS = 32;
   private readonly LONG_TERM_ORDER_FLAGS = 64;
 
@@ -300,20 +347,32 @@ export class DydxV4Client extends AbstractDexClient {
     const market = this.normalizeMarket((alert as any).market);
     const signal = this.getSignal(alert);
     const telemetry = this.getTradingViewTelemetry(alert);
+    const profile = this.getExecutionProfile(alert);
 
     console.log('dYdX alert intake:', {
       market,
       signal,
+      profile: profile.name,
       desiredPosition: telemetry.desiredPosition,
       telemetry: this.compactObject(telemetry as Record<string, unknown>)
     });
 
     if (this.isManualStopSyncSignal(signal)) {
+      if (!profile.allowManualStopSync) {
+        console.log('Manual stop sync ignored for execution profile.', { market, signal, profile: profile.name });
+        return;
+      }
+
       await this.handleManualStopSync(market, alert);
       return;
     }
 
     if (this.isFractalMovementSignal(signal)) {
+      if (!profile.allowFractalTrail) {
+        console.log('Fractal movement ignored for execution profile.', { market, signal, profile: profile.name });
+        return;
+      }
+
       await this.handleFractalMovement(market, alert);
       return;
     }
@@ -321,14 +380,15 @@ export class DydxV4Client extends AbstractDexClient {
     if (signal === 'TRAIL_UPDATE') {
       console.log('TRAIL_UPDATE ignored because legacy Render trailing is disabled.', {
         market,
-        signal
+        signal,
+        profile: profile.name
       });
       return;
     }
 
     const targetSize = this.getTargetSize(alert, Number((alert as any).size ?? 0));
 
-    console.log('Target position:', { market, targetSize });
+    console.log('Target position:', { market, targetSize, profile: profile.name });
 
     await this.cancelOpenOrders(market);
 
@@ -340,11 +400,25 @@ export class DydxV4Client extends AbstractDexClient {
 
     await this.reachTargetPositionSafely(market, targetSize);
 
+    if (!profile.placeStaticStop) {
+      console.log('Signal-only execution complete: no SL/TP/trailing orders placed.', {
+        market,
+        targetSize,
+        profile: profile.name
+      });
+      return;
+    }
+
     const safetyStop = await this.placeStaticSafetyStopAfterEntry(
       market,
       targetSize,
       alert
     );
+
+    if (!profile.placeSafetyTp) {
+      console.log('Safety TP skipped for execution profile.', { market, profile: profile.name });
+      return;
+    }
 
     const safetyTakeProfit = await this.placeSafetyTakeProfitAfterEntry(
       market,
@@ -353,6 +427,11 @@ export class DydxV4Client extends AbstractDexClient {
       safetyStop
     );
 
+    if (!profile.placeExtraTps) {
+      console.log('Extra TPs skipped for execution profile.', { market, profile: profile.name });
+      return;
+    }
+
     await this.placeExtraTakeProfitsAfterEntry(
       market,
       targetSize,
@@ -360,6 +439,60 @@ export class DydxV4Client extends AbstractDexClient {
       safetyTakeProfit
     );
   }
+
+  private getExecutionProfile(alert: AlertObject): ExecutionProfile {
+    const data = alert as any;
+    const rawProfile =
+      data.profile ??
+      data.execution_profile ??
+      data.executionProfile ??
+      this.DEFAULT_EXECUTION_PROFILE;
+
+    const profileName = this.normalizeExecutionProfileName(rawProfile);
+
+    return this.EXECUTION_PROFILES[profileName];
+  }
+
+  private normalizeExecutionProfileName(
+    value: unknown,
+    fallback?: ExecutionProfileName
+  ): ExecutionProfileName {
+    const normalized = String(value ?? '')
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
+
+    switch (normalized) {
+      case '':
+      case 'DEFAULT':
+        if (fallback) return fallback;
+        break;
+
+      case 'MANAGED':
+      case 'FULL':
+      case 'WITH_RISK':
+        return 'MANAGED';
+
+      case 'SIGNAL':
+      case 'SIGNALS':
+      case 'SIGNAL_ONLY':
+      case 'LONG_SHORT_ONLY':
+      case 'ENTRY_ONLY':
+      case 'NO_SL_TP':
+        return 'SIGNAL_ONLY';
+
+      case 'NO_TP':
+      case 'STOP_ONLY':
+        return 'NO_TP';
+    }
+
+    if (fallback) return fallback;
+
+    throw new Error(
+      `Invalid dYdX execution profile "${String(value)}". Use MANAGED, SIGNAL_ONLY, or NO_TP.`
+    );
+  }
+
 
   private isFractalMovementSignal(signal: string): boolean {
     return (
