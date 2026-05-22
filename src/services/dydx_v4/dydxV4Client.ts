@@ -120,7 +120,6 @@ type ExecutionProfile = {
   allowManualStopSync: boolean;
 };
 
-
 const parseEnvFraction = (value: unknown, fallback = 0): number => {
   const parsed = Number(value);
 
@@ -131,6 +130,14 @@ const parseEnvFraction = (value: unknown, fallback = 0): number => {
   return parsed > 1
     ? parsed / 100
     : parsed;
+};
+
+const parseEnvPositiveNumber = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : fallback;
 };
 
 export class DydxV4Client extends AbstractDexClient {
@@ -266,7 +273,20 @@ export class DydxV4Client extends AbstractDexClient {
   private readonly LOG_RAW_ORDER_SNAPSHOTS =
     String(process.env.DYDX_V4_LOG_RAW_ORDER_SNAPSHOTS ?? 'true').toLowerCase() !== 'false';
 
-    private readonly DEFAULT_EXECUTION_PROFILE = this.normalizeExecutionProfileName(
+  private readonly MARKET_BUY_WORST_PRICE = parseEnvPositiveNumber(
+    process.env.DYDX_V4_MARKET_BUY_WORST_PRICE,
+    999999
+  );
+
+  private readonly MARKET_SELL_WORST_PRICE = parseEnvPositiveNumber(
+    process.env.DYDX_V4_MARKET_SELL_WORST_PRICE,
+    0.000001
+  );
+
+  private readonly FAILSAFE_FLATTEN_ON_TARGET_FAILURE =
+    String(process.env.DYDX_V4_FAILSAFE_FLATTEN_ON_TARGET_FAILURE ?? 'true').toLowerCase() !== 'false';
+
+  private readonly DEFAULT_EXECUTION_PROFILE = this.normalizeExecutionProfileName(
     process.env.DYDX_V4_DEFAULT_EXECUTION_PROFILE ?? 'MANAGED',
     'MANAGED'
   );
@@ -299,7 +319,6 @@ export class DydxV4Client extends AbstractDexClient {
       allowManualStopSync: true
     }
   };
-
 
   private readonly CONDITIONAL_ORDER_FLAGS = 32;
   private readonly LONG_TERM_ORDER_FLAGS = 64;
@@ -398,7 +417,19 @@ export class DydxV4Client extends AbstractDexClient {
       return;
     }
 
-    await this.reachTargetPositionSafely(market, targetSize);
+    const targetReached = await this.reachTargetPositionOrFailsafeFlat(
+      market,
+      targetSize
+    );
+
+    if (!targetReached) {
+      console.warn('Target was not reached. Position was fail-safe flattened; skipping SL/TP setup.', {
+        market,
+        targetSize,
+        profile: profile.name
+      });
+      return;
+    }
 
     if (!profile.placeStaticStop) {
       console.log('Signal-only execution complete: no SL/TP/trailing orders placed.', {
@@ -492,7 +523,6 @@ export class DydxV4Client extends AbstractDexClient {
       `Invalid dYdX execution profile "${String(value)}". Use MANAGED, SIGNAL_ONLY, or NO_TP.`
     );
   }
-
 
   private isFractalMovementSignal(signal: string): boolean {
     return (
@@ -1155,6 +1185,51 @@ export class DydxV4Client extends AbstractDexClient {
     throw new Error(`Target correction failed for ${market}: max attempts reached.`);
   }
 
+  private async reachTargetPositionOrFailsafeFlat(
+    market: string,
+    targetSize: number
+  ): Promise<boolean> {
+    try {
+      await this.reachTargetPositionSafely(market, targetSize);
+      return true;
+    } catch (error) {
+      if (!this.FAILSAFE_FLATTEN_ON_TARGET_FAILURE) {
+        throw error;
+      }
+
+      console.error('Target position failed. Starting fail-safe flatten.', {
+        market,
+        targetSize,
+        error
+      });
+
+      try {
+        await this.cancelOpenOrders(market);
+        await this.clearManagedOrdersForFlatMarket(
+          market,
+          'Target position failed before fail-safe flatten.'
+        );
+        await this.flattenPositionSafely(market);
+
+        console.error('Fail-safe flatten completed after target failure.', {
+          market,
+          targetSize
+        });
+
+        return false;
+      } catch (flattenError) {
+        console.error('Fail-safe flatten failed after target failure.', {
+          market,
+          targetSize,
+          originalError: error,
+          flattenError
+        });
+
+        throw flattenError;
+      }
+    }
+  }
+
   private async waitForTargetProgress(
     market: string,
     initialSize: number,
@@ -1207,13 +1282,17 @@ export class DydxV4Client extends AbstractDexClient {
     size: number,
     reduceOnly: boolean
   ): Promise<void> {
-    const price = side === OrderSide.BUY ? 999999 : 1;
+    const price = side === OrderSide.BUY
+      ? this.MARKET_BUY_WORST_PRICE
+      : this.MARKET_SELL_WORST_PRICE;
+
     const clientId = this.createClientId();
 
     console.log('Correction order:', {
       market,
       side,
       size,
+      price,
       clientId,
       reduceOnly
     });
