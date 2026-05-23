@@ -158,6 +158,9 @@ export class DydxV4Client extends AbstractDexClient {
   private indexer!: IndexerClient;
   private initialized = false;
 
+  private txQueue: Promise<unknown> = Promise.resolve();
+  private readonly marketQueues = new Map<string, Promise<unknown>>();
+
   private readonly managedStops = new Map<string, ManagedStop>();
   private readonly managedTakeProfits = new Map<string, ManagedTakeProfit[]>();
 
@@ -340,31 +343,7 @@ export class DydxV4Client extends AbstractDexClient {
       BECH32_PREFIX
     );
 
-    const validatorConfig = new ValidatorConfig(
-      config.get('DydxV4.ValidatorConfig.restEndpoint'),
-      'dydx-mainnet-1',
-      {
-        CHAINTOKEN_DENOM: 'adydx',
-        CHAINTOKEN_DECIMALS: 18,
-        USDC_DENOM: 'uusdc',
-        USDC_GAS_DENOM: 'uusdc',
-        USDC_DECIMALS: 6
-      }
-    );
-
-    const network =
-      process.env.NODE_ENV === 'production'
-        ? new Network('mainnet', this.getIndexerConfig(), validatorConfig)
-        : Network.testnet();
-
-    this.client = await CompositeClient.connect(network);
-    this.subaccount = new SubaccountClient(this.wallet, 0);
-
-    this.indexer = new IndexerClient(
-      process.env.NODE_ENV === 'production'
-        ? this.getIndexerConfig()
-        : Network.testnet().indexerConfig
-    );
+    await this.connectDydxClients('init');
 
     this.initialized = true;
   }
@@ -375,6 +354,16 @@ export class DydxV4Client extends AbstractDexClient {
 
   async placeOrder(alert: AlertObject): Promise<void> {
     const market = this.normalizeMarket((alert as any).market);
+
+    return this.withMarketQueue(market, () =>
+      this.placeOrderForMarket(market, alert)
+    );
+  }
+
+  private async placeOrderForMarket(
+    market: string,
+    alert: AlertObject
+  ): Promise<void> {
     const signal = this.getSignal(alert);
     const telemetry = this.getTradingViewTelemetry(alert);
     const profile = this.getExecutionProfile(alert);
@@ -954,7 +943,7 @@ export class DydxV4Client extends AbstractDexClient {
         clientId: stop.clientId,
         goodTilBlockTime: stop.goodTilBlockTime,
         reason,
-        error
+        error: this.serializeError(error)
       });
     }
   }
@@ -1008,7 +997,7 @@ export class DydxV4Client extends AbstractDexClient {
         clientId: takeProfit.clientId,
         goodTilBlockTime: takeProfit.goodTilBlockTime,
         reason,
-        error
+        error: this.serializeError(error)
       });
     }
   }
@@ -1202,7 +1191,7 @@ export class DydxV4Client extends AbstractDexClient {
           diff
         }
       );
-      
+
       console.warn('No visible progress yet after correction; retrying cautiously.', { market });
     }
 
@@ -1224,7 +1213,7 @@ export class DydxV4Client extends AbstractDexClient {
       console.error('Target position failed. Starting fail-safe flatten.', {
         market,
         targetSize,
-        error
+        error: this.serializeError(error)
       });
 
       try {
@@ -1245,8 +1234,8 @@ export class DydxV4Client extends AbstractDexClient {
         console.error('Fail-safe flatten failed after target failure.', {
           market,
           targetSize,
-          originalError: error,
-          flattenError
+          originalError: this.serializeError(error),
+          flattenError: this.serializeError(flattenError)
         });
 
         throw flattenError;
@@ -1322,21 +1311,35 @@ export class DydxV4Client extends AbstractDexClient {
       reduceOnly
     });
 
+    const placedOrder = {
+      market,
+      side,
+      size,
+      price,
+      clientId,
+      reduceOnly,
+      submittedAt
+    };
+
     try {
-      const submitResult = await this.client.placeOrder(
-        this.subaccount,
-        market,
-        OrderType.MARKET,
-        side,
-        price,
-        size,
-        clientId,
-        OrderTimeInForce.IOC,
-        20,
-        OrderExecution.DEFAULT,
-        false,
-        reduceOnly,
-        undefined
+      const submitResult = await this.submitDydxTransaction(
+        'Correction order',
+        () => this.client.placeOrder(
+          this.subaccount,
+          market,
+          OrderType.MARKET,
+          side,
+          price,
+          size,
+          clientId,
+          OrderTimeInForce.IOC,
+          20,
+          OrderExecution.DEFAULT,
+          false,
+          reduceOnly,
+          undefined
+        ),
+        placedOrder
       );
 
       console.log('Correction order submit result:', {
@@ -1350,26 +1353,10 @@ export class DydxV4Client extends AbstractDexClient {
       });
 
       return {
-        market,
-        side,
-        size,
-        price,
-        clientId,
-        reduceOnly,
-        submittedAt,
+        ...placedOrder,
         submitResult
       };
     } catch (error) {
-      const placedOrder = {
-        market,
-        side,
-        size,
-        price,
-        clientId,
-        reduceOnly,
-        submittedAt
-      };
-
       console.error('Correction order placement rejected before polling:', {
         ...placedOrder,
         error: this.serializeError(error)
@@ -1386,7 +1373,7 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
-    private async logOrderDiagnostics(
+  private async logOrderDiagnostics(
     label: string,
     market: string,
     placedOrder?: PlacedCorrectionOrder,
@@ -1457,59 +1444,6 @@ export class DydxV4Client extends AbstractDexClient {
           ? assetPositions.value
           : this.serializeError(assetPositions.reason)
     };
-  }
-
-  private serializeError(error: unknown): any {
-    if (!(error instanceof Error)) {
-      return error;
-    }
-
-    const serialized: Record<string, unknown> = {
-      name: error.name,
-      message: error.message,
-      stack: error.stack
-    };
-
-    for (const key of Object.getOwnPropertyNames(error)) {
-      serialized[key] = (error as any)[key];
-    }
-
-    const anyError = error as any;
-
-    for (const key of ['cause', 'code', 'status', 'response', 'data', 'details']) {
-      if (anyError[key] !== undefined) {
-        serialized[key] = anyError[key];
-      }
-    }
-
-    return serialized;
-  }
-
-  private getOrderDiagnosticFields(order: any): Record<string, unknown> {
-    const keys = [
-      'reason',
-      'rejectionReason',
-      'rejectReason',
-      'failureReason',
-      'cancelReason',
-      'removalReason',
-      'statusReason',
-      'detailedStatus',
-      'error',
-      'message'
-    ];
-
-    const diagnostics: Record<string, unknown> = {};
-
-    for (const key of keys) {
-      const value = order[key] ?? order.order?.[key];
-
-      if (value !== undefined && value !== null && value !== '') {
-        diagnostics[key] = value;
-      }
-    }
-
-    return diagnostics;
   }
 
   private async placeStaticSafetyStopAfterEntry(
@@ -1879,20 +1813,35 @@ export class DydxV4Client extends AbstractDexClient {
       goodTilBlockTime
     });
 
-    await this.client.placeOrder(
-      this.subaccount,
-      market,
-      orderType,
-      side,
-      executionPrice,
-      size,
-      clientId,
-      OrderTimeInForce.IOC,
-      lifetimeSeconds,
-      OrderExecution.IOC,
-      false,
-      true,
-      triggerPrice
+    await this.submitDydxTransaction(
+      'Take profit order',
+      () => this.client.placeOrder(
+        this.subaccount,
+        market,
+        orderType,
+        side,
+        executionPrice,
+        size,
+        clientId,
+        OrderTimeInForce.IOC,
+        lifetimeSeconds,
+        OrderExecution.IOC,
+        false,
+        true,
+        triggerPrice
+      ),
+      {
+        market,
+        levelName,
+        side,
+        size,
+        triggerPrice,
+        executionPrice,
+        clientId,
+        reduceOnly: true,
+        orderType,
+        goodTilBlockTime
+      }
     );
 
     return {
@@ -2037,20 +1986,34 @@ export class DydxV4Client extends AbstractDexClient {
       goodTilBlockTime
     });
 
-    await this.client.placeOrder(
-      this.subaccount,
-      market,
-      OrderType.STOP_MARKET,
-      side,
-      executionPrice,
-      size,
-      clientId,
-      OrderTimeInForce.IOC,
-      this.SAFETY_STOP_LIFETIME_SECONDS,
-      OrderExecution.IOC,
-      false,
-      true,
-      triggerPrice
+    await this.submitDydxTransaction(
+      'Safety stop order',
+      () => this.client.placeOrder(
+        this.subaccount,
+        market,
+        OrderType.STOP_MARKET,
+        side,
+        executionPrice,
+        size,
+        clientId,
+        OrderTimeInForce.IOC,
+        this.SAFETY_STOP_LIFETIME_SECONDS,
+        OrderExecution.IOC,
+        false,
+        true,
+        triggerPrice
+      ),
+      {
+        market,
+        side,
+        size,
+        triggerPrice,
+        executionPrice,
+        clientId,
+        reduceOnly: true,
+        orderType: OrderType.STOP_MARKET,
+        goodTilBlockTime
+      }
     );
 
     return {
@@ -2369,7 +2332,7 @@ export class DydxV4Client extends AbstractDexClient {
           orderFlags,
           goodTilBlock,
           goodTilBlockTime,
-          error
+          error: this.serializeError(error)
         });
       }
     }
@@ -2392,13 +2355,23 @@ export class DydxV4Client extends AbstractDexClient {
       );
     }
 
-    await (this.client as any).cancelOrder(
-      this.subaccount,
-      clientId,
-      orderFlags,
-      market,
-      usesGoodTilTime ? undefined : goodTilBlock,
-      usesGoodTilTime ? goodTilBlockTime : undefined
+    await this.submitDydxTransaction(
+      'Cancel order',
+      () => (this.client as any).cancelOrder(
+        this.subaccount,
+        clientId,
+        orderFlags,
+        market,
+        usesGoodTilTime ? undefined : goodTilBlock,
+        usesGoodTilTime ? goodTilBlockTime : undefined
+      ),
+      {
+        market,
+        clientId,
+        orderFlags,
+        goodTilBlock,
+        goodTilBlockTime
+      }
     );
   }
 
@@ -3013,10 +2986,232 @@ export class DydxV4Client extends AbstractDexClient {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  private async withMarketQueue<T>(
+    market: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const previous = this.marketQueues.get(market) ?? Promise.resolve();
+    const run = previous.then(fn, fn);
+    const cleanup = run.catch(() => undefined);
+
+    this.marketQueues.set(market, cleanup);
+
+    cleanup.then(() => {
+      if (this.marketQueues.get(market) === cleanup) {
+        this.marketQueues.delete(market);
+      }
+    });
+
+    return run;
+  }
+
+  private async withTxQueue<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.txQueue.then(fn, fn);
+    this.txQueue = run.catch(() => undefined);
+
+    return run;
+  }
+
+  private async submitDydxTransaction<T>(
+    label: string,
+    fn: () => Promise<T>,
+    context: Record<string, unknown> = {}
+  ): Promise<T> {
+    return this.withTxQueue(async () => {
+      try {
+        return await fn();
+      } catch (error) {
+        if (!this.isSignatureVerificationError(error)) {
+          throw error;
+        }
+
+        console.warn(`${label} failed with signature verification error. Reconnecting dYdX clients and retrying once.`, {
+          context,
+          error: this.serializeError(error)
+        });
+
+        await this.reconnectDydxClients(`${label} signature retry`);
+
+        try {
+          return await fn();
+        } catch (retryError) {
+          console.error(`${label} retry failed after reconnect.`, {
+            context,
+            originalError: this.serializeError(error),
+            retryError: this.serializeError(retryError)
+          });
+
+          throw retryError;
+        }
+      }
+    });
+  }
+
+  private async connectDydxClients(reason: string): Promise<void> {
+    const network = this.createNetwork();
+
+    this.client = await CompositeClient.connect(network);
+    this.subaccount = new SubaccountClient(this.wallet, 0);
+    this.indexer = this.createIndexerClient();
+
+    console.log('dYdX clients connected:', {
+      reason,
+      address: this.wallet.address,
+      nodeEnv: process.env.NODE_ENV ?? ''
+    });
+  }
+
+  private async reconnectDydxClients(reason: string): Promise<void> {
+    console.warn('Reconnecting dYdX clients.', {
+      reason,
+      address: this.wallet.address
+    });
+
+    await this.connectDydxClients(reason);
+  }
+
+  private createNetwork(): Network {
+    if (process.env.NODE_ENV === 'production') {
+      return new Network(
+        'mainnet',
+        this.getIndexerConfig(),
+        this.getValidatorConfig()
+      );
+    }
+
+    return Network.testnet();
+  }
+
+  private createIndexerClient(): IndexerClient {
+    return new IndexerClient(
+      process.env.NODE_ENV === 'production'
+        ? this.getIndexerConfig()
+        : Network.testnet().indexerConfig
+    );
+  }
+
+  private getValidatorConfig(): ValidatorConfig {
+    return new ValidatorConfig(
+      config.get('DydxV4.ValidatorConfig.restEndpoint'),
+      'dydx-mainnet-1',
+      {
+        CHAINTOKEN_DENOM: 'adydx',
+        CHAINTOKEN_DECIMALS: 18,
+        USDC_DENOM: 'uusdc',
+        USDC_GAS_DENOM: 'uusdc',
+        USDC_DECIMALS: 6
+      }
+    );
+  }
+
   private getIndexerConfig(): IndexerConfig {
     return new IndexerConfig(
       config.get('DydxV4.IndexerConfig.httpsEndpoint'),
       config.get('DydxV4.IndexerConfig.wssEndpoint')
     );
+  }
+
+  private isSignatureVerificationError(error: unknown): boolean {
+    const text = this.getErrorSearchText(error).toLowerCase();
+
+    return (
+      text.includes('signature verification failed') ||
+      text.includes('unable to verify single signer signature') ||
+      text.includes('unauthorized') ||
+      text.includes('account number') ||
+      text.includes('chain-id')
+    );
+  }
+
+  private getErrorSearchText(value: unknown, depth = 0): string {
+    if (depth > 6 || value === undefined || value === null) {
+      return '';
+    }
+
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    if (
+      typeof value === 'number' ||
+      typeof value === 'boolean' ||
+      typeof value === 'bigint'
+    ) {
+      return String(value);
+    }
+
+    if (value instanceof Error) {
+      return [
+        value.name,
+        value.message,
+        value.stack,
+        ...Object.getOwnPropertyNames(value).map(key =>
+          this.getErrorSearchText((value as any)[key], depth + 1)
+        )
+      ].join(' ');
+    }
+
+    if (typeof value === 'object') {
+      return Object.entries(value as Record<string, unknown>)
+        .map(([key, childValue]) =>
+          `${key} ${this.getErrorSearchText(childValue, depth + 1)}`
+        )
+        .join(' ');
+    }
+
+    return '';
+  }
+
+  private serializeError(error: unknown): any {
+    if (!(error instanceof Error)) {
+      return error;
+    }
+
+    const serialized: Record<string, unknown> = {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    };
+
+    for (const key of Object.getOwnPropertyNames(error)) {
+      serialized[key] = (error as any)[key];
+    }
+
+    const anyError = error as any;
+
+    for (const key of ['cause', 'code', 'status', 'response', 'data', 'details']) {
+      if (anyError[key] !== undefined) {
+        serialized[key] = anyError[key];
+      }
+    }
+
+    return serialized;
+  }
+
+  private getOrderDiagnosticFields(order: any): Record<string, unknown> {
+    const keys = [
+      'reason',
+      'rejectionReason',
+      'rejectReason',
+      'failureReason',
+      'cancelReason',
+      'removalReason',
+      'statusReason',
+      'detailedStatus',
+      'error',
+      'message'
+    ];
+
+    const diagnostics: Record<string, unknown> = {};
+
+    for (const key of keys) {
+      const value = order[key] ?? order.order?.[key];
+
+      if (value !== undefined && value !== null && value !== '') {
+        diagnostics[key] = value;
+      }
+    }
+
+    return diagnostics;
   }
 }
