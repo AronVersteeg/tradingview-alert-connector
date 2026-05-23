@@ -61,6 +61,17 @@ type PlacedConditionalOrder = {
   goodTilBlockTime?: number;
 };
 
+type PlacedCorrectionOrder = {
+  market: string;
+  side: OrderSide;
+  size: number;
+  price: number;
+  clientId: number;
+  reduceOnly: boolean;
+  submittedAt: number;
+  submitResult?: any;
+};
+
 type PositionSnapshot = {
   size: number;
   entryPrice?: number;
@@ -1155,7 +1166,7 @@ export class DydxV4Client extends AbstractDexClient {
       const side = diff > 0 ? OrderSide.BUY : OrderSide.SELL;
       const size = Math.abs(diff);
 
-      await this.placeCorrectionOrder(market, side, size, false);
+      const placedOrder = await this.placeCorrectionOrder(market, side, size, false);
       await this.sleep(this.POST_ORDER_SETTLE_MS);
 
       const progress = await this.waitForTargetProgress(market, currentSize, targetSize);
@@ -1179,6 +1190,19 @@ export class DydxV4Client extends AbstractDexClient {
         );
       }
 
+      await this.logOrderDiagnostics(
+        'Target correction made no visible progress.',
+        market,
+        placedOrder,
+        {
+          attempt,
+          maxAttempts: this.MAX_ATTEMPTS,
+          currentSize,
+          targetSize,
+          diff
+        }
+      );
+      
       console.warn('No visible progress yet after correction; retrying cautiously.', { market });
     }
 
@@ -1281,12 +1305,13 @@ export class DydxV4Client extends AbstractDexClient {
     side: OrderSide,
     size: number,
     reduceOnly: boolean
-  ): Promise<void> {
+  ): Promise<PlacedCorrectionOrder> {
     const price = side === OrderSide.BUY
       ? this.MARKET_BUY_WORST_PRICE
       : this.MARKET_SELL_WORST_PRICE;
 
     const clientId = this.createClientId();
+    const submittedAt = Date.now();
 
     console.log('Correction order:', {
       market,
@@ -1297,21 +1322,194 @@ export class DydxV4Client extends AbstractDexClient {
       reduceOnly
     });
 
-    await this.client.placeOrder(
-      this.subaccount,
+    try {
+      const submitResult = await this.client.placeOrder(
+        this.subaccount,
+        market,
+        OrderType.MARKET,
+        side,
+        price,
+        size,
+        clientId,
+        OrderTimeInForce.IOC,
+        20,
+        OrderExecution.DEFAULT,
+        false,
+        reduceOnly,
+        undefined
+      );
+
+      console.log('Correction order submit result:', {
+        market,
+        side,
+        size,
+        price,
+        clientId,
+        reduceOnly,
+        submitResult
+      });
+
+      return {
+        market,
+        side,
+        size,
+        price,
+        clientId,
+        reduceOnly,
+        submittedAt,
+        submitResult
+      };
+    } catch (error) {
+      const placedOrder = {
+        market,
+        side,
+        size,
+        price,
+        clientId,
+        reduceOnly,
+        submittedAt
+      };
+
+      console.error('Correction order placement rejected before polling:', {
+        ...placedOrder,
+        error: this.serializeError(error)
+      });
+
+      await this.logOrderDiagnostics(
+        'Correction order placement rejected before polling.',
+        market,
+        placedOrder,
+        { error: this.serializeError(error) }
+      );
+
+      throw error;
+    }
+  }
+
+    private async logOrderDiagnostics(
+    label: string,
+    market: string,
+    placedOrder?: PlacedCorrectionOrder,
+    context: Record<string, unknown> = {}
+  ): Promise<void> {
+    const diagnostics: Record<string, unknown> = {
+      label,
       market,
-      OrderType.MARKET,
-      side,
-      price,
-      size,
-      clientId,
-      OrderTimeInForce.IOC,
-      20,
-      OrderExecution.DEFAULT,
-      false,
-      reduceOnly,
-      undefined
-    );
+      placedOrder,
+      context
+    };
+
+    try {
+      diagnostics.currentPosition = await this.getCurrentPosition(market);
+    } catch (error) {
+      diagnostics.currentPositionError = this.serializeError(error);
+    }
+
+    try {
+      const allMarketOrders = await this.getAllOrdersForMarket(market);
+      const matchingOrders = placedOrder
+        ? allMarketOrders.filter((order: any) =>
+            this.orderClientIdMatches(order, placedOrder.clientId)
+          )
+        : [];
+
+      diagnostics.allMarketOrderCount = allMarketOrders.length;
+      diagnostics.matchingOrders = matchingOrders.map((order: any) => this.summarizeOrder(order));
+      diagnostics.recentMarketOrders = allMarketOrders
+        .slice(0, 10)
+        .map((order: any) => this.summarizeOrder(order));
+
+      if (this.LOG_RAW_ORDER_SNAPSHOTS) {
+        diagnostics.rawMatchingOrders = matchingOrders;
+      }
+    } catch (error) {
+      diagnostics.ordersError = this.serializeError(error);
+    }
+
+    try {
+      diagnostics.subaccount = await this.getSubaccountSnapshotBestEffort();
+    } catch (error) {
+      diagnostics.subaccountError = this.serializeError(error);
+    }
+
+    console.warn('dYdX order diagnostics:', diagnostics);
+  }
+
+  private async getSubaccountSnapshotBestEffort(): Promise<any> {
+    const accountApi = this.indexer.account as any;
+
+    if (typeof accountApi.getSubaccount === 'function') {
+      return accountApi.getSubaccount(this.wallet.address, 0);
+    }
+
+    const [perpetualPositions, assetPositions] = await Promise.allSettled([
+      accountApi.getSubaccountPerpetualPositions?.(this.wallet.address, 0),
+      accountApi.getSubaccountAssetPositions?.(this.wallet.address, 0)
+    ]);
+
+    return {
+      perpetualPositions:
+        perpetualPositions.status === 'fulfilled'
+          ? perpetualPositions.value
+          : this.serializeError(perpetualPositions.reason),
+      assetPositions:
+        assetPositions.status === 'fulfilled'
+          ? assetPositions.value
+          : this.serializeError(assetPositions.reason)
+    };
+  }
+
+  private serializeError(error: unknown): any {
+    if (!(error instanceof Error)) {
+      return error;
+    }
+
+    const serialized: Record<string, unknown> = {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    };
+
+    for (const key of Object.getOwnPropertyNames(error)) {
+      serialized[key] = (error as any)[key];
+    }
+
+    const anyError = error as any;
+
+    for (const key of ['cause', 'code', 'status', 'response', 'data', 'details']) {
+      if (anyError[key] !== undefined) {
+        serialized[key] = anyError[key];
+      }
+    }
+
+    return serialized;
+  }
+
+  private getOrderDiagnosticFields(order: any): Record<string, unknown> {
+    const keys = [
+      'reason',
+      'rejectionReason',
+      'rejectReason',
+      'failureReason',
+      'cancelReason',
+      'removalReason',
+      'statusReason',
+      'detailedStatus',
+      'error',
+      'message'
+    ];
+
+    const diagnostics: Record<string, unknown> = {};
+
+    for (const key of keys) {
+      const value = order[key] ?? order.order?.[key];
+
+      if (value !== undefined && value !== null && value !== '') {
+        diagnostics[key] = value;
+      }
+    }
+
+    return diagnostics;
   }
 
   private async placeStaticSafetyStopAfterEntry(
@@ -2563,7 +2761,8 @@ export class DydxV4Client extends AbstractDexClient {
       execution: order.execution,
       postOnly: order.postOnly ?? order.post_only,
       createdAt: order.createdAt ?? order.created_at,
-      updatedAt: order.updatedAt ?? order.updated_at
+      updatedAt: order.updatedAt ?? order.updated_at,
+      diagnostics: this.getOrderDiagnosticFields(order)
     };
   }
 
