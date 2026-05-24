@@ -127,13 +127,11 @@ router.post('/', async (req, res) => {
     return res.send(`Error. Exchange: ${exchange} is not supported`);
   }
 
-  try {
-    await dexClient.placeOrder(req.body);
-    res.send('OK');
-  } catch (e) {
-    console.error('Order placement failed:', e);
-    res.status(500).send('error');
-  }
+  res.send('OK');
+
+  dexClient.placeOrder(req.body).catch((error) => {
+    console.error('Order placement failed after webhook acknowledgement:', error);
+  });
 });
 
 // ================= DEBUG =================
