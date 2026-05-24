@@ -66,6 +66,7 @@ type PlacedCorrectionOrder = {
   side: OrderSide;
   size: number;
   price: number;
+  goodTilBlockBuffer: number;
   clientId: number;
   reduceOnly: boolean;
   submittedAt: number;
@@ -295,6 +296,11 @@ export class DydxV4Client extends AbstractDexClient {
   private readonly MARKET_SELL_WORST_PRICE = parseEnvPositiveNumber(
     process.env.DYDX_V4_MARKET_SELL_WORST_PRICE,
     0.000001
+  );
+
+  private readonly MARKET_ORDER_GOOD_TIL_BLOCKS = parseEnvPositiveNumber(
+    process.env.DYDX_V4_MARKET_ORDER_GOOD_TIL_BLOCKS,
+    100
   );
 
   private readonly FAILSAFE_FLATTEN_ON_TARGET_FAILURE =
@@ -1307,6 +1313,7 @@ export class DydxV4Client extends AbstractDexClient {
       side,
       size,
       price,
+      goodTilBlockBuffer: this.MARKET_ORDER_GOOD_TIL_BLOCKS,
       clientId,
       reduceOnly
     });
@@ -1316,6 +1323,7 @@ export class DydxV4Client extends AbstractDexClient {
       side,
       size,
       price,
+      goodTilBlockBuffer: this.MARKET_ORDER_GOOD_TIL_BLOCKS,
       clientId,
       reduceOnly,
       submittedAt
@@ -1333,7 +1341,7 @@ export class DydxV4Client extends AbstractDexClient {
           size,
           clientId,
           OrderTimeInForce.IOC,
-          20,
+          this.MARKET_ORDER_GOOD_TIL_BLOCKS,
           OrderExecution.DEFAULT,
           false,
           reduceOnly,
@@ -1347,6 +1355,7 @@ export class DydxV4Client extends AbstractDexClient {
         side,
         size,
         price,
+        goodTilBlockBuffer: this.MARKET_ORDER_GOOD_TIL_BLOCKS,
         clientId,
         reduceOnly,
         submitResult
@@ -3021,16 +3030,16 @@ export class DydxV4Client extends AbstractDexClient {
       try {
         return await fn();
       } catch (error) {
-        if (!this.isSignatureVerificationError(error)) {
+        if (!this.isRetriableDydxBroadcastError(error)) {
           throw error;
         }
 
-        console.warn(`${label} failed with signature verification error. Reconnecting dYdX clients and retrying once.`, {
+        console.warn(`${label} failed with retriable dYdX broadcast error. Reconnecting dYdX clients and retrying once.`, {
           context,
           error: this.serializeError(error)
         });
 
-        await this.reconnectDydxClients(`${label} signature retry`);
+        await this.reconnectDydxClients(`${label} broadcast retry`);
 
         try {
           return await fn();
@@ -3111,7 +3120,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 
-  private isSignatureVerificationError(error: unknown): boolean {
+  private isRetriableDydxBroadcastError(error: unknown): boolean {
     const text = this.getErrorSearchText(error).toLowerCase();
 
     return (
@@ -3119,7 +3128,9 @@ export class DydxV4Client extends AbstractDexClient {
       text.includes('unable to verify single signer signature') ||
       text.includes('unauthorized') ||
       text.includes('account number') ||
-      text.includes('chain-id')
+      text.includes('chain-id') ||
+      text.includes('goodtilblock') ||
+      text.includes('next block height is greater than the goodtilblock')
     );
   }
 
