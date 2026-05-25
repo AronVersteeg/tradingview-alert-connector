@@ -66,7 +66,13 @@ type PlacedCorrectionOrder = {
   side: OrderSide;
   size: number;
   price: number;
+  referencePrice?: number;
+  priceSource: string;
+  slippagePct: number;
+  usedFallbackWorstPrice: boolean;
   goodTilBlockBuffer: number;
+  goodTilBlock?: number;
+  currentHeight?: number;
   clientId: number;
   reduceOnly: boolean;
   submittedAt: number;
@@ -119,6 +125,25 @@ type PriceCandidate = {
   path: string;
   value: unknown;
   parsed?: number;
+};
+
+type CorrectionOrderPriceReference = {
+  price?: number;
+  source: string;
+};
+
+type CorrectionOrderPricing = {
+  price: number;
+  referencePrice?: number;
+  priceSource: string;
+  slippagePct: number;
+  usedFallbackWorstPrice: boolean;
+};
+
+type MarketOrderGoodTilBlock = {
+  currentHeight?: number;
+  goodTilBlock?: number;
+  goodTilBlockForward: number;
 };
 
 type ExecutionProfileName = 'MANAGED' | 'SIGNAL_ONLY' | 'NO_TP';
@@ -298,10 +323,17 @@ export class DydxV4Client extends AbstractDexClient {
     0.000001
   );
 
+  private readonly MARKET_ORDER_SLIPPAGE_PCT = parseEnvFraction(
+    process.env.DYDX_V4_MARKET_ORDER_SLIPPAGE_PCT,
+    0.03
+  );
+
   private readonly MARKET_ORDER_GOOD_TIL_BLOCKS = parseEnvPositiveNumber(
     process.env.DYDX_V4_MARKET_ORDER_GOOD_TIL_BLOCKS,
-    100
+    20
   );
+
+  private readonly MAX_SHORT_TERM_GOOD_TIL_BLOCKS = 20;
 
   private readonly FAILSAFE_FLATTEN_ON_TARGET_FAILURE =
     String(process.env.DYDX_V4_FAILSAFE_FLATTEN_ON_TARGET_FAILURE ?? 'true').toLowerCase() !== 'false';
@@ -425,7 +457,8 @@ export class DydxV4Client extends AbstractDexClient {
 
     const targetReached = await this.reachTargetPositionOrFailsafeFlat(
       market,
-      targetSize
+      targetSize,
+      this.getAlertPriceReference(alert, telemetry)
     );
 
     if (!targetReached) {
@@ -1136,7 +1169,11 @@ export class DydxV4Client extends AbstractDexClient {
     return { kind: 'unchanged', currentSize: lastSeen };
   }
 
-  private async reachTargetPositionSafely(market: string, targetSize: number): Promise<void> {
+  private async reachTargetPositionSafely(
+    market: string,
+    targetSize: number,
+    priceReference?: CorrectionOrderPriceReference
+  ): Promise<void> {
     for (let attempt = 1; attempt <= this.MAX_ATTEMPTS; attempt++) {
       await this.sleep(this.TARGET_POLL_DELAY_MS);
 
@@ -1161,7 +1198,13 @@ export class DydxV4Client extends AbstractDexClient {
       const side = diff > 0 ? OrderSide.BUY : OrderSide.SELL;
       const size = Math.abs(diff);
 
-      const placedOrder = await this.placeCorrectionOrder(market, side, size, false);
+      const placedOrder = await this.placeCorrectionOrder(
+        market,
+        side,
+        size,
+        false,
+        priceReference
+      );
       await this.sleep(this.POST_ORDER_SETTLE_MS);
 
       const progress = await this.waitForTargetProgress(market, currentSize, targetSize);
@@ -1198,6 +1241,23 @@ export class DydxV4Client extends AbstractDexClient {
         }
       );
 
+      if (this.isAcceptedBroadcastResult(placedOrder.submitResult)) {
+        console.warn('Correction IOC was accepted by dYdX but produced no visible fill before expiry.', {
+          market,
+          side,
+          size,
+          price: placedOrder.price,
+          referencePrice: placedOrder.referencePrice,
+          priceSource: placedOrder.priceSource,
+          slippagePct: placedOrder.slippagePct,
+          goodTilBlock: placedOrder.goodTilBlock,
+          currentHeight: placedOrder.currentHeight,
+          attempt,
+          currentSize: progress.currentSize,
+          targetSize
+        });
+      }
+
       console.warn('No visible progress yet after correction; retrying cautiously.', { market });
     }
 
@@ -1206,10 +1266,11 @@ export class DydxV4Client extends AbstractDexClient {
 
   private async reachTargetPositionOrFailsafeFlat(
     market: string,
-    targetSize: number
+    targetSize: number,
+    priceReference?: CorrectionOrderPriceReference
   ): Promise<boolean> {
     try {
-      await this.reachTargetPositionSafely(market, targetSize);
+      await this.reachTargetPositionSafely(market, targetSize, priceReference);
       return true;
     } catch (error) {
       if (!this.FAILSAFE_FLATTEN_ON_TARGET_FAILURE) {
@@ -1299,31 +1360,43 @@ export class DydxV4Client extends AbstractDexClient {
     market: string,
     side: OrderSide,
     size: number,
-    reduceOnly: boolean
+    reduceOnly: boolean,
+    priceReference?: CorrectionOrderPriceReference
   ): Promise<PlacedCorrectionOrder> {
-    const price = side === OrderSide.BUY
-      ? this.MARKET_BUY_WORST_PRICE
-      : this.MARKET_SELL_WORST_PRICE;
+    const pricing = await this.resolveCorrectionOrderPricing(
+      market,
+      side,
+      priceReference
+    );
 
     const clientId = this.createClientId();
     const submittedAt = Date.now();
+    const goodTilBlockForward = this.getMarketOrderGoodTilBlockForward();
 
     console.log('Correction order:', {
       market,
       side,
       size,
-      price,
-      goodTilBlockBuffer: this.MARKET_ORDER_GOOD_TIL_BLOCKS,
+      price: pricing.price,
+      referencePrice: pricing.referencePrice,
+      priceSource: pricing.priceSource,
+      slippagePct: pricing.slippagePct,
+      usedFallbackWorstPrice: pricing.usedFallbackWorstPrice,
+      goodTilBlockBuffer: goodTilBlockForward,
       clientId,
       reduceOnly
     });
 
-    const placedOrder = {
+    const placedOrder: PlacedCorrectionOrder = {
       market,
       side,
       size,
-      price,
-      goodTilBlockBuffer: this.MARKET_ORDER_GOOD_TIL_BLOCKS,
+      price: pricing.price,
+      referencePrice: pricing.referencePrice,
+      priceSource: pricing.priceSource,
+      slippagePct: pricing.slippagePct,
+      usedFallbackWorstPrice: pricing.usedFallbackWorstPrice,
+      goodTilBlockBuffer: goodTilBlockForward,
       clientId,
       reduceOnly,
       submittedAt
@@ -1332,21 +1405,32 @@ export class DydxV4Client extends AbstractDexClient {
     try {
       const submitResult = await this.submitDydxTransaction(
         'Correction order',
-        () => this.client.placeOrder(
-          this.subaccount,
-          market,
-          OrderType.MARKET,
-          side,
-          price,
-          size,
-          clientId,
-          OrderTimeInForce.IOC,
-          this.MARKET_ORDER_GOOD_TIL_BLOCKS,
-          OrderExecution.DEFAULT,
-          false,
-          reduceOnly,
-          undefined
-        ),
+        async () => {
+          const goodTilBlock = await this.getMarketOrderGoodTilBlock();
+
+          placedOrder.currentHeight = goodTilBlock.currentHeight;
+          placedOrder.goodTilBlock = goodTilBlock.goodTilBlock;
+          placedOrder.goodTilBlockBuffer = goodTilBlock.goodTilBlockForward;
+
+          return this.client.placeOrder(
+            this.subaccount,
+            market,
+            OrderType.MARKET,
+            side,
+            pricing.price,
+            size,
+            clientId,
+            OrderTimeInForce.IOC,
+            undefined,
+            OrderExecution.IOC,
+            false,
+            reduceOnly,
+            undefined,
+            undefined,
+            goodTilBlock.currentHeight,
+            goodTilBlock.goodTilBlock
+          );
+        },
         placedOrder
       );
 
@@ -1354,8 +1438,14 @@ export class DydxV4Client extends AbstractDexClient {
         market,
         side,
         size,
-        price,
-        goodTilBlockBuffer: this.MARKET_ORDER_GOOD_TIL_BLOCKS,
+        price: pricing.price,
+        referencePrice: pricing.referencePrice,
+        priceSource: pricing.priceSource,
+        slippagePct: pricing.slippagePct,
+        usedFallbackWorstPrice: pricing.usedFallbackWorstPrice,
+        goodTilBlockBuffer: placedOrder.goodTilBlockBuffer,
+        goodTilBlock: placedOrder.goodTilBlock,
+        currentHeight: placedOrder.currentHeight,
         clientId,
         reduceOnly,
         submitResult
@@ -1382,6 +1472,199 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
+  private getAlertPriceReference(
+    alert: AlertObject,
+    telemetry: TradingViewTelemetry
+  ): CorrectionOrderPriceReference | undefined {
+    const data = alert as any;
+    const candidates = [
+      { source: 'alert.current_price', value: data.current_price },
+      { source: 'alert.currentPrice', value: data.currentPrice },
+      { source: 'alert.close', value: data.close },
+      { source: 'alert.close_price', value: data.close_price },
+      { source: 'alert.closePrice', value: data.closePrice },
+      { source: 'alert.price', value: data.price },
+      { source: 'alert.entry_price', value: data.entry_price },
+      { source: 'alert.entryPrice', value: data.entryPrice },
+      { source: 'telemetry.currentPrice', value: telemetry.currentPrice },
+      { source: 'telemetry.alertPrice', value: telemetry.alertPrice },
+      { source: 'telemetry.entryPrice', value: telemetry.entryPrice }
+    ];
+
+    for (const candidate of candidates) {
+      const price = this.parsePositiveNumber(candidate.value);
+
+      if (price !== undefined) {
+        return {
+          price,
+          source: candidate.source
+        };
+      }
+    }
+
+    return undefined;
+  }
+
+  private async resolveCorrectionOrderPricing(
+    market: string,
+    side: OrderSide,
+    alertReference?: CorrectionOrderPriceReference
+  ): Promise<CorrectionOrderPricing> {
+    const marketReference = await this.getMarketPriceReferenceBestEffort(market);
+    const reference = marketReference ?? alertReference;
+    const slippagePct = this.getMarketOrderSlippagePct();
+
+    if (reference?.price && Number.isFinite(slippagePct) && slippagePct > 0) {
+      return {
+        price:
+          side === OrderSide.BUY
+            ? reference.price * (1 + slippagePct)
+            : reference.price * (1 - slippagePct),
+        referencePrice: reference.price,
+        priceSource: reference.source,
+        slippagePct,
+        usedFallbackWorstPrice: false
+      };
+    }
+
+    const fallbackPrice = side === OrderSide.BUY
+      ? this.MARKET_BUY_WORST_PRICE
+      : this.MARKET_SELL_WORST_PRICE;
+
+    console.warn('Correction order using legacy worst-price fallback because no reference price was available.', {
+      market,
+      side,
+      fallbackPrice,
+      alertReference
+    });
+
+    return {
+      price: fallbackPrice,
+      referencePrice: reference?.price,
+      priceSource: reference?.source ?? 'LEGACY_WORST_PRICE_FALLBACK',
+      slippagePct,
+      usedFallbackWorstPrice: true
+    };
+  }
+
+  private async getMarketPriceReferenceBestEffort(
+    market: string
+  ): Promise<CorrectionOrderPriceReference | undefined> {
+    try {
+      const marketsApi = (this.indexer as any).markets;
+
+      if (typeof marketsApi?.getPerpetualMarkets !== 'function') {
+        return undefined;
+      }
+
+      const response = await marketsApi.getPerpetualMarkets(market);
+      const marketInfo = this.getMarketInfoFromResponse(response, market);
+      const price = this.getMarketInfoReferencePrice(marketInfo);
+
+      if (price !== undefined) {
+        return {
+          price,
+          source: 'dydx_indexer_market'
+        };
+      }
+    } catch (error) {
+      console.warn('Could not fetch dYdX market reference price; falling back to alert price.', {
+        market,
+        error: this.serializeError(error)
+      });
+    }
+
+    return undefined;
+  }
+
+  private getMarketInfoFromResponse(response: any, market: string): any | undefined {
+    const markets = response?.markets;
+
+    if (!markets || typeof markets !== 'object') {
+      return undefined;
+    }
+
+    const normalizedMarket = this.normalizeMarket(market);
+
+    return (
+      markets[market] ??
+      markets[normalizedMarket] ??
+      Object.keys(markets)
+        .map(key => markets[key])
+        .find((item: any) =>
+          this.normalizeMarket(item?.ticker ?? item?.market ?? item?.id) === normalizedMarket
+        )
+    );
+  }
+
+  private getMarketInfoReferencePrice(marketInfo: any): number | undefined {
+    if (!marketInfo) {
+      return undefined;
+    }
+
+    return this.getFirstPositiveNumber([
+      marketInfo.oraclePrice,
+      marketInfo.oracle_price,
+      marketInfo.indexPrice,
+      marketInfo.index_price,
+      marketInfo.price,
+      marketInfo.midPrice,
+      marketInfo.mid_price
+    ]);
+  }
+
+  private getMarketOrderSlippagePct(): number {
+    if (!Number.isFinite(this.MARKET_ORDER_SLIPPAGE_PCT) || this.MARKET_ORDER_SLIPPAGE_PCT <= 0) {
+      return 0.03;
+    }
+
+    return Math.min(this.MARKET_ORDER_SLIPPAGE_PCT, 0.5);
+  }
+
+  private getMarketOrderGoodTilBlockForward(): number {
+    const configured = Math.floor(this.MARKET_ORDER_GOOD_TIL_BLOCKS);
+
+    if (!Number.isFinite(configured) || configured <= 0) {
+      return this.MAX_SHORT_TERM_GOOD_TIL_BLOCKS;
+    }
+
+    return Math.min(configured, this.MAX_SHORT_TERM_GOOD_TIL_BLOCKS);
+  }
+
+  private async getMarketOrderGoodTilBlock(): Promise<MarketOrderGoodTilBlock> {
+    const goodTilBlockForward = this.getMarketOrderGoodTilBlockForward();
+
+    try {
+      const currentHeightRaw = await (this.client as any).validatorClient.get.latestBlockHeight();
+      const currentHeight = Number(currentHeightRaw);
+
+      if (!Number.isFinite(currentHeight) || currentHeight <= 0) {
+        throw new Error(`Invalid latest block height: ${String(currentHeightRaw)}`);
+      }
+
+      return {
+        currentHeight,
+        goodTilBlock: currentHeight + goodTilBlockForward,
+        goodTilBlockForward
+      };
+    } catch (error) {
+      console.warn('Could not calculate explicit dYdX GoodTilBlock; client default will be used.', {
+        goodTilBlockForward,
+        error: this.serializeError(error)
+      });
+
+      return {
+        goodTilBlockForward
+      };
+    }
+  }
+
+  private isAcceptedBroadcastResult(result: any): boolean {
+    const code = Number(result?.code ?? result?.result?.code);
+
+    return Number.isFinite(code) && code === 0;
+  }
+
   private async logOrderDiagnostics(
     label: string,
     market: string,
@@ -1399,6 +1682,18 @@ export class DydxV4Client extends AbstractDexClient {
       diagnostics.currentPosition = await this.getCurrentPosition(market);
     } catch (error) {
       diagnostics.currentPositionError = this.serializeError(error);
+    }
+
+    try {
+      diagnostics.market = await this.getMarketSnapshotBestEffort(market);
+    } catch (error) {
+      diagnostics.marketError = this.serializeError(error);
+    }
+
+    try {
+      diagnostics.orderbook = await this.getOrderbookSnapshotBestEffort(market);
+    } catch (error) {
+      diagnostics.orderbookError = this.serializeError(error);
     }
 
     try {
@@ -1429,6 +1724,82 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     console.warn('dYdX order diagnostics:', diagnostics);
+  }
+
+  private async getMarketSnapshotBestEffort(market: string): Promise<any> {
+    const marketsApi = (this.indexer as any).markets;
+
+    if (typeof marketsApi?.getPerpetualMarkets !== 'function') {
+      return { available: false, reason: 'Indexer markets.getPerpetualMarkets is unavailable.' };
+    }
+
+    const response = await marketsApi.getPerpetualMarkets(market);
+    const marketInfo = this.getMarketInfoFromResponse(response, market);
+
+    if (!marketInfo) {
+      return {
+        available: false,
+        reason: 'Market was not found in dYdX indexer response.'
+      };
+    }
+
+    return this.summarizeMarketInfo(marketInfo);
+  }
+
+  private async getOrderbookSnapshotBestEffort(market: string): Promise<any> {
+    const marketsApi = (this.indexer as any).markets;
+
+    if (typeof marketsApi?.getPerpetualMarketOrderbook !== 'function') {
+      return { available: false, reason: 'Indexer markets.getPerpetualMarketOrderbook is unavailable.' };
+    }
+
+    const response = await marketsApi.getPerpetualMarketOrderbook(market);
+    const bids = Array.isArray(response?.bids) ? response.bids : [];
+    const asks = Array.isArray(response?.asks) ? response.asks : [];
+    const bestBid = bids[0];
+    const bestAsk = asks[0];
+    const bestBidPrice = this.parsePositiveNumber(bestBid?.price ?? bestBid?.[0]);
+    const bestAskPrice = this.parsePositiveNumber(bestAsk?.price ?? bestAsk?.[0]);
+
+    return {
+      bidCount: bids.length,
+      askCount: asks.length,
+      bestBid: bestBid
+        ? {
+            price: bestBidPrice,
+            size: this.parsePositiveNumber(bestBid.size ?? bestBid[1])
+          }
+        : undefined,
+      bestAsk: bestAsk
+        ? {
+            price: bestAskPrice,
+            size: this.parsePositiveNumber(bestAsk.size ?? bestAsk[1])
+          }
+        : undefined,
+      spreadPct:
+        bestBidPrice !== undefined && bestAskPrice !== undefined
+          ? (bestAskPrice - bestBidPrice) / ((bestAskPrice + bestBidPrice) / 2)
+          : undefined
+    };
+  }
+
+  private summarizeMarketInfo(marketInfo: any): any {
+    return this.compactObject({
+      ticker: marketInfo.ticker ?? marketInfo.market ?? marketInfo.id,
+      status: marketInfo.status,
+      clobPairId: marketInfo.clobPairId,
+      atomicResolution: marketInfo.atomicResolution,
+      quantumConversionExponent: marketInfo.quantumConversionExponent,
+      subticksPerTick: marketInfo.subticksPerTick,
+      stepBaseQuantums: marketInfo.stepBaseQuantums,
+      oraclePrice: this.parsePositiveNumber(marketInfo.oraclePrice ?? marketInfo.oracle_price),
+      indexPrice: this.parsePositiveNumber(marketInfo.indexPrice ?? marketInfo.index_price),
+      initialMarginFraction: marketInfo.initialMarginFraction ?? marketInfo.initial_margin_fraction,
+      maintenanceMarginFraction: marketInfo.maintenanceMarginFraction ?? marketInfo.maintenance_margin_fraction,
+      baseOpenInterest: marketInfo.baseOpenInterest ?? marketInfo.base_open_interest,
+      nextFundingRate: marketInfo.nextFundingRate ?? marketInfo.next_funding_rate,
+      openInterest: marketInfo.openInterest ?? marketInfo.open_interest
+    });
   }
 
   private async getSubaccountSnapshotBestEffort(): Promise<any> {
