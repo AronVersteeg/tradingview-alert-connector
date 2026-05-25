@@ -70,6 +70,9 @@ type PlacedCorrectionOrder = {
   priceSource: string;
   slippagePct: number;
   usedFallbackWorstPrice: boolean;
+  minOrderSize?: number;
+  roundedOrderSize?: number;
+  stepSize?: number;
   goodTilBlockBuffer: number;
   goodTilBlock?: number;
   currentHeight?: number;
@@ -138,6 +141,14 @@ type CorrectionOrderPricing = {
   priceSource: string;
   slippagePct: number;
   usedFallbackWorstPrice: boolean;
+};
+
+type CorrectionOrderSizeCheck = {
+  requestedSize: number;
+  minOrderSize?: number;
+  roundedOrderSize?: number;
+  stepSize?: number;
+  source: string;
 };
 
 type MarketOrderGoodTilBlock = {
@@ -1363,10 +1374,16 @@ export class DydxV4Client extends AbstractDexClient {
     reduceOnly: boolean,
     priceReference?: CorrectionOrderPriceReference
   ): Promise<PlacedCorrectionOrder> {
+    const marketInfo = await this.getMarketInfoBestEffort(market);
+    const sizeCheck = this.getCorrectionOrderSizeCheck(market, size, marketInfo);
+
+    this.assertCorrectionOrderSizeSupported(market, sizeCheck);
+
     const pricing = await this.resolveCorrectionOrderPricing(
       market,
       side,
-      priceReference
+      priceReference,
+      marketInfo
     );
 
     const clientId = this.createClientId();
@@ -1382,6 +1399,9 @@ export class DydxV4Client extends AbstractDexClient {
       priceSource: pricing.priceSource,
       slippagePct: pricing.slippagePct,
       usedFallbackWorstPrice: pricing.usedFallbackWorstPrice,
+      minOrderSize: sizeCheck.minOrderSize,
+      roundedOrderSize: sizeCheck.roundedOrderSize,
+      stepSize: sizeCheck.stepSize,
       goodTilBlockBuffer: goodTilBlockForward,
       clientId,
       reduceOnly
@@ -1396,6 +1416,9 @@ export class DydxV4Client extends AbstractDexClient {
       priceSource: pricing.priceSource,
       slippagePct: pricing.slippagePct,
       usedFallbackWorstPrice: pricing.usedFallbackWorstPrice,
+      minOrderSize: sizeCheck.minOrderSize,
+      roundedOrderSize: sizeCheck.roundedOrderSize,
+      stepSize: sizeCheck.stepSize,
       goodTilBlockBuffer: goodTilBlockForward,
       clientId,
       reduceOnly,
@@ -1443,6 +1466,9 @@ export class DydxV4Client extends AbstractDexClient {
         priceSource: pricing.priceSource,
         slippagePct: pricing.slippagePct,
         usedFallbackWorstPrice: pricing.usedFallbackWorstPrice,
+        minOrderSize: sizeCheck.minOrderSize,
+        roundedOrderSize: sizeCheck.roundedOrderSize,
+        stepSize: sizeCheck.stepSize,
         goodTilBlockBuffer: placedOrder.goodTilBlockBuffer,
         goodTilBlock: placedOrder.goodTilBlock,
         currentHeight: placedOrder.currentHeight,
@@ -1508,9 +1534,10 @@ export class DydxV4Client extends AbstractDexClient {
   private async resolveCorrectionOrderPricing(
     market: string,
     side: OrderSide,
-    alertReference?: CorrectionOrderPriceReference
+    alertReference?: CorrectionOrderPriceReference,
+    marketInfo?: any
   ): Promise<CorrectionOrderPricing> {
-    const marketReference = await this.getMarketPriceReferenceBestEffort(market);
+    const marketReference = await this.getMarketPriceReferenceBestEffort(market, marketInfo);
     const reference = marketReference ?? alertReference;
     const slippagePct = this.getMarketOrderSlippagePct();
 
@@ -1548,22 +1575,25 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   private async getMarketPriceReferenceBestEffort(
-    market: string
+    market: string,
+    marketInfo?: any
   ): Promise<CorrectionOrderPriceReference | undefined> {
     try {
-      const marketsApi = (this.indexer as any).markets;
-
-      if (typeof marketsApi?.getPerpetualMarkets !== 'function') {
-        return undefined;
-      }
-
-      const response = await marketsApi.getPerpetualMarkets(market);
-      const marketInfo = this.getMarketInfoFromResponse(response, market);
       const price = this.getMarketInfoReferencePrice(marketInfo);
 
       if (price !== undefined) {
         return {
           price,
+          source: 'dydx_indexer_market'
+        };
+      }
+
+      const fetchedMarketInfo = await this.getMarketInfoBestEffort(market);
+      const fetchedPrice = this.getMarketInfoReferencePrice(fetchedMarketInfo);
+
+      if (fetchedPrice !== undefined) {
+        return {
+          price: fetchedPrice,
           source: 'dydx_indexer_market'
         };
       }
@@ -1575,6 +1605,27 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     return undefined;
+  }
+
+  private async getMarketInfoBestEffort(market: string): Promise<any | undefined> {
+    try {
+      const marketsApi = (this.indexer as any).markets;
+
+      if (typeof marketsApi?.getPerpetualMarkets !== 'function') {
+        return undefined;
+      }
+
+      const response = await marketsApi.getPerpetualMarkets(market);
+
+      return this.getMarketInfoFromResponse(response, market);
+    } catch (error) {
+      console.warn('Could not fetch dYdX market info.', {
+        market,
+        error: this.serializeError(error)
+      });
+
+      return undefined;
+    }
   }
 
   private getMarketInfoFromResponse(response: any, market: string): any | undefined {
@@ -1611,6 +1662,70 @@ export class DydxV4Client extends AbstractDexClient {
       marketInfo.midPrice,
       marketInfo.mid_price
     ]);
+  }
+
+  private getCorrectionOrderSizeCheck(
+    market: string,
+    size: number,
+    marketInfo?: any
+  ): CorrectionOrderSizeCheck {
+    const atomicResolution = Number(marketInfo?.atomicResolution);
+    const stepBaseQuantums = Number(marketInfo?.stepBaseQuantums);
+
+    if (
+      !Number.isFinite(atomicResolution) ||
+      !Number.isFinite(stepBaseQuantums) ||
+      stepBaseQuantums <= 0
+    ) {
+      return {
+        requestedSize: size,
+        source: 'UNKNOWN'
+      };
+    }
+
+    const baseQuantumMultiplier = 10 ** (-1 * atomicResolution);
+    const rawQuantums = size * baseQuantumMultiplier;
+    const roundedQuantums =
+      Math.floor(rawQuantums / stepBaseQuantums) * stepBaseQuantums;
+    const finalQuantums = Math.max(roundedQuantums, stepBaseQuantums);
+    const stepSize = stepBaseQuantums / baseQuantumMultiplier;
+    const roundedOrderSize = finalQuantums / baseQuantumMultiplier;
+
+    return {
+      requestedSize: size,
+      minOrderSize: stepSize,
+      roundedOrderSize,
+      stepSize,
+      source: `DYDX_MARKET_INFO:${this.normalizeMarket(market)}`
+    };
+  }
+
+  private assertCorrectionOrderSizeSupported(
+    market: string,
+    sizeCheck: CorrectionOrderSizeCheck
+  ): void {
+    if (
+      sizeCheck.minOrderSize !== undefined &&
+      sizeCheck.requestedSize + this.TOLERANCE < sizeCheck.minOrderSize
+    ) {
+      throw new Error(
+        `Order size ${sizeCheck.requestedSize} is below dYdX minimum ${sizeCheck.minOrderSize} for ${market}. Increase the alert size; otherwise dYdX would round it up to ${sizeCheck.roundedOrderSize}.`
+      );
+    }
+
+    if (
+      sizeCheck.roundedOrderSize !== undefined &&
+      Math.abs(sizeCheck.roundedOrderSize - sizeCheck.requestedSize) > this.TOLERANCE
+    ) {
+      console.warn('dYdX will quantize correction order size to market step size.', {
+        market,
+        requestedSize: sizeCheck.requestedSize,
+        roundedOrderSize: sizeCheck.roundedOrderSize,
+        minOrderSize: sizeCheck.minOrderSize,
+        stepSize: sizeCheck.stepSize,
+        source: sizeCheck.source
+      });
+    }
   }
 
   private getMarketOrderSlippagePct(): number {
@@ -1733,8 +1848,7 @@ export class DydxV4Client extends AbstractDexClient {
       return { available: false, reason: 'Indexer markets.getPerpetualMarkets is unavailable.' };
     }
 
-    const response = await marketsApi.getPerpetualMarkets(market);
-    const marketInfo = this.getMarketInfoFromResponse(response, market);
+    const marketInfo = await this.getMarketInfoBestEffort(market);
 
     if (!marketInfo) {
       return {
