@@ -140,11 +140,23 @@ function smtpSettingsFromEnv(): SmtpSettings | undefined {
     recipients,
     useTls: parseBool(process.env.SMTP_USE_TLS, !useSsl),
     useSsl,
-    timeoutMs: Number(process.env.SMTP_TIMEOUT_MS || process.env.SMTP_TIMEOUT_SECONDS || 20000),
+    timeoutMs: smtpTimeoutMs(),
     jobName:
       String(process.env.DECENTRADER_GAP_ALERT_JOB_NAME || 'Decentrader BTC gap monitor').trim() ||
       'Decentrader BTC gap monitor'
   };
+}
+
+function smtpTimeoutMs(): number {
+  const timeoutMs = Number(process.env.SMTP_TIMEOUT_MS || '');
+  if (Number.isFinite(timeoutMs) && timeoutMs > 0) return timeoutMs;
+
+  const timeoutSeconds = Number(process.env.SMTP_TIMEOUT_SECONDS || '');
+  if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0) {
+    return timeoutSeconds * 1000;
+  }
+
+  return 20000;
 }
 
 function escapeEmailHeader(value: string): string {
