@@ -204,8 +204,21 @@ class SmtpSession {
     return new Promise((resolve, reject) => {
       const onError = (error: Error) => reject(error);
       const socket = this.settings.useSsl
-        ? tls.connect(this.settings.port, this.settings.host, resolve)
-        : net.connect(this.settings.port, this.settings.host, resolve);
+        ? tls.connect(
+            {
+              port: this.settings.port,
+              host: this.settings.host,
+              servername: this.settings.host
+            },
+            resolve
+          )
+        : net.connect(
+            {
+              port: this.settings.port,
+              host: this.settings.host
+            },
+            resolve
+          );
       socket.setTimeout(this.settings.timeoutMs, () => {
         socket.destroy(new Error('SMTP timeout'));
       });
