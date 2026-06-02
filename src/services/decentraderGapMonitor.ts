@@ -121,11 +121,12 @@ function nowNlIso(): string {
 
 function smtpSettingsFromEnv(): SmtpSettings | undefined {
   const host = String(process.env.SMTP_HOST || '').trim();
-  const recipients = parseRecipients(process.env.SMTP_TO);
+  const recipients = parseRecipients(process.env.SMTP_TO || process.env.NOTIFY_EMAIL);
   if (!host || !recipients.length) return undefined;
 
-  const username = String(process.env.SMTP_USERNAME || '').trim();
-  const sender = String(process.env.SMTP_FROM || '').trim() || username;
+  const username = String(process.env.SMTP_USERNAME || process.env.SMTP_USER || '').trim();
+  const password = String(process.env.SMTP_PASSWORD || process.env.SMTP_APP_PASSWORD || '');
+  const sender = String(process.env.SMTP_FROM || process.env.NOTIFY_FROM || '').trim() || username;
   if (!sender) return undefined;
 
   const useSsl = parseBool(process.env.SMTP_USE_SSL, false);
@@ -134,7 +135,7 @@ function smtpSettingsFromEnv(): SmtpSettings | undefined {
     host,
     port: Number(process.env.SMTP_PORT || defaultPort),
     username,
-    password: String(process.env.SMTP_PASSWORD || ''),
+    password,
     sender,
     recipients,
     useTls: parseBool(process.env.SMTP_USE_TLS, !useSsl),

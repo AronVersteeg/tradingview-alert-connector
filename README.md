@@ -34,6 +34,8 @@ SMTP_USE_TLS=true
 SMTP_USE_SSL=false
 ```
 
+Scanner-v3 aliases also work: `SMTP_USER`, `SMTP_APP_PASSWORD`, `NOTIFY_FROM`, and `NOTIFY_EMAIL`.
+
 Status:
 
 ```text
