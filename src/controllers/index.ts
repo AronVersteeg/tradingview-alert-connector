@@ -4,6 +4,7 @@ import path from 'path';
 import express, { Router } from 'express';
 import { validateAlert } from '../services';
 import { DexRegistry } from '../services/dexRegistry';
+import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
 
@@ -25,6 +26,21 @@ function saveStore(store: Record<string, boolean>) {
 // Only hash VALID alerts
 function alertHash(body: any): string {
   return `${body.strategy}_${body.market}_${body.time}`;
+}
+
+function isMonitorRequestAuthorized(req: express.Request): boolean {
+  const expected = String(process.env.TRADINGVIEW_PASSPHRASE || '').trim();
+  if (!expected) return true;
+
+  const headerToken = req.header('X-Webhook-Token');
+  const received =
+    headerToken ||
+    req.body?.passphrase ||
+    req.body?.token ||
+    req.query?.passphrase ||
+    req.query?.token;
+
+  return String(received || '').trim() === expected;
 }
 
 // ================= GLOBAL REGISTRY =================
@@ -134,11 +150,36 @@ router.post('/', async (req, res) => {
   });
 });
 
+// ================= DECENTRADER GAP MONITOR =================
+
+router.get('/decentrader/gap-status', async (req, res) => {
+  res.send(decentraderGapMonitor.getStatus());
+});
+
+router.post('/decentrader/gap-check', async (req, res) => {
+  if (!isMonitorRequestAuthorized(req)) {
+    return res.status(401).send({ ok: false, error: 'Unauthorized' });
+  }
+
+  try {
+    const result = await decentraderGapMonitor.checkOnce();
+    res.send(result);
+  } catch (error) {
+    console.error('Manual Decentrader gap check failed:', error);
+    res.status(500).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
 // ================= DEBUG =================
 
 router.get('/debug-sentry', function mainHandler(req, res) {
   throw new Error('My first Sentry error!');
 });
+
+decentraderGapMonitor.start();
 
 export default router;
 

@@ -8,6 +8,52 @@ Currently supports [dYdX v3](https://dydx.exchange), [dYdX v4](https://dydx.trad
 
 https://tv-connector.gitbook.io/docs/
 
+# Decentrader BTC liquidity gap monitor
+
+This connector can also run a Decentrader BTC liquidity-gap monitor in the background. It checks the latest hourly Decentrader liquidity map and sends an SMTP email when new active histogram zones appear inside the previous clean gap around price.
+
+Enable it on Render with environment variables:
+
+```text
+DECENTRADER_GAP_MONITOR_ENABLED=true
+DECENTRADER_GAP_SYMBOL=btcusdt
+DECENTRADER_GAP_POLL_MINUTES=10
+DECENTRADER_GAP_ALERT_JOB_NAME=Decentrader BTC gap monitor
+```
+
+The monitor uses the same SMTP variables:
+
+```text
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM=
+SMTP_TO=
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+```
+
+Status:
+
+```text
+GET /decentrader/gap-status
+```
+
+Manual check:
+
+```text
+POST /decentrader/gap-check
+```
+
+If `TRADINGVIEW_PASSPHRASE` is configured, the manual check requires that same value as `X-Webhook-Token`, `passphrase`, or `token`.
+
+For duplicate-alert protection across Render restarts, use a persistent path for:
+
+```text
+DECENTRADER_GAP_ALERT_STATE_FILE=/var/data/decentrader-gap-alert-state.json
+```
+
 # Video Tutorial
 
 dYdX v3:
