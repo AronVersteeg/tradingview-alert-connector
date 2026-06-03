@@ -156,6 +156,10 @@ router.get('/decentrader/gap-status', async (req, res) => {
   res.send(decentraderGapMonitor.getStatus());
 });
 
+router.get('/decentrader/map', async (req, res) => {
+  res.sendFile(path.join(process.cwd(), 'public', 'decentrader_liquidity_timelapse.html'));
+});
+
 router.get('/decentrader/liquidity-timelapse', async (req, res) => {
   try {
     res.setHeader('Access-Control-Allow-Origin', '*');

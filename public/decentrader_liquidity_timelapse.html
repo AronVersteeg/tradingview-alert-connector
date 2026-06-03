@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Decentrader BTC Liquidity Timelapse</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #11151c;
+      --panel: #181f29;
+      --panel-2: #202937;
+      --text: #ecf2f8;
+      --muted: #9aa8b8;
+      --grid: rgba(236, 242, 248, 0.12);
+      --long-3: #FF09FF;
+      --long-5: #09FF78;
+      --long-10: #09D0FF;
+      --short-3: #FFE52B;
+      --short-5: #FF7F0E;
+      --short-10: #D62728;
+      --new: #fbbf24;
+      --price: #21d3a3;
+      --border: rgba(236, 242, 248, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    header,
+    footer {
+      padding: 16px 22px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      border-bottom: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    .meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 12px 22px;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .control {
+      display: grid;
+      gap: 6px;
+      min-width: 132px;
+    }
+
+    label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+
+    select,
+    button {
+      height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #101722;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      padding: 0 10px;
+    }
+
+    button.is-active {
+      border-color: var(--price);
+      color: var(--price);
+    }
+
+    button {
+      cursor: pointer;
+      min-width: 42px;
+    }
+
+    .playback-controls {
+      display: inline-flex;
+      gap: 6px;
+      align-items: end;
+    }
+
+    .step-button {
+      min-width: 46px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+    }
+
+    .step-arrow {
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .step-unit {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    input[type="range"] {
+      width: min(560px, 80vw);
+      accent-color: var(--new);
+    }
+
+    .inline-buttons {
+      display: inline-flex;
+      gap: 6px;
+    }
+
+    .gap-monitor {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.3fr) repeat(4, minmax(108px, 0.65fr)) minmax(220px, 1fr);
+      gap: 10px;
+      align-items: stretch;
+      padding: 12px 22px;
+      background: #121923;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .gap-card {
+      min-height: 54px;
+      padding: 9px 10px;
+      background: rgba(13, 17, 24, 0.62);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+    }
+
+    .gap-label {
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.2;
+      text-transform: uppercase;
+    }
+
+    .gap-value {
+      margin-top: 4px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 650;
+      line-height: 1.2;
+    }
+
+    .gap-value--accent {
+      color: var(--price);
+      font-size: 18px;
+    }
+
+    .gap-status {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .gap-alert {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .gap-alert.is-hot {
+      color: var(--new);
+    }
+
+    .stage {
+      position: relative;
+      min-height: 0;
+      padding: 18px 22px 14px;
+    }
+
+    canvas {
+      width: 100%;
+      height: calc(100vh - 190px);
+      min-height: 420px;
+      display: block;
+      background: #0d1118;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .legend {
+      position: absolute;
+      top: 30px;
+      right: 34px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: flex-end;
+      max-width: min(640px, calc(100% - 68px));
+      padding: 8px 10px;
+      background: rgba(13, 17, 24, 0.82);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .legend span {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+
+    @media (max-width: 760px) {
+      header,
+      footer,
+      .stage {
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+
+      .toolbar {
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+
+      .gap-monitor {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+
+      .gap-monitor .gap-card:first-child,
+      .gap-monitor .gap-card:last-child {
+        grid-column: 1 / -1;
+      }
+
+      .stage {
+        display: flex;
+        flex-direction: column;
+      }
+
+      canvas {
+        height: calc(100vh - 240px);
+        min-height: 360px;
+      }
+
+      .legend {
+        position: static;
+        order: -1;
+        margin-top: 10px;
+        margin-bottom: 10px;
+        width: fit-content;
+        max-width: 100%;
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>BTCUSDT Liquidity Timelapse</h1>
+      <div class="meta" id="meta">Loading data</div>
+    </header>
+
+    <section class="toolbar">
+      <div class="playback-controls">
+        <button id="prevHour" class="step-button" type="button" aria-label="Previous hour" title="Previous hour">
+          <span class="step-arrow" aria-hidden="true">&#8249;</span>
+          <span class="step-unit" aria-hidden="true">1h</span>
+        </button>
+        <button id="play" type="button" aria-label="Play or pause">Play</button>
+        <button id="nextHour" class="step-button" type="button" aria-label="Next hour" title="Next hour">
+          <span class="step-unit" aria-hidden="true">1h</span>
+          <span class="step-arrow" aria-hidden="true">&#8250;</span>
+        </button>
+      </div>
+      <div class="control">
+        <label for="frame">Frame</label>
+        <input id="frame" type="range" min="0" max="0" value="0">
+      </div>
+      <div class="control">
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="active">Active accumulation</option>
+          <option value="new">New zones</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="side">Side</label>
+        <select id="side">
+          <option value="all">Long + short</option>
+          <option value="L">Long</option>
+          <option value="S">Short</option>
+        </select>
+      </div>
+      <div class="control">
+        <label for="lev">Leverage</label>
+        <select id="lev">
+          <option value="all">3x + 5x + 10x</option>
+          <option value="3">3x</option>
+          <option value="5">5x</option>
+          <option value="10">10x</option>
+        </select>
+      </div>
+      <div class="control">
+        <label>Alerts</label>
+        <div class="inline-buttons">
+          <button id="enableAlerts" type="button">Notify</button>
+          <button id="liveMonitor" type="button">Live</button>
+          <button id="refreshData" type="button">Refresh</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="gap-monitor" aria-live="polite">
+      <div class="gap-card">
+        <div class="gap-label">Gap</div>
+        <div class="gap-value gap-value--accent" id="gapWidth">-</div>
+        <div class="gap-status" id="gapStatus">Waiting for data</div>
+      </div>
+      <div class="gap-card">
+        <div class="gap-label">Left edge</div>
+        <div class="gap-value" id="gapLeft">-</div>
+      </div>
+      <div class="gap-card">
+        <div class="gap-label">Price</div>
+        <div class="gap-value" id="gapPrice">-</div>
+      </div>
+      <div class="gap-card">
+        <div class="gap-label">Right edge</div>
+        <div class="gap-value" id="gapRight">-</div>
+      </div>
+      <div class="gap-card">
+        <div class="gap-label">Live check</div>
+        <div class="gap-value" id="liveStatus">Off</div>
+      </div>
+      <div class="gap-card">
+        <div class="gap-label">Gap alert</div>
+        <div class="gap-alert" id="gapAlert">No intrusions</div>
+      </div>
+    </section>
+
+    <section class="stage">
+      <canvas id="chart" width="1400" height="760"></canvas>
+      <div class="legend">
+        <span><i class="swatch" style="background: var(--long-3)"></i>Long 3x</span>
+        <span><i class="swatch" style="background: var(--long-5)"></i>Long 5x</span>
+        <span><i class="swatch" style="background: var(--long-10)"></i>Long 10x</span>
+        <span><i class="swatch" style="background: var(--short-3)"></i>Short 3x</span>
+        <span><i class="swatch" style="background: var(--short-5)"></i>Short 5x</span>
+        <span><i class="swatch" style="background: var(--short-10)"></i>Short 10x</span>
+        <span><i class="swatch" style="background: var(--new)"></i>First seen</span>
+        <span><i class="swatch" style="background: var(--price)"></i>Price</span>
+      </div>
+    </section>
+
+    <footer id="note"></footer>
+  </main>
+
+  <script src="data/decentrader_btc_liquidity_timelapse_data.js"></script>
+  <script>
+    const CLOUD_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+      ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/liquidity-timelapse'
+      : '/decentrader/liquidity-timelapse';
+    let payload = window.DECENTRADER_LIQUIDITY_TIMELAPSE;
+    const canvas = document.getElementById('chart');
+    const ctx = canvas.getContext('2d');
+    const frameInput = document.getElementById('frame');
+    const modeInput = document.getElementById('mode');
+    const sideInput = document.getElementById('side');
+    const levInput = document.getElementById('lev');
+    const prevHourButton = document.getElementById('prevHour');
+    const nextHourButton = document.getElementById('nextHour');
+    const enableAlertsButton = document.getElementById('enableAlerts');
+    const liveMonitorButton = document.getElementById('liveMonitor');
+    const refreshDataButton = document.getElementById('refreshData');
+    const playButton = document.getElementById('play');
+    const meta = document.getElementById('meta');
+    const note = document.getElementById('note');
+    const gapWidth = document.getElementById('gapWidth');
+    const gapStatus = document.getElementById('gapStatus');
+    const gapLeft = document.getElementById('gapLeft');
+    const gapPrice = document.getElementById('gapPrice');
+    const gapRight = document.getElementById('gapRight');
+    const liveStatus = document.getElementById('liveStatus');
+    const gapAlert = document.getElementById('gapAlert');
+
+    let playing = false;
+    let timer = null;
+    let liveTimer = null;
+    let alertsEnabled = false;
+    let lastSentAlertSignature = '';
+    const BAR_WIDTH = 4;
+    const GAP_EDGE_PADDING = 3;
+
+    function money(value) {
+      return '$' + Math.round(value).toLocaleString('en-US');
+    }
+
+    function parseDecentraderUtc(timestamp) {
+      if (!timestamp) return null;
+      const iso = timestamp.replace(' ', 'T') + 'Z';
+      const date = new Date(iso);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    function nlTime(timestamp, includeDate = true) {
+      const date = parseDecentraderUtc(timestamp);
+      if (!date) return timestamp || '-';
+      return new Intl.DateTimeFormat('nl-NL', {
+        timeZone: 'Europe/Amsterdam',
+        year: includeDate ? 'numeric' : undefined,
+        month: includeDate ? '2-digit' : undefined,
+        day: includeDate ? '2-digit' : undefined,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(date);
+    }
+
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      canvas.width = Math.max(900, Math.floor(rect.width * scale));
+      canvas.height = Math.max(520, Math.floor(rect.height * scale));
+      draw();
+    }
+
+    function eventAllowed(event) {
+      const side = sideInput.value;
+      const leverage = levInput.value;
+      return (side === 'all' || event.s === side) && (leverage === 'all' || String(event.l) === leverage);
+    }
+
+    function getFrameEvents(frameIndex, options = {}) {
+      const mode = options.mode || modeInput.value;
+      const bins = new Map();
+      const firstSeen = [];
+
+      for (const event of payload.events) {
+        if (!eventAllowed(event)) continue;
+        if (mode === 'active') {
+          if (event.i > frameIndex || !event.a) continue;
+        } else {
+          if (event.i !== frameIndex) continue;
+        }
+
+        const key = `${event.s}|${event.l}|${event.p}`;
+        const existing = bins.get(key) || { key, side: event.s, leverage: event.l, price: event.p, count: 0, first: false };
+        existing.count += 1;
+        existing.first = existing.first || Boolean(event.n && event.i === frameIndex);
+        bins.set(key, existing);
+      }
+
+      for (const item of bins.values()) {
+        if (item.first) firstSeen.push(item);
+      }
+
+      return { bars: [...bins.values()], firstSeen };
+    }
+
+    function getGapIntrusion(frameIndex, xFor, xToPrice) {
+      if (frameIndex <= 0) return null;
+
+      const previousFrame = payload.frames[frameIndex - 1];
+      const currentFrame = payload.frames[frameIndex];
+      const previousBars = getFrameEvents(frameIndex - 1, { mode: 'active' }).bars;
+      const currentBars = getFrameEvents(frameIndex, { mode: 'active' }).bars;
+      const previousGap = getVisualGapForBars(previousFrame, previousBars, xFor, xToPrice);
+      if (!previousGap || !currentFrame || !Number.isFinite(currentFrame.price)) return null;
+
+      const previousKeys = new Set(previousBars.map((bar) => bar.key));
+      const entrants = currentBars
+        .filter((bar) => !previousKeys.has(bar.key))
+        .filter((bar) => bar.price > previousGap.left && bar.price < previousGap.right)
+        .map((bar) => ({
+          ...bar,
+          sideOfPrice: bar.price < currentFrame.price ? 'left' : bar.price > currentFrame.price ? 'right' : 'price',
+        }));
+
+      if (!entrants.length) return { previousGap, entrants: [], left: [], right: [] };
+
+      const left = entrants.filter((bar) => bar.sideOfPrice === 'left');
+      const right = entrants.filter((bar) => bar.sideOfPrice === 'right');
+      return { previousGap, entrants, left, right };
+    }
+
+    function formatZone(zone) {
+      if (!zone) return '-';
+      return `${zone.side === 'L' ? 'Long' : 'Short'} ${zone.leverage}x ${money(zone.price)}`;
+    }
+
+    function leverageOffset(leverage) {
+      if (levInput.value !== 'all') return 0;
+      return { 3: -5, 5: 0, 10: 5 }[leverage] || 0;
+    }
+
+    function getVisualGapForBars(frame, bars, xFor, xToPrice) {
+      if (!frame || !Number.isFinite(frame.price)) return null;
+      const leftBars = bars.filter((bar) => bar.price < frame.price);
+      const rightBars = bars.filter((bar) => bar.price > frame.price);
+      if (!leftBars.length || !rightBars.length) return null;
+
+      let leftEdge = null;
+      let rightEdge = null;
+
+      for (const bar of leftBars) {
+        const visualRight = xFor(bar.price) + leverageOffset(bar.leverage) + BAR_WIDTH / 2 + GAP_EDGE_PADDING;
+        if (!leftEdge || visualRight > leftEdge.visualRight) {
+          leftEdge = { ...bar, visualRight };
+        }
+      }
+
+      for (const bar of rightBars) {
+        const visualLeft = xFor(bar.price) + leverageOffset(bar.leverage) - BAR_WIDTH / 2 - GAP_EDGE_PADDING;
+        if (!rightEdge || visualLeft < rightEdge.visualLeft) {
+          rightEdge = { ...bar, visualLeft };
+        }
+      }
+
+      if (!leftEdge || !rightEdge || leftEdge.visualRight >= rightEdge.visualLeft) return null;
+
+      const left = xToPrice(leftEdge.visualRight);
+      const right = xToPrice(rightEdge.visualLeft);
+      return {
+        left,
+        right,
+        width: right - left,
+        leftX: leftEdge.visualRight,
+        rightX: rightEdge.visualLeft,
+        leftEdge,
+        rightEdge,
+        leftToPrice: frame.price - left,
+        rightToPrice: right - frame.price,
+      };
+    }
+
+    function drawGrid(area, minPrice, maxPrice, maxCount) {
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--grid');
+      ctx.fillStyle = '#9aa8b8';
+      ctx.lineWidth = 1;
+      ctx.font = '12px Inter, system-ui, sans-serif';
+
+      for (let i = 0; i <= 5; i++) {
+        const y = area.bottom - (area.height * i / 5);
+        ctx.beginPath();
+        ctx.moveTo(area.left, y);
+        ctx.lineTo(area.right, y);
+        ctx.stroke();
+        ctx.fillText(String(Math.round(maxCount * i / 5)), 12, y + 4);
+      }
+
+      for (let i = 0; i <= 6; i++) {
+        const x = area.left + (area.width * i / 6);
+        const price = minPrice + ((maxPrice - minPrice) * i / 6);
+        ctx.beginPath();
+        ctx.moveTo(x, area.top);
+        ctx.lineTo(x, area.bottom);
+        ctx.stroke();
+        ctx.fillText(money(price), x - 32, area.bottom + 24);
+      }
+    }
+
+    function drawGap(area, gap, priceColor) {
+      if (!gap) return;
+      const leftX = gap.leftX;
+      const rightX = gap.rightX;
+      const width = Math.max(0, rightX - leftX);
+      if (width <= 0) return;
+
+      ctx.fillStyle = 'rgba(33, 211, 163, 0.12)';
+      ctx.fillRect(leftX, area.top, width, area.height);
+
+      ctx.save();
+      ctx.setLineDash([7, 6]);
+      ctx.strokeStyle = 'rgba(33, 211, 163, 0.7)';
+      ctx.lineWidth = 1;
+      for (const x of [leftX, rightX]) {
+        ctx.beginPath();
+        ctx.moveTo(x, area.top);
+        ctx.lineTo(x, area.bottom);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      const label = `GAP ${money(gap.width)}`;
+      ctx.font = '600 12px Inter, system-ui, sans-serif';
+      const labelWidth = Math.ceil(ctx.measureText(label).width) + 18;
+      const labelX = Math.max(area.left + 6, Math.min(leftX + width / 2 - labelWidth / 2, area.right - labelWidth - 6));
+      const labelY = area.top + 44;
+      ctx.fillStyle = 'rgba(13, 17, 24, 0.9)';
+      ctx.strokeStyle = priceColor;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(labelX, labelY, labelWidth, 24, 5);
+      } else {
+        ctx.rect(labelX, labelY, labelWidth, 24);
+      }
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = priceColor;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, labelX + 9, labelY + 12);
+      ctx.textBaseline = 'alphabetic';
+    }
+
+    function updateGapMonitor(frame, gap, intrusion) {
+      if (!gap || !frame) {
+        gapWidth.textContent = '-';
+        gapLeft.textContent = '-';
+        gapPrice.textContent = frame?.price ? money(frame.price) : '-';
+        gapRight.textContent = '-';
+        gapStatus.textContent = 'No clean two-sided gap for current filters';
+        gapAlert.textContent = 'No intrusions';
+        gapAlert.classList.remove('is-hot');
+        return;
+      }
+
+      gapWidth.textContent = money(gap.width);
+      gapLeft.textContent = money(gap.left);
+      gapPrice.textContent = money(frame.price);
+      gapRight.textContent = money(gap.right);
+      gapStatus.textContent = `${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`;
+
+      if (intrusion?.entrants?.length) {
+        const leftText = intrusion.left.length ? `${intrusion.left.length} left` : '';
+        const rightText = intrusion.right.length ? `${intrusion.right.length} right` : '';
+        const sides = [leftText, rightText].filter(Boolean).join(' + ');
+        const zones = intrusion.entrants
+          .slice(0, 4)
+          .map((bar) => `${bar.side}${bar.leverage} ${money(bar.price)}`)
+          .join(', ');
+        gapAlert.textContent = `${nlTime(frame.t)}: ${sides || 'inside'} gap intrusion | ${zones}`;
+        gapAlert.classList.add('is-hot');
+      } else {
+        gapAlert.textContent = 'No intrusions';
+        gapAlert.classList.remove('is-hot');
+      }
+    }
+
+    function maybeSendGapAlert(frameIndex, frame, intrusion) {
+      if (!alertsEnabled || !intrusion?.entrants?.length) return;
+      if (frameIndex !== Number(frameInput.max)) return;
+
+      const signature = `${frame.t}|${intrusion.entrants.map((bar) => bar.key).sort().join('|')}`;
+      if (signature === lastSentAlertSignature) return;
+      lastSentAlertSignature = signature;
+
+      const leftText = intrusion.left.length ? `${intrusion.left.length} left` : '';
+      const rightText = intrusion.right.length ? `${intrusion.right.length} right` : '';
+      const body = `${nlTime(frame.t)} NL: ${[leftText, rightText].filter(Boolean).join(' + ') || 'Inside'} gap intrusion near ${money(frame.price)}`;
+
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('BTC liquidity gap alert', { body });
+      }
+    }
+
+    function draw() {
+      if (!payload) return;
+      const frameIndex = Number(frameInput.value);
+      const frame = payload.frames[frameIndex];
+      const minPrice = payload.range.minPrice;
+      const maxPrice = payload.range.maxPrice;
+      const { bars, firstSeen } = getFrameEvents(frameIndex);
+      const monitorBars = getFrameEvents(frameIndex, { mode: 'active' }).bars;
+      const maxCount = Math.max(1, ...bars.map((bar) => bar.count));
+      const css = getComputedStyle(document.documentElement);
+      const newColor = css.getPropertyValue('--new').trim();
+      const priceColor = css.getPropertyValue('--price').trim();
+      const zoneColors = {
+        L3: css.getPropertyValue('--long-3').trim(),
+        L5: css.getPropertyValue('--long-5').trim(),
+        L10: css.getPropertyValue('--long-10').trim(),
+        S3: css.getPropertyValue('--short-3').trim(),
+        S5: css.getPropertyValue('--short-5').trim(),
+        S10: css.getPropertyValue('--short-10').trim(),
+      };
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const area = {
+        left: 64,
+        top: 34,
+        right: canvas.width - 30,
+        bottom: canvas.height - 58,
+      };
+      area.width = area.right - area.left;
+      area.height = area.bottom - area.top;
+
+      drawGrid(area, minPrice, maxPrice, maxCount);
+
+      function xFor(price) {
+        return area.left + ((price - minPrice) / (maxPrice - minPrice)) * area.width;
+      }
+
+      function xToPrice(x) {
+        return minPrice + ((x - area.left) / area.width) * (maxPrice - minPrice);
+      }
+
+      function colorForZone(side, leverage) {
+        return zoneColors[`${side}${leverage}`] || newColor;
+      }
+
+      const gap = getVisualGapForBars(frame, monitorBars, xFor, xToPrice);
+      const intrusion = getGapIntrusion(frameIndex, xFor, xToPrice);
+      drawGap(area, gap, priceColor);
+
+      for (const bar of bars) {
+        const x = xFor(bar.price) + leverageOffset(bar.leverage);
+        const barHeight = Math.max(2, (bar.count / maxCount) * area.height);
+        ctx.fillStyle = colorForZone(bar.side, bar.leverage);
+        ctx.globalAlpha = modeInput.value === 'new' ? 0.86 : 0.58;
+        ctx.fillRect(x - 2, area.bottom - barHeight, 4, barHeight);
+      }
+
+      ctx.globalAlpha = 1;
+      for (const item of firstSeen) {
+        const x = xFor(item.price) + leverageOffset(item.leverage);
+        ctx.strokeStyle = newColor;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(x, area.top);
+        ctx.lineTo(x, area.bottom);
+        ctx.stroke();
+
+        ctx.strokeStyle = colorForZone(item.side, item.leverage);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, area.top);
+        ctx.lineTo(x, area.bottom);
+        ctx.stroke();
+      }
+
+      if (intrusion?.entrants?.length) {
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = newColor;
+        ctx.lineWidth = 5;
+        for (const item of intrusion.entrants) {
+          const x = xFor(item.price) + leverageOffset(item.leverage);
+          ctx.beginPath();
+          ctx.moveTo(x, area.top);
+          ctx.lineTo(x, area.bottom);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      if (frame && frame.price) {
+        const x = xFor(frame.price);
+        const priceLabel = `Price ${money(frame.price)}`;
+        ctx.font = '600 12px Inter, system-ui, sans-serif';
+        const labelWidth = Math.ceil(ctx.measureText(priceLabel).width) + 18;
+        const labelHeight = 24;
+        const labelGap = 8;
+        const labelX = x + labelWidth + labelGap < area.right
+          ? x + labelGap
+          : x - labelWidth - labelGap;
+        const labelY = area.top + 10;
+
+        ctx.strokeStyle = priceColor;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, area.top);
+        ctx.lineTo(x, area.bottom);
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(13, 17, 24, 0.92)';
+        ctx.strokeStyle = priceColor;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(labelX, labelY, labelWidth, labelHeight, 5);
+        } else {
+          ctx.rect(labelX, labelY, labelWidth, labelHeight);
+        }
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = priceColor;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(priceLabel, labelX + 9, labelY + labelHeight / 2);
+        ctx.textBaseline = 'alphabetic';
+      }
+
+      ctx.fillStyle = '#ecf2f8';
+      ctx.font = '600 15px Inter, system-ui, sans-serif';
+      ctx.fillText(`${nlTime(frame.t)} NL | ${money(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
+
+      meta.textContent = `${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
+      updateGapMonitor(frame, gap, intrusion);
+      maybeSendGapAlert(frameIndex, frame, intrusion);
+      note.textContent = payload.source.note;
+    }
+
+    function tick() {
+      let next = Number(frameInput.value) + 1;
+      if (next > Number(frameInput.max)) next = 0;
+      frameInput.value = next;
+      draw();
+    }
+
+    function setPlaying(value) {
+      playing = value;
+      playButton.textContent = playing ? 'Pause' : 'Play';
+      if (timer) clearInterval(timer);
+      timer = playing ? setInterval(tick, 80) : null;
+    }
+
+    function stepFrame(delta) {
+      setPlaying(false);
+      const current = Number(frameInput.value);
+      const max = Number(frameInput.max);
+      frameInput.value = String(Math.min(max, Math.max(0, current + delta)));
+      draw();
+    }
+
+    async function enableAlerts() {
+      if (!('Notification' in window)) {
+        gapAlert.textContent = 'Browser notifications unavailable';
+        gapAlert.classList.add('is-hot');
+        return;
+      }
+
+      const permission = Notification.permission === 'default'
+        ? await Notification.requestPermission()
+        : Notification.permission;
+      alertsEnabled = permission === 'granted';
+      enableAlertsButton.classList.toggle('is-active', alertsEnabled);
+      enableAlertsButton.textContent = alertsEnabled ? 'Notify on' : 'Notify';
+      if (!alertsEnabled) {
+        gapAlert.textContent = 'Notifications not enabled';
+        gapAlert.classList.add('is-hot');
+      }
+    }
+
+    function parsePayloadScript(text) {
+      const match = text.match(/^window\.DECENTRADER_LIQUIDITY_TIMELAPSE = (.*);\s*$/s);
+      if (!match) throw new Error('Unexpected timelapse data format');
+      return JSON.parse(match[1]);
+    }
+
+    async function fetchCloudPayload() {
+      const response = await fetch(`${CLOUD_DATA_URL}?ts=${Date.now()}`, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`Cloud data ${response.status}`);
+      return { payload: await response.json(), source: 'cloud' };
+    }
+
+    async function fetchLocalPayload() {
+      const response = await fetch(`data/decentrader_btc_liquidity_timelapse_data.js?ts=${Date.now()}`);
+      if (!response.ok) throw new Error(`Local data ${response.status}`);
+      return { payload: parsePayloadScript(await response.text()), source: 'local' };
+    }
+
+    async function refreshPayload() {
+      const wasAtLatest = Number(frameInput.value) === Number(frameInput.max);
+      const previousLast = payload?.frames?.[payload.frames.length - 1]?.t;
+      let loaded;
+      try {
+        loaded = await fetchCloudPayload();
+      } catch (cloudError) {
+        loaded = await fetchLocalPayload();
+      }
+      const nextPayload = loaded.payload;
+      payload = nextPayload;
+      window.DECENTRADER_LIQUIDITY_TIMELAPSE = nextPayload;
+      frameInput.max = String(payload.frames.length - 1);
+
+      const nextLast = payload.frames[payload.frames.length - 1]?.t;
+      if (wasAtLatest || previousLast !== nextLast) {
+        frameInput.value = frameInput.max;
+      }
+
+      draw();
+      const sourceLabel = loaded.source === 'cloud' ? 'cloud' : 'local';
+      liveStatus.textContent = previousLast === nextLast
+        ? `Checked ${new Date().toLocaleTimeString('nl-NL')} (${sourceLabel})`
+        : `Updated ${nlTime(nextLast)} NL (${sourceLabel})`;
+    }
+
+    function setLiveMonitor(enabled) {
+      if (liveTimer) {
+        clearInterval(liveTimer);
+        liveTimer = null;
+      }
+
+      if (enabled) {
+        liveTimer = setInterval(() => refreshPayload().catch((error) => {
+          liveStatus.textContent = 'Refresh error';
+          gapAlert.textContent = String(error.message || error);
+          gapAlert.classList.add('is-hot');
+        }), 60000);
+      }
+
+      liveMonitorButton.classList.toggle('is-active', Boolean(liveTimer));
+      liveMonitorButton.textContent = liveTimer ? 'Live on' : 'Live';
+      liveStatus.textContent = liveTimer ? 'Every 60s' : 'Off';
+    }
+
+    function showRefreshError(error) {
+      liveStatus.textContent = 'Refresh error';
+      gapAlert.textContent = String(error.message || error);
+      gapAlert.classList.add('is-hot');
+    }
+
+    function initializeViewer() {
+      frameInput.max = String(payload.frames.length - 1);
+      frameInput.value = String(payload.frames.length - 1);
+      meta.textContent = `${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
+      note.textContent = payload.source.note;
+      resizeCanvas();
+    }
+
+    function wireViewer() {
+      for (const input of [frameInput, modeInput, sideInput, levInput]) {
+        input.addEventListener('input', draw);
+      }
+      prevHourButton.addEventListener('click', () => stepFrame(-1));
+      nextHourButton.addEventListener('click', () => stepFrame(1));
+      enableAlertsButton.addEventListener('click', enableAlerts);
+      liveMonitorButton.addEventListener('click', () => setLiveMonitor(!liveTimer));
+      refreshDataButton.addEventListener('click', () => refreshPayload().catch(showRefreshError));
+      playButton.addEventListener('click', () => setPlaying(!playing));
+      window.addEventListener('resize', resizeCanvas);
+
+      if (payload) {
+        initializeViewer();
+      } else {
+        meta.textContent = 'Loading cloud data...';
+      }
+
+      refreshPayload()
+        .then(() => {
+          if (payload) initializeViewer();
+        })
+        .catch(showRefreshError);
+      setLiveMonitor(true);
+    }
+
+    wireViewer();
+  </script>
+</body>
+</html>
