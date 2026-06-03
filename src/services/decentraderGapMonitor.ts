@@ -94,6 +94,8 @@ type FractalLevel = {
 type FractalStop = {
   price?: number;
   rawFractalPrice?: number;
+  wickGuardPrice?: number;
+  wickGuardSource?: 'highRef' | 'lowRef';
   buffer?: number;
   source: 'confirmed-top-fractal' | 'confirmed-bottom-fractal' | 'missing-fractal' | 'invalid-distance';
   fractal?: FractalLevel;
@@ -1017,6 +1019,39 @@ function latestValidFractal(
     .find((fractal) => direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice);
 }
 
+function wickGuardForFractal(
+  rows: DecentraderRow[],
+  fractal: FractalLevel,
+  direction: TradePlanDirection
+): { price: number; source: 'highRef' | 'lowRef' } {
+  const key = direction === 'long' ? 'lowRef' : 'highRef';
+  const start = Math.max(0, fractal.index - fractal.window);
+  const end = Math.min(rows.length - 1, fractal.index + fractal.window);
+  const candidates: number[] = [];
+
+  for (let index = start; index <= end; index += 1) {
+    const value = parseNumber(rows[index]?.[key]);
+
+    if (value !== undefined) {
+      candidates.push(value);
+    }
+  }
+
+  if (!candidates.length) {
+    return {
+      price: fractal.price,
+      source: direction === 'long' ? 'lowRef' : 'highRef'
+    };
+  }
+
+  return {
+    price: direction === 'long'
+      ? Math.min(fractal.price, ...candidates)
+      : Math.max(fractal.price, ...candidates),
+    source: key
+  };
+}
+
 function buildFractalStop(
   rows: DecentraderRow[],
   frameIndex: number,
@@ -1043,9 +1078,10 @@ function buildFractalStop(
     };
   }
 
+  const wickGuard = wickGuardForFractal(rows, fractal, direction);
   let price = direction === 'long'
-    ? fractal.price - buffer
-    : fractal.price + buffer;
+    ? wickGuard.price - buffer
+    : wickGuard.price + buffer;
   let distance = Math.abs(entryPrice - price);
   let riskPct = distance / Math.max(1, entryPrice);
   let adjustedToMinDistance = false;
@@ -1063,6 +1099,8 @@ function buildFractalStop(
     return {
       price,
       rawFractalPrice: fractal.price,
+      wickGuardPrice: wickGuard.price,
+      wickGuardSource: wickGuard.source,
       buffer,
       source: 'invalid-distance',
       fractal,
@@ -1078,6 +1116,8 @@ function buildFractalStop(
   return {
     price,
     rawFractalPrice: fractal.price,
+    wickGuardPrice: wickGuard.price,
+    wickGuardSource: wickGuard.source,
     buffer,
     source: direction === 'long' ? 'confirmed-bottom-fractal' : 'confirmed-top-fractal',
     fractal,
@@ -1194,6 +1234,8 @@ function buildDirectionalPlan(
           riskPct: stopRiskPct,
           source: stop.source,
           rawFractalPrice: stop.rawFractalPrice,
+          wickGuardPrice: stop.wickGuardPrice,
+          wickGuardSource: stop.wickGuardSource,
           buffer: stop.buffer,
           fractal: stop.fractal,
           minDistancePct: stop.minDistancePct,
