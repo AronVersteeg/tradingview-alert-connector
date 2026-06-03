@@ -432,6 +432,11 @@
         <div class="gap-value" id="tradeZoneValue">-</div>
         <div class="gap-status" id="tradeZoneStatus">Waiting for data</div>
       </div>
+      <div class="gap-card gap-card--wide">
+        <div class="gap-label">Trade plan</div>
+        <div class="gap-value" id="tradePlanValue">-</div>
+        <div class="gap-status" id="tradePlanStatus">Waiting for dYdX sizing</div>
+      </div>
     </section>
 
     <section class="stage">
@@ -458,6 +463,9 @@
     const CLOUD_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/liquidity-timelapse'
       : '/decentrader/liquidity-timelapse';
+    const CLOUD_TRADE_PLAN_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+      ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/trade-plan'
+      : '/decentrader/trade-plan';
     let payload = window.DECENTRADER_LIQUIDITY_TIMELAPSE;
     const canvas = document.getElementById('chart');
     const ctx = canvas.getContext('2d');
@@ -486,6 +494,8 @@
     const gapAlert = document.getElementById('gapAlert');
     const tradeZoneValue = document.getElementById('tradeZoneValue');
     const tradeZoneStatus = document.getElementById('tradeZoneStatus');
+    const tradePlanValue = document.getElementById('tradePlanValue');
+    const tradePlanStatus = document.getElementById('tradePlanStatus');
 
     let playing = false;
     let timer = null;
@@ -493,6 +503,8 @@
     let alertsEnabled = false;
     let lastSentAlertSignature = '';
     let lastSentTpHitSignature = '';
+    let latestTradePlan = null;
+    let latestTradePlanError = '';
     let tradeZonesVisible = true;
     let canvasScale = 1;
     let canvasCssWidth = 0;
@@ -508,7 +520,26 @@
     const GAP_EDGE_PADDING = 3;
 
     function money(value) {
+      if (!Number.isFinite(Number(value))) return '-';
       return '$' + Math.round(value).toLocaleString('en-US');
+    }
+
+    function money2(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return '$0.00';
+      return '$' + parsed.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function pct(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return '0.0%';
+      return (parsed * 100).toFixed(1) + '%';
+    }
+
+    function btcSize(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed <= 0) return '0 BTC';
+      return parsed.toLocaleString('en-US', { maximumFractionDigits: 6 }) + ' BTC';
     }
 
     function parseDecentraderUtc(timestamp) {
@@ -1196,6 +1227,57 @@
       tradeZoneStatus.textContent = [hitText, setupText].filter(Boolean).join(' | ');
     }
 
+    function planSummary(plan) {
+      if (!plan) return null;
+      const tp1 = plan.takeProfits?.[0];
+      return [
+        `${plan.direction.toUpperCase()} ${money2(plan.sizing?.notional)} / ${btcSize(plan.sizing?.size)}`,
+        `score ${plan.sizing?.confidenceScore ?? 0}`,
+        `trigger ${money(plan.trigger?.price)}`,
+        plan.stop ? `SL ${money(plan.stop.price)} (${pct(plan.stop.riskPct)})` : 'SL -',
+        tp1 ? `${tp1.label} ${money(tp1.price)}` : 'TP1 -'
+      ].join(' | ');
+    }
+
+    function updateTradePlanMonitor(frame) {
+      if (latestTradePlanError) {
+        tradePlanValue.textContent = 'Sizing unavailable';
+        tradePlanStatus.textContent = latestTradePlanError;
+        return;
+      }
+
+      if (!latestTradePlan) {
+        tradePlanValue.textContent = '-';
+        tradePlanStatus.textContent = 'Waiting for dYdX sizing';
+        return;
+      }
+
+      const isLatestFrame = frame?.t === latestTradePlan.timestamp;
+      const active = latestTradePlan.activePlan;
+      const longPlan = latestTradePlan.plans?.long;
+      const shortPlan = latestTradePlan.plans?.short;
+      const account = latestTradePlan.account || {};
+      const accountText = `Equity ${money2(account.equity)} | Free ${money2(account.freeCollateral)} | open ${account.openPositionsCount ?? 0}`;
+
+      if (active) {
+        tradePlanValue.textContent = planSummary(active);
+        tradePlanStatus.textContent = [
+          accountText,
+          `${latestTradePlan.timestampNl}`,
+          isLatestFrame ? 'latest frame' : 'shown for latest frame only'
+        ].join(' | ');
+        return;
+      }
+
+      tradePlanValue.textContent = 'Wait for fresh gap alert';
+      tradePlanStatus.textContent = [
+        accountText,
+        longPlan ? `L watch ${money2(longPlan.sizing?.notional)} > ${money(longPlan.trigger?.price)}` : '',
+        shortPlan ? `S watch ${money2(shortPlan.sizing?.notional)} < ${money(shortPlan.trigger?.price)}` : '',
+        latestTradePlan.timestampNl
+      ].filter(Boolean).join(' | ');
+    }
+
     function maybeSendGapAlert(frameIndex, frame, intrusion) {
       if (!alertsEnabled || !intrusion?.entrants?.length) return;
       if (frameIndex !== Number(frameInput.max)) return;
@@ -1380,6 +1462,7 @@
       meta.textContent = `${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       updateGapMonitor(frame, gap, intrusion);
       updateTradeZoneMonitor(frame, gap, tradeZones, tpHits);
+      updateTradePlanMonitor(frame);
       maybeSendGapAlert(frameIndex, frame, intrusion);
       maybeSendTpHitAlert(frameIndex, frame, tpHits);
       note.textContent = payload.source.note;
@@ -1460,6 +1543,16 @@
       return { payload: parsePayloadScript(await response.text()), source: 'local' };
     }
 
+    async function refreshTradePlan() {
+      const response = await fetch(`${CLOUD_TRADE_PLAN_URL}?market=BTC-USD&ts=${Date.now()}`, { cache: 'no-store' });
+      const plan = await response.json();
+      if (!response.ok || plan.error) throw new Error(plan.error || `Trade plan ${response.status}`);
+      latestTradePlan = plan;
+      latestTradePlanError = '';
+      draw();
+      return plan;
+    }
+
     async function refreshPayload() {
       const wasAtLatest = Number(frameInput.value) === Number(frameInput.max);
       const previousLast = payload?.frames?.[payload.frames.length - 1]?.t;
@@ -1480,6 +1573,10 @@
       }
 
       draw();
+      refreshTradePlan().catch((error) => {
+        latestTradePlanError = String(error.message || error);
+        updateTradePlanMonitor(payload?.frames?.[Number(frameInput.value)]);
+      });
       const sourceLabel = loaded.source === 'cloud' ? 'cloud' : 'local';
       liveStatus.textContent = previousLast === nextLast
         ? `Checked ${new Date().toLocaleTimeString('nl-NL')} (${sourceLabel})`

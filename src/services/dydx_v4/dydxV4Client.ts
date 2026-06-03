@@ -168,6 +168,34 @@ type ExecutionProfile = {
   allowManualStopSync: boolean;
 };
 
+export type DydxV4AccountSnapshot = {
+  wallet: string;
+  subaccount: number;
+  equity: number;
+  freeCollateral: number;
+  marginEnabled: boolean;
+  openPositionsCount: number;
+  openPositions: Array<{
+    market: string;
+    side: string;
+    size: number;
+    entryPrice?: number;
+    realizedPnl?: number;
+    unrealizedPnl?: number;
+  }>;
+  markets: Record<
+    string,
+    {
+      oraclePrice?: number;
+      initialMarginFraction: number;
+      maintenanceMarginFraction: number;
+      stepSize: number;
+      status?: string;
+    }
+  >;
+  updatedAt: string;
+};
+
 const parseEnvFraction = (value: unknown, fallback = 0): number => {
   const parsed = Number(value);
 
@@ -399,6 +427,43 @@ export class DydxV4Client extends AbstractDexClient {
 
   async getIsAccountReady(): Promise<boolean> {
     return this.initialized;
+  }
+
+  async getAccountSnapshot(markets: string[] = ['BTC-USD']): Promise<DydxV4AccountSnapshot> {
+    if (!this.initialized) {
+      throw new Error('dYdX v4 client is not initialized.');
+    }
+
+    const snapshot = await this.getSubaccountSnapshotBestEffort();
+    const subaccount = snapshot?.subaccount ?? snapshot;
+    const positions =
+      subaccount?.openPerpetualPositions ??
+      subaccount?.perpetualPositions ??
+      snapshot?.perpetualPositions?.positions ??
+      {};
+
+    const openPositions = this.normalizeOpenPositions(positions);
+    const requestedMarkets = Array.from(
+      new Set(markets.map((market) => this.normalizeMarket(market)).filter(Boolean))
+    );
+    const marketSnapshots: DydxV4AccountSnapshot['markets'] = {};
+
+    for (const market of requestedMarkets) {
+      const marketInfo = await this.getMarketInfoBestEffort(market);
+      marketSnapshots[market] = this.toPublicMarketSnapshot(marketInfo);
+    }
+
+    return {
+      wallet: this.wallet.address,
+      subaccount: 0,
+      equity: this.parseNumberOrZero(subaccount?.equity),
+      freeCollateral: this.parseNumberOrZero(subaccount?.freeCollateral),
+      marginEnabled: Boolean(subaccount?.marginEnabled ?? true),
+      openPositionsCount: openPositions.length,
+      openPositions,
+      markets: marketSnapshots,
+      updatedAt: new Date().toISOString()
+    };
   }
 
   async placeOrder(alert: AlertObject): Promise<void> {
@@ -3341,6 +3406,71 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     return undefined;
+  }
+
+  private parseNumberOrZero(value: unknown): number {
+    const normalized =
+      typeof value === 'string'
+        ? value.replace(/[$,\s]/g, '')
+        : value;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private parseSignedNumber(value: unknown): number | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const normalized =
+      typeof value === 'string'
+        ? value.replace(/[$,\s]/g, '')
+        : value;
+    const parsed = Number(normalized);
+
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private normalizeOpenPositions(positions: any): DydxV4AccountSnapshot['openPositions'] {
+    const entries = Array.isArray(positions)
+      ? positions.map((position: any) => [position?.market ?? position?.ticker, position])
+      : Object.entries(positions || {});
+
+    return entries
+      .map(([market, position]: [string, any]) => ({
+        market: this.normalizeMarket(position?.market ?? position?.ticker ?? market),
+        side: String(position?.side ?? ''),
+        size: this.parseNumberOrZero(position?.size),
+        entryPrice: this.parsePositiveNumber(position?.entryPrice ?? position?.entry_price),
+        realizedPnl: this.parseSignedNumber(position?.realizedPnl ?? position?.realized_pnl),
+        unrealizedPnl: this.parseSignedNumber(position?.unrealizedPnl ?? position?.unrealized_pnl)
+      }))
+      .filter((position) => position.market && Math.abs(position.size) > 0);
+  }
+
+  private toPublicMarketSnapshot(marketInfo: any): DydxV4AccountSnapshot['markets'][string] {
+    const computedStep = this.getCorrectionOrderSizeCheck(
+      this.normalizeMarket(marketInfo?.ticker ?? marketInfo?.market ?? marketInfo?.id),
+      1,
+      marketInfo
+    ).stepSize;
+
+    return {
+      oraclePrice: this.getMarketInfoReferencePrice(marketInfo),
+      initialMarginFraction:
+        this.parsePositiveNumber(
+          marketInfo?.initialMarginFraction ?? marketInfo?.initial_margin_fraction
+        ) ?? 0.1,
+      maintenanceMarginFraction:
+        this.parsePositiveNumber(
+          marketInfo?.maintenanceMarginFraction ?? marketInfo?.maintenance_margin_fraction
+        ) ?? 0.05,
+      stepSize:
+        this.parsePositiveNumber(marketInfo?.stepSize ?? marketInfo?.step_size) ??
+        computedStep ??
+        0.0001,
+      status: marketInfo?.status
+    };
   }
 
   private normalizeMarket(value: unknown): string {

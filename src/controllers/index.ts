@@ -191,6 +191,30 @@ router.get('/decentrader/liquidity-timelapse', async (req, res) => {
   }
 });
 
+router.get('/decentrader/trade-plan', async (req, res) => {
+  try {
+    const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
+    const client = dexRegistry.getDex('dydxv4') as any;
+
+    if (!client || typeof client.getAccountSnapshot !== 'function') {
+      return res.status(503).send({
+        ok: false,
+        error: 'dYdX v4 account snapshot is unavailable.'
+      });
+    }
+
+    const account = await client.getAccountSnapshot([market]);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(await decentraderGapMonitor.getTradePlan(account, market));
+  } catch (error) {
+    console.error('Decentrader trade plan request failed:', error);
+    res.status(500).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
 router.post('/decentrader/gap-check', async (req, res) => {
   if (!isMonitorRequestAuthorized(req)) {
     return res.status(401).send({ ok: false, error: 'Unauthorized' });

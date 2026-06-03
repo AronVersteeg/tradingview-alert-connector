@@ -62,6 +62,25 @@ type TpHit = {
   zone: TradeZone;
 };
 
+type DydxSizingAccountSnapshot = {
+  equity: number;
+  freeCollateral: number;
+  openPositionsCount: number;
+  markets: Record<
+    string,
+    {
+      oraclePrice?: number;
+      initialMarginFraction: number;
+      maintenanceMarginFraction?: number;
+      stepSize: number;
+      status?: string;
+    }
+  >;
+  updatedAt?: string;
+};
+
+type TradePlanDirection = 'long' | 'short';
+
 type MonitorStatus = {
   enabled: boolean;
   running: boolean;
@@ -115,6 +134,23 @@ function parseRecipients(value: string | undefined): string[] {
 function parseNumber(value: any): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function numberOrZero(value: any): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function floorToStep(value: number, step: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (!Number.isFinite(step) || step <= 0) return value;
+
+  const decimals = Math.max(0, (String(step).split('.')[1] || '').length);
+  return Number((Math.floor(value / step) * step).toFixed(decimals));
 }
 
 function money(value: number | undefined): string {
@@ -731,6 +767,152 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
   };
 }
 
+function sizingModeConfig(mode: string) {
+  return (
+    {
+      conservative: { targetMultiplier: 0.45, collateralUse: 0.45, equityLeverage: 3.0, minWeight: 0.04 },
+      balanced: { targetMultiplier: 0.75, collateralUse: 0.6, equityLeverage: 5.0, minWeight: 0.05 },
+      growth: { targetMultiplier: 1.0, collateralUse: 0.85, equityLeverage: 8.0, minWeight: 0.06 }
+    } as Record<
+      string,
+      { targetMultiplier: number; collateralUse: number; equityLeverage: number; minWeight: number }
+    >
+  )[mode] || { targetMultiplier: 1.0, collateralUse: 0.85, equityLeverage: 8.0, minWeight: 0.06 };
+}
+
+function effectiveTargetNotional(equity: number, mode: string): number {
+  const baseTarget = Math.max(50, Number(process.env.DECENTRADER_TRADE_BASE_NOTIONAL || 1000));
+  if (mode !== 'growth') return baseTarget;
+
+  const referenceEquity = Math.max(
+    1,
+    Number(process.env.DECENTRADER_TRADE_REFERENCE_EQUITY || equity || 1)
+  );
+  const compoundFactor = Math.pow(clamp(Math.max(0, equity) / referenceEquity, 0.25, 12), 0.35);
+  return baseTarget * compoundFactor;
+}
+
+function confidenceMultiplier(score: number): number {
+  if (score >= 85) return 1.25;
+  if (score >= 75) return 1;
+  if (score >= 65) return 0.75;
+  return 0.5;
+}
+
+function mapDirectionFromAlert(alert: GapAlert | undefined): TradePlanDirection | undefined {
+  if (!alert?.entrants.length) return undefined;
+  const leftWeight = alert.left.reduce((sum, bar) => sum + (bar.newCount || 1) * bar.leverage, 0);
+  const rightWeight = alert.right.reduce((sum, bar) => sum + (bar.newCount || 1) * bar.leverage, 0);
+
+  if (leftWeight > rightWeight) return 'long';
+  if (rightWeight > leftWeight) return 'short';
+  return undefined;
+}
+
+function mapScoreForDirection(
+  direction: TradePlanDirection,
+  gap: Gap | undefined,
+  alert: GapAlert | undefined,
+  zone: TradeZone | undefined,
+  entryPrice: number,
+  stopPrice: number
+): number {
+  const tpScore = zone ? clamp(zone.score / 2, 0, 38) : 0;
+  const overlapScore = zone ? clamp(zone.leverages.length * 7, 0, 21) : 0;
+  const freshScore = zone ? clamp(zone.fresh * 4, 0, 12) : 0;
+  const alertDirection = mapDirectionFromAlert(alert);
+  const alertScore = alertDirection === direction ? 24 : alert?.entrants.length ? 8 : 0;
+  const stopRiskPct = Math.abs(entryPrice - stopPrice) / Math.max(1, entryPrice);
+  const stopScore = clamp(18 - stopRiskPct * 100, 0, 18);
+  const gapScore = gap ? clamp(12 - (gap.width / Math.max(1, entryPrice)) * 50, 0, 12) : 0;
+
+  return Math.round(clamp(tpScore + overlapScore + freshScore + alertScore + stopScore + gapScore, 0, 100));
+}
+
+function buildDirectionalPlan(
+  direction: TradePlanDirection,
+  account: DydxSizingAccountSnapshot,
+  marketInfo: DydxSizingAccountSnapshot['markets'][string],
+  gap: Gap | undefined,
+  alert: GapAlert | undefined,
+  zones: { longTp: TradeZone[]; shortTp: TradeZone[] },
+  fallbackPrice: number,
+  mode: string
+) {
+  const isLong = direction === 'long';
+  const tpZones = isLong ? zones.longTp : zones.shortTp;
+  const entryPrice = gap ? (isLong ? gap.right : gap.left) : fallbackPrice;
+  const stopPrice = gap ? (isLong ? gap.left : gap.right) : undefined;
+  const marketPrice = marketInfo.oraclePrice || fallbackPrice;
+  const equity = numberOrZero(account.equity);
+  const freeCollateral = numberOrZero(account.freeCollateral);
+  const marginFraction = Math.max(0.01, numberOrZero(marketInfo.initialMarginFraction) || 0.1);
+  const stepSize = numberOrZero(marketInfo.stepSize) || 0.0001;
+  const targetNotional = effectiveTargetNotional(equity, mode);
+  const modeConfig = sizingModeConfig(mode);
+  const mapScore = stopPrice
+    ? mapScoreForDirection(direction, gap, alert, tpZones[0], entryPrice, stopPrice)
+    : 0;
+  const weight = clamp((mapScore / 100) * 0.12, 0.04, 0.16);
+  const confidence = confidenceMultiplier(mapScore);
+  const stopDistance = stopPrice ? Math.abs(entryPrice - stopPrice) : 0;
+  const stopRiskPct = stopDistance / Math.max(1, entryPrice);
+  const stopBrake = clamp(1 - Math.max(0, stopRiskPct - 0.035) / 0.16, 0.35, 1);
+  const desiredNotional = targetNotional * modeConfig.targetMultiplier * confidence * stopBrake;
+  const flatCollateral = Math.max(freeCollateral, equity * 0.8);
+  const collateralBudget = flatCollateral * modeConfig.collateralUse * Math.max(weight, modeConfig.minWeight);
+  const collateralCappedNotional = collateralBudget / marginFraction;
+  const equityCappedNotional = equity * modeConfig.equityLeverage * Math.max(weight, modeConfig.minWeight);
+  const notional = Math.max(0, Math.min(desiredNotional, collateralCappedNotional, equityCappedNotional));
+  const size = floorToStep(notional / Math.max(1, marketPrice), stepSize);
+
+  return {
+    direction,
+    status: mapDirectionFromAlert(alert) === direction ? 'alert-active' : 'watch',
+    trigger: {
+      type: gap ? (isLong ? 'gap-right-break' : 'gap-left-break') : 'no-clean-gap',
+      price: entryPrice
+    },
+    entryReference: {
+      price: marketPrice,
+      source: marketInfo.oraclePrice ? 'dydx-oracle' : 'decentrader-frame'
+    },
+    stop: stopPrice
+      ? {
+          price: stopPrice,
+          distance: stopDistance,
+          riskPct: stopRiskPct
+        }
+      : null,
+    takeProfits: tpZones.map((zone) => ({
+      label: `${isLong ? 'L' : 'S'} TP${zone.rank}`,
+      price: zone.price,
+      score: zone.score,
+      leverages: zone.leverages,
+      distance: Math.abs(zone.price - entryPrice)
+    })),
+    sizing: {
+      mode,
+      baseTargetNotional: Math.max(50, Number(process.env.DECENTRADER_TRADE_BASE_NOTIONAL || 1000)),
+      effectiveTargetNotional: targetNotional,
+      desiredNotional,
+      notional: size * marketPrice,
+      size,
+      equityFraction: weight,
+      confidenceScore: mapScore,
+      confidenceMultiplier: confidence,
+      stopBrake,
+      caps: {
+        collateralBudget,
+        collateralCappedNotional,
+        equityCappedNotional,
+        marginFraction,
+        stepSize
+      }
+    }
+  };
+}
+
 function gapAlertSignature(alert: GapAlert): string {
   return `${alert.timestamp}|${alert.entrants
     .map((bar) => `${bar.key}:${bar.count}`)
@@ -1057,6 +1239,88 @@ export class DecentraderGapMonitor {
     this.latestRows = rows;
     this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
     return this.latestTimelapsePayload;
+  }
+
+  async getTradePlan(
+    account: DydxSizingAccountSnapshot,
+    market = 'BTC-USD'
+  ): Promise<any> {
+    const config = this.config();
+    const rows = this.latestRows || (await fetchSnapshot(config.symbol));
+    this.latestRows = rows;
+    this.latestTimelapsePayload = this.latestTimelapsePayload || buildTimelapsePayload(rows, config.symbol);
+
+    const frameIndex = rows.length - 1;
+    const frame = rows[frameIndex];
+
+    if (!frame) {
+      throw new Error('No Decentrader rows available for trade planning.');
+    }
+
+    const price = parseNumber(frame?.ohlc4);
+    const bars = activeBarsForFrame(rows, frameIndex);
+    const gap = cleanGapForBars(frame, bars);
+    const alert = detectGapIntrusion(rows, frameIndex);
+    const zones = tradeZonesForFrame(rows, frameIndex);
+    const normalizedMarket = market.replace(/_/g, '-').toUpperCase();
+    const marketInfo =
+      account.markets[normalizedMarket] ||
+      account.markets[market] ||
+      Object.values(account.markets)[0];
+
+    if (price === undefined) {
+      throw new Error('Latest Decentrader frame has no price.');
+    }
+
+    if (!marketInfo) {
+      throw new Error(`No dYdX market info available for ${normalizedMarket}.`);
+    }
+
+    const mode = String(process.env.DECENTRADER_TRADE_SIZING_MODE || 'growth')
+      .trim()
+      .toLowerCase();
+    const longPlan = buildDirectionalPlan('long', account, marketInfo, gap, alert, zones, price, mode);
+    const shortPlan = buildDirectionalPlan('short', account, marketInfo, gap, alert, zones, price, mode);
+    const activeDirection = mapDirectionFromAlert(alert);
+    const activePlan = activeDirection === 'long' ? longPlan : activeDirection === 'short' ? shortPlan : null;
+
+    return {
+      ok: true,
+      symbol: config.symbol,
+      market: normalizedMarket,
+      timestamp: String(frame.timestamp || ''),
+      timestampNl: nlTime(frame.timestamp),
+      price,
+      signal: {
+        direction: activeDirection || 'none',
+        reason: activeDirection
+          ? `${activeDirection} bias from latest gap intrusion`
+          : 'No fresh one-sided gap intrusion on latest frame',
+        alert: alert
+          ? {
+              sideCounts: sideCounts(alert),
+              entrants: alert.entrants,
+              leftCount: alert.left.length,
+              rightCount: alert.right.length
+            }
+          : null
+      },
+      account: {
+        equity: account.equity,
+        freeCollateral: account.freeCollateral,
+        openPositionsCount: account.openPositionsCount,
+        updatedAt: account.updatedAt
+      },
+      gap: gap || null,
+      marketInfo,
+      activePlan,
+      plans: {
+        long: longPlan,
+        short: shortPlan
+      },
+      note:
+        'Signal-only planning layer. It estimates trigger, SL, TP and dYdX size from live equity; it does not place orders.'
+    };
   }
 
   private config() {
