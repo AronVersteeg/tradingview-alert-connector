@@ -44,7 +44,7 @@ type ManagedTakeProfit = {
   executionPrice: number;
   clientId: number;
   size: number;
-  source: 'SAFETY' | 'EXTRA_TP';
+  source: 'SAFETY' | 'EXTRA_TP' | 'EXPLICIT_TP';
   levelName: string;
   updatedAt: number;
   goodTilBlockTime?: number;
@@ -54,6 +54,13 @@ type ExtraTakeProfitLevel = {
   name: string;
   distancePct: number;
   remainingSizePct: number;
+};
+
+type ExplicitTakeProfitLevel = {
+  name: string;
+  price: number;
+  size?: number;
+  sizeFraction?: number;
 };
 
 type PlacedConditionalOrder = {
@@ -546,7 +553,38 @@ export class DydxV4Client extends AbstractDexClient {
       return;
     }
 
+    const explicitTakeProfits = this.getExplicitTakeProfitLevels(alert);
+    const skipStaticStop = this.shouldSkipStaticStop(alert);
+
+    if (skipStaticStop) {
+      if (explicitTakeProfits.length) {
+        await this.placeExplicitTakeProfitsAfterEntry(
+          market,
+          targetSize,
+          alert,
+          explicitTakeProfits
+        );
+      } else {
+        console.log('Static stop skipped and no explicit TPs supplied.', {
+          market,
+          targetSize,
+          profile: profile.name
+        });
+      }
+      return;
+    }
+
     if (!profile.placeStaticStop) {
+      if (explicitTakeProfits.length) {
+        await this.placeExplicitTakeProfitsAfterEntry(
+          market,
+          targetSize,
+          alert,
+          explicitTakeProfits
+        );
+        return;
+      }
+
       console.log('Signal-only execution complete: no SL/TP/trailing orders placed.', {
         market,
         targetSize,
@@ -560,6 +598,16 @@ export class DydxV4Client extends AbstractDexClient {
       targetSize,
       alert
     );
+
+    if (explicitTakeProfits.length) {
+      await this.placeExplicitTakeProfitsAfterEntry(
+        market,
+        targetSize,
+        alert,
+        explicitTakeProfits
+      );
+      return;
+    }
 
     if (!profile.placeSafetyTp) {
       console.log('Safety TP skipped for execution profile.', { market, profile: profile.name });
@@ -2345,6 +2393,118 @@ export class DydxV4Client extends AbstractDexClient {
     }
   }
 
+  private async placeExplicitTakeProfitsAfterEntry(
+    market: string,
+    targetSize: number,
+    alert: AlertObject,
+    levels: ExplicitTakeProfitLevel[]
+  ): Promise<void> {
+    const position = await this.getCurrentPosition(market);
+
+    if (Math.abs(position.size) < this.TOLERANCE) {
+      console.log('Explicit TPs skipped: position is flat after entry.', { market });
+      return;
+    }
+
+    if (Math.sign(position.size) !== Math.sign(targetSize)) {
+      throw new Error(
+        `Explicit TPs not placed for ${market}: position direction mismatch. Current=${position.size}, target=${targetSize}`
+      );
+    }
+
+    const isLong = position.size > 0;
+    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+    const entryReferencePrice = this.getSafetyStopReferencePrice(alert, position.entryPrice);
+    const positionSize = Math.abs(position.size);
+
+    console.log('Placing explicit take profits:', {
+      market,
+      direction: isLong ? 'LONG' : 'SHORT',
+      entryReferencePrice,
+      positionSize,
+      levels
+    });
+
+    for (const level of levels) {
+      const triggerPrice = level.price;
+      const size = Number(
+        (
+          level.size && level.size > 0
+            ? level.size
+            : positionSize * (level.sizeFraction ?? 0)
+        ).toFixed(6)
+      );
+
+      if (size < this.TOLERANCE) {
+        console.log('Explicit TP skipped: size is below tolerance.', {
+          market,
+          level,
+          size
+        });
+        continue;
+      }
+
+      if (!Number.isFinite(triggerPrice) || triggerPrice <= 0) {
+        throw new Error(`Explicit TP trigger price invalid for ${market} ${level.name}. Price=${triggerPrice}`);
+      }
+
+      if (isLong && triggerPrice <= entryReferencePrice) {
+        console.warn('Explicit LONG TP skipped because it is not above entry reference.', {
+          market,
+          level,
+          entryReferencePrice
+        });
+        continue;
+      }
+
+      if (!isLong && triggerPrice >= entryReferencePrice) {
+        console.warn('Explicit SHORT TP skipped because it is not below entry reference.', {
+          market,
+          level,
+          entryReferencePrice
+        });
+        continue;
+      }
+
+      const placedTakeProfit = await this.placeTakeProfitMarketOrder(
+        market,
+        side,
+        size,
+        triggerPrice,
+        level.name,
+        this.EXTRA_TP_LIFETIME_SECONDS,
+        this.EXTRA_TP_SLIPPAGE_PCT
+      );
+
+      const managedTakeProfit: ManagedTakeProfit = {
+        market,
+        side,
+        triggerPrice,
+        executionPrice: this.getTakeProfitExecutionPrice(
+          side,
+          triggerPrice,
+          this.EXTRA_TP_SLIPPAGE_PCT
+        ),
+        clientId: placedTakeProfit.clientId,
+        size,
+        source: 'EXPLICIT_TP',
+        levelName: level.name,
+        updatedAt: Date.now(),
+        goodTilBlockTime: placedTakeProfit.goodTilBlockTime
+      };
+
+      this.rememberManagedTakeProfit(market, managedTakeProfit);
+
+      await this.waitForTakeProfitVisibleBestEffort(
+        level.name,
+        market,
+        side,
+        triggerPrice,
+        placedTakeProfit.clientId
+      );
+    }
+  }
+
   private async placeTakeProfitMarketOrder(
     market: string,
     side: OrderSide,
@@ -3161,6 +3321,132 @@ export class DydxV4Client extends AbstractDexClient {
     return isLong
       ? telemetry.longStaticStop ?? telemetry.staticStop
       : telemetry.shortStaticStop ?? telemetry.staticStop;
+  }
+
+  private shouldSkipStaticStop(alert: AlertObject): boolean {
+    const data = alert as any;
+
+    return (
+      data.skip_static_stop === true ||
+      data.skipStaticStop === true ||
+      String(data.skip_static_stop).toLowerCase() === 'true' ||
+      String(data.skipStaticStop).toLowerCase() === 'true'
+    );
+  }
+
+  private getExplicitTakeProfitLevels(alert: AlertObject): ExplicitTakeProfitLevel[] {
+    const data = alert as any;
+    const raw =
+      data.take_profits ??
+      data.takeProfits ??
+      data.take_profit_levels ??
+      data.takeProfitLevels ??
+      data.tp_levels ??
+      data.tpLevels ??
+      data.tp_prices ??
+      data.tpPrices;
+
+    const values = Array.isArray(raw)
+      ? raw
+      : typeof raw === 'string'
+        ? raw.split(',').map((item) => item.trim()).filter(Boolean)
+        : [];
+
+    const parsed = values
+      .map((value: any, index: number): ExplicitTakeProfitLevel | undefined => {
+        const price = this.parsePositiveNumber(
+          typeof value === 'object' && value !== null
+            ? value.price ?? value.triggerPrice ?? value.trigger_price
+            : value
+        );
+
+        if (!price) {
+          return undefined;
+        }
+
+        const size = this.parsePositiveNumber(
+          typeof value === 'object' && value !== null
+            ? value.size ?? value.quantity ?? value.qty
+            : undefined
+        );
+        const sizeFraction = this.parseTakeProfitFraction(
+          typeof value === 'object' && value !== null
+            ? value.sizeFraction ??
+              value.size_fraction ??
+              value.sizePct ??
+              value.size_pct ??
+              value.fraction
+            : undefined
+        );
+
+        return {
+          name: String(
+            typeof value === 'object' && value !== null
+              ? value.label ?? value.name ?? `TP${index + 1}`
+              : `TP${index + 1}`
+          ),
+          price,
+          size,
+          sizeFraction
+        };
+      })
+      .filter((level): level is ExplicitTakeProfitLevel => level !== undefined)
+      .slice(0, 6);
+
+    const missingFraction = parsed.filter(
+      (level) => !level.size && (!level.sizeFraction || level.sizeFraction <= 0)
+    );
+
+    if (parsed.length && missingFraction.length === parsed.length) {
+      const equalFraction = 1 / parsed.length;
+      return parsed.map((level) => ({
+        ...level,
+        sizeFraction: equalFraction
+      }));
+    }
+
+    if (missingFraction.length) {
+      const usedFraction = parsed.reduce((sum, level) => sum + (level.sizeFraction || 0), 0);
+      const remainingFraction = Math.max(0, 1 - usedFraction);
+      const fallbackFraction = remainingFraction / missingFraction.length;
+
+      const withFallbacks = parsed.map((level) =>
+        level.size || level.sizeFraction
+          ? level
+          : { ...level, sizeFraction: fallbackFraction }
+      );
+
+      return this.normalizeTakeProfitFractions(withFallbacks);
+    }
+
+    return this.normalizeTakeProfitFractions(parsed);
+  }
+
+  private parseTakeProfitFraction(value: unknown): number | undefined {
+    const parsed = this.parsePositiveNumber(value);
+
+    if (parsed === undefined) {
+      return undefined;
+    }
+
+    return parsed > 1
+      ? parsed / 100
+      : parsed;
+  }
+
+  private normalizeTakeProfitFractions(levels: ExplicitTakeProfitLevel[]): ExplicitTakeProfitLevel[] {
+    const fractionTotal = levels.reduce((sum, level) => sum + (level.sizeFraction || 0), 0);
+
+    if (fractionTotal <= 1 + this.TOLERANCE) {
+      return levels;
+    }
+
+    return levels.map((level) => ({
+      ...level,
+      sizeFraction: level.sizeFraction
+        ? level.sizeFraction / fractionTotal
+        : level.sizeFraction
+    }));
   }
 
   private getOrderTriggerPrice(order: any): number | undefined {

@@ -49,6 +49,24 @@ const dexRegistry = new DexRegistry();
 
 // ================= INITIALIZATION =================
 
+function configureDecentraderTradeExecutor() {
+  const client = dexRegistry.getDex('dydxv4') as any;
+
+  if (
+    !client ||
+    typeof client.getAccountSnapshot !== 'function' ||
+    typeof client.placeOrder !== 'function'
+  ) {
+    console.warn('Decentrader auto-trade executor not configured: dYdX v4 client is unavailable.');
+    return;
+  }
+
+  decentraderGapMonitor.configureTradeExecutor({
+    getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    placeOrder: (alert: any) => client.placeOrder(alert)
+  });
+}
+
 async function initializeExchanges() {
   console.log("Initializing exchanges...");
 
@@ -72,13 +90,18 @@ async function initializeExchanges() {
     }
   }
 
+  configureDecentraderTradeExecutor();
   console.log("All exchanges initialized.");
 }
 
-initializeExchanges().catch((err) => {
-  console.error("Exchange initialization failed:", err);
-  process.exit(1);
-});
+initializeExchanges()
+  .then(() => {
+    decentraderGapMonitor.start();
+  })
+  .catch((err) => {
+    console.error("Exchange initialization failed:", err);
+    process.exit(1);
+  });
 
 // ================= ROUTER =================
 
@@ -237,8 +260,6 @@ router.post('/decentrader/gap-check', async (req, res) => {
 router.get('/debug-sentry', function mainHandler(req, res) {
   throw new Error('My first Sentry error!');
 });
-
-decentraderGapMonitor.start();
 
 export default router;
 
