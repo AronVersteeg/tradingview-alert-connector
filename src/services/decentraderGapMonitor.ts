@@ -41,6 +41,27 @@ type GapAlert = {
   right: LiquidityBar[];
 };
 
+type TradeZone = {
+  direction: 'long' | 'short';
+  rank: number;
+  price: number;
+  count: number;
+  score: number;
+  distance: number;
+  leverages: number[];
+  fresh: number;
+};
+
+type TpHit = {
+  timestamp: string;
+  timestampNl: string;
+  price: number;
+  previousPrice: number;
+  direction: 'long' | 'short';
+  label: string;
+  zone: TradeZone;
+};
+
 type MonitorStatus = {
   enabled: boolean;
   running: boolean;
@@ -70,6 +91,10 @@ type AlertState = {
   lastAlertObservedSignature?: string | null;
   lastAlertSentSignature?: string;
   lastAlertSentAt?: string;
+  lastTpHitObservedSignature?: string | null;
+  lastTpHitSentSignature?: string;
+  lastTpHitSentSignatures?: string[];
+  lastTpHitSentAt?: string;
   lastCheckedAt?: string;
   lastDataTimestamp?: string;
 };
@@ -346,6 +371,30 @@ function activeBarsForFrame(rows: DecentraderRow[], frameIndex: number): Liquidi
   return Array.from(bars.values());
 }
 
+function firstSeenKeysForFrame(rows: DecentraderRow[], frameIndex: number): Set<string> {
+  const seen = new Set<string>();
+  const firstSeen = new Set<string>();
+
+  for (let rowIndex = 0; rowIndex <= frameIndex; rowIndex++) {
+    const row = rows[rowIndex];
+    for (const side of ['long', 'short'] as const) {
+      for (const leverage of LEVERAGES) {
+        const event = eventForRow(row, rowIndex, side, leverage);
+        if (!event.active || event.roundedPrice === undefined) continue;
+
+        const compactSide = side === 'long' ? 'L' : 'S';
+        const key = `${compactSide}|${leverage}|${priceKey(event.roundedPrice)}`;
+        if (!seen.has(key) && rowIndex === frameIndex) {
+          firstSeen.add(key);
+        }
+        seen.add(key);
+      }
+    }
+  }
+
+  return firstSeen;
+}
+
 function cleanGapForBars(frame: DecentraderRow, bars: LiquidityBar[]): Gap | undefined {
   const price = parseNumber(frame.ohlc4);
   if (price === undefined) return undefined;
@@ -424,6 +473,191 @@ function gapIntrusionsSince(rows: DecentraderRow[], lastDataTimestamp?: string):
   }
 
   return alerts;
+}
+
+function tradeClusterStep(span: number): number {
+  if (span > 60000) return 1000;
+  if (span > 30000) return 500;
+  if (span > 12000) return 250;
+  return 100;
+}
+
+function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longTp: TradeZone[]; shortTp: TradeZone[] } {
+  const frame = rows[frameIndex];
+  const price = parseNumber(frame?.ohlc4);
+  if (price === undefined) return { longTp: [], shortTp: [] };
+
+  const bars = activeBarsForFrame(rows, frameIndex);
+  const firstSeenKeys = firstSeenKeysForFrame(rows, frameIndex);
+  const gap = cleanGapForBars(frame, bars);
+  const prices = [price, ...bars.map((bar) => bar.price)];
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const step = tradeClusterStep(maxPrice - minPrice);
+  const minDistance = Math.max(100, step * 0.5);
+  const leverageWeight = new Map<number, number>([
+    [3, 1],
+    [5, 1.35],
+    [10, 1.7]
+  ]);
+  const clusters = new Map<
+    string,
+    {
+      direction: 'long' | 'short';
+      priceSum: number;
+      weightSum: number;
+      weighted: number;
+      count: number;
+      fresh: number;
+      leverages: Set<number>;
+    }
+  >();
+
+  function addCandidate(direction: 'long' | 'short', bar: LiquidityBar): void {
+    const isLongTarget = direction === 'long';
+    const isCorrectSide = isLongTarget ? bar.side === 'S' && bar.price > price : bar.side === 'L' && bar.price < price;
+    if (!isCorrectSide || Math.abs(bar.price - price) < minDistance) return;
+
+    const bucket = Math.round(bar.price / step) * step;
+    const key = `${direction}|${bucket}`;
+    const weight = leverageWeight.get(bar.leverage) || 1;
+    const cluster =
+      clusters.get(key) ||
+      ({
+        direction,
+        priceSum: 0,
+        weightSum: 0,
+        weighted: 0,
+        count: 0,
+        fresh: 0,
+        leverages: new Set<number>()
+      } as {
+        direction: 'long' | 'short';
+        priceSum: number;
+        weightSum: number;
+        weighted: number;
+        count: number;
+        fresh: number;
+        leverages: Set<number>;
+      });
+
+    cluster.priceSum += bar.price * weight;
+    cluster.weightSum += weight;
+    cluster.weighted += bar.count * weight;
+    cluster.count += bar.count;
+    cluster.fresh += firstSeenKeys.has(bar.key) ? 1 : 0;
+    cluster.leverages.add(bar.leverage);
+    clusters.set(key, cluster);
+  }
+
+  for (const bar of bars) {
+    addCandidate('long', bar);
+    addCandidate('short', bar);
+  }
+
+  const zones = Array.from(clusters.values()).map((cluster) => {
+    const zonePrice = Math.round(cluster.priceSum / cluster.weightSum / 50) * 50;
+    const distance = Math.abs(zonePrice - price);
+    const distancePct = distance / Math.max(1, price);
+    const distanceFactor = Math.max(0.35, 1 - Math.min(distancePct / 0.22, 1) * 0.65);
+    const overlapFactor = 1 + Math.max(0, cluster.leverages.size - 1) * 0.22;
+    const freshFactor = 1 + Math.min(cluster.fresh, 3) * 0.12;
+    let gapFactor = 1;
+
+    if (gap) {
+      const edge = cluster.direction === 'long' ? gap.right : gap.left;
+      const edgeDistance = Math.abs(zonePrice - edge);
+      gapFactor += Math.max(0, 1 - edgeDistance / (step * 6)) * 0.25;
+    }
+
+    return {
+      direction: cluster.direction,
+      rank: 0,
+      price: zonePrice,
+      count: cluster.count,
+      score: Math.max(1, Math.round(cluster.weighted * overlapFactor * distanceFactor * freshFactor * gapFactor)),
+      distance,
+      leverages: Array.from(cluster.leverages).sort((a, b) => a - b),
+      fresh: cluster.fresh
+    } as TradeZone;
+  });
+
+  function ranked(direction: 'long' | 'short'): TradeZone[] {
+    return zones
+      .filter((zone) => zone.direction === direction)
+      .sort((a, b) => {
+        if (direction === 'long') return a.price - b.price || b.score - a.score;
+        return b.price - a.price || b.score - a.score;
+      })
+      .slice(0, 3)
+      .map((zone, index) => ({ ...zone, rank: index + 1 }));
+  }
+
+  return {
+    longTp: ranked('long'),
+    shortTp: ranked('short')
+  };
+}
+
+function detectTpHits(rows: DecentraderRow[], frameIndex: number): TpHit[] {
+  if (frameIndex <= 0) return [];
+
+  const previousFrame = rows[frameIndex - 1];
+  const currentFrame = rows[frameIndex];
+  const previousPrice = parseNumber(previousFrame?.ohlc4);
+  const currentPrice = parseNumber(currentFrame?.ohlc4);
+  if (previousPrice === undefined || currentPrice === undefined) return [];
+
+  const previousZones = tradeZonesForFrame(rows, frameIndex - 1);
+  const hits: TpHit[] = [];
+  const timestamp = String(currentFrame.timestamp || '');
+
+  for (const zone of previousZones.longTp) {
+    if (previousPrice < zone.price && currentPrice >= zone.price) {
+      hits.push({
+        timestamp,
+        timestampNl: nlTime(currentFrame.timestamp),
+        price: currentPrice,
+        previousPrice,
+        direction: 'long',
+        label: `L TP${zone.rank}`,
+        zone
+      });
+    }
+  }
+
+  for (const zone of previousZones.shortTp) {
+    if (previousPrice > zone.price && currentPrice <= zone.price) {
+      hits.push({
+        timestamp,
+        timestampNl: nlTime(currentFrame.timestamp),
+        price: currentPrice,
+        previousPrice,
+        direction: 'short',
+        label: `S TP${zone.rank}`,
+        zone
+      });
+    }
+  }
+
+  return hits;
+}
+
+function tpHitsSince(rows: DecentraderRow[], lastDataTimestamp?: string): TpHit[] {
+  if (rows.length < 2) return [];
+
+  let startIndex = rows.length - 1;
+  if (lastDataTimestamp) {
+    const lastIndex = rows.findIndex((row) => String(row.timestamp || '') === lastDataTimestamp);
+    startIndex = lastIndex >= 0 ? lastIndex : rows.length - 1;
+  }
+
+  const hits: TpHit[] = [];
+  for (let frameIndex = Math.max(1, startIndex); frameIndex < rows.length; frameIndex += 1) {
+    hits.push(...detectTpHits(rows, frameIndex));
+  }
+
+  return hits;
 }
 
 function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
@@ -541,6 +775,29 @@ function alertBody(alert: GapAlert, symbol: string): string {
   return lines.join('\n');
 }
 
+function tpHitSignature(hit: TpHit): string {
+  return `${hit.timestamp}|${hit.label}|${hit.zone.price}|${hit.zone.score}`;
+}
+
+function tpHitBody(hit: TpHit, symbol: string): string {
+  const lines = [
+    `Decentrader ${symbol.toUpperCase()} liquidity TP hit`,
+    '',
+    `Time: ${hit.timestampNl} (${hit.timestamp} UTC)`,
+    `Hit: ${hit.label} ${money(hit.zone.price)}`,
+    `Price move: ${money(hit.previousPrice)} -> ${money(hit.price)}`,
+    `Zone score: ${hit.zone.score}`,
+    `Zone side: ${hit.direction === 'long' ? 'long target above price' : 'short target below price'}`,
+    `Leverages: ${hit.zone.leverages.map((leverage) => `${leverage}x`).join(' + ') || '-'}`,
+    `Zone count: ${hit.zone.count}`,
+    '',
+    'Bron: https://www.decentrader.com/liquidity-maps/?coin=btc',
+    'Let op: dit is een liquidity TP-hit event, geen automatisch trade-advies.'
+  ];
+
+  return lines.join('\n');
+}
+
 function readState(stateFile: string): AlertState {
   try {
     return JSON.parse(fs.readFileSync(stateFile, 'utf8'));
@@ -655,6 +912,7 @@ export class DecentraderGapMonitor {
       const state = readState(config.stateFile);
       const previousDataTimestamp = state.lastDataTimestamp;
       const alerts = gapIntrusionsSince(rows, previousDataTimestamp);
+      const tpHits = tpHitsSince(rows, previousDataTimestamp);
       state.lastCheckedAt = nowNlIso();
       state.lastDataTimestamp = rows[rows.length - 1]?.timestamp;
 
@@ -666,7 +924,11 @@ export class DecentraderGapMonitor {
         latestTimestampNl: nlTime(state.lastDataTimestamp),
         alert: null,
         alerts: [],
-        alertCount: alerts.length,
+        alertCount: alerts.length + tpHits.length,
+        gapAlertCount: alerts.length,
+        tpHit: null,
+        tpHits: [],
+        tpHitCount: tpHits.length,
         emailConfigured: smtpSettingsFromEnv() !== undefined,
         emailSent: false,
         emailSentCount: 0,
@@ -675,6 +937,12 @@ export class DecentraderGapMonitor {
 
       if (!alerts.length) {
         state.lastAlertObservedSignature = null;
+      }
+      if (!tpHits.length) {
+        state.lastTpHitObservedSignature = null;
+      }
+
+      if (!alerts.length && !tpHits.length) {
         writeState(config.stateFile, state);
         this.status = {
           ...this.status,
@@ -718,6 +986,47 @@ export class DecentraderGapMonitor {
           result.emailSentCount += 1;
         }
       }
+
+      const sentTpHitSignatures = new Set<string>([
+        ...(state.lastTpHitSentSignatures || []),
+        ...(state.lastTpHitSentSignature ? [state.lastTpHitSentSignature] : [])
+      ]);
+
+      for (const hit of tpHits) {
+        const signature = tpHitSignature(hit);
+        const hitSummary = {
+          signature,
+          timestamp: hit.timestamp,
+          timestampNl: hit.timestampNl,
+          price: hit.price,
+          previousPrice: hit.previousPrice,
+          label: hit.label,
+          direction: hit.direction,
+          zone: hit.zone
+        };
+        state.lastTpHitObservedSignature = signature;
+        result.tpHit = hitSummary;
+        result.tpHits.push(hitSummary);
+
+        if (sentTpHitSignatures.has(signature)) {
+          result.duplicate = true;
+          continue;
+        }
+
+        if (smtpSettings) {
+          await sendEmail(
+            smtpSettings,
+            `[${smtpSettings.jobName}] ${hit.timestampNl} | ${hit.label} hit ${money(hit.zone.price)}`,
+            tpHitBody(hit, config.symbol)
+          );
+          state.lastTpHitSentSignature = signature;
+          sentTpHitSignatures.add(signature);
+          state.lastTpHitSentAt = nowNlIso();
+          result.emailSent = true;
+          result.emailSentCount += 1;
+        }
+      }
+      state.lastTpHitSentSignatures = Array.from(sentTpHitSignatures).slice(-50);
 
       writeState(config.stateFile, state);
       this.status = {

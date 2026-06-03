@@ -492,6 +492,7 @@
     let liveTimer = null;
     let alertsEnabled = false;
     let lastSentAlertSignature = '';
+    let lastSentTpHitSignature = '';
     let tradeZonesVisible = true;
     let canvasScale = 1;
     let canvasCssWidth = 0;
@@ -939,6 +940,42 @@
       };
     }
 
+    function getTradeRange() {
+      const range = payload?.range;
+      if (range && Number.isFinite(range.minPrice) && Number.isFinite(range.maxPrice)) {
+        return { min: range.minPrice, max: range.maxPrice };
+      }
+      return ensurePriceView();
+    }
+
+    function getTpHits(frameIndex, xFor, xToPrice, minPrice, maxPrice) {
+      if (frameIndex <= 0) return [];
+
+      const previousFrame = payload.frames[frameIndex - 1];
+      const currentFrame = payload.frames[frameIndex];
+      if (!previousFrame || !currentFrame) return [];
+      if (!Number.isFinite(previousFrame.price) || !Number.isFinite(currentFrame.price)) return [];
+
+      const previous = getFrameEvents(frameIndex - 1, { mode: 'active' });
+      const previousGap = getVisualGapForBars(previousFrame, previous.bars, xFor, xToPrice);
+      const previousZones = getTradeZones(previousFrame, previous.bars, previous.firstSeen, previousGap, minPrice, maxPrice);
+      const hits = [];
+
+      for (const zone of previousZones.longTp) {
+        if (previousFrame.price < zone.price && currentFrame.price >= zone.price) {
+          hits.push({ direction: 'long', label: `L TP${zone.rank}`, zone });
+        }
+      }
+
+      for (const zone of previousZones.shortTp) {
+        if (previousFrame.price > zone.price && currentFrame.price <= zone.price) {
+          hits.push({ direction: 'short', label: `S TP${zone.rank}`, zone });
+        }
+      }
+
+      return hits;
+    }
+
     function priceTickStep(span) {
       if (span > 60000) return 5000;
       if (span > 30000) return 2500;
@@ -1126,7 +1163,7 @@
       }
     }
 
-    function updateTradeZoneMonitor(frame, gap, tradeZones) {
+    function updateTradeZoneMonitor(frame, gap, tradeZones, tpHits) {
       if (!tradeZonesVisible) {
         tradeZoneValue.textContent = 'Hidden';
         tradeZoneStatus.textContent = 'Trade zone layer is off';
@@ -1146,14 +1183,17 @@
         shortTp ? `Short TP1 ${money(shortTp.price)}` : 'Short TP1 -',
       ].join(' | ');
 
-      if (gap) {
-        tradeZoneStatus.textContent = [
-          `Long trigger > ${money(gap.right)} / SL ref ${money(gap.left)}`,
-          `Short trigger < ${money(gap.left)} / SL ref ${money(gap.right)}`,
-        ].join(' | ');
-      } else {
-        tradeZoneStatus.textContent = 'No clean gap trigger; TP candidates only';
-      }
+      const setupText = gap
+        ? [
+            `Long trigger > ${money(gap.right)} / SL ref ${money(gap.left)}`,
+            `Short trigger < ${money(gap.left)} / SL ref ${money(gap.right)}`,
+          ].join(' | ')
+        : 'No clean gap trigger; TP candidates only';
+
+      const hitText = tpHits?.length
+        ? `TP hit: ${tpHits.map((hit) => `${hit.label} ${money(hit.zone.price)}`).join(', ')}`
+        : '';
+      tradeZoneStatus.textContent = [hitText, setupText].filter(Boolean).join(' | ');
     }
 
     function maybeSendGapAlert(frameIndex, frame, intrusion) {
@@ -1170,6 +1210,23 @@
 
       if ('Notification' in window && Notification.permission === 'granted') {
         new Notification('BTC liquidity gap alert', { body });
+      }
+    }
+
+    function maybeSendTpHitAlert(frameIndex, frame, tpHits) {
+      if (!alertsEnabled || !tpHits?.length) return;
+      if (frameIndex !== Number(frameInput.max)) return;
+
+      const signature = `${frame.t}|${tpHits.map((hit) => `${hit.label}:${hit.zone.price}:${hit.zone.score}`).sort().join('|')}`;
+      if (signature === lastSentTpHitSignature) return;
+      lastSentTpHitSignature = signature;
+
+      const body = `${nlTime(frame.t)} NL: ${tpHits
+        .map((hit) => `${hit.label} ${money(hit.zone.price)} score ${hit.zone.score}`)
+        .join(', ')} | price ${money(frame.price)}`;
+
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('BTC liquidity TP hit', { body });
       }
     }
 
@@ -1227,7 +1284,9 @@
 
       const gap = getVisualGapForBars(frame, monitorBars, xFor, xToPrice);
       const intrusion = getGapIntrusion(frameIndex, xFor, xToPrice);
-      const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, minPrice, maxPrice);
+      const tradeRange = getTradeRange();
+      const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, tradeRange.min, tradeRange.max);
+      const tpHits = getTpHits(frameIndex, xFor, xToPrice, tradeRange.min, tradeRange.max);
       drawGap(area, gap, priceColor);
 
       for (const bar of visibleBars) {
@@ -1320,8 +1379,9 @@
 
       meta.textContent = `${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       updateGapMonitor(frame, gap, intrusion);
-      updateTradeZoneMonitor(frame, gap, tradeZones);
+      updateTradeZoneMonitor(frame, gap, tradeZones, tpHits);
       maybeSendGapAlert(frameIndex, frame, intrusion);
+      maybeSendTpHitAlert(frameIndex, frame, tpHits);
       note.textContent = payload.source.note;
     }
 
