@@ -925,7 +925,10 @@
       function ranked(direction) {
         return zones
           .filter((zone) => zone.direction === direction)
-          .sort((a, b) => b.score - a.score || a.distance - b.distance)
+          .sort((a, b) => {
+            if (direction === 'long') return a.price - b.price || b.score - a.score;
+            return b.price - a.price || b.score - a.score;
+          })
           .slice(0, 3)
           .map((zone, index) => ({ ...zone, rank: index + 1 }));
       }
