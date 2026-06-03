@@ -15,6 +15,8 @@ type LiquidityBar = {
   leverage: number;
   price: number;
   count: number;
+  newCount?: number;
+  gapSide?: 'left' | 'right';
   sideOfPrice?: 'left' | 'right' | 'price';
 };
 
@@ -381,12 +383,17 @@ function detectGapIntrusion(rows: DecentraderRow[], frameIndex: number): GapAler
   const previousGap = cleanGapForBars(previousFrame, previousBars);
   if (!previousGap) return undefined;
 
-  const previousKeys = new Set(previousBars.map((bar) => bar.key));
+  const previousCounts = new Map(previousBars.map((bar) => [bar.key, bar.count]));
   const entrants = currentBars
-    .filter((bar) => !previousKeys.has(bar.key))
+    .filter((bar) => bar.count > (previousCounts.get(bar.key) || 0))
     .filter((bar) => bar.price > previousGap.left && bar.price < previousGap.right)
     .map((bar) => ({
       ...bar,
+      newCount: bar.count - (previousCounts.get(bar.key) || 0),
+      gapSide:
+        bar.price - previousGap.left <= previousGap.right - bar.price
+          ? 'left'
+          : 'right',
       sideOfPrice: bar.price < currentPrice ? 'left' : bar.price > currentPrice ? 'right' : 'price'
     })) as LiquidityBar[];
 
@@ -396,14 +403,27 @@ function detectGapIntrusion(rows: DecentraderRow[], frameIndex: number): GapAler
     price: currentPrice,
     previousGap,
     entrants,
-    left: entrants.filter((bar) => bar.sideOfPrice === 'left'),
-    right: entrants.filter((bar) => bar.sideOfPrice === 'right')
+    left: entrants.filter((bar) => bar.gapSide === 'left'),
+    right: entrants.filter((bar) => bar.gapSide === 'right')
   };
 }
 
-function latestGapIntrusion(rows: DecentraderRow[]): GapAlert | undefined {
-  if (rows.length < 2) return undefined;
-  return detectGapIntrusion(rows, rows.length - 1);
+function gapIntrusionsSince(rows: DecentraderRow[], lastDataTimestamp?: string): GapAlert[] {
+  if (rows.length < 2) return [];
+
+  let startIndex = rows.length - 1;
+  if (lastDataTimestamp) {
+    const lastIndex = rows.findIndex((row) => String(row.timestamp || '') === lastDataTimestamp);
+    startIndex = lastIndex >= 0 ? lastIndex : rows.length - 1;
+  }
+
+  const alerts: GapAlert[] = [];
+  for (let frameIndex = Math.max(1, startIndex); frameIndex < rows.length; frameIndex += 1) {
+    const alert = detectGapIntrusion(rows, frameIndex);
+    if (alert?.entrants.length) alerts.push(alert);
+  }
+
+  return alerts;
 }
 
 function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
@@ -478,13 +498,16 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
 }
 
 function gapAlertSignature(alert: GapAlert): string {
-  return `${alert.timestamp}|${alert.entrants.map((bar) => bar.key).sort().join('|')}`;
+  return `${alert.timestamp}|${alert.entrants
+    .map((bar) => `${bar.key}:${bar.count}`)
+    .sort()
+    .join('|')}`;
 }
 
 function sideCounts(alert: GapAlert): string {
   const parts: string[] = [];
-  if (alert.left.length) parts.push(`${alert.left.length} left`);
-  if (alert.right.length) parts.push(`${alert.right.length} right`);
+  if (alert.left.length) parts.push(`${alert.left.length} left edge`);
+  if (alert.right.length) parts.push(`${alert.right.length} right edge`);
   if (!parts.length && alert.entrants.length) parts.push(`${alert.entrants.length} around price`);
   return parts.join(' + ') || 'no intrusions';
 }
@@ -500,12 +523,16 @@ function alertBody(alert: GapAlert, symbol: string): string {
     `Gap width: ${money(gap.width)}`,
     `Distance to price: L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`,
     '',
-    `New histos inside previous gap: ${sideCounts(alert)}`
+    `New or expanded histos inside previous gap: ${sideCounts(alert)}`
   ];
 
   for (const bar of alert.entrants) {
+    const gapSide = bar.gapSide ? `${bar.gapSide} edge` : 'inside gap';
+    const priceSide =
+      bar.sideOfPrice === 'price' ? 'at price' : `${bar.sideOfPrice || 'unknown'} of price`;
+    const added = bar.newCount && bar.newCount > 1 ? ` +${bar.newCount}` : '';
     lines.push(
-      `- ${bar.side === 'L' ? 'Long' : 'Short'} ${bar.leverage}x ${money(bar.price)} (${bar.sideOfPrice})`
+      `- ${bar.side === 'L' ? 'Long' : 'Short'} ${bar.leverage}x ${money(bar.price)}${added} (${gapSide}, ${priceSide})`
     );
   }
 
@@ -625,8 +652,9 @@ export class DecentraderGapMonitor {
       const rows = await fetchSnapshot(config.symbol);
       this.latestRows = rows;
       this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
-      const alert = latestGapIntrusion(rows);
       const state = readState(config.stateFile);
+      const previousDataTimestamp = state.lastDataTimestamp;
+      const alerts = gapIntrusionsSince(rows, previousDataTimestamp);
       state.lastCheckedAt = nowNlIso();
       state.lastDataTimestamp = rows[rows.length - 1]?.timestamp;
 
@@ -637,12 +665,15 @@ export class DecentraderGapMonitor {
         latestTimestamp: state.lastDataTimestamp,
         latestTimestampNl: nlTime(state.lastDataTimestamp),
         alert: null,
+        alerts: [],
+        alertCount: alerts.length,
         emailConfigured: smtpSettingsFromEnv() !== undefined,
         emailSent: false,
+        emailSentCount: 0,
         duplicate: false
       };
 
-      if (!alert || !alert.entrants.length) {
+      if (!alerts.length) {
         state.lastAlertObservedSignature = null;
         writeState(config.stateFile, state);
         this.status = {
@@ -654,40 +685,38 @@ export class DecentraderGapMonitor {
         return result;
       }
 
-      const signature = gapAlertSignature(alert);
-      state.lastAlertObservedSignature = signature;
-      result.alert = {
-        signature,
-        timestamp: alert.timestamp,
-        timestampNl: alert.timestampNl,
-        price: alert.price,
-        sideCounts: sideCounts(alert),
-        gap: alert.previousGap,
-        entrants: alert.entrants
-      };
-
-      if (signature === state.lastAlertSentSignature) {
-        result.duplicate = true;
-        writeState(config.stateFile, state);
-        this.status = {
-          ...this.status,
-          running: false,
-          lastFinishedAt: nowNlIso(),
-          lastResult: result
-        };
-        return result;
-      }
-
       const smtpSettings = smtpSettingsFromEnv();
-      if (smtpSettings) {
-        await sendEmail(
-          smtpSettings,
-          `[${smtpSettings.jobName}] ${alert.timestampNl} | ${sideCounts(alert)}`,
-          alertBody(alert, config.symbol)
-        );
-        state.lastAlertSentSignature = signature;
-        state.lastAlertSentAt = nowNlIso();
-        result.emailSent = true;
+      for (const alert of alerts) {
+        const signature = gapAlertSignature(alert);
+        const alertSummary = {
+          signature,
+          timestamp: alert.timestamp,
+          timestampNl: alert.timestampNl,
+          price: alert.price,
+          sideCounts: sideCounts(alert),
+          gap: alert.previousGap,
+          entrants: alert.entrants
+        };
+        state.lastAlertObservedSignature = signature;
+        result.alert = alertSummary;
+        result.alerts.push(alertSummary);
+
+        if (signature === state.lastAlertSentSignature) {
+          result.duplicate = true;
+          continue;
+        }
+
+        if (smtpSettings) {
+          await sendEmail(
+            smtpSettings,
+            `[${smtpSettings.jobName}] ${alert.timestampNl} | ${sideCounts(alert)}`,
+            alertBody(alert, config.symbol)
+          );
+          state.lastAlertSentSignature = signature;
+          state.lastAlertSentAt = nowNlIso();
+          result.emailSent = true;
+          result.emailSentCount += 1;
+        }
       }
 
       writeState(config.stateFile, state);

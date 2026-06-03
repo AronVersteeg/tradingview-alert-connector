@@ -471,6 +471,8 @@
     let alertsEnabled = false;
     let lastSentAlertSignature = '';
     let canvasScale = 1;
+    let canvasCssWidth = 0;
+    let canvasCssHeight = 0;
     let priceView = null;
     let lastChartArea = null;
     let isPanningPrice = false;
@@ -509,8 +511,11 @@
     function resizeCanvas() {
       const rect = canvas.getBoundingClientRect();
       canvasScale = window.devicePixelRatio || 1;
-      canvas.width = Math.max(900, Math.floor(rect.width * canvasScale));
-      canvas.height = Math.max(520, Math.floor(rect.height * canvasScale));
+      canvasCssWidth = Math.max(320, Math.floor(rect.width));
+      canvasCssHeight = Math.max(360, Math.floor(rect.height));
+      canvas.width = Math.floor(canvasCssWidth * canvasScale);
+      canvas.height = Math.floor(canvasCssHeight * canvasScale);
+      ctx.setTransform(canvasScale, 0, 0, canvasScale, 0, 0);
       ctx.imageSmoothingEnabled = false;
       draw();
     }
@@ -577,8 +582,8 @@
     function canvasPoint(event) {
       const rect = canvas.getBoundingClientRect();
       return {
-        x: (event.clientX - rect.left) * canvasScale,
-        y: (event.clientY - rect.top) * canvasScale,
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
       };
     }
 
@@ -746,19 +751,21 @@
       const previousGap = getVisualGapForBars(previousFrame, previousBars, xFor, xToPrice);
       if (!previousGap || !currentFrame || !Number.isFinite(currentFrame.price)) return null;
 
-      const previousKeys = new Set(previousBars.map((bar) => bar.key));
+      const previousCounts = new Map(previousBars.map((bar) => [bar.key, bar.count]));
       const entrants = currentBars
-        .filter((bar) => !previousKeys.has(bar.key))
+        .filter((bar) => bar.count > (previousCounts.get(bar.key) || 0))
         .filter((bar) => bar.price > previousGap.left && bar.price < previousGap.right)
         .map((bar) => ({
           ...bar,
+          newCount: bar.count - (previousCounts.get(bar.key) || 0),
+          gapSide: bar.price - previousGap.left <= previousGap.right - bar.price ? 'left' : 'right',
           sideOfPrice: bar.price < currentFrame.price ? 'left' : bar.price > currentFrame.price ? 'right' : 'price',
         }));
 
       if (!entrants.length) return { previousGap, entrants: [], left: [], right: [] };
 
-      const left = entrants.filter((bar) => bar.sideOfPrice === 'left');
-      const right = entrants.filter((bar) => bar.sideOfPrice === 'right');
+      const left = entrants.filter((bar) => bar.gapSide === 'left');
+      const right = entrants.filter((bar) => bar.gapSide === 'right');
       return { previousGap, entrants, left, right };
     }
 
@@ -933,8 +940,8 @@
       gapStatus.textContent = `${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`;
 
       if (intrusion?.entrants?.length) {
-        const leftText = intrusion.left.length ? `${intrusion.left.length} left` : '';
-        const rightText = intrusion.right.length ? `${intrusion.right.length} right` : '';
+        const leftText = intrusion.left.length ? `${intrusion.left.length} left edge` : '';
+        const rightText = intrusion.right.length ? `${intrusion.right.length} right edge` : '';
         const sides = [leftText, rightText].filter(Boolean).join(' + ');
         const zones = intrusion.entrants
           .slice(0, 4)
@@ -952,12 +959,12 @@
       if (!alertsEnabled || !intrusion?.entrants?.length) return;
       if (frameIndex !== Number(frameInput.max)) return;
 
-      const signature = `${frame.t}|${intrusion.entrants.map((bar) => bar.key).sort().join('|')}`;
+      const signature = `${frame.t}|${intrusion.entrants.map((bar) => `${bar.key}:${bar.count}`).sort().join('|')}`;
       if (signature === lastSentAlertSignature) return;
       lastSentAlertSignature = signature;
 
-      const leftText = intrusion.left.length ? `${intrusion.left.length} left` : '';
-      const rightText = intrusion.right.length ? `${intrusion.right.length} right` : '';
+      const leftText = intrusion.left.length ? `${intrusion.left.length} left edge` : '';
+      const rightText = intrusion.right.length ? `${intrusion.right.length} right edge` : '';
       const body = `${nlTime(frame.t)} NL: ${[leftText, rightText].filter(Boolean).join(' + ') || 'Inside'} gap intrusion near ${money(frame.price)}`;
 
       if ('Notification' in window && Notification.permission === 'granted') {
@@ -988,12 +995,12 @@
         S10: css.getPropertyValue('--short-10').trim(),
       };
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, canvasCssWidth, canvasCssHeight);
       const area = {
         left: 64,
         top: 34,
-        right: canvas.width - 30,
-        bottom: canvas.height - 108,
+        right: canvasCssWidth - 30,
+        bottom: canvasCssHeight - 108,
       };
       area.width = area.right - area.left;
       area.height = area.bottom - area.top;
@@ -1020,7 +1027,7 @@
       for (const bar of visibleBars) {
         const x = xFor(bar.price) + leverageOffset(bar.leverage);
         const barHeight = Math.max(2, (bar.count / maxCount) * area.height);
-        const barWidth = Math.max(2, Math.round(BAR_WIDTH * canvasScale));
+        const barWidth = Math.max(2, BAR_WIDTH);
         const crispX = Math.round(x - barWidth / 2);
         ctx.fillStyle = colorForZone(bar.side, bar.leverage);
         ctx.globalAlpha = modeInput.value === 'new' ? 0.86 : 0.58;
@@ -1131,8 +1138,26 @@
       draw();
     }
 
+    function syncNotificationState() {
+      if (!('Notification' in window)) {
+        alertsEnabled = false;
+        enableAlertsButton.classList.remove('is-active');
+        enableAlertsButton.textContent = 'Notify unavailable';
+        return;
+      }
+
+      alertsEnabled = Notification.permission === 'granted';
+      enableAlertsButton.classList.toggle('is-active', alertsEnabled);
+      enableAlertsButton.textContent = alertsEnabled
+        ? 'Notify on'
+        : Notification.permission === 'denied'
+          ? 'Notify blocked'
+          : 'Notify';
+    }
+
     async function enableAlerts() {
       if (!('Notification' in window)) {
+        syncNotificationState();
         gapAlert.textContent = 'Browser notifications unavailable';
         gapAlert.classList.add('is-hot');
         return;
@@ -1141,10 +1166,8 @@
       const permission = Notification.permission === 'default'
         ? await Notification.requestPermission()
         : Notification.permission;
-      alertsEnabled = permission === 'granted';
-      enableAlertsButton.classList.toggle('is-active', alertsEnabled);
-      enableAlertsButton.textContent = alertsEnabled ? 'Notify on' : 'Notify';
-      if (!alertsEnabled) {
+      syncNotificationState();
+      if (permission !== 'granted') {
         gapAlert.textContent = 'Notifications not enabled';
         gapAlert.classList.add('is-hot');
       }
@@ -1194,23 +1217,14 @@
         : `Updated ${nlTime(nextLast)} NL (${sourceLabel})`;
     }
 
-    function setLiveMonitor(enabled) {
-      if (liveTimer) {
-        clearInterval(liveTimer);
-        liveTimer = null;
+    function startLiveMonitor() {
+      if (!liveTimer) {
+        liveTimer = setInterval(() => refreshPayload().catch(showRefreshError), 60000);
       }
 
-      if (enabled) {
-        liveTimer = setInterval(() => refreshPayload().catch((error) => {
-          liveStatus.textContent = 'Refresh error';
-          gapAlert.textContent = String(error.message || error);
-          gapAlert.classList.add('is-hot');
-        }), 60000);
-      }
-
-      liveMonitorButton.classList.toggle('is-active', Boolean(liveTimer));
-      liveMonitorButton.textContent = liveTimer ? 'Live on' : 'Live';
-      liveStatus.textContent = liveTimer ? 'Every 60s' : 'Off';
+      liveMonitorButton.classList.add('is-active');
+      liveMonitorButton.textContent = 'Live on';
+      if (liveStatus.textContent === 'Off') liveStatus.textContent = 'Every 60s';
     }
 
     function showRefreshError(error) {
@@ -1234,7 +1248,10 @@
       prevHourButton.addEventListener('click', () => stepFrame(-1));
       nextHourButton.addEventListener('click', () => stepFrame(1));
       enableAlertsButton.addEventListener('click', enableAlerts);
-      liveMonitorButton.addEventListener('click', () => setLiveMonitor(!liveTimer));
+      liveMonitorButton.addEventListener('click', () => {
+        startLiveMonitor();
+        refreshPayload().catch(showRefreshError);
+      });
       refreshDataButton.addEventListener('click', () => refreshPayload().catch(showRefreshError));
       zoomOutButton.addEventListener('click', () => zoomPrice(1.25));
       zoomResetButton.addEventListener('click', resetPriceView);
@@ -1254,12 +1271,13 @@
         meta.textContent = 'Loading cloud data...';
       }
 
+      syncNotificationState();
+      startLiveMonitor();
       refreshPayload()
         .then(() => {
           if (payload) initializeViewer();
         })
         .catch(showRefreshError);
-      setLiveMonitor(true);
     }
 
     wireViewer();
