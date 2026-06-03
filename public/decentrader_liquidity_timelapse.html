@@ -21,6 +21,8 @@
       --short-10: #D62728;
       --new: #fbbf24;
       --price: #21d3a3;
+      --tp-long: #fbbf24;
+      --tp-short: #09d0ff;
       --border: rgba(236, 242, 248, 0.14);
     }
 
@@ -154,7 +156,7 @@
 
     .gap-monitor {
       display: grid;
-      grid-template-columns: minmax(220px, 1.3fr) repeat(4, minmax(108px, 0.65fr)) minmax(220px, 1fr);
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
       gap: 10px;
       align-items: stretch;
       padding: 12px 22px;
@@ -168,6 +170,10 @@
       background: rgba(13, 17, 24, 0.62);
       border: 1px solid var(--border);
       border-radius: 7px;
+    }
+
+    .gap-card--wide {
+      grid-column: span 2;
     }
 
     .gap-label {
@@ -298,7 +304,7 @@
       }
 
       .gap-monitor .gap-card:first-child,
-      .gap-monitor .gap-card:last-child {
+      .gap-card--wide {
         grid-column: 1 / -1;
       }
 
@@ -387,6 +393,12 @@
           <button id="refreshData" type="button">Refresh</button>
         </div>
       </div>
+      <div class="control">
+        <label>Setups</label>
+        <div class="inline-buttons">
+          <button id="tradeZones" class="is-active" type="button">Trade zones</button>
+        </div>
+      </div>
     </section>
 
     <section class="gap-monitor" aria-live="polite">
@@ -415,6 +427,11 @@
         <div class="gap-label">Gap alert</div>
         <div class="gap-alert" id="gapAlert">No intrusions</div>
       </div>
+      <div class="gap-card gap-card--wide">
+        <div class="gap-label">Trade zones</div>
+        <div class="gap-value" id="tradeZoneValue">-</div>
+        <div class="gap-status" id="tradeZoneStatus">Waiting for data</div>
+      </div>
     </section>
 
     <section class="stage">
@@ -428,6 +445,8 @@
         <span><i class="swatch" style="background: var(--short-10)"></i>Short 10x</span>
         <span><i class="swatch" style="background: var(--new)"></i>First seen</span>
         <span><i class="swatch" style="background: var(--price)"></i>Price</span>
+        <span><i class="swatch" style="background: var(--tp-long)"></i>Long TP</span>
+        <span><i class="swatch" style="background: var(--tp-short)"></i>Short TP</span>
       </div>
     </section>
 
@@ -449,6 +468,7 @@
     const zoomOutButton = document.getElementById('zoomOut');
     const zoomResetButton = document.getElementById('zoomReset');
     const zoomInButton = document.getElementById('zoomIn');
+    const tradeZonesButton = document.getElementById('tradeZones');
     const prevHourButton = document.getElementById('prevHour');
     const nextHourButton = document.getElementById('nextHour');
     const enableAlertsButton = document.getElementById('enableAlerts');
@@ -464,12 +484,15 @@
     const gapRight = document.getElementById('gapRight');
     const liveStatus = document.getElementById('liveStatus');
     const gapAlert = document.getElementById('gapAlert');
+    const tradeZoneValue = document.getElementById('tradeZoneValue');
+    const tradeZoneStatus = document.getElementById('tradeZoneStatus');
 
     let playing = false;
     let timer = null;
     let liveTimer = null;
     let alertsEnabled = false;
     let lastSentAlertSignature = '';
+    let tradeZonesVisible = true;
     let canvasScale = 1;
     let canvasCssWidth = 0;
     let canvasCssHeight = 0;
@@ -819,6 +842,100 @@
       };
     }
 
+    function tradeClusterStep(span) {
+      if (span > 60000) return 1000;
+      if (span > 30000) return 500;
+      if (span > 12000) return 250;
+      return 100;
+    }
+
+    function getTradeZones(frame, bars, firstSeen, gap, minPrice, maxPrice) {
+      if (!frame || !Number.isFinite(frame.price)) return { longTp: [], shortTp: [] };
+
+      const span = maxPrice - minPrice;
+      const step = tradeClusterStep(span);
+      const minDistance = Math.max(100, step * 0.5);
+      const firstSeenKeys = new Set(firstSeen.map((bar) => bar.key));
+      const clusters = new Map();
+      const leverageWeight = { 3: 1, 5: 1.35, 10: 1.7 };
+
+      function addCandidate(direction, bar) {
+        const isLongTarget = direction === 'long';
+        const isCorrectSide = isLongTarget
+          ? bar.side === 'S' && bar.price > frame.price
+          : bar.side === 'L' && bar.price < frame.price;
+        if (!isCorrectSide || Math.abs(bar.price - frame.price) < minDistance) return;
+
+        const bucket = Math.round(bar.price / step) * step;
+        const key = `${direction}|${bucket}`;
+        const weight = leverageWeight[bar.leverage] || 1;
+        const cluster = clusters.get(key) || {
+          direction,
+          bucket,
+          priceSum: 0,
+          weightSum: 0,
+          weighted: 0,
+          count: 0,
+          fresh: 0,
+          bars: 0,
+          leverages: new Set(),
+        };
+
+        cluster.priceSum += bar.price * weight;
+        cluster.weightSum += weight;
+        cluster.weighted += bar.count * weight;
+        cluster.count += bar.count;
+        cluster.fresh += firstSeenKeys.has(bar.key) ? 1 : 0;
+        cluster.bars += 1;
+        cluster.leverages.add(bar.leverage);
+        clusters.set(key, cluster);
+      }
+
+      for (const bar of bars) {
+        addCandidate('long', bar);
+        addCandidate('short', bar);
+      }
+
+      const zones = [...clusters.values()].map((cluster) => {
+        const price = Math.round((cluster.priceSum / cluster.weightSum) / 50) * 50;
+        const distance = Math.abs(price - frame.price);
+        const distancePct = distance / Math.max(1, frame.price);
+        const distanceFactor = Math.max(0.35, 1 - Math.min(distancePct / 0.22, 1) * 0.65);
+        const overlapFactor = 1 + Math.max(0, cluster.leverages.size - 1) * 0.22;
+        const freshFactor = 1 + Math.min(cluster.fresh, 3) * 0.12;
+        let gapFactor = 1;
+
+        if (gap) {
+          const edge = cluster.direction === 'long' ? gap.right : gap.left;
+          const edgeDistance = Math.abs(price - edge);
+          gapFactor += Math.max(0, 1 - edgeDistance / (step * 6)) * 0.25;
+        }
+
+        return {
+          direction: cluster.direction,
+          price,
+          count: cluster.count,
+          score: Math.max(1, Math.round(cluster.weighted * overlapFactor * distanceFactor * freshFactor * gapFactor)),
+          distance,
+          leverages: [...cluster.leverages].sort((a, b) => a - b),
+          fresh: cluster.fresh,
+        };
+      });
+
+      function ranked(direction) {
+        return zones
+          .filter((zone) => zone.direction === direction)
+          .sort((a, b) => b.score - a.score || a.distance - b.distance)
+          .slice(0, 3)
+          .map((zone, index) => ({ ...zone, rank: index + 1 }));
+      }
+
+      return {
+        longTp: ranked('long'),
+        shortTp: ranked('short'),
+      };
+    }
+
     function priceTickStep(span) {
       if (span > 60000) return 5000;
       if (span > 30000) return 2500;
@@ -921,6 +1038,57 @@
       ctx.textBaseline = 'alphabetic';
     }
 
+    function drawTradeZones(area, tradeZones, xFor, minPrice, maxPrice, colors) {
+      if (!tradeZonesVisible) return;
+
+      const markers = [
+        ...tradeZones.longTp.map((zone) => ({ ...zone, prefix: 'L TP', color: colors.long })),
+        ...tradeZones.shortTp.map((zone) => ({ ...zone, prefix: 'S TP', color: colors.short })),
+      ];
+
+      ctx.save();
+      ctx.font = '700 11px Inter, system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+
+      for (const zone of markers) {
+        if (zone.price < minPrice || zone.price > maxPrice) continue;
+        const x = xFor(zone.price);
+        const lane = zone.direction === 'long' ? zone.rank - 1 : zone.rank + 2;
+        const label = `${zone.prefix}${zone.rank} ${money(zone.price)} · ${zone.score}`;
+        const labelWidth = Math.ceil(ctx.measureText(label).width) + 16;
+        const labelHeight = 22;
+        const labelX = Math.max(area.left + 6, Math.min(x - labelWidth / 2, area.right - labelWidth - 6));
+        const labelY = Math.min(area.bottom - labelHeight - 8, area.top + 72 + lane * 25);
+
+        ctx.globalAlpha = zone.rank === 1 ? 0.98 : 0.7;
+        ctx.setLineDash(zone.rank === 1 ? [7, 4] : [3, 5]);
+        ctx.strokeStyle = zone.color;
+        ctx.lineWidth = zone.rank === 1 ? 2 : 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x, area.top);
+        ctx.lineTo(x, area.bottom);
+        ctx.stroke();
+
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(13, 17, 24, 0.92)';
+        ctx.strokeStyle = zone.color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(labelX, labelY, labelWidth, labelHeight, 5);
+        } else {
+          ctx.rect(labelX, labelY, labelWidth, labelHeight);
+        }
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = zone.color;
+        ctx.fillText(label, labelX + 8, labelY + labelHeight / 2);
+      }
+
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
     function updateGapMonitor(frame, gap, intrusion) {
       if (!gap || !frame) {
         gapWidth.textContent = '-';
@@ -955,6 +1123,36 @@
       }
     }
 
+    function updateTradeZoneMonitor(frame, gap, tradeZones) {
+      if (!tradeZonesVisible) {
+        tradeZoneValue.textContent = 'Hidden';
+        tradeZoneStatus.textContent = 'Trade zone layer is off';
+        return;
+      }
+
+      if (!frame) {
+        tradeZoneValue.textContent = '-';
+        tradeZoneStatus.textContent = 'Waiting for data';
+        return;
+      }
+
+      const longTp = tradeZones.longTp[0];
+      const shortTp = tradeZones.shortTp[0];
+      tradeZoneValue.textContent = [
+        longTp ? `Long TP1 ${money(longTp.price)}` : 'Long TP1 -',
+        shortTp ? `Short TP1 ${money(shortTp.price)}` : 'Short TP1 -',
+      ].join(' | ');
+
+      if (gap) {
+        tradeZoneStatus.textContent = [
+          `Long trigger > ${money(gap.right)} / SL ref ${money(gap.left)}`,
+          `Short trigger < ${money(gap.left)} / SL ref ${money(gap.right)}`,
+        ].join(' | ');
+      } else {
+        tradeZoneStatus.textContent = 'No clean gap trigger; TP candidates only';
+      }
+    }
+
     function maybeSendGapAlert(frameIndex, frame, intrusion) {
       if (!alertsEnabled || !intrusion?.entrants?.length) return;
       if (frameIndex !== Number(frameInput.max)) return;
@@ -986,6 +1184,10 @@
       const css = getComputedStyle(document.documentElement);
       const newColor = css.getPropertyValue('--new').trim();
       const priceColor = css.getPropertyValue('--price').trim();
+      const tradeZoneColors = {
+        long: css.getPropertyValue('--tp-long').trim(),
+        short: css.getPropertyValue('--tp-short').trim(),
+      };
       const zoneColors = {
         L3: css.getPropertyValue('--long-3').trim(),
         L5: css.getPropertyValue('--long-5').trim(),
@@ -1022,6 +1224,7 @@
 
       const gap = getVisualGapForBars(frame, monitorBars, xFor, xToPrice);
       const intrusion = getGapIntrusion(frameIndex, xFor, xToPrice);
+      const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, minPrice, maxPrice);
       drawGap(area, gap, priceColor);
 
       for (const bar of visibleBars) {
@@ -1069,6 +1272,8 @@
         ctx.restore();
       }
 
+      drawTradeZones(area, tradeZones, xFor, minPrice, maxPrice, tradeZoneColors);
+
       if (frame && frame.price && frame.price >= minPrice && frame.price <= maxPrice) {
         const x = xFor(frame.price);
         const priceLabel = `Price ${money(frame.price)}`;
@@ -1112,6 +1317,7 @@
 
       meta.textContent = `${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       updateGapMonitor(frame, gap, intrusion);
+      updateTradeZoneMonitor(frame, gap, tradeZones);
       maybeSendGapAlert(frameIndex, frame, intrusion);
       note.textContent = payload.source.note;
     }
@@ -1256,6 +1462,12 @@
       zoomOutButton.addEventListener('click', () => zoomPrice(1.25));
       zoomResetButton.addEventListener('click', resetPriceView);
       zoomInButton.addEventListener('click', () => zoomPrice(0.8));
+      tradeZonesButton.addEventListener('click', () => {
+        tradeZonesVisible = !tradeZonesVisible;
+        tradeZonesButton.classList.toggle('is-active', tradeZonesVisible);
+        tradeZonesButton.textContent = tradeZonesVisible ? 'Trade zones' : 'Zones off';
+        draw();
+      });
       canvas.addEventListener('wheel', handleWheel, { passive: false });
       canvas.addEventListener('pointerdown', handlePointerDown);
       canvas.addEventListener('pointermove', handlePointerMove);
