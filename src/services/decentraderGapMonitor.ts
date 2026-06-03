@@ -406,6 +406,77 @@ function latestGapIntrusion(rows: DecentraderRow[]): GapAlert | undefined {
   return detectGapIntrusion(rows, rows.length - 1);
 }
 
+function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
+  const events: any[] = [];
+  const prices: number[] = [];
+  const firstSeen = new Set<string>();
+  const currentZoneCounts = new Map<string, { s: 'L' | 'S'; l: number; p: number; c: number }>();
+
+  rows.forEach((row, rowIndex) => {
+    const framePrice = parseNumber(row.ohlc4);
+    if (framePrice !== undefined) prices.push(framePrice);
+
+    for (const side of ['long', 'short'] as const) {
+      for (const leverage of LEVERAGES) {
+        const event = eventForRow(row, rowIndex, side, leverage);
+        if (event.roundedPrice === undefined) continue;
+
+        const compactSide = side === 'long' ? 'L' : 'S';
+        const zoneKey = `${compactSide}|${leverage}|${priceKey(event.roundedPrice)}`;
+        const isFirstSeen = !firstSeen.has(zoneKey);
+        firstSeen.add(zoneKey);
+        prices.push(event.roundedPrice);
+
+        events.push({
+          i: rowIndex,
+          s: compactSide,
+          l: leverage,
+          p: event.roundedPrice,
+          a: event.active ? 1 : 0,
+          n: isFirstSeen ? 1 : 0
+        });
+
+        if (event.active) {
+          const existing =
+            currentZoneCounts.get(zoneKey) ||
+            ({ s: compactSide, l: leverage, p: event.roundedPrice, c: 0 } as {
+              s: 'L' | 'S';
+              l: number;
+              p: number;
+              c: number;
+            });
+          existing.c += 1;
+          currentZoneCounts.set(zoneKey, existing);
+        }
+      }
+    }
+  });
+
+  return {
+    source: {
+      url: 'https://www.decentrader.com/liquidity-maps/?coin=btc',
+      api: API_URL,
+      method: 'getOHLCHourlyCalculations',
+      params: [symbol],
+      note:
+        'Live cloud payload served by the Render Decentrader gap monitor. Times are Decentrader UTC and shown in the chart as Europe/Amsterdam.'
+    },
+    range: {
+      minPrice: Math.min(...prices),
+      maxPrice: Math.max(...prices)
+    },
+    frames: rows.map((row, index) => ({
+      i: index,
+      t: row.timestamp,
+      price: parseNumber(row.ohlc4)
+    })),
+    events,
+    topCurrentZones: Array.from(currentZoneCounts.values())
+      .sort((a, b) => b.c - a.c || a.p - b.p)
+      .slice(0, 40)
+  };
+}
+
 function gapAlertSignature(alert: GapAlert): string {
   return `${alert.timestamp}|${alert.entrants.map((bar) => bar.key).sort().join('|')}`;
 }
@@ -487,6 +558,8 @@ async function fetchSnapshot(symbol: string): Promise<DecentraderRow[]> {
 
 export class DecentraderGapMonitor {
   private interval: NodeJS.Timeout | undefined;
+  private latestRows: DecentraderRow[] | undefined;
+  private latestTimelapsePayload: any | undefined;
   private status: MonitorStatus = {
     enabled: false,
     running: false,
@@ -550,6 +623,8 @@ export class DecentraderGapMonitor {
 
     try {
       const rows = await fetchSnapshot(config.symbol);
+      this.latestRows = rows;
+      this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
       const alert = latestGapIntrusion(rows);
       const state = readState(config.stateFile);
       state.lastCheckedAt = nowNlIso();
@@ -632,6 +707,18 @@ export class DecentraderGapMonitor {
       };
       throw error;
     }
+  }
+
+  async getTimelapsePayload(): Promise<any> {
+    const config = this.config();
+    if (this.latestTimelapsePayload) {
+      return this.latestTimelapsePayload;
+    }
+
+    const rows = await fetchSnapshot(config.symbol);
+    this.latestRows = rows;
+    this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
+    return this.latestTimelapsePayload;
   }
 
   private config() {

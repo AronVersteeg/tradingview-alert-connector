@@ -156,6 +156,19 @@ router.get('/decentrader/gap-status', async (req, res) => {
   res.send(decentraderGapMonitor.getStatus());
 });
 
+router.get('/decentrader/liquidity-timelapse', async (req, res) => {
+  try {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(await decentraderGapMonitor.getTimelapsePayload());
+  } catch (error) {
+    console.error('Decentrader timelapse payload request failed:', error);
+    res.status(500).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
 router.post('/decentrader/gap-check', async (req, res) => {
   if (!isMonitorRequestAuthorized(req)) {
     return res.status(401).send({ ok: false, error: 'Unauthorized' });
