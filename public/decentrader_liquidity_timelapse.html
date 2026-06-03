@@ -112,6 +112,11 @@
       min-width: 42px;
     }
 
+    .zoom-button {
+      min-width: 34px;
+      font-weight: 700;
+    }
+
     .playback-controls {
       display: inline-flex;
       gap: 6px;
@@ -215,6 +220,13 @@
       background: #0d1118;
       border: 1px solid var(--border);
       border-radius: 8px;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+
+    canvas.is-panning {
+      cursor: grabbing;
     }
 
     .legend {
@@ -259,6 +271,24 @@
       .toolbar {
         padding-left: 12px;
         padding-right: 12px;
+        gap: 8px;
+      }
+
+      .control {
+        min-width: min(100%, 148px);
+      }
+
+      .control:has(#frame) {
+        flex: 1 1 100%;
+      }
+
+      .inline-buttons {
+        flex-wrap: wrap;
+      }
+
+      select,
+      button {
+        height: 36px;
       }
 
       .gap-monitor {
@@ -278,7 +308,7 @@
       }
 
       canvas {
-        height: calc(100vh - 240px);
+        height: min(62vh, 560px);
         min-height: 360px;
       }
 
@@ -340,6 +370,14 @@
           <option value="5">5x</option>
           <option value="10">10x</option>
         </select>
+      </div>
+      <div class="control">
+        <label>Price zoom</label>
+        <div class="inline-buttons">
+          <button id="zoomOut" class="zoom-button" type="button" aria-label="Zoom out" title="Zoom out">-</button>
+          <button id="zoomReset" type="button" aria-label="Reset price zoom" title="Reset price zoom">Reset</button>
+          <button id="zoomIn" class="zoom-button" type="button" aria-label="Zoom in" title="Zoom in">+</button>
+        </div>
       </div>
       <div class="control">
         <label>Alerts</label>
@@ -408,6 +446,9 @@
     const modeInput = document.getElementById('mode');
     const sideInput = document.getElementById('side');
     const levInput = document.getElementById('lev');
+    const zoomOutButton = document.getElementById('zoomOut');
+    const zoomResetButton = document.getElementById('zoomReset');
+    const zoomInButton = document.getElementById('zoomIn');
     const prevHourButton = document.getElementById('prevHour');
     const nextHourButton = document.getElementById('nextHour');
     const enableAlertsButton = document.getElementById('enableAlerts');
@@ -429,6 +470,14 @@
     let liveTimer = null;
     let alertsEnabled = false;
     let lastSentAlertSignature = '';
+    let canvasScale = 1;
+    let priceView = null;
+    let lastChartArea = null;
+    let isPanningPrice = false;
+    let panStartX = 0;
+    let panStartView = null;
+    const activePointers = new Map();
+    let pinchStart = null;
     const BAR_WIDTH = 4;
     const GAP_EDGE_PADDING = 3;
 
@@ -459,10 +508,199 @@
 
     function resizeCanvas() {
       const rect = canvas.getBoundingClientRect();
-      const scale = window.devicePixelRatio || 1;
-      canvas.width = Math.max(900, Math.floor(rect.width * scale));
-      canvas.height = Math.max(520, Math.floor(rect.height * scale));
+      canvasScale = window.devicePixelRatio || 1;
+      canvas.width = Math.max(900, Math.floor(rect.width * canvasScale));
+      canvas.height = Math.max(520, Math.floor(rect.height * canvasScale));
+      ctx.imageSmoothingEnabled = false;
       draw();
+    }
+
+    function fullPriceRange() {
+      if (!payload) return { min: 0, max: 1 };
+      const min = payload.range.minPrice;
+      const max = payload.range.maxPrice;
+      const padding = Math.max(500, (max - min) * 0.01);
+      return { min: min - padding, max: max + padding };
+    }
+
+    function minZoomSpan() {
+      const full = fullPriceRange();
+      return Math.max(500, (full.max - full.min) * 0.006);
+    }
+
+    function clampPriceView(min, max) {
+      const full = fullPriceRange();
+      const fullSpan = full.max - full.min;
+      let span = Math.max(minZoomSpan(), max - min);
+      if (span >= fullSpan) return { min: full.min, max: full.max };
+
+      if (min < full.min) {
+        min = full.min;
+        max = min + span;
+      }
+      if (max > full.max) {
+        max = full.max;
+        min = max - span;
+      }
+      return { min, max };
+    }
+
+    function ensurePriceView() {
+      if (!priceView) priceView = fullPriceRange();
+      priceView = clampPriceView(priceView.min, priceView.max);
+      return priceView;
+    }
+
+    function resetPriceView() {
+      priceView = fullPriceRange();
+      draw();
+    }
+
+    function zoomPrice(factor, anchorPrice) {
+      const view = ensurePriceView();
+      const span = view.max - view.min;
+      const nextSpan = Math.max(minZoomSpan(), span * factor);
+      const anchor = Number.isFinite(anchorPrice) ? anchorPrice : (view.min + view.max) / 2;
+      const anchorRatio = (anchor - view.min) / span;
+      priceView = clampPriceView(anchor - nextSpan * anchorRatio, anchor + nextSpan * (1 - anchorRatio));
+      draw();
+    }
+
+    function panPriceFromStart(canvasX) {
+      if (!lastChartArea || !panStartView) return;
+      const span = panStartView.max - panStartView.min;
+      const deltaPrice = -((canvasX - panStartX) / lastChartArea.width) * span;
+      priceView = clampPriceView(panStartView.min + deltaPrice, panStartView.max + deltaPrice);
+      draw();
+    }
+
+    function canvasPoint(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (event.clientX - rect.left) * canvasScale,
+        y: (event.clientY - rect.top) * canvasScale,
+      };
+    }
+
+    function pointInChart(point) {
+      return lastChartArea
+        && point.x >= lastChartArea.left
+        && point.x <= lastChartArea.right
+        && point.y >= lastChartArea.top
+        && point.y <= lastChartArea.bottom + 92;
+    }
+
+    function canvasXToPrice(x) {
+      const area = lastChartArea;
+      if (!area) return null;
+      const view = ensurePriceView();
+      return view.min + ((x - area.left) / area.width) * (view.max - view.min);
+    }
+
+    function pointerMetrics() {
+      const points = [...activePointers.values()];
+      if (points.length < 2) return null;
+      const a = points[0];
+      const b = points[1];
+      return {
+        distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+        centerX: (a.x + b.x) / 2,
+        centerY: (a.y + b.y) / 2,
+      };
+    }
+
+    function resetPinchStart() {
+      const metrics = pointerMetrics();
+      if (!metrics || !lastChartArea) {
+        pinchStart = null;
+        return;
+      }
+      const view = ensurePriceView();
+      pinchStart = {
+        ...metrics,
+        view: { ...view },
+        anchorPrice: canvasXToPrice(metrics.centerX),
+      };
+    }
+
+    function handleWheel(event) {
+      if (!payload) return;
+      const point = canvasPoint(event);
+      if (!pointInChart(point)) return;
+      event.preventDefault();
+      const anchorPrice = canvasXToPrice(point.x);
+      zoomPrice(event.deltaY > 0 ? 1.18 : 0.84, anchorPrice);
+    }
+
+    function handlePointerDown(event) {
+      if (!payload) return;
+      const point = canvasPoint(event);
+      if (!pointInChart(point)) return;
+      event.preventDefault();
+      canvas.setPointerCapture?.(event.pointerId);
+      activePointers.set(event.pointerId, point);
+
+      if (activePointers.size === 1) {
+        isPanningPrice = true;
+        canvas.classList.add('is-panning');
+        panStartX = point.x;
+        panStartView = { ...ensurePriceView() };
+      } else {
+        isPanningPrice = false;
+        resetPinchStart();
+      }
+    }
+
+    function handlePointerMove(event) {
+      if (!activePointers.has(event.pointerId)) return;
+      const point = canvasPoint(event);
+      activePointers.set(event.pointerId, point);
+
+      if (activePointers.size >= 2 && pinchStart && lastChartArea) {
+        event.preventDefault();
+        const metrics = pointerMetrics();
+        if (!metrics) return;
+        const startSpan = pinchStart.view.max - pinchStart.view.min;
+        const nextSpan = Math.max(minZoomSpan(), startSpan * (pinchStart.distance / metrics.distance));
+        const anchor = Number.isFinite(pinchStart.anchorPrice)
+          ? pinchStart.anchorPrice
+          : (pinchStart.view.min + pinchStart.view.max) / 2;
+        const centerShiftPrice = -((metrics.centerX - pinchStart.centerX) / lastChartArea.width) * nextSpan;
+        const adjustedAnchor = anchor + centerShiftPrice;
+        const anchorRatio = (anchor - pinchStart.view.min) / startSpan;
+        priceView = clampPriceView(
+          adjustedAnchor - nextSpan * anchorRatio,
+          adjustedAnchor + nextSpan * (1 - anchorRatio)
+        );
+        draw();
+        return;
+      }
+
+      if (activePointers.size === 1 && isPanningPrice) {
+        event.preventDefault();
+        panPriceFromStart(point.x);
+      }
+    }
+
+    function handlePointerEnd(event) {
+      activePointers.delete(event.pointerId);
+      if (activePointers.size === 0) {
+        isPanningPrice = false;
+        panStartView = null;
+        pinchStart = null;
+        canvas.classList.remove('is-panning');
+        return;
+      }
+
+      if (activePointers.size === 1) {
+        const remaining = [...activePointers.values()][0];
+        isPanningPrice = true;
+        panStartX = remaining.x;
+        panStartView = { ...ensurePriceView() };
+        pinchStart = null;
+      } else {
+        resetPinchStart();
+      }
     }
 
     function eventAllowed(event) {
@@ -574,6 +812,16 @@
       };
     }
 
+    function priceTickStep(span) {
+      if (span > 60000) return 5000;
+      if (span > 30000) return 2500;
+      if (span > 12000) return 1000;
+      if (span > 6000) return 500;
+      if (span > 2500) return 250;
+      if (span > 1000) return 100;
+      return 50;
+    }
+
     function drawGrid(area, minPrice, maxPrice, maxCount) {
       ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--grid');
       ctx.fillStyle = '#9aa8b8';
@@ -589,15 +837,37 @@
         ctx.fillText(String(Math.round(maxCount * i / 5)), 12, y + 4);
       }
 
-      for (let i = 0; i <= 6; i++) {
-        const x = area.left + (area.width * i / 6);
-        const price = minPrice + ((maxPrice - minPrice) * i / 6);
+      ctx.strokeStyle = 'rgba(236, 242, 248, 0.28)';
+      ctx.beginPath();
+      ctx.moveTo(area.left, area.bottom);
+      ctx.lineTo(area.right, area.bottom);
+      ctx.stroke();
+
+      const step = priceTickStep(maxPrice - minPrice);
+      const firstTick = Math.ceil(minPrice / step) * step;
+      ctx.font = '600 12px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+
+      for (let price = firstTick; price <= maxPrice + step * 0.5; price += step) {
+        const x = area.left + ((price - minPrice) / (maxPrice - minPrice)) * area.width;
+        const isMajor = Math.round(price / 5000) * 5000 === Math.round(price);
+        ctx.strokeStyle = isMajor ? 'rgba(236, 242, 248, 0.22)' : 'rgba(236, 242, 248, 0.10)';
         ctx.beginPath();
         ctx.moveTo(x, area.top);
-        ctx.lineTo(x, area.bottom);
+        ctx.lineTo(x, area.bottom + 8);
         ctx.stroke();
-        ctx.fillText(money(price), x - 32, area.bottom + 24);
+
+        ctx.save();
+        ctx.translate(Math.round(x) - 3, area.bottom + 18);
+        ctx.rotate(Math.PI / 3);
+        ctx.fillStyle = isMajor ? '#ecf2f8' : '#9aa8b8';
+        ctx.fillText(money(price), 0, 0);
+        ctx.restore();
       }
+
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
     }
 
     function drawGap(area, gap, priceColor) {
@@ -699,11 +969,13 @@
       if (!payload) return;
       const frameIndex = Number(frameInput.value);
       const frame = payload.frames[frameIndex];
-      const minPrice = payload.range.minPrice;
-      const maxPrice = payload.range.maxPrice;
+      const visiblePrice = ensurePriceView();
+      const minPrice = visiblePrice.min;
+      const maxPrice = visiblePrice.max;
       const { bars, firstSeen } = getFrameEvents(frameIndex);
       const monitorBars = getFrameEvents(frameIndex, { mode: 'active' }).bars;
-      const maxCount = Math.max(1, ...bars.map((bar) => bar.count));
+      const visibleBars = bars.filter((bar) => bar.price >= minPrice && bar.price <= maxPrice);
+      const maxCount = Math.max(1, ...visibleBars.map((bar) => bar.count));
       const css = getComputedStyle(document.documentElement);
       const newColor = css.getPropertyValue('--new').trim();
       const priceColor = css.getPropertyValue('--price').trim();
@@ -721,10 +993,11 @@
         left: 64,
         top: 34,
         right: canvas.width - 30,
-        bottom: canvas.height - 58,
+        bottom: canvas.height - 108,
       };
       area.width = area.right - area.left;
       area.height = area.bottom - area.top;
+      lastChartArea = area;
 
       drawGrid(area, minPrice, maxPrice, maxCount);
 
@@ -744,16 +1017,19 @@
       const intrusion = getGapIntrusion(frameIndex, xFor, xToPrice);
       drawGap(area, gap, priceColor);
 
-      for (const bar of bars) {
+      for (const bar of visibleBars) {
         const x = xFor(bar.price) + leverageOffset(bar.leverage);
         const barHeight = Math.max(2, (bar.count / maxCount) * area.height);
+        const barWidth = Math.max(2, Math.round(BAR_WIDTH * canvasScale));
+        const crispX = Math.round(x - barWidth / 2);
         ctx.fillStyle = colorForZone(bar.side, bar.leverage);
         ctx.globalAlpha = modeInput.value === 'new' ? 0.86 : 0.58;
-        ctx.fillRect(x - 2, area.bottom - barHeight, 4, barHeight);
+        ctx.fillRect(crispX, Math.round(area.bottom - barHeight), barWidth, Math.round(barHeight));
       }
 
       ctx.globalAlpha = 1;
       for (const item of firstSeen) {
+        if (item.price < minPrice || item.price > maxPrice) continue;
         const x = xFor(item.price) + leverageOffset(item.leverage);
         ctx.strokeStyle = newColor;
         ctx.lineWidth = 4;
@@ -776,6 +1052,7 @@
         ctx.strokeStyle = newColor;
         ctx.lineWidth = 5;
         for (const item of intrusion.entrants) {
+          if (item.price < minPrice || item.price > maxPrice) continue;
           const x = xFor(item.price) + leverageOffset(item.leverage);
           ctx.beginPath();
           ctx.moveTo(x, area.top);
@@ -785,7 +1062,7 @@
         ctx.restore();
       }
 
-      if (frame && frame.price) {
+      if (frame && frame.price && frame.price >= minPrice && frame.price <= maxPrice) {
         const x = xFor(frame.price);
         const priceLabel = `Price ${money(frame.price)}`;
         ctx.font = '600 12px Inter, system-ui, sans-serif';
@@ -959,6 +1236,15 @@
       enableAlertsButton.addEventListener('click', enableAlerts);
       liveMonitorButton.addEventListener('click', () => setLiveMonitor(!liveTimer));
       refreshDataButton.addEventListener('click', () => refreshPayload().catch(showRefreshError));
+      zoomOutButton.addEventListener('click', () => zoomPrice(1.25));
+      zoomResetButton.addEventListener('click', resetPriceView);
+      zoomInButton.addEventListener('click', () => zoomPrice(0.8));
+      canvas.addEventListener('wheel', handleWheel, { passive: false });
+      canvas.addEventListener('pointerdown', handlePointerDown);
+      canvas.addEventListener('pointermove', handlePointerMove);
+      canvas.addEventListener('pointerup', handlePointerEnd);
+      canvas.addEventListener('pointercancel', handlePointerEnd);
+      canvas.addEventListener('lostpointercapture', handlePointerEnd);
       playButton.addEventListener('click', () => setPlaying(!playing));
       window.addEventListener('resize', resizeCanvas);
 
