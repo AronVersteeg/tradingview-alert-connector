@@ -2416,6 +2416,7 @@ export class DydxV4Client extends AbstractDexClient {
     const side = isLong ? OrderSide.SELL : OrderSide.BUY;
     const entryReferencePrice = this.getSafetyStopReferencePrice(alert, position.entryPrice);
     const positionSize = Math.abs(position.size);
+    const marketInfo = await this.getMarketInfoBestEffort(market);
 
     console.log('Placing explicit take profits:', {
       market,
@@ -2427,19 +2428,26 @@ export class DydxV4Client extends AbstractDexClient {
 
     for (const level of levels) {
       const triggerPrice = level.price;
-      const size = Number(
+      const requestedSize = Number(
         (
           level.size && level.size > 0
             ? level.size
             : positionSize * (level.sizeFraction ?? 0)
         ).toFixed(6)
       );
+      const sizeCheck = this.getCorrectionOrderSizeCheck(market, requestedSize, marketInfo);
+      const minOrderSize = sizeCheck.minOrderSize ?? this.TOLERANCE;
+      const size = sizeCheck.roundedOrderSize ?? requestedSize;
 
-      if (size < this.TOLERANCE) {
-        console.log('Explicit TP skipped: size is below tolerance.', {
+      if (requestedSize <= 0 || requestedSize + Number.EPSILON < minOrderSize || size <= 0) {
+        console.log('Explicit TP skipped: size is below dYdX market minimum.', {
           market,
           level,
-          size
+          requestedSize,
+          minOrderSize,
+          roundedOrderSize: sizeCheck.roundedOrderSize,
+          stepSize: sizeCheck.stepSize,
+          source: sizeCheck.source
         });
         continue;
       }
