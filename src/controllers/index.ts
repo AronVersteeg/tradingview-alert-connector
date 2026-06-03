@@ -157,6 +157,24 @@ router.get('/decentrader/gap-status', async (req, res) => {
 });
 
 router.get('/decentrader/map', async (req, res) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+      "script-src 'self' 'unsafe-inline'",
+      "script-src-attr 'none'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "connect-src 'self' https://arons-tradingview-alert-connector.onrender.com",
+      "font-src 'self' https: data:",
+      "form-action 'self'",
+      "frame-ancestors 'self'",
+      'upgrade-insecure-requests'
+    ].join('; ')
+  );
+  res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(process.cwd(), 'public', 'decentrader_liquidity_timelapse.html'));
 });
 
