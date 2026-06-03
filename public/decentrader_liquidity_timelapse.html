@@ -1230,11 +1230,16 @@
     function planSummary(plan) {
       if (!plan) return null;
       const tp1 = plan.takeProfits?.[0];
+      const stopText = plan.stop?.valid === false
+        ? 'SL invalid'
+        : plan.stop
+          ? `SL ${money(plan.stop.price)} (${pct(plan.stop.riskPct)})`
+          : 'SL -';
       return [
         `${plan.direction.toUpperCase()} ${money2(plan.sizing?.notional)} / ${btcSize(plan.sizing?.size)}`,
         `score ${plan.sizing?.confidenceScore ?? 0}`,
         `trigger ${money(plan.trigger?.price)}`,
-        plan.stop ? `SL ${money(plan.stop.price)} (${pct(plan.stop.riskPct)})` : 'SL -',
+        stopText,
         tp1 ? `${tp1.label} ${money(tp1.price)}` : 'TP1 -'
       ].join(' | ');
     }
@@ -1263,9 +1268,10 @@
         tradePlanValue.textContent = planSummary(active);
         tradePlanStatus.textContent = [
           accountText,
+          active.stop?.valid === false ? active.stop.reason : '',
           `${latestTradePlan.timestampNl}`,
           isLatestFrame ? 'latest frame' : 'shown for latest frame only'
-        ].join(' | ');
+        ].filter(Boolean).join(' | ');
         return;
       }
 

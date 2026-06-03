@@ -82,6 +82,30 @@ type DydxSizingAccountSnapshot = {
 
 type TradePlanDirection = 'long' | 'short';
 
+type FractalLevel = {
+  kind: 'top' | 'bottom';
+  price: number;
+  timestamp: string;
+  index: number;
+  window: number;
+  source: 'highRef' | 'lowRef' | 'ohlc4';
+};
+
+type FractalStop = {
+  price?: number;
+  rawFractalPrice?: number;
+  buffer?: number;
+  source: 'confirmed-top-fractal' | 'confirmed-bottom-fractal' | 'missing-fractal' | 'invalid-distance';
+  fractal?: FractalLevel;
+  distance?: number;
+  riskPct?: number;
+  minDistancePct: number;
+  maxDistancePct: number;
+  valid: boolean;
+  adjustedToMinDistance?: boolean;
+  reason?: string;
+};
+
 type DecentraderTradeExecutor = {
   getAccountSnapshot: (markets: string[]) => Promise<DydxSizingAccountSnapshot>;
   placeOrder: (alert: AlertObject) => Promise<void>;
@@ -842,6 +866,233 @@ function decentraderTpFractions(count: number): number[] {
   return rawFractions.map((value) => value / Math.max(sum, Number.EPSILON));
 }
 
+function envPositiveNumber(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function envFraction(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  const value = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return value > 1 ? value / 100 : value;
+}
+
+function decentraderTradeRiskPct(): number {
+  return envFraction('DECENTRADER_TRADE_RISK_PCT', 0.0035);
+}
+
+function decentraderSlFractalWindow(): number {
+  return Math.max(1, Math.floor(envPositiveNumber('DECENTRADER_SL_FRACTAL_WINDOW', 2)));
+}
+
+function decentraderSlLookbackBars(): number {
+  return Math.max(8, Math.floor(envPositiveNumber('DECENTRADER_SL_LOOKBACK_BARS', 72)));
+}
+
+function decentraderSlBufferPct(): number {
+  return envFraction('DECENTRADER_SL_BUFFER_PCT', 0.001);
+}
+
+function decentraderSlRangeBufferMultiplier(): number {
+  return envPositiveNumber('DECENTRADER_SL_BUFFER_RANGE_MULTIPLIER', 0.25);
+}
+
+function decentraderSlMinDistancePct(): number {
+  return envFraction('DECENTRADER_SL_MIN_DISTANCE_PCT', 0.0025);
+}
+
+function decentraderSlMaxDistancePct(): number {
+  return envFraction('DECENTRADER_SL_MAX_DISTANCE_PCT', 0.025);
+}
+
+function decentraderSkipTradeWithoutSl(): boolean {
+  return parseBool(process.env.DECENTRADER_SKIP_TRADE_WITHOUT_SL, true);
+}
+
+function median(values: number[]): number | undefined {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!sorted.length) return undefined;
+
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function medianHourlyRange(rows: DecentraderRow[], frameIndex: number, lookback: number): number | undefined {
+  const start = Math.max(1, frameIndex - lookback + 1);
+  const ranges: number[] = [];
+
+  for (let index = start; index <= frameIndex; index += 1) {
+    const current = parseNumber(rows[index]?.ohlc4);
+    const previous = parseNumber(rows[index - 1]?.ohlc4);
+
+    if (current !== undefined && previous !== undefined) {
+      ranges.push(Math.abs(current - previous));
+    }
+  }
+
+  return median(ranges);
+}
+
+function confirmedFractals(
+  rows: DecentraderRow[],
+  frameIndex: number,
+  kind: 'top' | 'bottom',
+  window: number,
+  lookback: number,
+  source?: 'highRef' | 'lowRef' | 'ohlc4'
+): FractalLevel[] {
+  const key = source || (kind === 'top' ? 'highRef' : 'lowRef');
+  const firstIndex = Math.max(window, frameIndex - lookback);
+  const lastIndex = frameIndex - window;
+  const fractals: FractalLevel[] = [];
+
+  for (let index = firstIndex; index <= lastIndex; index += 1) {
+    const price = parseNumber(rows[index]?.[key]);
+    if (price === undefined) continue;
+
+    let confirmed = true;
+    for (let offset = -window; offset <= window; offset += 1) {
+      if (offset === 0) continue;
+
+      const neighborPrice = parseNumber(rows[index + offset]?.[key]);
+      if (neighborPrice === undefined) {
+        confirmed = false;
+        break;
+      }
+
+      if (kind === 'top' ? price <= neighborPrice : price >= neighborPrice) {
+        confirmed = false;
+        break;
+      }
+    }
+
+    if (confirmed) {
+      fractals.push({
+        kind,
+        price,
+        timestamp: String(rows[index]?.timestamp || ''),
+        index,
+        window,
+        source: key as 'highRef' | 'lowRef' | 'ohlc4'
+      });
+    }
+  }
+
+  return fractals;
+}
+
+function latestValidFractal(
+  rows: DecentraderRow[],
+  frameIndex: number,
+  direction: TradePlanDirection,
+  entryPrice: number
+): FractalLevel | undefined {
+  const kind = direction === 'long' ? 'bottom' : 'top';
+  const fractals = confirmedFractals(
+    rows,
+    frameIndex,
+    kind,
+    decentraderSlFractalWindow(),
+    decentraderSlLookbackBars()
+  );
+  const validRefFractal = fractals
+    .reverse()
+    .find((fractal) => direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice);
+
+  if (validRefFractal) {
+    return validRefFractal;
+  }
+
+  return confirmedFractals(
+    rows,
+    frameIndex,
+    kind,
+    decentraderSlFractalWindow(),
+    decentraderSlLookbackBars(),
+    'ohlc4'
+  )
+    .reverse()
+    .find((fractal) => direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice);
+}
+
+function buildFractalStop(
+  rows: DecentraderRow[],
+  frameIndex: number,
+  direction: TradePlanDirection,
+  entryPrice: number
+): FractalStop {
+  const minDistancePct = decentraderSlMinDistancePct();
+  const maxDistancePct = decentraderSlMaxDistancePct();
+  const fractal = latestValidFractal(rows, frameIndex, direction, entryPrice);
+  const rangeBuffer = (medianHourlyRange(rows, frameIndex, decentraderSlLookbackBars()) || 0) *
+    decentraderSlRangeBufferMultiplier();
+  const pctBuffer = entryPrice * decentraderSlBufferPct();
+  const buffer = Math.max(pctBuffer, rangeBuffer);
+
+  if (!fractal) {
+    return {
+      source: 'missing-fractal',
+      minDistancePct,
+      maxDistancePct,
+      valid: false,
+      reason: decentraderSkipTradeWithoutSl()
+        ? 'No confirmed fractal stop found; trade will be skipped.'
+        : 'No confirmed fractal stop found.'
+    };
+  }
+
+  let price = direction === 'long'
+    ? fractal.price - buffer
+    : fractal.price + buffer;
+  let distance = Math.abs(entryPrice - price);
+  let riskPct = distance / Math.max(1, entryPrice);
+  let adjustedToMinDistance = false;
+
+  if (riskPct < minDistancePct) {
+    price = direction === 'long'
+      ? entryPrice * (1 - minDistancePct)
+      : entryPrice * (1 + minDistancePct);
+    distance = Math.abs(entryPrice - price);
+    riskPct = distance / Math.max(1, entryPrice);
+    adjustedToMinDistance = true;
+  }
+
+  if (riskPct > maxDistancePct) {
+    return {
+      price,
+      rawFractalPrice: fractal.price,
+      buffer,
+      source: 'invalid-distance',
+      fractal,
+      distance,
+      riskPct,
+      minDistancePct,
+      maxDistancePct,
+      valid: false,
+      reason: `Fractal stop distance ${riskPct} is above maximum ${maxDistancePct}.`
+    };
+  }
+
+  return {
+    price,
+    rawFractalPrice: fractal.price,
+    buffer,
+    source: direction === 'long' ? 'confirmed-bottom-fractal' : 'confirmed-top-fractal',
+    fractal,
+    distance,
+    riskPct,
+    minDistancePct,
+    maxDistancePct,
+    valid: true,
+    adjustedToMinDistance,
+    reason: adjustedToMinDistance
+      ? `Fractal stop was widened to minimum distance ${minDistancePct}.`
+      : undefined
+  };
+}
+
 function mapDirectionFromAlert(alert: GapAlert | undefined): TradePlanDirection | undefined {
   if (!alert?.entrants.length) return undefined;
   const leftWeight = alert.left.reduce((sum, bar) => sum + (bar.newCount || 1) * bar.leverage, 0);
@@ -876,6 +1127,8 @@ function buildDirectionalPlan(
   direction: TradePlanDirection,
   account: DydxSizingAccountSnapshot,
   marketInfo: DydxSizingAccountSnapshot['markets'][string],
+  rows: DecentraderRow[],
+  frameIndex: number,
   gap: Gap | undefined,
   alert: GapAlert | undefined,
   zones: { longTp: TradeZone[]; shortTp: TradeZone[] },
@@ -885,7 +1138,8 @@ function buildDirectionalPlan(
   const isLong = direction === 'long';
   const tpZones = isLong ? zones.longTp : zones.shortTp;
   const entryPrice = gap ? (isLong ? gap.right : gap.left) : fallbackPrice;
-  const stopPrice = gap ? (isLong ? gap.left : gap.right) : undefined;
+  const stop = buildFractalStop(rows, frameIndex, direction, entryPrice);
+  const stopPrice = stop.valid ? stop.price : undefined;
   const marketPrice = marketInfo.oraclePrice || fallbackPrice;
   const equity = numberOrZero(account.equity);
   const freeCollateral = numberOrZero(account.freeCollateral);
@@ -906,12 +1160,24 @@ function buildDirectionalPlan(
   const collateralBudget = flatCollateral * modeConfig.collateralUse * Math.max(weight, modeConfig.minWeight);
   const collateralCappedNotional = collateralBudget / marginFraction;
   const equityCappedNotional = equity * modeConfig.equityLeverage * Math.max(weight, modeConfig.minWeight);
-  const notional = Math.max(0, Math.min(desiredNotional, collateralCappedNotional, equityCappedNotional));
+  const riskBudgetUsd = equity * decentraderTradeRiskPct();
+  const riskCappedNotional =
+    stop.valid && stopDistance > 0
+      ? (riskBudgetUsd / stopDistance) * marketPrice
+      : 0;
+  const notional = Math.max(
+    0,
+    Math.min(desiredNotional, collateralCappedNotional, equityCappedNotional, riskCappedNotional)
+  );
   const size = floorToStep(notional / Math.max(1, marketPrice), stepSize);
 
   return {
     direction,
-    status: mapDirectionFromAlert(alert) === direction ? 'alert-active' : 'watch',
+    status: !stop.valid
+      ? 'invalid-stop'
+      : mapDirectionFromAlert(alert) === direction
+        ? 'alert-active'
+        : 'watch',
     trigger: {
       type: gap ? (isLong ? 'gap-right-break' : 'gap-left-break') : 'no-clean-gap',
       price: entryPrice
@@ -922,11 +1188,27 @@ function buildDirectionalPlan(
     },
     stop: stopPrice
       ? {
+          valid: true,
           price: stopPrice,
           distance: stopDistance,
-          riskPct: stopRiskPct
+          riskPct: stopRiskPct,
+          source: stop.source,
+          rawFractalPrice: stop.rawFractalPrice,
+          buffer: stop.buffer,
+          fractal: stop.fractal,
+          minDistancePct: stop.minDistancePct,
+          maxDistancePct: stop.maxDistancePct,
+          adjustedToMinDistance: stop.adjustedToMinDistance,
+          reason: stop.reason
         }
-      : null,
+      : {
+          source: stop.source,
+          valid: false,
+          reason: stop.reason,
+          minDistancePct: stop.minDistancePct,
+          maxDistancePct: stop.maxDistancePct,
+          fractal: stop.fractal || null
+        },
     takeProfits: tpZones.map((zone) => ({
       label: `${isLong ? 'L' : 'S'} TP${zone.rank}`,
       price: zone.price,
@@ -942,6 +1224,8 @@ function buildDirectionalPlan(
       notional: size * marketPrice,
       size,
       equityFraction: weight,
+      riskPct: decentraderTradeRiskPct(),
+      riskBudgetUsd,
       confidenceScore: mapScore,
       confidenceMultiplier: confidence,
       stopBrake,
@@ -949,6 +1233,7 @@ function buildDirectionalPlan(
         collateralBudget,
         collateralCappedNotional,
         equityCappedNotional,
+        riskCappedNotional,
         marginFraction,
         stepSize
       }
@@ -969,9 +1254,14 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
     numberOrZero(plan.price) ||
     numberOrZero(activePlan?.trigger?.price);
   const size = numberOrZero(activePlan?.sizing?.size);
+  const stopPrice = numberOrZero(activePlan?.stop?.price);
 
   if (direction !== 'long' && direction !== 'short') {
     throw new Error('Decentrader trade execution skipped: no active long/short plan.');
+  }
+
+  if (activePlan?.status === 'invalid-stop' || (!activePlan?.stop?.valid && !stopPrice)) {
+    throw new Error(activePlan?.stop?.reason || 'Decentrader trade execution skipped: no valid fractal stop.');
   }
 
   if (!Number.isFinite(size) || size <= 0) {
@@ -982,20 +1272,23 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
     throw new Error('Decentrader trade execution skipped: active plan has no valid reference price.');
   }
 
+  if (!Number.isFinite(stopPrice) || stopPrice <= 0) {
+    throw new Error('Decentrader trade execution skipped: active plan has no positive static SL.');
+  }
+
   return {
     exchange: 'dydxv4',
     strategy: 'decentrader_liquidity_map',
     market: plan.market || decentraderTradeMarket(),
     price: referencePrice,
+    entry_price: referencePrice,
     size,
     sizeUsd: numberOrZero(activePlan?.sizing?.notional),
     desired_position: direction === 'long' ? 'LONG' : 'SHORT',
     time: Date.parse(String(plan.timestamp || '').replace(' ', 'T') + 'Z') || Date.now(),
-    signal: direction === 'long'
-      ? 'DECENTRADER_LEFT_EDGE_LONG'
-      : 'DECENTRADER_RIGHT_EDGE_SHORT',
-    profile: 'SIGNAL_ONLY',
-    skip_static_stop: true,
+    signal: direction === 'long' ? 'LONG_ENTRY' : 'SHORT_ENTRY',
+    profile: 'MANAGED',
+    static_sl: stopPrice,
     take_profits: takeProfits.map((tp: any, index: number) => ({
       label: tp.label || `${direction === 'long' ? 'L' : 'S'} TP${index + 1}`,
       price: tp.price,
@@ -1009,7 +1302,8 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
       confidenceScore: activePlan?.sizing?.confidenceScore,
       equityFraction: activePlan?.sizing?.equityFraction,
       notional: activePlan?.sizing?.notional,
-      note: 'Generated by Decentrader edge trigger. SL is intentionally skipped until the dedicated stop-loss system is added.'
+      stop: activePlan?.stop,
+      note: 'Generated by Decentrader edge trigger with confirmed fractal SL and map-derived TP levels.'
     }
   } as AlertObject;
 }
@@ -1409,12 +1703,30 @@ export class DecentraderGapMonitor {
         return;
       }
 
+      if (plan.activePlan.status === 'invalid-stop' || plan.activePlan.stop?.valid === false) {
+        result.tradeSkipped = plan.activePlan.stop?.reason || 'Trade skipped because fractal SL is invalid.';
+        result.tradeAttempted = false;
+        result.tradePlan = {
+          timestamp: plan.timestamp,
+          timestampNl: plan.timestampNl,
+          market: plan.market,
+          direction: plan.activePlan.direction,
+          status: plan.activePlan.status,
+          stop: plan.activePlan.stop,
+          size: plan.activePlan.sizing?.size,
+          notional: plan.activePlan.sizing?.notional
+        };
+        return;
+      }
+
       const orderAlert = buildDecentraderOrderAlert(plan, signature);
       result.tradePlan = {
         timestamp: plan.timestamp,
         timestampNl: plan.timestampNl,
         market: plan.market,
         direction: plan.activePlan.direction,
+        status: plan.activePlan.status,
+        stop: plan.activePlan.stop,
         size: plan.activePlan.sizing?.size,
         notional: plan.activePlan.sizing?.notional,
         confidenceScore: plan.activePlan.sizing?.confidenceScore,
@@ -1427,7 +1739,10 @@ export class DecentraderGapMonitor {
         size: orderAlert.size,
         sizeUsd: orderAlert.sizeUsd,
         price: orderAlert.price,
+        entry_price: (orderAlert as any).entry_price,
+        static_sl: (orderAlert as any).static_sl,
         signal: (orderAlert as any).signal,
+        profile: (orderAlert as any).profile,
         take_profits: (orderAlert as any).take_profits
       };
 
@@ -1495,8 +1810,8 @@ export class DecentraderGapMonitor {
     const mode = String(process.env.DECENTRADER_TRADE_SIZING_MODE || 'growth')
       .trim()
       .toLowerCase();
-    const longPlan = buildDirectionalPlan('long', account, marketInfo, gap, alert, zones, price, mode);
-    const shortPlan = buildDirectionalPlan('short', account, marketInfo, gap, alert, zones, price, mode);
+    const longPlan = buildDirectionalPlan('long', account, marketInfo, rows, frameIndex, gap, alert, zones, price, mode);
+    const shortPlan = buildDirectionalPlan('short', account, marketInfo, rows, frameIndex, gap, alert, zones, price, mode);
     const activeDirection = mapDirectionFromAlert(alert);
     const activePlan = activeDirection === 'long' ? longPlan : activeDirection === 'short' ? shortPlan : null;
 
@@ -1535,7 +1850,7 @@ export class DecentraderGapMonitor {
         short: shortPlan
       },
       note:
-        'Signal-only planning layer. It estimates trigger, SL, TP and dYdX size from live equity; it does not place orders.'
+        'Planning layer. It estimates trigger, confirmed-fractal SL, map TP and dYdX size from live equity; this endpoint does not place orders.'
     };
   }
 
