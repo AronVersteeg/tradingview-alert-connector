@@ -75,7 +75,8 @@ function configureDecentraderTradeExecutor() {
 
   decentraderGapMonitor.configureTradeExecutor({
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
-    placeOrder: (alert: any) => client.placeOrder(alert)
+    placeOrder: (alert: any) => client.placeOrder(alert),
+    syncTakeProfits: (alert: any) => client.syncTakeProfits(alert)
   });
 }
 

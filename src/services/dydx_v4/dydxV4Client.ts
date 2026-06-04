@@ -484,6 +484,132 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 
+  async syncTakeProfits(alert: AlertObject): Promise<any> {
+    const market = this.normalizeMarket((alert as any).market);
+
+    return this.withMarketQueue(market, () =>
+      this.syncTakeProfitsForMarket(market, alert)
+    );
+  }
+
+  private async syncTakeProfitsForMarket(market: string, alert: AlertObject): Promise<any> {
+    const position = await this.getCurrentPosition(market);
+
+    if (Math.abs(position.size) < this.TOLERANCE) {
+      return {
+        outcome: 'SKIPPED',
+        reason: `${market} is flat; dynamic TP sync has nothing to manage.`
+      };
+    }
+
+    const expectedSize = this.getTargetSize(alert, Math.abs(position.size));
+    if (Math.sign(expectedSize) !== Math.sign(position.size)) {
+      throw new Error(
+        `Dynamic TP sync direction mismatch for ${market}. Current=${position.size}, requested=${expectedSize}.`
+      );
+    }
+
+    const requestedLevels = this.getExplicitTakeProfitLevels(alert);
+    if (!requestedLevels.length) {
+      return {
+        outcome: 'SKIPPED',
+        reason: 'No valid map-derived TP levels supplied; existing TP orders were preserved.'
+      };
+    }
+
+    const isLong = position.size > 0;
+    const marketInfo = await this.getMarketInfoBestEffort(market);
+    const currentPrice = this.getMarketInfoReferencePrice(marketInfo);
+    const levels = requestedLevels.filter((level) =>
+      !currentPrice || (isLong ? level.price > currentPrice : level.price < currentPrice)
+    );
+
+    if (!levels.length) {
+      return {
+        outcome: 'SKIPPED',
+        reason: 'No supplied map-derived TP levels remain beyond the current market price.'
+      };
+    }
+
+    const openOrders = await this.getOpenOrdersForMarket(market);
+    const existingTakeProfits = openOrders.filter((order: any) => this.isTakeProfitOrder(order));
+
+    if (this.takeProfitOrdersMatchLevels(existingTakeProfits, levels, market, marketInfo)) {
+      return {
+        outcome: 'UNCHANGED',
+        reason: 'Live dYdX TP orders already match the latest map-derived TP ladder.',
+        positionSize: position.size,
+        takeProfitCount: existingTakeProfits.length
+      };
+    }
+
+    console.log('Dynamic map TP sync replacing TP-only ladder:', {
+      market,
+      position,
+      currentPrice,
+      existingTakeProfits: existingTakeProfits.map((order: any) => this.summarizeOrder(order)),
+      requestedLevels: levels
+    });
+
+    await this.cancelSpecificOrders(market, existingTakeProfits);
+    const remainingTakeProfits = await this.waitForTakeProfitsCleared(market);
+
+    if (remainingTakeProfits.length) {
+      throw new Error(
+        `Dynamic TP sync stopped for ${market}: ${remainingTakeProfits.length} old TP order(s) remain visible after cancellation.`
+      );
+    }
+
+    const positionAfterCancel = await this.getCurrentPosition(market);
+    if (
+      Math.sign(positionAfterCancel.size) !== Math.sign(position.size) ||
+      Math.abs(positionAfterCancel.size - position.size) >= this.TOLERANCE
+    ) {
+      throw new Error(
+        `Dynamic TP sync stopped for ${market}: position changed during TP replacement. Before=${position.size}, after=${positionAfterCancel.size}.`
+      );
+    }
+
+    this.managedTakeProfits.delete(market);
+    await this.placeExplicitTakeProfitsAfterEntry(
+      market,
+      position.size,
+      {
+        ...(alert as any),
+        take_profits: levels
+      } as AlertObject,
+      levels
+    );
+
+    return {
+      outcome: 'UPDATED',
+      reason: 'Replaced dYdX TP-only ladder with latest map-derived liquidity zones.',
+      positionSize: position.size,
+      previousTakeProfitCount: existingTakeProfits.length,
+      takeProfitCount: levels.length,
+      levels
+    };
+  }
+
+  private async waitForTakeProfitsCleared(market: string): Promise<any[]> {
+    let remainingTakeProfits: any[] = [];
+
+    for (let poll = 1; poll <= this.SAFETY_STOP_VERIFY_POLLS; poll += 1) {
+      await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
+      remainingTakeProfits = (await this.getOpenOrdersForMarket(market))
+        .filter((order: any) => this.isTakeProfitOrder(order));
+
+      console.log(`Dynamic TP cancel verify ${poll}/${this.SAFETY_STOP_VERIFY_POLLS}`, {
+        market,
+        remainingTakeProfitCount: remainingTakeProfits.length
+      });
+
+      if (!remainingTakeProfits.length) return [];
+    }
+
+    return remainingTakeProfits;
+  }
+
   private async placeOrderForMarket(
     market: string,
     alert: AlertObject
@@ -2955,6 +3081,56 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     return orderType === '' && hasTriggerPrice;
+  }
+
+  private isTakeProfitOrder(order: any): boolean {
+    const orderType = this.getOrderTypeText(order);
+
+    return (
+      this.getOrderReduceOnly(order) &&
+      (orderType.includes('TAKE_PROFIT') || orderType.includes('TAKE-PROFIT'))
+    );
+  }
+
+  private takeProfitOrdersMatchLevels(
+    orders: any[],
+    levels: ExplicitTakeProfitLevel[],
+    market: string,
+    marketInfo?: any
+  ): boolean {
+    if (orders.length !== levels.length) return false;
+
+    const unmatchedOrders = [...orders];
+
+    for (const level of levels) {
+      const requestedSize =
+        level.size ??
+        0;
+      const sizeCheck = this.getCorrectionOrderSizeCheck(market, requestedSize, marketInfo);
+      const expectedSize = sizeCheck.roundedOrderSize ?? requestedSize;
+      const matchIndex = unmatchedOrders.findIndex((order: any) => {
+        const triggerPrice = this.getOrderTriggerPrice(order) ?? this.getOrderPrice(order);
+        const orderSize = this.parsePositiveNumber(
+          order.size ??
+          order.remainingSize ??
+          order.remaining_size ??
+          order.quantity ??
+          order.qty
+        );
+
+        return (
+          triggerPrice !== undefined &&
+          orderSize !== undefined &&
+          Math.abs(triggerPrice - level.price) / level.price < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT &&
+          Math.abs(orderSize - expectedSize) < this.TOLERANCE
+        );
+      });
+
+      if (matchIndex < 0) return false;
+      unmatchedOrders.splice(matchIndex, 1);
+    }
+
+    return unmatchedOrders.length === 0;
   }
 
   private findSafetyStopOrderInOrders(

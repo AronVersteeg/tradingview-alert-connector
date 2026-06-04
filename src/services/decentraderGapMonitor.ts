@@ -125,6 +125,7 @@ type FractalStop = {
 type DecentraderTradeExecutor = {
   getAccountSnapshot: (markets: string[]) => Promise<DydxSizingAccountSnapshot>;
   placeOrder: (alert: AlertObject) => Promise<void>;
+  syncTakeProfits?: (alert: AlertObject) => Promise<any>;
 };
 
 type MonitorStatus = {
@@ -137,6 +138,10 @@ type MonitorStatus = {
   hasTradeExecutor?: boolean;
   tradeRiskPct?: number;
   slMaxDistancePct?: number;
+  tpMaxLevels?: number;
+  tpAllocation?: 'fixed-fractions' | 'map-weighted';
+  dynamicTpEnabled?: boolean;
+  hasDynamicTpExecutor?: boolean;
   lastStartedAt?: string;
   lastFinishedAt?: string;
   lastError?: string;
@@ -169,6 +174,14 @@ type AlertState = {
   lastTradeExecutedAt?: string;
   lastTradeExecutionError?: string;
   lastTradeDecision?: any;
+  managedPosition?: {
+    market: string;
+    direction: TradePlanDirection;
+    openedAt: string;
+    entrySignature: string;
+    initialSize: number;
+    entryPrice?: number;
+  };
   lastCheckedAt?: string;
   lastDataTimestamp?: string;
 };
@@ -726,13 +739,22 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
   });
 
   function ranked(direction: 'long' | 'short'): TradeZone[] {
-    return zones
+    const ordered = zones
       .filter((zone) => zone.direction === direction)
       .sort((a, b) => {
         if (direction === 'long') return a.price - b.price || b.score - a.score;
         return b.price - a.price || b.score - a.score;
-      })
-      .slice(0, 3)
+      });
+    const strongestScore = Math.max(0, ...ordered.map((zone) => zone.score));
+    const minimumRelativeScore = Math.max(2, strongestScore * 0.2);
+
+    return ordered
+      .filter((zone) =>
+        zone.score >= minimumRelativeScore ||
+        zone.leverages.length >= 2 ||
+        (zone.fresh > 0 && zone.count >= 2)
+      )
+      .slice(0, decentraderMaxTpLevels())
       .map((zone, index) => ({ ...zone, rank: index + 1 }));
   }
 
@@ -918,21 +940,37 @@ function decentraderTradeMarket(): string {
 }
 
 function decentraderMaxTpLevels(): number {
-  const parsed = Number(process.env.DECENTRADER_TP_MAX_LEVELS || 3);
+  const parsed = Number(process.env.DECENTRADER_TP_MAX_LEVELS || 6);
   return Number.isFinite(parsed) && parsed > 0
-    ? Math.max(1, Math.floor(parsed))
-    : 3;
+    ? clamp(Math.floor(parsed), 1, 6)
+    : 6;
 }
 
-function decentraderTpFractions(count: number): number[] {
-  if (count <= 0) return [];
+function decentraderTpAllocationMode(): 'fixed-fractions' | 'map-weighted' {
+  return String(process.env.DECENTRADER_TP_SIZE_FRACTIONS || '').trim()
+    ? 'fixed-fractions'
+    : 'map-weighted';
+}
 
-  const configured = String(process.env.DECENTRADER_TP_SIZE_FRACTIONS || '0.5,0.3,0.2')
+function decentraderDynamicTpEnabled(): boolean {
+  return parseBool(process.env.DECENTRADER_DYNAMIC_TP_ENABLED, true);
+}
+
+function decentraderTpFractions(takeProfits: any[]): number[] {
+  if (!takeProfits.length) return [];
+
+  const configured = String(process.env.DECENTRADER_TP_SIZE_FRACTIONS || '')
     .split(',')
     .map((item) => Number(item.trim()))
     .filter((value) => Number.isFinite(value) && value > 0)
     .map((value) => (value > 1 ? value / 100 : value));
-  const rawFractions = Array.from({ length: count }, (_, index) => configured[index] || 1 / count);
+  const rawFractions = takeProfits.map((tp, index) => {
+    if (configured[index]) return configured[index];
+
+    const score = Math.max(1, numberOrZero(tp?.score));
+    const rankDecay = 1 / Math.sqrt(index + 1);
+    return Math.sqrt(score) * rankDecay;
+  });
   const sum = rawFractions.reduce((total, value) => total + value, 0);
 
   return rawFractions.map((value) => value / Math.max(sum, Number.EPSILON));
@@ -1360,6 +1398,8 @@ function buildDirectionalPlan(
       label: `${isLong ? 'L' : 'S'} TP${zone.rank}`,
       price: zone.price,
       score: zone.score,
+      count: zone.count,
+      fresh: zone.fresh,
       leverages: zone.leverages,
       distance: Math.abs(zone.price - marketPrice)
     })),
@@ -1399,7 +1439,7 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
   const takeProfits = Array.isArray(activePlan?.takeProfits)
     ? activePlan.takeProfits.slice(0, maxTpLevels)
     : [];
-  const fractions = decentraderTpFractions(takeProfits.length);
+  const fractions = decentraderTpFractions(takeProfits);
   const referencePrice =
     numberOrZero(activePlan?.entryReference?.price) ||
     numberOrZero(plan.price) ||
@@ -1446,7 +1486,12 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
       .map((tp: any, index: number) => ({
         label: tp.label || `${direction === 'long' ? 'L' : 'S'} TP${index + 1}`,
         price: tp.price,
-        size: takeProfitSizes[index] || 0
+        size: takeProfitSizes[index] || 0,
+        zone_score: numberOrZero(tp.score),
+        zone_count: numberOrZero(tp.count),
+        zone_fresh: numberOrZero(tp.fresh),
+        zone_leverages: Array.isArray(tp.leverages) ? tp.leverages : [],
+        distance: numberOrZero(tp.distance)
       }))
       .filter((tp: any) => tp.size > 0),
     decentrader: {
@@ -1459,6 +1504,57 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
       notional: activePlan?.sizing?.notional,
       stop: activePlan?.stop,
       note: 'Generated by Decentrader edge trigger with confirmed fractal SL and map-derived TP levels.'
+    }
+  } as AlertObject;
+}
+
+function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): AlertObject {
+  const direction: TradePlanDirection = position.size > 0 ? 'long' : 'short';
+  const directionalPlan = plan?.plans?.[direction];
+  const maxTpLevels = decentraderMaxTpLevels();
+  const takeProfits = Array.isArray(directionalPlan?.takeProfits)
+    ? directionalPlan.takeProfits.slice(0, maxTpLevels)
+    : [];
+  const fractions = decentraderTpFractions(takeProfits);
+  const size = Math.abs(numberOrZero(position.size));
+  const minimumOrderSize =
+    numberOrZero(directionalPlan?.sizing?.minimumOrderSize) ||
+    numberOrZero(plan?.marketInfo?.stepSize);
+  const takeProfitSizes = allocateTakeProfitSizes(size, minimumOrderSize, fractions);
+  const referencePrice =
+    numberOrZero(directionalPlan?.entryReference?.price) ||
+    numberOrZero(plan?.marketInfo?.oraclePrice) ||
+    numberOrZero(plan?.price);
+
+  return {
+    exchange: 'dydxv4',
+    strategy: 'decentrader_dynamic_liquidity_tps',
+    market: plan.market || decentraderTradeMarket(),
+    price: referencePrice,
+    entry_price: referencePrice,
+    size,
+    desired_position: direction === 'long' ? 'LONG' : 'SHORT',
+    time: Date.now(),
+    signal: 'SYNC_TAKE_PROFITS',
+    profile: 'MANAGED',
+    take_profits: takeProfits
+      .map((tp: any, index: number) => ({
+        label: tp.label || `${direction === 'long' ? 'L' : 'S'} TP${index + 1}`,
+        price: tp.price,
+        size: takeProfitSizes[index] || 0,
+        zone_score: numberOrZero(tp.score),
+        zone_count: numberOrZero(tp.count),
+        zone_fresh: numberOrZero(tp.fresh),
+        zone_leverages: Array.isArray(tp.leverages) ? tp.leverages : [],
+        distance: numberOrZero(tp.distance)
+      }))
+      .filter((tp: any) => tp.size > 0),
+    decentrader: {
+      timestamp: plan.timestamp,
+      timestampNl: plan.timestampNl,
+      direction,
+      dynamicTpSync: true,
+      note: 'TP-only sync from latest Decentrader liquidity zones; position and SL must remain unchanged.'
     }
   } as AlertObject;
 }
@@ -1706,6 +1802,10 @@ export class DecentraderGapMonitor {
       hasTradeExecutor: this.tradeExecutor !== undefined,
       tradeRiskPct: decentraderTradeRiskPct(),
       slMaxDistancePct: decentraderSlMaxDistancePct(),
+      tpMaxLevels: decentraderMaxTpLevels(),
+      tpAllocation: decentraderTpAllocationMode(),
+      dynamicTpEnabled: decentraderDynamicTpEnabled(),
+      hasDynamicTpExecutor: typeof this.tradeExecutor?.syncTakeProfits === 'function',
       lastTradeDecision: state.lastTradeDecision
     };
   }
@@ -1761,9 +1861,12 @@ export class DecentraderGapMonitor {
         tradeAlert: null,
         tradePlan: null,
         tradeDecision: null,
+        dynamicTpSync: null,
         lastTradeDecision: state.lastTradeDecision || null,
         duplicate: false
       };
+
+      await this.maybeSyncDynamicTakeProfits(state, result);
 
       if (!alerts.length) {
         state.lastAlertObservedSignature = null;
@@ -1875,6 +1978,111 @@ export class DecentraderGapMonitor {
         lastError: error instanceof Error ? error.message : String(error)
       };
       throw error;
+    }
+  }
+
+  private async maybeSyncDynamicTakeProfits(state: AlertState, result: any): Promise<void> {
+    if (!decentraderDynamicTpEnabled()) {
+      result.dynamicTpSync = {
+        outcome: 'DISABLED',
+        reason: 'DECENTRADER_DYNAMIC_TP_ENABLED is false.'
+      };
+      return;
+    }
+
+    if (!decentraderAutoTradeEnabled()) {
+      result.dynamicTpSync = {
+        outcome: 'SKIPPED',
+        reason: 'Auto-trading is disabled; dynamic TP orders were preserved.'
+      };
+      return;
+    }
+
+    const executor = this.tradeExecutor;
+    const syncTakeProfits = executor?.syncTakeProfits;
+
+    if (!executor || !syncTakeProfits) {
+      result.dynamicTpSync = {
+        outcome: 'SKIPPED',
+        reason: 'The dYdX executor does not expose TP-only synchronization.'
+      };
+      return;
+    }
+
+    const market = decentraderTradeMarket();
+
+    try {
+      const account = await executor.getAccountSnapshot([market]);
+      const position = existingMarketPosition(account, market);
+
+      if (!position) {
+        delete state.managedPosition;
+        result.dynamicTpSync = {
+          outcome: 'SKIPPED',
+          reason: `${market} is flat; no dynamic TP sync needed.`
+        };
+        return;
+      }
+
+      const managedPosition = state.managedPosition;
+      const positionDirection: TradePlanDirection = position.size > 0 ? 'long' : 'short';
+      const entryPriceMismatch = Boolean(
+        managedPosition?.entryPrice &&
+        position.entryPrice &&
+        Math.abs(position.entryPrice - managedPosition.entryPrice) / managedPosition.entryPrice > 0.005
+      );
+      const positionGrewBeyondManagedSize =
+        managedPosition &&
+        Math.abs(position.size) > managedPosition.initialSize + 0.00000001;
+
+      if (
+        !managedPosition ||
+        managedPosition.market.replace(/_/g, '-').toUpperCase() !== market ||
+        managedPosition.direction !== positionDirection ||
+        entryPriceMismatch ||
+        positionGrewBeyondManagedSize
+      ) {
+        result.dynamicTpSync = {
+          outcome: 'SKIPPED',
+          reason: 'Existing BTC position was not opened by this Decentrader monitor; TP orders were preserved.',
+          market,
+          position,
+          managedPosition: managedPosition || null
+        };
+        return;
+      }
+
+      const plan = await this.getTradePlan(account, market);
+      const alert = buildDecentraderDynamicTpAlert(plan, position);
+      const takeProfits = (alert as any).take_profits || [];
+
+      if (!takeProfits.length) {
+        result.dynamicTpSync = {
+          outcome: 'SKIPPED',
+          reason: 'No placeable map-derived TP levels; existing TP orders were preserved.',
+          market,
+          position
+        };
+        return;
+      }
+
+      const syncResult = await syncTakeProfits(alert);
+      result.dynamicTpSync = {
+        ...syncResult,
+        market,
+        position,
+        timestamp: plan.timestamp,
+        timestampNl: plan.timestampNl,
+        takeProfits
+      };
+      console.log('Decentrader dynamic TP sync:', result.dynamicTpSync);
+    } catch (error) {
+      result.dynamicTpSync = {
+        outcome: 'ERROR',
+        reason: error instanceof Error ? error.message : String(error),
+        market
+      };
+      console.error('Decentrader dynamic TP sync failed; position and SL were left unchanged:', error);
     }
   }
 
@@ -2245,6 +2453,14 @@ export class DecentraderGapMonitor {
       state.lastTradeExecutedSignature = signature;
       state.lastTradeExecutedAt = nowNlIso();
       state.lastTradeExecutionError = undefined;
+      state.managedPosition = {
+        market: orderAlert.market,
+        direction,
+        openedAt: state.lastTradeExecutedAt,
+        entrySignature: signature,
+        initialSize: Math.abs(observedEntryPosition.size),
+        entryPrice: observedEntryPosition.entryPrice
+      };
       result.tradePlaced = true;
       result.tradeSkipped = null;
       this.recordTradeDecision(state, result, alert, signature, 'PLACED', 'dYdX order flow completed.', {
