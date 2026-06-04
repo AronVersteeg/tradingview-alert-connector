@@ -938,6 +938,27 @@ function decentraderTpFractions(count: number): number[] {
   return rawFractions.map((value) => value / Math.max(sum, Number.EPSILON));
 }
 
+function allocateTakeProfitSizes(size: number, stepSize: number, fractions: number[]): number[] {
+  if (!fractions.length || size <= 0 || stepSize <= 0) return [];
+
+  const decimals = Math.max(0, (String(stepSize).split('.')[1] || '').length);
+  const totalSteps = Math.floor((size + stepSize * 0.000001) / stepSize);
+  const rawSteps = fractions.map((fraction) => totalSteps * fraction);
+  const allocatedSteps = rawSteps.map((steps) => Math.floor(steps));
+  let remainingSteps = totalSteps - allocatedSteps.reduce((total, steps) => total + steps, 0);
+  const remainderOrder = rawSteps
+    .map((steps, index) => ({ index, remainder: steps - Math.floor(steps) }))
+    .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
+
+  for (const item of remainderOrder) {
+    if (remainingSteps <= 0) break;
+    allocatedSteps[item.index] += 1;
+    remainingSteps -= 1;
+  }
+
+  return allocatedSteps.map((steps) => Number((steps * stepSize).toFixed(decimals)));
+}
+
 function envPositiveNumber(name: string, fallback: number): number {
   const parsed = Number(process.env[name]);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -1384,6 +1405,8 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
     numberOrZero(plan.price) ||
     numberOrZero(activePlan?.trigger?.price);
   const size = numberOrZero(activePlan?.sizing?.size);
+  const minimumOrderSize = numberOrZero(activePlan?.sizing?.minimumOrderSize);
+  const takeProfitSizes = allocateTakeProfitSizes(size, minimumOrderSize, fractions);
   const stopPrice = numberOrZero(activePlan?.stop?.price);
 
   if (direction !== 'long' && direction !== 'short') {
@@ -1419,11 +1442,13 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
     signal: direction === 'long' ? 'LONG_ENTRY' : 'SHORT_ENTRY',
     profile: 'MANAGED',
     static_sl: stopPrice,
-    take_profits: takeProfits.map((tp: any, index: number) => ({
-      label: tp.label || `${direction === 'long' ? 'L' : 'S'} TP${index + 1}`,
-      price: tp.price,
-      size_fraction: fractions[index] || 0
-    })),
+    take_profits: takeProfits
+      .map((tp: any, index: number) => ({
+        label: tp.label || `${direction === 'long' ? 'L' : 'S'} TP${index + 1}`,
+        price: tp.price,
+        size: takeProfitSizes[index] || 0
+      }))
+      .filter((tp: any) => tp.size > 0),
     decentrader: {
       signature,
       timestamp: plan.timestamp,
@@ -2203,6 +2228,20 @@ export class DecentraderGapMonitor {
       }
 
       await this.tradeExecutor.placeOrder(orderAlert);
+      const entrySnapshot = await this.tradeExecutor.getAccountSnapshot([orderAlert.market]);
+      const observedEntryPosition = existingMarketPosition(entrySnapshot, orderAlert.market);
+      const expectedLong = direction === 'long';
+
+      if (
+        !observedEntryPosition ||
+        (expectedLong && observedEntryPosition.size <= 0) ||
+        (!expectedLong && observedEntryPosition.size >= 0)
+      ) {
+        throw new Error(
+          `dYdX order flow completed but no matching ${direction.toUpperCase()} ${orderAlert.market} position was found.`
+        );
+      }
+
       state.lastTradeExecutedSignature = signature;
       state.lastTradeExecutedAt = nowNlIso();
       state.lastTradeExecutionError = undefined;
@@ -2213,6 +2252,7 @@ export class DecentraderGapMonitor {
         desiredPosition: orderAlert.desired_position,
         size: orderAlert.size,
         notional: orderAlert.sizeUsd,
+        observedPosition: observedEntryPosition,
         staticSl: (orderAlert as any).static_sl,
         takeProfits: (orderAlert as any).take_profits
       });

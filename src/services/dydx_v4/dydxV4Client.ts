@@ -236,7 +236,10 @@ export class DydxV4Client extends AbstractDexClient {
   private readonly managedStops = new Map<string, ManagedStop>();
   private readonly managedTakeProfits = new Map<string, ManagedTakeProfit[]>();
 
-  private readonly TOLERANCE = 0.001;
+  private readonly TOLERANCE = parseEnvPositiveNumber(
+    process.env.DYDX_V4_SIZE_TOLERANCE,
+    0.00000001
+  );
 
   private readonly MAX_ATTEMPTS = 5;
   private readonly FLAT_MAX_ATTEMPTS = 5;
@@ -1302,8 +1305,7 @@ export class DydxV4Client extends AbstractDexClient {
       await this.sleep(this.TARGET_POLL_DELAY_MS);
 
       const currentSize = await this.getCurrentSize(market);
-      const diffRaw = targetSize - currentSize;
-      const diff = Number(diffRaw.toFixed(3));
+      const diff = targetSize - currentSize;
 
       console.log('Target attempt:', {
         market,
