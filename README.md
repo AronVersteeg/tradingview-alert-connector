@@ -59,6 +59,14 @@ Use `left`/`long` for a simulated LONG signal or `right`/`short` for a simulated
 
 If `TRADINGVIEW_PASSPHRASE` is configured, the manual check and simulation require that same value as `X-Webhook-Token`, `passphrase`, or `token`.
 
+An explicit live end-to-end test can place a temporary `0.001 BTC` position with a temporary 1% SL/TP and automatically flatten it after 5-60 seconds. This test deliberately overrides a normal map-plan SL/size skip, but still refuses to start when a BTC position is already open. It requires `DECENTRADER_LIVE_TEST_TOKEN` and the exact confirmation `PLACE_AND_FLAT`:
+
+```text
+POST /decentrader/live-test-edge
+X-Decentrader-Live-Test-Token: <DECENTRADER_LIVE_TEST_TOKEN>
+{"edge":"right","holdSeconds":20,"confirm":"PLACE_AND_FLAT"}
+```
+
 For duplicate-alert protection across Render restarts, use a persistent path for:
 
 ```text

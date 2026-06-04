@@ -88,6 +88,13 @@ type DydxSizingAccountSnapshot = {
 };
 
 type TradePlanDirection = 'long' | 'short';
+type TradeDecisionOutcome = 'PLACED' | 'SKIPPED' | 'ERROR' | 'READY';
+
+type TradeEvaluationOptions = {
+  dryRun?: boolean;
+  simulatedDirection?: TradePlanDirection;
+  liveTestHoldSeconds?: number;
+};
 
 type FractalLevel = {
   kind: 'top' | 'bottom';
@@ -1429,6 +1436,71 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
   } as AlertObject;
 }
 
+function buildDecentraderLiveTestOrderAlert(
+  plan: any,
+  signature: string,
+  direction: TradePlanDirection
+): AlertObject {
+  const market = String(plan.market || decentraderTradeMarket()).replace(/_/g, '-').toUpperCase();
+  const referencePrice =
+    numberOrZero(plan.marketInfo?.oraclePrice) ||
+    numberOrZero(plan.activePlan?.entryReference?.price) ||
+    numberOrZero(plan.price);
+  const size = Math.max(0.001, numberOrZero(plan.marketInfo?.stepSize));
+  const isLong = direction === 'long';
+
+  if (!Number.isFinite(referencePrice) || referencePrice <= 0) {
+    throw new Error('Decentrader live test cannot start without a valid dYdX reference price.');
+  }
+
+  return {
+    exchange: 'dydxv4',
+    strategy: 'decentrader_liquidity_map_live_test',
+    market,
+    price: referencePrice,
+    entry_price: referencePrice,
+    size,
+    sizeUsd: size * referencePrice,
+    desired_position: isLong ? 'LONG' : 'SHORT',
+    time: Date.now(),
+    signal: isLong ? 'LONG_ENTRY' : 'SHORT_ENTRY',
+    profile: 'MANAGED',
+    static_sl: isLong ? referencePrice * 0.99 : referencePrice * 1.01,
+    take_profits: [
+      {
+        label: 'LIVE TEST TP',
+        price: isLong ? referencePrice * 1.01 : referencePrice * 0.99,
+        size_fraction: 1
+      }
+    ],
+    decentrader: {
+      signature,
+      timestamp: plan.timestamp,
+      timestampNl: plan.timestampNl,
+      direction,
+      liveTest: true,
+      note: 'Temporary live end-to-end test order. Automatically flattened after the configured hold.'
+    }
+  } as AlertObject;
+}
+
+function buildDecentraderLiveTestFlatAlert(orderAlert: AlertObject): AlertObject {
+  return {
+    exchange: 'dydxv4',
+    strategy: 'decentrader_liquidity_map_live_test',
+    market: orderAlert.market,
+    price: orderAlert.price,
+    desired_position: 'FLAT',
+    time: Date.now(),
+    signal: 'FLAT',
+    profile: 'MANAGED',
+    decentrader: {
+      liveTest: true,
+      note: 'Automatic flatten after temporary live end-to-end test.'
+    }
+  } as AlertObject;
+}
+
 function gapAlertSignature(alert: GapAlert): string {
   return `${alert.timestamp}|${alert.entrants
     .map((bar) => `${bar.key}:${bar.count}`)
@@ -1782,7 +1854,7 @@ export class DecentraderGapMonitor {
     result: any,
     alert: GapAlert,
     signature: string,
-    outcome: 'PLACED' | 'SKIPPED' | 'ERROR',
+    outcome: TradeDecisionOutcome,
     reason: string,
     details: Record<string, unknown> = {}
   ): void {
@@ -1809,7 +1881,8 @@ export class DecentraderGapMonitor {
     alert: GapAlert,
     signature: string,
     state: AlertState,
-    result: any
+    result: any,
+    options: TradeEvaluationOptions = {}
   ): Promise<void> {
     if (!decentraderAutoTradeEnabled()) {
       result.tradeSkipped = 'DECENTRADER_AUTO_TRADE_ENABLED is not true.';
@@ -1849,6 +1922,7 @@ export class DecentraderGapMonitor {
     const market = decentraderTradeMarket();
     result.tradeAttempted = true;
     console.log('Decentrader auto-trade evaluation started:', {
+      dryRun: Boolean(options.dryRun),
       signature,
       timestamp: alert.timestamp,
       timestampNl: alert.timestampNl,
@@ -1872,7 +1946,7 @@ export class DecentraderGapMonitor {
         return;
       }
 
-      const plan = await this.getTradePlan(account, market);
+      const plan = await this.getTradePlan(account, market, options.simulatedDirection);
 
       if (plan.timestamp !== alert.timestamp) {
         result.tradeSkipped = `Trade plan timestamp ${plan.timestamp} does not match alert ${alert.timestamp}.`;
@@ -1897,41 +1971,61 @@ export class DecentraderGapMonitor {
         plan.activePlan.status === 'invalid-size' ||
         plan.activePlan.stop?.valid === false
       ) {
-        result.tradeSkipped =
-          plan.activePlan.statusReason ||
-          plan.activePlan.stop?.reason ||
-          'Trade skipped because the active trade plan is invalid.';
-        result.tradeAttempted = false;
-        result.tradePlan = {
-          timestamp: plan.timestamp,
-          timestampNl: plan.timestampNl,
-          market: plan.market,
-          direction: plan.activePlan.direction,
-          status: plan.activePlan.status,
-          statusReason: plan.activePlan.statusReason,
-          stop: plan.activePlan.stop,
-          size: plan.activePlan.sizing?.size,
-          rawSize: plan.activePlan.sizing?.rawSize,
-          minimumOrderSize: plan.activePlan.sizing?.minimumOrderSize,
-          minimumOrderRiskUsd: plan.activePlan.sizing?.minimumOrderRiskUsd,
-          minimumOrderRiskPctOfEquity: plan.activePlan.sizing?.minimumOrderRiskPctOfEquity,
-          notional: plan.activePlan.sizing?.notional
-        };
-        this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
-          market: plan.market,
-          status: plan.activePlan.status,
-          stop: plan.activePlan.stop,
-          size: plan.activePlan.sizing?.size,
-          rawSize: plan.activePlan.sizing?.rawSize,
-          minimumOrderSize: plan.activePlan.sizing?.minimumOrderSize,
-          minimumOrderRiskUsd: plan.activePlan.sizing?.minimumOrderRiskUsd,
-          minimumOrderRiskPctOfEquity: plan.activePlan.sizing?.minimumOrderRiskPctOfEquity,
-          notional: plan.activePlan.sizing?.notional
-        });
-        return;
+        if (options.liveTestHoldSeconds !== undefined) {
+          result.normalPlanWouldSkip = {
+            status: plan.activePlan.status,
+            reason:
+              plan.activePlan.statusReason ||
+              plan.activePlan.stop?.reason ||
+              'The normal production plan is invalid.',
+            stop: plan.activePlan.stop,
+            sizing: plan.activePlan.sizing
+          };
+          console.warn('Decentrader live test overriding normal production safety skip:', {
+            signature,
+            direction,
+            market,
+            normalPlanWouldSkip: result.normalPlanWouldSkip
+          });
+        } else {
+          result.tradeSkipped =
+            plan.activePlan.statusReason ||
+            plan.activePlan.stop?.reason ||
+            'Trade skipped because the active trade plan is invalid.';
+          result.tradeAttempted = false;
+          result.tradePlan = {
+            timestamp: plan.timestamp,
+            timestampNl: plan.timestampNl,
+            market: plan.market,
+            direction: plan.activePlan.direction,
+            status: plan.activePlan.status,
+            statusReason: plan.activePlan.statusReason,
+            stop: plan.activePlan.stop,
+            size: plan.activePlan.sizing?.size,
+            rawSize: plan.activePlan.sizing?.rawSize,
+            minimumOrderSize: plan.activePlan.sizing?.minimumOrderSize,
+            minimumOrderRiskUsd: plan.activePlan.sizing?.minimumOrderRiskUsd,
+            minimumOrderRiskPctOfEquity: plan.activePlan.sizing?.minimumOrderRiskPctOfEquity,
+            notional: plan.activePlan.sizing?.notional
+          };
+          this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+            market: plan.market,
+            status: plan.activePlan.status,
+            stop: plan.activePlan.stop,
+            size: plan.activePlan.sizing?.size,
+            rawSize: plan.activePlan.sizing?.rawSize,
+            minimumOrderSize: plan.activePlan.sizing?.minimumOrderSize,
+            minimumOrderRiskUsd: plan.activePlan.sizing?.minimumOrderRiskUsd,
+            minimumOrderRiskPctOfEquity: plan.activePlan.sizing?.minimumOrderRiskPctOfEquity,
+            notional: plan.activePlan.sizing?.notional
+          });
+          return;
+        }
       }
 
-      const orderAlert = buildDecentraderOrderAlert(plan, signature);
+      const orderAlert = options.liveTestHoldSeconds !== undefined
+        ? buildDecentraderLiveTestOrderAlert(plan, signature, direction)
+        : buildDecentraderOrderAlert(plan, signature);
       result.tradePlan = {
         timestamp: plan.timestamp,
         timestampNl: plan.timestampNl,
@@ -1957,6 +2051,152 @@ export class DecentraderGapMonitor {
         profile: (orderAlert as any).profile,
         take_profits: (orderAlert as any).take_profits
       };
+
+      if (options.dryRun) {
+        result.orderPlacementAttempted = false;
+        result.tradePlaced = false;
+        result.tradeSkipped = null;
+        this.recordTradeDecision(
+          state,
+          result,
+          alert,
+          signature,
+          'READY',
+          'End-to-end dry run reached the dYdX placement boundary. No order was placed.',
+          {
+            dryRun: true,
+            market: orderAlert.market,
+            desiredPosition: orderAlert.desired_position,
+            size: orderAlert.size,
+            notional: orderAlert.sizeUsd,
+            staticSl: (orderAlert as any).static_sl,
+            takeProfits: (orderAlert as any).take_profits
+          }
+        );
+        return;
+      }
+
+      if (options.liveTestHoldSeconds !== undefined) {
+        const holdSeconds = clamp(Math.floor(options.liveTestHoldSeconds), 5, 60);
+        const flatAlert = buildDecentraderLiveTestFlatAlert(orderAlert);
+        let entryCompleted = false;
+        let flattenCompleted = false;
+
+        result.liveTest = {
+          enabled: true,
+          holdSeconds,
+          entryCompleted,
+          flattenCompleted
+        };
+        result.orderPlacementAttempted = true;
+
+        try {
+          console.warn('Decentrader LIVE TEST placing temporary order:', {
+            signature,
+            market: orderAlert.market,
+            desiredPosition: orderAlert.desired_position,
+            size: orderAlert.size,
+            staticSl: (orderAlert as any).static_sl,
+            takeProfits: (orderAlert as any).take_profits,
+            holdSeconds
+          });
+          await this.tradeExecutor.placeOrder(orderAlert);
+          const entrySnapshot = await this.tradeExecutor.getAccountSnapshot([orderAlert.market]);
+          const observedEntryPosition = existingMarketPosition(entrySnapshot, orderAlert.market);
+          const expectedLong = direction === 'long';
+
+          if (
+            !observedEntryPosition ||
+            (expectedLong && observedEntryPosition.size <= 0) ||
+            (!expectedLong && observedEntryPosition.size >= 0)
+          ) {
+            throw new Error(
+              `Live test entry flow completed but no matching ${direction.toUpperCase()} ${orderAlert.market} position was found.`
+            );
+          }
+
+          entryCompleted = true;
+          result.liveTest.entryCompleted = true;
+          result.liveTest.entryPosition = observedEntryPosition;
+          console.warn('Decentrader LIVE TEST entry flow completed; waiting before automatic flat:', {
+            signature,
+            market: orderAlert.market,
+            entryPosition: observedEntryPosition,
+            holdSeconds
+          });
+          await new Promise((resolve) => setTimeout(resolve, holdSeconds * 1000));
+        } finally {
+          console.warn('Decentrader LIVE TEST automatic flat starting:', {
+            signature,
+            market: orderAlert.market,
+            entryCompleted
+          });
+          let remainingPosition: DydxOpenPosition | undefined;
+
+          for (let flattenAttempt = 1; flattenAttempt <= 2; flattenAttempt += 1) {
+            try {
+              await this.tradeExecutor.placeOrder(flatAlert);
+              const flatSnapshot = await this.tradeExecutor.getAccountSnapshot([orderAlert.market]);
+              remainingPosition = existingMarketPosition(flatSnapshot, orderAlert.market);
+
+              if (!remainingPosition) {
+                flattenCompleted = true;
+                result.liveTest.flattenCompleted = true;
+                break;
+              }
+            } catch (flattenError) {
+              if (flattenAttempt === 2) throw flattenError;
+              console.error('Decentrader LIVE TEST automatic flat attempt failed; retrying:', {
+                signature,
+                market: orderAlert.market,
+                flattenAttempt,
+                error: flattenError instanceof Error ? flattenError.message : String(flattenError)
+              });
+              continue;
+            }
+
+            console.error('Decentrader LIVE TEST position remains after flat attempt; retrying:', {
+              signature,
+              market: orderAlert.market,
+              flattenAttempt,
+              remainingPosition
+            });
+          }
+
+          if (!flattenCompleted) {
+            result.liveTest.remainingPosition = remainingPosition || null;
+            throw new Error(
+              `Live test automatic flat completed but ${orderAlert.market} position ${remainingPosition?.size ?? 'unknown'} is still open.`
+            );
+          }
+
+          console.warn('Decentrader LIVE TEST automatic flat completed:', {
+            signature,
+            market: orderAlert.market
+          });
+        }
+
+        result.tradePlaced = entryCompleted;
+        result.tradeSkipped = null;
+        this.recordTradeDecision(
+          state,
+          result,
+          alert,
+          signature,
+          'PLACED',
+          'Live end-to-end test order flow completed and position was automatically flattened.',
+          {
+            liveTest: true,
+            market: orderAlert.market,
+            desiredPosition: orderAlert.desired_position,
+            size: orderAlert.size,
+            holdSeconds,
+            entryCompleted,
+            flattenCompleted
+          }
+        );
+        return;
+      }
 
       await this.tradeExecutor.placeOrder(orderAlert);
       state.lastTradeExecutedSignature = signature;
@@ -2089,72 +2329,87 @@ export class DecentraderGapMonitor {
     };
   }
 
-  async simulateEdge(
-    account: DydxSizingAccountSnapshot,
-    market: string,
-    edge: 'left' | 'right'
+  private async evaluateSimulatedEdge(
+    edge: 'left' | 'right',
+    options: TradeEvaluationOptions
   ): Promise<any> {
+    const config = this.config();
     const direction: TradePlanDirection = edge === 'left' ? 'long' : 'short';
-    const normalizedMarket = market.replace(/_/g, '-').toUpperCase();
-    const plan = await this.getTradePlan(account, normalizedMarket, direction);
-    const signature = `simulation|${edge}|${plan.timestamp}|${Date.now()}`;
-    const openMarketPosition = existingMarketPosition(account, normalizedMarket);
-    const unknownOpenPosition =
-      !account.openPositions &&
-      account.openPositionsCount > 0;
-    const activePlan = plan.activePlan;
-    const invalidPlan =
-      !activePlan ||
-      activePlan.status === 'invalid-stop' ||
-      activePlan.status === 'invalid-size' ||
-      activePlan.stop?.valid === false;
-    let orderAlert: AlertObject | null = null;
-
-    if (!invalidPlan) {
-      orderAlert = buildDecentraderOrderAlert(plan, signature);
-    }
-
-    const outcome = openMarketPosition || unknownOpenPosition || invalidPlan
-      ? 'SKIPPED'
-      : 'READY';
-    const reason = openMarketPosition || unknownOpenPosition
-      ? `Existing ${normalizedMarket} position detected; simulated edge trade skipped.`
-      : invalidPlan
-        ? activePlan?.statusReason ||
-          activePlan?.stop?.reason ||
-          'Simulated edge trade skipped because the active trade plan is invalid.'
-        : 'Simulated edge produced a valid order preview. No order was placed.';
-    const simulation = {
+    const rows = await fetchSnapshot(config.symbol);
+    const frameIndex = rows.length - 1;
+    const frame = rows[frameIndex];
+    const bars = activeBarsForFrame(rows, frameIndex);
+    const gap = cleanGapForBars(frame, bars);
+    const alert = buildSimulatedGapAlert(rows, frameIndex, direction, gap);
+    const signature = `simulation-e2e|${edge}|${alert.timestamp}|${Date.now()}`;
+    const state = { ...readState(config.stateFile) };
+    const result: any = {
       ok: true,
-      dryRun: true,
+      dryRun: Boolean(options.dryRun),
+      liveTest: options.liveTestHoldSeconds !== undefined,
       orderPlacementAttempted: false,
+      pipeline: 'synthetic map alert -> production auto-trade evaluation -> dYdX placement boundary',
       edge,
       direction,
-      market: normalizedMarket,
-      outcome,
-      reason,
-      existingPosition: openMarketPosition || null,
-      openPositionsCount: account.openPositionsCount,
-      signal: plan.signal,
-      activePlan,
-      orderAlert,
-      timestamp: plan.timestamp,
-      timestampNl: plan.timestampNl
+      market: decentraderTradeMarket(),
+      timestamp: alert.timestamp,
+      timestampNl: alert.timestampNl,
+      alert: {
+        signature,
+        price: alert.price,
+        sideCounts: sideCounts(alert),
+        gap: alert.previousGap,
+        entrants: alert.entrants
+      },
+      tradeAttempted: false,
+      tradePlaced: false,
+      tradeSkipped: null,
+      tradeError: null,
+      tradeAlert: null,
+      tradePlan: null,
+      tradeDecision: null
     };
 
-    console.log('Decentrader edge simulation:', {
-      dryRun: true,
+    this.latestRows = rows;
+    this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
+    console.log('Decentrader end-to-end edge simulation detected:', {
+      dryRun: Boolean(options.dryRun),
+      liveTest: options.liveTestHoldSeconds !== undefined,
+      signature,
       edge,
       direction,
-      market: normalizedMarket,
-      outcome,
-      reason,
-      existingPosition: openMarketPosition || null,
-      signal: plan.signal,
-      orderAlert
+      market: decentraderTradeMarket(),
+      timestamp: alert.timestamp,
+      price: alert.price,
+      sideCounts: sideCounts(alert)
     });
 
-    return simulation;
+    await this.maybeExecuteTradeForAlert(alert, signature, state, result, {
+      ...options,
+      simulatedDirection: direction
+    });
+
+    result.outcome = result.tradeDecision?.outcome || 'UNKNOWN';
+    result.reason =
+      result.tradeDecision?.reason ||
+      result.tradeSkipped ||
+      result.tradeError ||
+      'Dry-run evaluation completed without a recorded decision.';
+    return result;
+  }
+
+  async simulateEdge(edge: 'left' | 'right'): Promise<any> {
+    return this.evaluateSimulatedEdge(edge, { dryRun: true });
+  }
+
+  async runLiveEdgeTest(edge: 'left' | 'right', holdSeconds = 20): Promise<any> {
+    const normalizedHoldSeconds = Number.isFinite(holdSeconds)
+      ? clamp(Math.floor(holdSeconds), 5, 60)
+      : 20;
+
+    return this.evaluateSimulatedEdge(edge, {
+      liveTestHoldSeconds: normalizedHoldSeconds
+    });
   }
 
   private config() {

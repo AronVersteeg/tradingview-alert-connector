@@ -43,6 +43,18 @@ function isMonitorRequestAuthorized(req: express.Request): boolean {
   return String(received || '').trim() === expected;
 }
 
+function isDecentraderLiveTestAuthorized(req: express.Request): boolean {
+  const expected = String(process.env.DECENTRADER_LIVE_TEST_TOKEN || '').trim();
+  if (!expected) return false;
+
+  const received =
+    req.header('X-Decentrader-Live-Test-Token') ||
+    req.body?.liveTestToken ||
+    req.body?.token;
+
+  return String(received || '').trim() === expected;
+}
+
 // ================= GLOBAL REGISTRY =================
 
 const dexRegistry = new DexRegistry();
@@ -264,26 +276,59 @@ router.post('/decentrader/simulate-edge', async (req, res) => {
   }
 
   try {
-    const market = String(req.body?.market || req.query?.market || 'BTC-USD')
-      .replace(/_/g, '-')
-      .toUpperCase();
-    const client = dexRegistry.getDex('dydxv4') as any;
-
-    if (!client || typeof client.getAccountSnapshot !== 'function') {
-      return res.status(503).send({
-        ok: false,
-        error: 'dYdX v4 account snapshot is unavailable.'
-      });
-    }
-
-    const account = await client.getAccountSnapshot([market]);
-    res.send(await decentraderGapMonitor.simulateEdge(account, market, edge));
+    res.send(await decentraderGapMonitor.simulateEdge(edge));
   } catch (error) {
     console.error('Decentrader edge simulation failed:', error);
     res.status(500).send({
       ok: false,
       dryRun: true,
       orderPlacementAttempted: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.post('/decentrader/live-test-edge', async (req, res) => {
+  if (!isDecentraderLiveTestAuthorized(req)) {
+    return res.status(401).send({
+      ok: false,
+      error: 'Live test is disabled or DECENTRADER_LIVE_TEST_TOKEN is invalid.'
+    });
+  }
+
+  if (String(req.body?.confirm || '').trim().toUpperCase() !== 'PLACE_AND_FLAT') {
+    return res.status(400).send({
+      ok: false,
+      error: 'confirm must be PLACE_AND_FLAT.'
+    });
+  }
+
+  const requestedEdge = String(req.body?.edge || '').trim().toLowerCase();
+  const edge = requestedEdge === 'left' || requestedEdge === 'long'
+    ? 'left'
+    : requestedEdge === 'right' || requestedEdge === 'short'
+      ? 'right'
+      : undefined;
+
+  if (!edge) {
+    return res.status(400).send({
+      ok: false,
+      error: 'edge must be left/long or right/short.'
+    });
+  }
+
+  const requestedHoldSeconds = Number(req.body?.holdSeconds ?? 20);
+  const holdSeconds = Number.isFinite(requestedHoldSeconds)
+    ? Math.max(5, Math.min(60, Math.floor(requestedHoldSeconds)))
+    : 20;
+
+  try {
+    res.send(await decentraderGapMonitor.runLiveEdgeTest(edge, holdSeconds));
+  } catch (error) {
+    console.error('Decentrader live edge test failed:', error);
+    res.status(500).send({
+      ok: false,
+      liveTest: true,
       error: error instanceof Error ? error.message : String(error)
     });
   }
