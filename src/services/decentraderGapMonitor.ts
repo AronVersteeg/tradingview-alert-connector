@@ -135,6 +135,8 @@ type MonitorStatus = {
   hasSmtp: boolean;
   autoTradeEnabled?: boolean;
   hasTradeExecutor?: boolean;
+  tradeRiskPct?: number;
+  slMaxDistancePct?: number;
   lastStartedAt?: string;
   lastFinishedAt?: string;
   lastError?: string;
@@ -948,7 +950,7 @@ function envFraction(name: string, fallback: number): number {
 }
 
 function decentraderTradeRiskPct(): number {
-  return envFraction('DECENTRADER_TRADE_RISK_PCT', 0.0035);
+  return envFraction('DECENTRADER_TRADE_RISK_PCT', 0.0075);
 }
 
 function decentraderSlFractalWindow(): number {
@@ -972,7 +974,7 @@ function decentraderSlMinDistancePct(): number {
 }
 
 function decentraderSlMaxDistancePct(): number {
-  return envFraction('DECENTRADER_SL_MAX_DISTANCE_PCT', 0.025);
+  return envFraction('DECENTRADER_SL_MAX_DISTANCE_PCT', 0.05);
 }
 
 function decentraderSkipTradeWithoutSl(): boolean {
@@ -1677,6 +1679,8 @@ export class DecentraderGapMonitor {
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined,
+      tradeRiskPct: decentraderTradeRiskPct(),
+      slMaxDistancePct: decentraderSlMaxDistancePct(),
       lastTradeDecision: state.lastTradeDecision
     };
   }
