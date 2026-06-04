@@ -67,6 +67,11 @@ type DydxSizingAccountSnapshot = {
   equity: number;
   freeCollateral: number;
   openPositionsCount: number;
+  openPositions?: Array<{
+    market: string;
+    side?: string;
+    size: number;
+  }>;
   markets: Record<
     string,
     {
@@ -125,6 +130,7 @@ type MonitorStatus = {
   lastFinishedAt?: string;
   lastError?: string;
   lastResult?: any;
+  lastTradeDecision?: any;
 };
 
 type SmtpSettings = {
@@ -151,6 +157,7 @@ type AlertState = {
   lastTradeExecutedSignature?: string;
   lastTradeExecutedAt?: string;
   lastTradeExecutionError?: string;
+  lastTradeDecision?: any;
   lastCheckedAt?: string;
   lastDataTimestamp?: string;
 };
@@ -1177,10 +1184,10 @@ function buildDirectionalPlan(
 ) {
   const isLong = direction === 'long';
   const tpZones = isLong ? zones.longTp : zones.shortTp;
-  const entryPrice = gap ? (isLong ? gap.right : gap.left) : fallbackPrice;
-  const stop = buildFractalStop(rows, frameIndex, direction, entryPrice);
-  const stopPrice = stop.valid ? stop.price : undefined;
+  const triggerPrice = gap ? (isLong ? gap.right : gap.left) : fallbackPrice;
   const marketPrice = marketInfo.oraclePrice || fallbackPrice;
+  const stop = buildFractalStop(rows, frameIndex, direction, marketPrice);
+  const stopPrice = stop.valid ? stop.price : undefined;
   const equity = numberOrZero(account.equity);
   const freeCollateral = numberOrZero(account.freeCollateral);
   const marginFraction = Math.max(0.01, numberOrZero(marketInfo.initialMarginFraction) || 0.1);
@@ -1188,12 +1195,12 @@ function buildDirectionalPlan(
   const targetNotional = effectiveTargetNotional(equity, mode);
   const modeConfig = sizingModeConfig(mode);
   const mapScore = stopPrice
-    ? mapScoreForDirection(direction, gap, alert, tpZones[0], entryPrice, stopPrice)
+    ? mapScoreForDirection(direction, gap, alert, tpZones[0], marketPrice, stopPrice)
     : 0;
   const weight = clamp((mapScore / 100) * 0.12, 0.04, 0.16);
   const confidence = confidenceMultiplier(mapScore);
-  const stopDistance = stopPrice ? Math.abs(entryPrice - stopPrice) : 0;
-  const stopRiskPct = stopDistance / Math.max(1, entryPrice);
+  const stopDistance = stopPrice ? Math.abs(marketPrice - stopPrice) : 0;
+  const stopRiskPct = stopDistance / Math.max(1, marketPrice);
   const stopBrake = clamp(1 - Math.max(0, stopRiskPct - 0.035) / 0.16, 0.35, 1);
   const desiredNotional = targetNotional * modeConfig.targetMultiplier * confidence * stopBrake;
   const flatCollateral = Math.max(freeCollateral, equity * 0.8);
@@ -1209,18 +1216,32 @@ function buildDirectionalPlan(
     0,
     Math.min(desiredNotional, collateralCappedNotional, equityCappedNotional, riskCappedNotional)
   );
-  const size = floorToStep(notional / Math.max(1, marketPrice), stepSize);
+  const rawSize = notional / Math.max(1, marketPrice);
+  const size = floorToStep(rawSize, stepSize);
+  const minimumOrderRiskUsd = stop.valid ? stopDistance * stepSize : 0;
+  const minimumOrderRiskPctOfEquity =
+    equity > 0
+      ? minimumOrderRiskUsd / equity
+      : 0;
+  const invalidSize = stop.valid && size < stepSize;
 
   return {
     direction,
     status: !stop.valid
       ? 'invalid-stop'
-      : mapDirectionFromAlert(alert) === direction
-        ? 'alert-active'
-        : 'watch',
+      : invalidSize
+        ? 'invalid-size'
+        : mapDirectionFromAlert(alert) === direction
+          ? 'alert-active'
+          : 'watch',
+    statusReason: !stop.valid
+      ? stop.reason
+      : invalidSize
+        ? `Risk-capped size ${rawSize} is below dYdX minimum ${stepSize}.`
+        : undefined,
     trigger: {
       type: gap ? (isLong ? 'gap-right-break' : 'gap-left-break') : 'no-clean-gap',
-      price: entryPrice
+      price: triggerPrice
     },
     entryReference: {
       price: marketPrice,
@@ -1256,7 +1277,7 @@ function buildDirectionalPlan(
       price: zone.price,
       score: zone.score,
       leverages: zone.leverages,
-      distance: Math.abs(zone.price - entryPrice)
+      distance: Math.abs(zone.price - marketPrice)
     })),
     sizing: {
       mode,
@@ -1265,6 +1286,10 @@ function buildDirectionalPlan(
       desiredNotional,
       notional: size * marketPrice,
       size,
+      rawSize,
+      minimumOrderSize: stepSize,
+      minimumOrderRiskUsd,
+      minimumOrderRiskPctOfEquity,
       equityFraction: weight,
       riskPct: decentraderTradeRiskPct(),
       riskBudgetUsd,
@@ -1516,6 +1541,8 @@ export class DecentraderGapMonitor {
 
   getStatus(): MonitorStatus {
     const config = this.config();
+    const state = readState(config.stateFile);
+
     return {
       ...this.status,
       enabled: config.enabled,
@@ -1523,7 +1550,8 @@ export class DecentraderGapMonitor {
       pollMinutes: config.pollMinutes,
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
-      hasTradeExecutor: this.tradeExecutor !== undefined
+      hasTradeExecutor: this.tradeExecutor !== undefined,
+      lastTradeDecision: state.lastTradeDecision
     };
   }
 
@@ -1577,6 +1605,8 @@ export class DecentraderGapMonitor {
         tradeError: null,
         tradeAlert: null,
         tradePlan: null,
+        tradeDecision: null,
+        lastTradeDecision: state.lastTradeDecision || null,
         duplicate: false
       };
 
@@ -1613,6 +1643,7 @@ export class DecentraderGapMonitor {
         state.lastAlertObservedSignature = signature;
         result.alert = alertSummary;
         result.alerts.push(alertSummary);
+        console.log('Decentrader gap alert detected:', alertSummary);
 
         const emailDuplicate = signature === state.lastAlertSentSignature;
         if (emailDuplicate) {
@@ -1692,6 +1723,34 @@ export class DecentraderGapMonitor {
     }
   }
 
+  private recordTradeDecision(
+    state: AlertState,
+    result: any,
+    alert: GapAlert,
+    signature: string,
+    outcome: 'PLACED' | 'SKIPPED' | 'ERROR',
+    reason: string,
+    details: Record<string, unknown> = {}
+  ): void {
+    const decision = {
+      at: nowNlIso(),
+      outcome,
+      reason,
+      signature,
+      timestamp: alert.timestamp,
+      timestampNl: alert.timestampNl,
+      price: alert.price,
+      sideCounts: sideCounts(alert),
+      direction: mapDirectionFromAlert(alert) || 'none',
+      ...details
+    };
+
+    state.lastTradeDecision = decision;
+    result.tradeDecision = decision;
+    result.lastTradeDecision = decision;
+    console.log('Decentrader auto-trade decision:', decision);
+  }
+
   private async maybeExecuteTradeForAlert(
     alert: GapAlert,
     signature: string,
@@ -1700,53 +1759,98 @@ export class DecentraderGapMonitor {
   ): Promise<void> {
     if (!decentraderAutoTradeEnabled()) {
       result.tradeSkipped = 'DECENTRADER_AUTO_TRADE_ENABLED is not true.';
+      this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped);
       return;
     }
 
     if (!this.tradeExecutor) {
       result.tradeSkipped = 'No dYdX trade executor is configured.';
+      this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped);
       return;
     }
 
     if (signature === state.lastTradeExecutedSignature) {
       result.tradeSkipped = 'Duplicate Decentrader trade signature.';
       result.duplicate = true;
+      this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped);
       return;
     }
 
     const latestTimestamp = this.latestRows?.[this.latestRows.length - 1]?.timestamp;
     if (alert.timestamp !== latestTimestamp) {
       result.tradeSkipped = `Stale Decentrader alert ${alert.timestamp}; latest frame is ${latestTimestamp || '-'}.`;
+      this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+        latestTimestamp: latestTimestamp || null
+      });
       return;
     }
 
     const direction = mapDirectionFromAlert(alert);
     if (!direction) {
       result.tradeSkipped = 'No one-sided edge direction for Decentrader trade.';
+      this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped);
       return;
     }
 
     const market = decentraderTradeMarket();
     result.tradeAttempted = true;
+    console.log('Decentrader auto-trade evaluation started:', {
+      signature,
+      timestamp: alert.timestamp,
+      timestampNl: alert.timestampNl,
+      direction,
+      market,
+      price: alert.price
+    });
 
     try {
       const account = await this.tradeExecutor.getAccountSnapshot([market]);
+      const existingMarketPosition = account.openPositions?.find(
+        (position) =>
+          String(position.market || '').replace(/_/g, '-').toUpperCase() === market &&
+          Math.abs(numberOrZero(position.size)) > 0
+      );
+
+      if (existingMarketPosition || (!account.openPositions && account.openPositionsCount > 0)) {
+        result.tradeSkipped = `Existing ${market} position detected; new edge trade skipped.`;
+        result.tradeAttempted = false;
+        this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+          market,
+          existingPosition: existingMarketPosition || null,
+          openPositionsCount: account.openPositionsCount
+        });
+        return;
+      }
+
       const plan = await this.getTradePlan(account, market);
 
       if (plan.timestamp !== alert.timestamp) {
         result.tradeSkipped = `Trade plan timestamp ${plan.timestamp} does not match alert ${alert.timestamp}.`;
         result.tradeAttempted = false;
+        this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+          planTimestamp: plan.timestamp
+        });
         return;
       }
 
       if (plan.signal?.direction !== direction || !plan.activePlan) {
         result.tradeSkipped = `Trade plan direction ${plan.signal?.direction || 'none'} did not match alert ${direction}.`;
         result.tradeAttempted = false;
+        this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+          planDirection: plan.signal?.direction || 'none'
+        });
         return;
       }
 
-      if (plan.activePlan.status === 'invalid-stop' || plan.activePlan.stop?.valid === false) {
-        result.tradeSkipped = plan.activePlan.stop?.reason || 'Trade skipped because fractal SL is invalid.';
+      if (
+        plan.activePlan.status === 'invalid-stop' ||
+        plan.activePlan.status === 'invalid-size' ||
+        plan.activePlan.stop?.valid === false
+      ) {
+        result.tradeSkipped =
+          plan.activePlan.statusReason ||
+          plan.activePlan.stop?.reason ||
+          'Trade skipped because the active trade plan is invalid.';
         result.tradeAttempted = false;
         result.tradePlan = {
           timestamp: plan.timestamp,
@@ -1754,10 +1858,26 @@ export class DecentraderGapMonitor {
           market: plan.market,
           direction: plan.activePlan.direction,
           status: plan.activePlan.status,
+          statusReason: plan.activePlan.statusReason,
           stop: plan.activePlan.stop,
           size: plan.activePlan.sizing?.size,
+          rawSize: plan.activePlan.sizing?.rawSize,
+          minimumOrderSize: plan.activePlan.sizing?.minimumOrderSize,
+          minimumOrderRiskUsd: plan.activePlan.sizing?.minimumOrderRiskUsd,
+          minimumOrderRiskPctOfEquity: plan.activePlan.sizing?.minimumOrderRiskPctOfEquity,
           notional: plan.activePlan.sizing?.notional
         };
+        this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+          market: plan.market,
+          status: plan.activePlan.status,
+          stop: plan.activePlan.stop,
+          size: plan.activePlan.sizing?.size,
+          rawSize: plan.activePlan.sizing?.rawSize,
+          minimumOrderSize: plan.activePlan.sizing?.minimumOrderSize,
+          minimumOrderRiskUsd: plan.activePlan.sizing?.minimumOrderRiskUsd,
+          minimumOrderRiskPctOfEquity: plan.activePlan.sizing?.minimumOrderRiskPctOfEquity,
+          notional: plan.activePlan.sizing?.notional
+        });
         return;
       }
 
@@ -1794,11 +1914,22 @@ export class DecentraderGapMonitor {
       state.lastTradeExecutionError = undefined;
       result.tradePlaced = true;
       result.tradeSkipped = null;
+      this.recordTradeDecision(state, result, alert, signature, 'PLACED', 'dYdX order flow completed.', {
+        market: orderAlert.market,
+        desiredPosition: orderAlert.desired_position,
+        size: orderAlert.size,
+        notional: orderAlert.sizeUsd,
+        staticSl: (orderAlert as any).static_sl,
+        takeProfits: (orderAlert as any).take_profits
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       state.lastTradeExecutionError = message;
       result.tradeError = message;
       console.error('Decentrader auto trade failed:', error);
+      this.recordTradeDecision(state, result, alert, signature, 'ERROR', message, {
+        market
+      });
     }
   }
 
