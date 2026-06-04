@@ -67,6 +67,7 @@ type DydxOpenPosition = {
   market: string;
   side?: string;
   size: number;
+  entryPrice?: number;
 };
 
 type DydxSizingAccountSnapshot = {
