@@ -48,7 +48,16 @@ Manual check:
 POST /decentrader/gap-check
 ```
 
-If `TRADINGVIEW_PASSPHRASE` is configured, the manual check requires that same value as `X-Webhook-Token`, `passphrase`, or `token`.
+Safe edge simulation using live map, equity, SL, sizing and TP logic without placing an order:
+
+```text
+POST /decentrader/simulate-edge
+{"edge":"left","market":"BTC-USD"}
+```
+
+Use `left`/`long` for a simulated LONG signal or `right`/`short` for a simulated SHORT signal.
+
+If `TRADINGVIEW_PASSPHRASE` is configured, the manual check and simulation require that same value as `X-Webhook-Token`, `passphrase`, or `token`.
 
 For duplicate-alert protection across Render restarts, use a persistent path for:
 

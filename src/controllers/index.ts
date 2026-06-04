@@ -238,6 +238,57 @@ router.get('/decentrader/trade-plan', async (req, res) => {
   }
 });
 
+router.post('/decentrader/simulate-edge', async (req, res) => {
+  if (!isMonitorRequestAuthorized(req)) {
+    return res.status(401).send({ ok: false, error: 'Unauthorized' });
+  }
+
+  const requestedEdge = String(
+    req.body?.edge ||
+    req.body?.direction ||
+    req.query?.edge ||
+    req.query?.direction ||
+    ''
+  ).trim().toLowerCase();
+  const edge = requestedEdge === 'left' || requestedEdge === 'long'
+    ? 'left'
+    : requestedEdge === 'right' || requestedEdge === 'short'
+      ? 'right'
+      : undefined;
+
+  if (!edge) {
+    return res.status(400).send({
+      ok: false,
+      error: 'edge must be left/long or right/short.'
+    });
+  }
+
+  try {
+    const market = String(req.body?.market || req.query?.market || 'BTC-USD')
+      .replace(/_/g, '-')
+      .toUpperCase();
+    const client = dexRegistry.getDex('dydxv4') as any;
+
+    if (!client || typeof client.getAccountSnapshot !== 'function') {
+      return res.status(503).send({
+        ok: false,
+        error: 'dYdX v4 account snapshot is unavailable.'
+      });
+    }
+
+    const account = await client.getAccountSnapshot([market]);
+    res.send(await decentraderGapMonitor.simulateEdge(account, market, edge));
+  } catch (error) {
+    console.error('Decentrader edge simulation failed:', error);
+    res.status(500).send({
+      ok: false,
+      dryRun: true,
+      orderPlacementAttempted: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
 router.post('/decentrader/gap-check', async (req, res) => {
   if (!isMonitorRequestAuthorized(req)) {
     return res.status(401).send({ ok: false, error: 'Unauthorized' });

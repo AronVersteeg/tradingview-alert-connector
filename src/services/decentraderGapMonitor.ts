@@ -63,15 +63,17 @@ type TpHit = {
   zone: TradeZone;
 };
 
+type DydxOpenPosition = {
+  market: string;
+  side?: string;
+  size: number;
+};
+
 type DydxSizingAccountSnapshot = {
   equity: number;
   freeCollateral: number;
   openPositionsCount: number;
-  openPositions?: Array<{
-    market: string;
-    side?: string;
-    size: number;
-  }>;
+  openPositions?: DydxOpenPosition[];
   markets: Record<
     string,
     {
@@ -183,6 +185,19 @@ function parseNumber(value: any): number | undefined {
 function numberOrZero(value: any): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function existingMarketPosition(
+  account: DydxSizingAccountSnapshot,
+  market: string
+): DydxOpenPosition | undefined {
+  const normalizedMarket = market.replace(/_/g, '-').toUpperCase();
+
+  return account.openPositions?.find(
+    (position) =>
+      String(position.market || '').replace(/_/g, '-').toUpperCase() === normalizedMarket &&
+      Math.abs(numberOrZero(position.size)) > 0
+  );
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -534,6 +549,45 @@ function detectGapIntrusion(rows: DecentraderRow[], frameIndex: number): GapAler
     entrants,
     left: entrants.filter((bar) => bar.gapSide === 'left'),
     right: entrants.filter((bar) => bar.gapSide === 'right')
+  };
+}
+
+function buildSimulatedGapAlert(
+  rows: DecentraderRow[],
+  frameIndex: number,
+  direction: TradePlanDirection,
+  gap: Gap | undefined
+): GapAlert {
+  const frame = rows[frameIndex];
+  const price = parseNumber(frame?.ohlc4);
+
+  if (!frame || price === undefined) {
+    throw new Error('Cannot simulate edge: latest Decentrader frame has no price.');
+  }
+
+  if (!gap) {
+    throw new Error('Cannot simulate edge: latest Decentrader frame has no clean gap.');
+  }
+
+  const gapSide = direction === 'long' ? 'left' : 'right';
+  const sourceBar = direction === 'long' ? gap.leftEdge : gap.rightEdge;
+  const entrant: LiquidityBar = {
+    ...sourceBar,
+    key: `SIMULATED_${gapSide.toUpperCase()}_${sourceBar.key}`,
+    count: sourceBar.count + 1,
+    newCount: 1,
+    gapSide,
+    sideOfPrice: sourceBar.price < price ? 'left' : sourceBar.price > price ? 'right' : 'price'
+  };
+
+  return {
+    timestamp: String(frame.timestamp || ''),
+    timestampNl: nlTime(frame.timestamp),
+    price,
+    previousGap: gap,
+    entrants: [entrant],
+    left: direction === 'long' ? [entrant] : [],
+    right: direction === 'short' ? [entrant] : []
   };
 }
 
@@ -1184,7 +1238,7 @@ function buildDirectionalPlan(
 ) {
   const isLong = direction === 'long';
   const tpZones = isLong ? zones.longTp : zones.shortTp;
-  const triggerPrice = gap ? (isLong ? gap.right : gap.left) : fallbackPrice;
+  const triggerPrice = gap ? (isLong ? gap.left : gap.right) : fallbackPrice;
   const marketPrice = marketInfo.oraclePrice || fallbackPrice;
   const stop = buildFractalStop(rows, frameIndex, direction, marketPrice);
   const stopPrice = stop.valid ? stop.price : undefined;
@@ -1240,7 +1294,7 @@ function buildDirectionalPlan(
         ? `Risk-capped size ${rawSize} is below dYdX minimum ${stepSize}.`
         : undefined,
     trigger: {
-      type: gap ? (isLong ? 'gap-right-break' : 'gap-left-break') : 'no-clean-gap',
+      type: gap ? (isLong ? 'gap-left-edge' : 'gap-right-edge') : 'no-clean-gap',
       price: triggerPrice
     },
     entryReference: {
@@ -1805,18 +1859,14 @@ export class DecentraderGapMonitor {
 
     try {
       const account = await this.tradeExecutor.getAccountSnapshot([market]);
-      const existingMarketPosition = account.openPositions?.find(
-        (position) =>
-          String(position.market || '').replace(/_/g, '-').toUpperCase() === market &&
-          Math.abs(numberOrZero(position.size)) > 0
-      );
+      const openMarketPosition = existingMarketPosition(account, market);
 
-      if (existingMarketPosition || (!account.openPositions && account.openPositionsCount > 0)) {
+      if (openMarketPosition || (!account.openPositions && account.openPositionsCount > 0)) {
         result.tradeSkipped = `Existing ${market} position detected; new edge trade skipped.`;
         result.tradeAttempted = false;
         this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
           market,
-          existingPosition: existingMarketPosition || null,
+          existingPosition: openMarketPosition || null,
           openPositionsCount: account.openPositionsCount
         });
         return;
@@ -1947,7 +1997,8 @@ export class DecentraderGapMonitor {
 
   async getTradePlan(
     account: DydxSizingAccountSnapshot,
-    market = 'BTC-USD'
+    market = 'BTC-USD',
+    simulatedDirection?: TradePlanDirection
   ): Promise<any> {
     const config = this.config();
     const rows = this.latestRows || (await fetchSnapshot(config.symbol));
@@ -1964,7 +2015,10 @@ export class DecentraderGapMonitor {
     const price = parseNumber(frame?.ohlc4);
     const bars = activeBarsForFrame(rows, frameIndex);
     const gap = cleanGapForBars(frame, bars);
-    const alert = detectGapIntrusion(rows, frameIndex);
+    const detectedAlert = detectGapIntrusion(rows, frameIndex);
+    const alert = simulatedDirection
+      ? buildSimulatedGapAlert(rows, frameIndex, simulatedDirection, gap)
+      : detectedAlert;
     const zones = tradeZonesForFrame(rows, frameIndex);
     const normalizedMarket = market.replace(/_/g, '-').toUpperCase();
     const marketInfo =
@@ -1985,7 +2039,7 @@ export class DecentraderGapMonitor {
       .toLowerCase();
     const longPlan = buildDirectionalPlan('long', account, marketInfo, rows, frameIndex, gap, alert, zones, price, mode);
     const shortPlan = buildDirectionalPlan('short', account, marketInfo, rows, frameIndex, gap, alert, zones, price, mode);
-    const activeDirection = mapDirectionFromAlert(alert);
+    const activeDirection = simulatedDirection || mapDirectionFromAlert(alert);
     const activePlan = activeDirection === 'long' ? longPlan : activeDirection === 'short' ? shortPlan : null;
 
     return {
@@ -1997,8 +2051,16 @@ export class DecentraderGapMonitor {
       price,
       signal: {
         direction: activeDirection || 'none',
+        simulated: Boolean(simulatedDirection),
+        simulatedEdge: simulatedDirection === 'long'
+          ? 'left'
+          : simulatedDirection === 'short'
+            ? 'right'
+            : undefined,
         reason: activeDirection
-          ? `${activeDirection} bias from latest gap intrusion`
+          ? simulatedDirection
+            ? `${activeDirection} bias from simulated ${simulatedDirection === 'long' ? 'left' : 'right'} edge`
+            : `${activeDirection} bias from latest gap intrusion`
           : 'No fresh one-sided gap intrusion on latest frame',
         alert: alert
           ? {
@@ -2025,6 +2087,74 @@ export class DecentraderGapMonitor {
       note:
         'Planning layer. It estimates trigger, confirmed-fractal SL, map TP and dYdX size from live equity; this endpoint does not place orders.'
     };
+  }
+
+  async simulateEdge(
+    account: DydxSizingAccountSnapshot,
+    market: string,
+    edge: 'left' | 'right'
+  ): Promise<any> {
+    const direction: TradePlanDirection = edge === 'left' ? 'long' : 'short';
+    const normalizedMarket = market.replace(/_/g, '-').toUpperCase();
+    const plan = await this.getTradePlan(account, normalizedMarket, direction);
+    const signature = `simulation|${edge}|${plan.timestamp}|${Date.now()}`;
+    const openMarketPosition = existingMarketPosition(account, normalizedMarket);
+    const unknownOpenPosition =
+      !account.openPositions &&
+      account.openPositionsCount > 0;
+    const activePlan = plan.activePlan;
+    const invalidPlan =
+      !activePlan ||
+      activePlan.status === 'invalid-stop' ||
+      activePlan.status === 'invalid-size' ||
+      activePlan.stop?.valid === false;
+    let orderAlert: AlertObject | null = null;
+
+    if (!invalidPlan) {
+      orderAlert = buildDecentraderOrderAlert(plan, signature);
+    }
+
+    const outcome = openMarketPosition || unknownOpenPosition || invalidPlan
+      ? 'SKIPPED'
+      : 'READY';
+    const reason = openMarketPosition || unknownOpenPosition
+      ? `Existing ${normalizedMarket} position detected; simulated edge trade skipped.`
+      : invalidPlan
+        ? activePlan?.statusReason ||
+          activePlan?.stop?.reason ||
+          'Simulated edge trade skipped because the active trade plan is invalid.'
+        : 'Simulated edge produced a valid order preview. No order was placed.';
+    const simulation = {
+      ok: true,
+      dryRun: true,
+      orderPlacementAttempted: false,
+      edge,
+      direction,
+      market: normalizedMarket,
+      outcome,
+      reason,
+      existingPosition: openMarketPosition || null,
+      openPositionsCount: account.openPositionsCount,
+      signal: plan.signal,
+      activePlan,
+      orderAlert,
+      timestamp: plan.timestamp,
+      timestampNl: plan.timestampNl
+    };
+
+    console.log('Decentrader edge simulation:', {
+      dryRun: true,
+      edge,
+      direction,
+      market: normalizedMarket,
+      outcome,
+      reason,
+      existingPosition: openMarketPosition || null,
+      signal: plan.signal,
+      orderAlert
+    });
+
+    return simulation;
   }
 
   private config() {
