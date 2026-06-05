@@ -48,6 +48,8 @@ type TradeZone = {
   price: number;
   count: number;
   score: number;
+  selectionScore?: number;
+  peak?: boolean;
   distance: number;
   leverages: number[];
   fresh: number;
@@ -745,22 +747,48 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
   });
 
   function ranked(direction: 'long' | 'short'): TradeZone[] {
-    const ordered = zones
+    const priceOrdered = zones
       .filter((zone) => zone.direction === direction)
-      .sort((a, b) => {
-        if (direction === 'long') return a.price - b.price || b.score - a.score;
-        return b.price - a.price || b.score - a.score;
-      });
-    const strongestScore = Math.max(0, ...ordered.map((zone) => zone.score));
+      .sort((a, b) => a.price - b.price || b.score - a.score);
+    const strongestScore = Math.max(0, ...priceOrdered.map((zone) => zone.score));
     const minimumRelativeScore = Math.max(2, strongestScore * 0.2);
 
-    return ordered
+    const eligible = priceOrdered
       .filter((zone) =>
         zone.score >= minimumRelativeScore ||
         zone.leverages.length >= 2 ||
         (zone.fresh > 0 && zone.count >= 2)
       )
+      .map((zone) => {
+        const index = priceOrdered.findIndex((candidate) => candidate.price === zone.price);
+        const previous = index > 0 ? priceOrdered[index - 1] : undefined;
+        const next = index >= 0 && index < priceOrdered.length - 1 ? priceOrdered[index + 1] : undefined;
+        const peak =
+          (!previous || zone.score >= previous.score) &&
+          (!next || zone.score >= next.score) &&
+          Boolean(previous || next);
+        const overlapBoost = 1 + Math.max(0, zone.leverages.length - 1) * 0.08;
+        const freshBoost = 1 + Math.min(zone.fresh, 3) * 0.05;
+        const peakBoost = peak ? 1.18 : 1;
+
+        return {
+          ...zone,
+          peak,
+          selectionScore: Math.round(zone.score * overlapBoost * freshBoost * peakBoost)
+        };
+      });
+
+    return eligible
+      .sort((a, b) =>
+        (b.selectionScore || b.score) - (a.selectionScore || a.score) ||
+        b.score - a.score ||
+        a.distance - b.distance
+      )
       .slice(0, decentraderMaxTpLevels())
+      .sort((a, b) => {
+        if (direction === 'long') return a.price - b.price || b.score - a.score;
+        return b.price - a.price || b.score - a.score;
+      })
       .map((zone, index) => ({ ...zone, rank: index + 1 }));
   }
 
@@ -981,7 +1009,11 @@ function decentraderTpFractions(takeProfits: any[]): number[] {
   const rawFractions = takeProfits.map((tp, index) => {
     if (configured[index]) return configured[index];
 
-    const score = Math.max(1, numberOrZero(tp?.score));
+    const score = Math.max(
+      1,
+      numberOrZero(tp?.selectionScore) ||
+      numberOrZero(tp?.score)
+    );
     const rankDecay = 1 / Math.sqrt(index + 1);
     return Math.sqrt(score) * rankDecay;
   });
@@ -1412,6 +1444,8 @@ function buildDirectionalPlan(
       label: `${isLong ? 'L' : 'S'} TP${zone.rank}`,
       price: zone.price,
       score: zone.score,
+      selectionScore: zone.selectionScore,
+      peak: zone.peak,
       count: zone.count,
       fresh: zone.fresh,
       leverages: zone.leverages,
@@ -1502,6 +1536,8 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
         price: tp.price,
         size: takeProfitSizes[index] || 0,
         zone_score: numberOrZero(tp.score),
+        zone_selection_score: numberOrZero(tp.selectionScore),
+        zone_peak: Boolean(tp.peak),
         zone_count: numberOrZero(tp.count),
         zone_fresh: numberOrZero(tp.fresh),
         zone_leverages: Array.isArray(tp.leverages) ? tp.leverages : [],
@@ -1557,6 +1593,8 @@ function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): 
         price: tp.price,
         size: takeProfitSizes[index] || 0,
         zone_score: numberOrZero(tp.score),
+        zone_selection_score: numberOrZero(tp.selectionScore),
+        zone_peak: Boolean(tp.peak),
         zone_count: numberOrZero(tp.count),
         zone_fresh: numberOrZero(tp.fresh),
         zone_leverages: Array.isArray(tp.leverages) ? tp.leverages : [],

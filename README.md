@@ -42,7 +42,7 @@ Status:
 GET /decentrader/gap-status
 ```
 
-When auto-trading is enabled, TP prices come from the latest qualifying liquidity-map zones. While a BTC position opened by this monitor is active, every monitor poll can replace only the dYdX take-profit ladder when the map changes. Unknown/manual positions, position size, direction, and stop orders are not changed by this TP-only sync.
+When auto-trading is enabled, TP prices come from the latest qualifying liquidity-map zones. Zones are clustered from active Decentrader histograms and selected by liquidity peak strength, overlap across leverage bands, freshness, and gap context before they are ordered along the trade path. While a BTC position opened by this monitor is active, every monitor poll can replace only the dYdX take-profit ladder when the map changes. Unknown/manual positions, position size, direction, and stop orders are not changed by this TP-only sync.
 
 ```text
 DECENTRADER_TP_MAX_LEVELS=6
@@ -52,7 +52,7 @@ DECENTRADER_DYNAMIC_SL_ENABLED=true
 DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT=0.0025
 ```
 
-Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map-weighted allocation. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
+Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map/peak-weighted allocation. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
 
 The dynamic SL is an add-only confirmed-fractal ratchet for positions opened by this monitor. For LONG positions it only moves upward; for SHORT positions it only moves downward. Older stops are preserved as fallback because dYdX conditional order visibility can lag or be incomplete.
 
