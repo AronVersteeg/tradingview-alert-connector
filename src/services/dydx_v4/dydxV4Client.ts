@@ -533,6 +533,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     const openOrders = await this.getOpenOrdersForMarket(market);
     const existingTakeProfits = openOrders.filter((order: any) => this.isTakeProfitOrder(order));
+    const managedTakeProfits = this.managedTakeProfits.get(market) ?? [];
 
     if (this.takeProfitOrdersMatchLevels(existingTakeProfits, levels, market, marketInfo)) {
       return {
@@ -543,16 +544,63 @@ export class DydxV4Client extends AbstractDexClient {
       };
     }
 
+    if (!existingTakeProfits.length && this.managedTakeProfitsMatchLevels(managedTakeProfits, levels)) {
+      return {
+        outcome: 'UNCHANGED',
+        reason: 'Render-managed TP memory already matches the latest map-derived TP ladder; dYdX indexer did not expose the conditional order.',
+        positionSize: position.size,
+        takeProfitCount: managedTakeProfits.length,
+        visibility: 'MANAGED_MEMORY_ONLY'
+      };
+    }
+
+    if (!existingTakeProfits.length && managedTakeProfits.length) {
+      return {
+        outcome: 'SKIPPED',
+        reason: 'Render-managed TP memory differs from the latest map ladder, but dYdX indexer did not expose the live conditional order; dynamic TP replacement skipped to avoid duplicates.',
+        positionSize: position.size,
+        managedTakeProfitCount: managedTakeProfits.length,
+        requestedTakeProfitCount: levels.length,
+        visibility: 'MANAGED_MEMORY_ONLY'
+      };
+    }
+
+    if (!existingTakeProfits.length && !managedTakeProfits.length) {
+      return {
+        outcome: 'SKIPPED',
+        reason: 'No visible or Render-managed TP orders were available to replace; dynamic TP sync skipped to avoid duplicate dYdX conditional orders.',
+        positionSize: position.size,
+        requestedTakeProfitCount: levels.length,
+        visibility: 'UNVERIFIED_INDEXER'
+      };
+    }
+
     console.log('Dynamic map TP sync replacing TP-only ladder:', {
       market,
       position,
       currentPrice,
       existingTakeProfits: existingTakeProfits.map((order: any) => this.summarizeOrder(order)),
+      managedTakeProfits,
       requestedLevels: levels
     });
 
     await this.cancelSpecificOrders(market, existingTakeProfits);
-    const remainingTakeProfits = await this.waitForTakeProfitsCleared(market);
+    const visibleManagedClientIds = new Set(
+      existingTakeProfits.map((order: any) => this.getOrderClientId(order))
+    );
+
+    for (const managedTakeProfit of managedTakeProfits) {
+      if (visibleManagedClientIds.has(managedTakeProfit.clientId)) continue;
+      await this.cancelManagedTakeProfitBestEffort(
+        market,
+        managedTakeProfit,
+        'Replacing dynamic map-derived TP ladder.'
+      );
+    }
+
+    const remainingTakeProfits = existingTakeProfits.length
+      ? await this.waitForTakeProfitsCleared(market)
+      : [];
 
     if (remainingTakeProfits.length) {
       throw new Error(
@@ -585,7 +633,7 @@ export class DydxV4Client extends AbstractDexClient {
       outcome: 'UPDATED',
       reason: 'Replaced dYdX TP-only ladder with latest map-derived liquidity zones.',
       positionSize: position.size,
-      previousTakeProfitCount: existingTakeProfits.length,
+      previousTakeProfitCount: Math.max(existingTakeProfits.length, managedTakeProfits.length),
       takeProfitCount: levels.length,
       levels
     };
@@ -3131,6 +3179,28 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     return unmatchedOrders.length === 0;
+  }
+
+  private managedTakeProfitsMatchLevels(
+    managedTakeProfits: ManagedTakeProfit[],
+    levels: ExplicitTakeProfitLevel[]
+  ): boolean {
+    if (managedTakeProfits.length !== levels.length) return false;
+
+    const unmatched = [...managedTakeProfits];
+
+    for (const level of levels) {
+      const expectedSize = level.size ?? 0;
+      const matchIndex = unmatched.findIndex((takeProfit) =>
+        Math.abs(takeProfit.triggerPrice - level.price) / level.price < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT &&
+        Math.abs(takeProfit.size - expectedSize) < this.TOLERANCE
+      );
+
+      if (matchIndex < 0) return false;
+      unmatched.splice(matchIndex, 1);
+    }
+
+    return unmatched.length === 0;
   }
 
   private findSafetyStopOrderInOrders(
