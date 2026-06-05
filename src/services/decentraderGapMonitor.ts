@@ -230,6 +230,13 @@ function existingMarketPosition(
   );
 }
 
+function positionDirection(position: DydxOpenPosition | undefined): TradePlanDirection | undefined {
+  const size = numberOrZero(position?.size);
+  if (size > 0) return 'long';
+  if (size < 0) return 'short';
+  return undefined;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -2401,13 +2408,42 @@ export class DecentraderGapMonitor {
     try {
       const account = await this.tradeExecutor.getAccountSnapshot([market]);
       const openMarketPosition = existingMarketPosition(account, market);
+      const openMarketDirection = positionDirection(openMarketPosition);
 
-      if (openMarketPosition || (!account.openPositions && account.openPositionsCount > 0)) {
+      if (openMarketPosition && (options.liveTestHoldSeconds !== undefined || openMarketDirection === direction)) {
         result.tradeSkipped = `Existing ${market} position detected; new edge trade skipped.`;
         result.tradeAttempted = false;
         this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
           market,
-          existingPosition: openMarketPosition || null,
+          existingPosition: openMarketPosition,
+          existingDirection: openMarketDirection || null,
+          requestedDirection: direction,
+          openPositionsCount: account.openPositionsCount
+        });
+        return;
+      }
+
+      if (openMarketPosition && openMarketDirection && openMarketDirection !== direction) {
+        result.reversal = {
+          from: openMarketDirection,
+          to: direction,
+          existingPosition: openMarketPosition
+        };
+        console.warn('Decentrader opposite edge detected; switching through dYdX target flow.', {
+          market,
+          signature,
+          from: openMarketDirection,
+          to: direction,
+          existingPosition: openMarketPosition
+        });
+      }
+
+      if (!openMarketPosition && !account.openPositions && account.openPositionsCount > 0) {
+        result.tradeSkipped = `Existing position detected but ${market} direction could not be verified; new edge trade skipped.`;
+        result.tradeAttempted = false;
+        this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+          market,
+          existingPosition: null,
           openPositionsCount: account.openPositionsCount
         });
         return;
@@ -2537,7 +2573,8 @@ export class DecentraderGapMonitor {
             size: orderAlert.size,
             notional: orderAlert.sizeUsd,
             staticSl: (orderAlert as any).static_sl,
-            takeProfits: (orderAlert as any).take_profits
+            takeProfits: (orderAlert as any).take_profits,
+            reversal: result.reversal || null
           }
         );
         return;
@@ -2702,7 +2739,8 @@ export class DecentraderGapMonitor {
         notional: orderAlert.sizeUsd,
         observedPosition: observedEntryPosition,
         staticSl: (orderAlert as any).static_sl,
-        takeProfits: (orderAlert as any).take_profits
+        takeProfits: (orderAlert as any).take_profits,
+        reversal: result.reversal || null
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
