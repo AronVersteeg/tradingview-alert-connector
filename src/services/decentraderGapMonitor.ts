@@ -127,6 +127,7 @@ type DecentraderTradeExecutor = {
   getAccountSnapshot: (markets: string[]) => Promise<DydxSizingAccountSnapshot>;
   placeOrder: (alert: AlertObject) => Promise<void>;
   syncTakeProfits?: (alert: AlertObject) => Promise<any>;
+  syncTrailingStop?: (alert: AlertObject) => Promise<any>;
 };
 
 type MonitorStatus = {
@@ -143,6 +144,8 @@ type MonitorStatus = {
   tpAllocation?: 'fixed-fractions' | 'map-weighted';
   dynamicTpEnabled?: boolean;
   hasDynamicTpExecutor?: boolean;
+  dynamicSlEnabled?: boolean;
+  hasDynamicSlExecutor?: boolean;
   lastStartedAt?: string;
   lastFinishedAt?: string;
   lastError?: string;
@@ -182,6 +185,8 @@ type AlertState = {
     entrySignature: string;
     initialSize: number;
     entryPrice?: number;
+    currentStop?: number;
+    currentStopUpdatedAt?: string;
   };
   lastCheckedAt?: string;
   lastDataTimestamp?: string;
@@ -957,6 +962,14 @@ function decentraderDynamicTpEnabled(): boolean {
   return parseBool(process.env.DECENTRADER_DYNAMIC_TP_ENABLED, true);
 }
 
+function decentraderDynamicSlEnabled(): boolean {
+  return parseBool(process.env.DECENTRADER_DYNAMIC_SL_ENABLED, true);
+}
+
+function decentraderDynamicSlMinImprovementPct(): number {
+  return envFraction('DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT', 0.0025);
+}
+
 function decentraderTpFractions(takeProfits: any[]): number[] {
   if (!takeProfits.length) return [];
 
@@ -1560,6 +1573,42 @@ function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): 
   } as AlertObject;
 }
 
+function buildDecentraderDynamicSlAlert(
+  plan: any,
+  position: DydxOpenPosition,
+  trailStop: number
+): AlertObject {
+  const direction: TradePlanDirection = position.size > 0 ? 'long' : 'short';
+  const directionalPlan = plan?.plans?.[direction];
+  const referencePrice =
+    numberOrZero(directionalPlan?.entryReference?.price) ||
+    numberOrZero(plan?.marketInfo?.oraclePrice) ||
+    numberOrZero(plan?.price);
+
+  return {
+    exchange: 'dydxv4',
+    strategy: 'decentrader_dynamic_fractal_sl',
+    market: plan.market || decentraderTradeMarket(),
+    price: referencePrice,
+    entry_price: referencePrice,
+    size: Math.abs(numberOrZero(position.size)),
+    desired_position: direction === 'long' ? 'LONG' : 'SHORT',
+    time: Date.now(),
+    signal: 'DECENTRADER_TRAILING_STOP_SYNC',
+    profile: 'MANAGED',
+    trail_stop: trailStop,
+    static_sl: trailStop,
+    decentrader: {
+      timestamp: plan.timestamp,
+      timestampNl: plan.timestampNl,
+      direction,
+      dynamicSlSync: true,
+      stop: directionalPlan?.stop,
+      note: 'Add-only fractal trailing SL from latest confirmed Decentrader fractal; older stops are preserved as fallback.'
+    }
+  } as AlertObject;
+}
+
 function buildDecentraderLiveTestOrderAlert(
   plan: any,
   signature: string,
@@ -1807,6 +1856,8 @@ export class DecentraderGapMonitor {
       tpAllocation: decentraderTpAllocationMode(),
       dynamicTpEnabled: decentraderDynamicTpEnabled(),
       hasDynamicTpExecutor: typeof this.tradeExecutor?.syncTakeProfits === 'function',
+      dynamicSlEnabled: decentraderDynamicSlEnabled(),
+      hasDynamicSlExecutor: typeof this.tradeExecutor?.syncTrailingStop === 'function',
       lastTradeDecision: state.lastTradeDecision
     };
   }
@@ -1862,11 +1913,13 @@ export class DecentraderGapMonitor {
         tradeAlert: null,
         tradePlan: null,
         tradeDecision: null,
+        dynamicSlSync: null,
         dynamicTpSync: null,
         lastTradeDecision: state.lastTradeDecision || null,
         duplicate: false
       };
 
+      await this.maybeSyncDynamicStopLoss(state, result);
       await this.maybeSyncDynamicTakeProfits(state, result);
 
       if (!alerts.length) {
@@ -2084,6 +2137,144 @@ export class DecentraderGapMonitor {
         market
       };
       console.error('Decentrader dynamic TP sync failed; position and SL were left unchanged:', error);
+    }
+  }
+
+  private async maybeSyncDynamicStopLoss(state: AlertState, result: any): Promise<void> {
+    if (!decentraderDynamicSlEnabled()) {
+      result.dynamicSlSync = {
+        outcome: 'DISABLED',
+        reason: 'DECENTRADER_DYNAMIC_SL_ENABLED is false.'
+      };
+      return;
+    }
+
+    if (!decentraderAutoTradeEnabled()) {
+      result.dynamicSlSync = {
+        outcome: 'SKIPPED',
+        reason: 'Auto-trading is disabled; dynamic SL orders were preserved.'
+      };
+      return;
+    }
+
+    const executor = this.tradeExecutor;
+    const syncTrailingStop = executor?.syncTrailingStop;
+
+    if (!executor || !syncTrailingStop) {
+      result.dynamicSlSync = {
+        outcome: 'SKIPPED',
+        reason: 'The dYdX executor does not expose add-only SL synchronization.'
+      };
+      return;
+    }
+
+    const market = decentraderTradeMarket();
+
+    try {
+      const account = await executor.getAccountSnapshot([market]);
+      const position = existingMarketPosition(account, market);
+
+      if (!position) {
+        delete state.managedPosition;
+        result.dynamicSlSync = {
+          outcome: 'SKIPPED',
+          reason: `${market} is flat; no dynamic SL sync needed.`
+        };
+        return;
+      }
+
+      const managedPosition = state.managedPosition;
+      const positionDirection: TradePlanDirection = position.size > 0 ? 'long' : 'short';
+      const entryPriceMismatch = Boolean(
+        managedPosition?.entryPrice &&
+        position.entryPrice &&
+        Math.abs(position.entryPrice - managedPosition.entryPrice) / managedPosition.entryPrice > 0.005
+      );
+      const positionGrewBeyondManagedSize =
+        managedPosition &&
+        Math.abs(position.size) > managedPosition.initialSize + 0.00000001;
+
+      if (
+        !managedPosition ||
+        managedPosition.market.replace(/_/g, '-').toUpperCase() !== market ||
+        managedPosition.direction !== positionDirection ||
+        entryPriceMismatch ||
+        positionGrewBeyondManagedSize
+      ) {
+        result.dynamicSlSync = {
+          outcome: 'SKIPPED',
+          reason: 'Existing BTC position was not opened by this Decentrader monitor; SL orders were preserved.',
+          market,
+          position,
+          managedPosition: managedPosition || null
+        };
+        return;
+      }
+
+      if (!managedPosition.currentStop || managedPosition.currentStop <= 0) {
+        result.dynamicSlSync = {
+          outcome: 'SKIPPED',
+          reason: 'Managed position has no known current stop yet; add-only trailing SL skipped.',
+          market,
+          position,
+          managedPosition
+        };
+        return;
+      }
+
+      const plan = await this.getTradePlan(account, market);
+      const directionalPlan = plan?.plans?.[positionDirection];
+      const candidateStop = numberOrZero(directionalPlan?.stop?.price);
+      const minImprovementPct = decentraderDynamicSlMinImprovementPct();
+      const improves =
+        positionDirection === 'long'
+          ? candidateStop > managedPosition.currentStop * (1 + minImprovementPct)
+          : candidateStop < managedPosition.currentStop * (1 - minImprovementPct);
+
+      if (
+        !directionalPlan?.stop?.valid ||
+        !candidateStop ||
+        !improves
+      ) {
+        result.dynamicSlSync = {
+          outcome: 'UNCHANGED',
+          reason: 'Latest confirmed fractal stop does not improve the managed SL enough.',
+          market,
+          position,
+          currentStop: managedPosition.currentStop,
+          candidateStop: candidateStop || null,
+          minImprovementPct,
+          stop: directionalPlan?.stop || null
+        };
+        return;
+      }
+
+      const alert = buildDecentraderDynamicSlAlert(plan, position, candidateStop);
+      const syncResult = await syncTrailingStop(alert);
+      result.dynamicSlSync = {
+        ...syncResult,
+        market,
+        position,
+        previousStop: managedPosition.currentStop,
+        candidateStop,
+        timestamp: plan.timestamp,
+        timestampNl: plan.timestampNl,
+        stop: directionalPlan.stop
+      };
+
+      if (syncResult?.outcome === 'UPDATED' || syncResult?.outcome === 'UNCHANGED') {
+        managedPosition.currentStop = candidateStop;
+        managedPosition.currentStopUpdatedAt = nowNlIso();
+      }
+
+      console.log('Decentrader dynamic SL sync:', result.dynamicSlSync);
+    } catch (error) {
+      result.dynamicSlSync = {
+        outcome: 'ERROR',
+        reason: error instanceof Error ? error.message : String(error),
+        market
+      };
+      console.error('Decentrader dynamic SL sync failed; existing stops were left unchanged:', error);
     }
   }
 
@@ -2460,7 +2651,9 @@ export class DecentraderGapMonitor {
         openedAt: state.lastTradeExecutedAt,
         entrySignature: signature,
         initialSize: Math.abs(observedEntryPosition.size),
-        entryPrice: observedEntryPosition.entryPrice
+        entryPrice: observedEntryPosition.entryPrice,
+        currentStop: numberOrZero((orderAlert as any).static_sl),
+        currentStopUpdatedAt: state.lastTradeExecutedAt
       };
       result.tradePlaced = true;
       result.tradeSkipped = null;

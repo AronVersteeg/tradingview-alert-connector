@@ -492,6 +492,109 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 
+  async syncTrailingStop(alert: AlertObject): Promise<any> {
+    const market = this.normalizeMarket((alert as any).market);
+
+    return this.withMarketQueue(market, () =>
+      this.syncTrailingStopForMarket(market, alert)
+    );
+  }
+
+  private async syncTrailingStopForMarket(market: string, alert: AlertObject): Promise<any> {
+    const position = await this.getCurrentPosition(market);
+
+    if (Math.abs(position.size) < this.TOLERANCE) {
+      return {
+        outcome: 'SKIPPED',
+        reason: `${market} is flat; dynamic SL sync has nothing to manage.`
+      };
+    }
+
+    const expectedSize = this.getTargetSize(alert, Math.abs(position.size));
+    if (Math.sign(expectedSize) !== Math.sign(position.size)) {
+      throw new Error(
+        `Dynamic SL sync direction mismatch for ${market}. Current=${position.size}, requested=${expectedSize}.`
+      );
+    }
+
+    const isLong = position.size > 0;
+    const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+    const trailStop = this.getFirstPositiveNumber([
+      (alert as any).trail_stop,
+      (alert as any).trailStop,
+      (alert as any).static_sl,
+      (alert as any).staticSL,
+      (alert as any).stop_loss,
+      (alert as any).stopLoss
+    ]);
+
+    if (!trailStop) {
+      return {
+        outcome: 'SKIPPED',
+        reason: 'No valid trailing stop price supplied.'
+      };
+    }
+
+    const managedStop = this.managedStops.get(market);
+    if (
+      managedStop &&
+      String(managedStop.side).toUpperCase() === String(side).toUpperCase() &&
+      Math.abs(managedStop.triggerPrice - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
+    ) {
+      return {
+        outcome: 'UNCHANGED',
+        reason: 'Render-managed stop memory already matches the latest fractal trailing stop.',
+        positionSize: position.size,
+        trailStop,
+        visibility: 'MANAGED_MEMORY_ONLY'
+      };
+    }
+
+    const executionPrice = this.getStopExecutionPrice(isLong, trailStop);
+    const size = Math.abs(position.size);
+
+    console.log('Submitting add-only Decentrader fractal trailing stop:', {
+      market,
+      direction: isLong ? 'LONG' : 'SHORT',
+      positionSize: position.size,
+      trailStop,
+      executionPrice,
+      side,
+      size,
+      previousManagedStop: managedStop || null
+    });
+
+    const placedStop = await this.placeSafetyStopOrder(
+      market,
+      side,
+      size,
+      trailStop,
+      executionPrice
+    );
+
+    this.managedStops.set(market, {
+      market,
+      side,
+      triggerPrice: trailStop,
+      clientId: placedStop.clientId,
+      size,
+      source: 'TRAIL',
+      updatedAt: Date.now(),
+      goodTilBlockTime: placedStop.goodTilBlockTime
+    });
+
+    return {
+      outcome: 'UPDATED',
+      reason: 'Submitted add-only fractal trailing stop. Older stops were preserved as fallback.',
+      positionSize: position.size,
+      trailStop,
+      executionPrice,
+      clientId: placedStop.clientId,
+      goodTilBlockTime: placedStop.goodTilBlockTime,
+      previousManagedStop: managedStop || null
+    };
+  }
+
   private async syncTakeProfitsForMarket(market: string, alert: AlertObject): Promise<any> {
     const position = await this.getCurrentPosition(market);
 

@@ -48,9 +48,13 @@ When auto-trading is enabled, TP prices come from the latest qualifying liquidit
 DECENTRADER_TP_MAX_LEVELS=6
 DECENTRADER_TP_SIZE_FRACTIONS=
 DECENTRADER_DYNAMIC_TP_ENABLED=true
+DECENTRADER_DYNAMIC_SL_ENABLED=true
+DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT=0.0025
 ```
 
 Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map-weighted allocation. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
+
+The dynamic SL is an add-only confirmed-fractal ratchet for positions opened by this monitor. For LONG positions it only moves upward; for SHORT positions it only moves downward. Older stops are preserved as fallback because dYdX conditional order visibility can lag or be incomplete.
 
 Manual check:
 
