@@ -15,6 +15,8 @@ const STUDY_FRAME_LIMIT = 500;
 
 type DydxCandle = {
   startedAt: string;
+  low?: string;
+  high?: string;
   close: string;
 };
 
@@ -62,6 +64,8 @@ type StudyFrame = {
   t: string;
   startedAtMs: number;
   price: number;
+  low: number;
+  high: number;
 };
 
 type TimelapseEvent = {
@@ -69,7 +73,7 @@ type TimelapseEvent = {
   s: 'L' | 'S';
   l: number;
   p: number;
-  a: 1;
+  a: 0 | 1;
   n: 0 | 1;
 };
 
@@ -586,13 +590,17 @@ function buildFrames(candles: DydxCandle[]): StudyFrame[] {
   return candles
     .map((candle, index) => {
       const price = parseNumber(candle.close);
+      const low = parseNumber(candle.low);
+      const high = parseNumber(candle.high);
       const startedAtMs = new Date(candle.startedAt).getTime();
       if (price === undefined || price <= 0 || !Number.isFinite(startedAtMs)) return undefined;
       return {
         i: index,
         t: timestampForDydx(candle.startedAt),
         startedAtMs,
-        price
+        price,
+        low: low !== undefined && low > 0 ? low : price,
+        high: high !== undefined && high > 0 ? high : price
       } as StudyFrame;
     })
     .filter(Boolean) as StudyFrame[];
@@ -682,6 +690,33 @@ function weightedLongShareAt(
   }
 
   return totalWeight > 0 ? weighted / totalWeight : undefined;
+}
+
+function markSweptLiquidationEvents(events: TimelapseEvent[], frames: StudyFrame[]): TimelapseEvent[] {
+  if (!events.length || !frames.length) return events;
+
+  const futureLow = Array(frames.length).fill(Infinity);
+  const futureHigh = Array(frames.length).fill(-Infinity);
+  let minLow = Infinity;
+  let maxHigh = -Infinity;
+
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    minLow = Math.min(minLow, frames[index].low || frames[index].price);
+    maxHigh = Math.max(maxHigh, frames[index].high || frames[index].price);
+    futureLow[index] = minLow;
+    futureHigh[index] = maxHigh;
+  }
+
+  const touchBufferPct = 0.003;
+  return events.map((event) => {
+    const nextIndex = Math.min(frames.length - 1, event.i + 1);
+    const swept =
+      event.s === 'L'
+        ? futureLow[nextIndex] <= event.p * (1 + touchBufferPct)
+        : futureHigh[nextIndex] >= event.p * (1 - touchBufferPct);
+
+    return swept ? { ...event, a: 0 as 0 } : event;
+  });
 }
 
 function hyperliquidContextForBtc(context: any): any | undefined {
@@ -913,6 +948,24 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
     );
   }
 
+  const sweptEvents = markSweptLiquidationEvents(events, frames);
+  const sweptCount = sweptEvents.filter((event) => event.a === 0).length;
+  const activeZoneCounts = new Map<string, { s: 'L' | 'S'; l: number; p: number; c: number }>();
+  for (const event of sweptEvents) {
+    if (!event.a || event.i > latestFrame.i) continue;
+    const key = `${event.s}|${event.l}|${priceKey(event.p)}`;
+    const existing =
+      activeZoneCounts.get(key) ||
+      ({
+        s: event.s,
+        l: event.l,
+        p: event.p,
+        c: 0
+      } as { s: 'L' | 'S'; l: number; p: number; c: number });
+    existing.c += 1;
+    activeZoneCounts.set(key, existing);
+  }
+
   const sourceStatuses = [
     gmxPositionsResult,
     binanceOiResult,
@@ -951,7 +1004,8 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
         `bybitOi=${bybitOi.length}`,
         `okxOi=${okxOi.length}`,
         `bitgetOi=${bitgetOiRows.length}`,
-        `hyperCandles=${hyperCandles.length}`
+        `hyperCandles=${hyperCandles.length}`,
+        `sweptInactive=${sweptCount}`
       ],
       sourceStatuses,
       marketDepth: {
@@ -971,8 +1025,8 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       t: frame.t,
       price: frame.price
     })),
-    events,
-    topCurrentZones: Array.from(currentZoneCounts.values())
+    events: sweptEvents,
+    topCurrentZones: Array.from(activeZoneCounts.values())
       .sort((a, b) => b.c - a.c || a.p - b.p)
       .slice(0, 40)
   };

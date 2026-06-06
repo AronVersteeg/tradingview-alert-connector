@@ -899,7 +899,7 @@
     function publicMajorThreshold(bars) {
       if (activeSource !== 'open' || !bars?.length) return 0;
       const maxCount = Math.max(1, ...bars.map((bar) => bar.count || 0));
-      return Math.max(6, Math.ceil(maxCount * 0.18));
+      return Math.max(10, Math.ceil(maxCount * 0.035));
     }
 
     function publicClusterStep(bars) {
@@ -984,6 +984,14 @@
 
     function getGapBarsForSource(bars, frame) {
       if (activeSource !== 'open' || !frame || !Number.isFinite(frame.price)) return bars;
+      const threshold = publicMajorThreshold(bars);
+      const majorBars = threshold ? bars.filter((bar) => bar.count >= threshold) : bars;
+      if (
+        majorBars.some((bar) => bar.price < frame.price) &&
+        majorBars.some((bar) => bar.price > frame.price)
+      ) {
+        return majorBars;
+      }
       return publicPeakBars(bars, frame);
     }
 
