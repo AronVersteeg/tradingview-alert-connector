@@ -873,20 +873,37 @@
       const mode = options.mode || modeInput.value;
       const bins = new Map();
       const firstSeen = [];
+      const eventGroups = [{ events: payload.events || [], context: false }];
+      if (options.includeContext && Array.isArray(payload.contextEvents)) {
+        eventGroups.push({ events: payload.contextEvents, context: true });
+      }
 
-      for (const event of payload.events) {
-        if (!eventAllowed(event)) continue;
-        if (mode === 'active') {
-          if (event.i > frameIndex || !event.a) continue;
-        } else {
-          if (event.i !== frameIndex) continue;
+      for (const group of eventGroups) {
+        for (const event of group.events) {
+          if (!eventAllowed(event)) continue;
+          if (mode === 'active') {
+            if (event.i > frameIndex || !event.a) continue;
+          } else {
+            if (event.i !== frameIndex) continue;
+          }
+
+          const key = `${event.s}|${event.l}|${event.p}`;
+          const existing =
+            bins.get(key) ||
+            {
+              key,
+              side: event.s,
+              leverage: event.l,
+              price: event.p,
+              count: 0,
+              first: false,
+              contextOnly: true,
+            };
+          existing.count += 1;
+          existing.contextOnly = existing.contextOnly && group.context;
+          existing.first = existing.first || Boolean(event.n && event.i === frameIndex && !group.context);
+          bins.set(key, existing);
         }
-
-        const key = `${event.s}|${event.l}|${event.p}`;
-        const existing = bins.get(key) || { key, side: event.s, leverage: event.l, price: event.p, count: 0, first: false };
-        existing.count += 1;
-        existing.first = existing.first || Boolean(event.n && event.i === frameIndex);
-        bins.set(key, existing);
       }
 
       for (const item of bins.values()) {
@@ -905,6 +922,16 @@
     function getGapBarsForSource(bars, frame) {
       if (activeSource !== 'open' || !frame || !Number.isFinite(frame.price)) return bars;
       return bars;
+    }
+
+    function isContextInsideGap(bar, gap) {
+      return Boolean(
+        activeSource === 'open' &&
+        bar.contextOnly &&
+        gap &&
+        bar.price > gap.left &&
+        bar.price < gap.right
+      );
     }
 
     function getGapIntrusion(frameIndex, xFor, xToPrice) {
@@ -1477,12 +1504,12 @@
       const visiblePrice = ensurePriceView();
       const minPrice = visiblePrice.min;
       const maxPrice = visiblePrice.max;
-      const { bars, firstSeen } = getFrameEvents(frameIndex);
+      const includeContext = activeSource === 'open';
+      const { bars, firstSeen } = getFrameEvents(frameIndex, { includeContext });
       const rawMonitorBars = getFrameEvents(frameIndex, { mode: 'active' }).bars;
       const monitorBars = getGapBarsForSource(rawMonitorBars, frame);
       const publicNoiseThreshold = publicMajorThreshold(rawMonitorBars);
       const visibleBars = bars.filter((bar) => bar.price >= minPrice && bar.price <= maxPrice);
-      const maxCount = Math.max(1, ...visibleBars.map((bar) => bar.count));
       const css = getComputedStyle(document.documentElement);
       const newColor = css.getPropertyValue('--new').trim();
       const priceColor = css.getPropertyValue('--price').trim();
@@ -1510,8 +1537,6 @@
       area.height = area.bottom - area.top;
       lastChartArea = area;
 
-      drawGrid(area, minPrice, maxPrice, maxCount);
-
       function xFor(price) {
         return area.left + ((price - minPrice) / (maxPrice - minPrice)) * area.width;
       }
@@ -1529,22 +1554,28 @@
       const tradeRange = getTradeRange();
       const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, tradeRange.min, tradeRange.max);
       const tpHits = getTpHits(frameIndex, xFor, xToPrice, tradeRange.min, tradeRange.max);
+      const drawableVisibleBars = visibleBars.filter((bar) => !isContextInsideGap(bar, gap));
+      const maxCount = Math.max(1, ...drawableVisibleBars.map((bar) => bar.count));
+
+      drawGrid(area, minPrice, maxPrice, maxCount);
       drawGap(area, gap, priceColor);
 
-      for (const bar of visibleBars) {
+      for (const bar of drawableVisibleBars) {
         const x = xFor(bar.price) + leverageOffset(bar.leverage);
         const barHeight = Math.max(2, (bar.count / maxCount) * area.height);
         const barWidth = Math.max(2, BAR_WIDTH);
         const crispX = Math.round(x - barWidth / 2);
         const isPublicMinor = activeSource === 'open' && publicNoiseThreshold && bar.count < publicNoiseThreshold;
+        const isPublicContext = activeSource === 'open' && bar.contextOnly;
         ctx.fillStyle = colorForZone(bar.side, bar.leverage);
-        ctx.globalAlpha = isPublicMinor ? 0.2 : modeInput.value === 'new' ? 0.86 : 0.62;
+        ctx.globalAlpha = isPublicContext ? 0.36 : isPublicMinor ? 0.2 : modeInput.value === 'new' ? 0.86 : 0.62;
         ctx.fillRect(crispX, Math.round(area.bottom - barHeight), barWidth, Math.round(barHeight));
       }
 
       ctx.globalAlpha = 1;
       for (const item of firstSeen) {
         if (item.price < minPrice || item.price > maxPrice) continue;
+        if (isContextInsideGap(item, gap)) continue;
         const x = xFor(item.price) + leverageOffset(item.leverage);
         ctx.strokeStyle = newColor;
         ctx.lineWidth = 4;

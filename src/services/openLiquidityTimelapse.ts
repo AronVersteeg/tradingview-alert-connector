@@ -1129,10 +1129,11 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
     if (!event.a || !event.z || activeSources.has(event.z)) return event;
     return { ...event, a: 0 as 0 };
   });
+  const contextEvents = lifecycleResult.events
+    .filter((event) => event.a && event.z && !activeSources.has(event.z))
+    .map((event) => ({ ...event, c: 1 }));
   const inactiveCount = lifecycleEvents.filter((event) => event.a === 0).length;
-  const sourceFilteredCount = lifecycleResult.events.filter(
-    (event) => event.a && event.z && !activeSources.has(event.z)
-  ).length;
+  const sourceFilteredCount = contextEvents.length;
   const activeZoneCounts = new Map<string, { s: 'L' | 'S'; l: number; p: number; c: number }>();
   for (const event of lifecycleEvents) {
     if (!event.a || event.i > latestFrame.i) continue;
@@ -1195,6 +1196,7 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
         `inactiveAgeDecay=${lifecycleResult.inactive.ageDecay}`,
         `inactiveLifecycle=${lifecycleResult.inactive.probabilistic}`,
         `inactiveSourceFiltered=${sourceFilteredCount}`,
+        `contextEvents=${contextEvents.length}`,
         `activeSources=${Array.from(activeSources).join('+')}`
       ],
       sourceStatuses,
@@ -1204,7 +1206,7 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
         hyperliquid: hyperBookResult.data || null
       },
       note:
-        'Study-only public perp liquidity estimate from GMX positions, Binance/Bybit/OKX open-interest buildups, Binance/Bybit/OKX trader ratios, Bitget current OI and Hyperliquid public context. It applies a lifecycle model so stale, swept, decayed or impulse-cleared zones stop being active, then renders a calibrated active-source subset. It does not use Decentrader and does not place or size trades.'
+        'Study-only public perp liquidity estimate from GMX positions, Binance/Bybit/OKX open-interest buildups, Binance/Bybit/OKX trader ratios, Bitget current OI and Hyperliquid public context. It applies a lifecycle model so stale, swept, decayed or impulse-cleared zones stop being active, renders a calibrated active-source subset for gap logic, and uses the remaining survivor sources as outside-gap context. It does not use Decentrader and does not place or size trades.'
     },
     range: {
       minPrice: Math.min(...prices),
@@ -1216,6 +1218,7 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       price: frame.price
     })),
     events: lifecycleEvents,
+    contextEvents,
     topCurrentZones: Array.from(activeZoneCounts.values())
       .sort((a, b) => b.c - a.c || a.p - b.p)
       .slice(0, 40)
