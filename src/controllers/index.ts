@@ -5,6 +5,7 @@ import express, { Router } from 'express';
 import { validateAlert } from '../services';
 import { DexRegistry } from '../services/dexRegistry';
 import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
+import { getOpenLiquidityTimelapsePayload } from '../services/openLiquidityTimelapse';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
 
@@ -205,6 +206,7 @@ router.get('/decentrader/map', async (req, res) => {
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "connect-src 'self' https://arons-tradingview-alert-connector.onrender.com",
+      "frame-src 'self'",
       "font-src 'self' https: data:",
       "form-action 'self'",
       "frame-ancestors 'self'",
@@ -221,6 +223,20 @@ router.get('/decentrader/liquidity-timelapse', async (req, res) => {
     res.send(await decentraderGapMonitor.getTimelapsePayload());
   } catch (error) {
     console.error('Decentrader timelapse payload request failed:', error);
+    res.status(500).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.get('/open-liquidity/liquidity-timelapse', async (req, res) => {
+  try {
+    const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(await getOpenLiquidityTimelapsePayload(market));
+  } catch (error) {
+    console.error('Open liquidity timelapse payload request failed:', error);
     res.status(500).send({
       ok: false,
       error: error instanceof Error ? error.message : String(error)

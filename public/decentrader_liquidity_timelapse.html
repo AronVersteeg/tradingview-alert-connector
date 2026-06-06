@@ -218,6 +218,57 @@
       padding: 18px 22px 14px;
     }
 
+    .comparison {
+      padding: 18px 22px 22px;
+      background: #0f151e;
+      border-top: 1px solid var(--border);
+    }
+
+    .comparison-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+
+    .comparison-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    .comparison-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      max-width: 720px;
+      text-align: right;
+    }
+
+    .comparison-frame {
+      display: block;
+      width: 100%;
+      height: min(980px, 92vh);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--bg);
+    }
+
+    body.is-embedded main {
+      min-height: 100vh;
+    }
+
+    body.is-embedded header,
+    body.is-embedded footer,
+    body.is-embedded .toolbar,
+    body.is-embedded .gap-monitor,
+    body.is-embedded .stage {
+      padding-left: 16px;
+      padding-right: 16px;
+    }
+
     canvas {
       width: 100%;
       height: calc(100vh - 190px);
@@ -269,7 +320,8 @@
     @media (max-width: 760px) {
       header,
       footer,
-      .stage {
+      .stage,
+      .comparison {
         padding-left: 12px;
         padding-right: 12px;
       }
@@ -327,13 +379,22 @@
         max-width: 100%;
         justify-content: flex-start;
       }
+
+      .comparison-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .comparison-note {
+        text-align: left;
+      }
     }
   </style>
 </head>
 <body>
   <main>
     <header>
-      <h1>BTC/USD Liquidity Timelapse</h1>
+      <h1 id="pageTitle">BTC/USD Liquidity Timelapse</h1>
       <div class="meta" id="meta">Loading data</div>
     </header>
 
@@ -455,18 +516,39 @@
       </div>
     </section>
 
+    <section class="comparison" id="openStudySection">
+      <div class="comparison-header">
+        <h2 class="comparison-title">Open-data BTC/USD study</h2>
+        <div class="comparison-note">
+          Zelfde kaartlogica, andere databron. Deze studie gebruikt geen Decentrader en is niet gekoppeld aan orderplaatsing.
+        </div>
+      </div>
+      <iframe
+        class="comparison-frame"
+        id="openStudyFrame"
+        title="Open-data BTC/USD liquidity study"
+        src="/decentrader/map?source=open&embedded=1"
+      ></iframe>
+    </section>
+
     <footer id="note"></footer>
   </main>
 
   <script src="data/decentrader_btc_liquidity_timelapse_data.js"></script>
   <script>
-    const CLOUD_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+    const queryParams = new URLSearchParams(window.location.search);
+    const activeSource = queryParams.get('source') === 'open' ? 'open' : 'decentrader';
+    const isEmbedded = queryParams.get('embedded') === '1';
+    const CLOUD_DECENTRADER_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/liquidity-timelapse'
       : '/decentrader/liquidity-timelapse';
+    const CLOUD_OPEN_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+      ? 'https://arons-tradingview-alert-connector.onrender.com/open-liquidity/liquidity-timelapse'
+      : '/open-liquidity/liquidity-timelapse';
     const CLOUD_TRADE_PLAN_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/trade-plan'
       : '/decentrader/trade-plan';
-    let payload = window.DECENTRADER_LIQUIDITY_TIMELAPSE;
+    let payload = activeSource === 'decentrader' ? window.DECENTRADER_LIQUIDITY_TIMELAPSE : null;
     const canvas = document.getElementById('chart');
     const ctx = canvas.getContext('2d');
     const frameInput = document.getElementById('frame');
@@ -483,6 +565,9 @@
     const liveMonitorButton = document.getElementById('liveMonitor');
     const refreshDataButton = document.getElementById('refreshData');
     const playButton = document.getElementById('play');
+    const pageTitle = document.getElementById('pageTitle');
+    const openStudySection = document.getElementById('openStudySection');
+    const openStudyFrame = document.getElementById('openStudyFrame');
     const meta = document.getElementById('meta');
     const note = document.getElementById('note');
     const gapWidth = document.getElementById('gapWidth');
@@ -518,6 +603,21 @@
     let pinchStart = null;
     const BAR_WIDTH = 4;
     const GAP_EDGE_PADDING = 3;
+
+    if (isEmbedded) {
+      document.body.classList.add('is-embedded');
+      openStudySection?.remove();
+    }
+
+    if (activeSource === 'open') {
+      pageTitle.textContent = 'BTC/USD Open-Data Liquidity Study';
+    } else {
+      pageTitle.textContent = 'BTC/USD Decentrader Liquidity Timelapse';
+    }
+
+    if (openStudyFrame && ['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
+      openStudyFrame.src = 'https://arons-tradingview-alert-connector.onrender.com/decentrader/map?source=open&embedded=1';
+    }
 
     function money(value) {
       if (!Number.isFinite(Number(value))) return '-';
@@ -1279,6 +1379,12 @@
     }
 
     function updateTradePlanMonitor(frame) {
+      if (activeSource !== 'decentrader') {
+        tradePlanValue.textContent = 'Study only';
+        tradePlanStatus.textContent = 'Open-data comparison is visual research only; no sizing, signals or dYdX orders.';
+        return;
+      }
+
       if (latestTradePlanError) {
         tradePlanValue.textContent = 'Sizing unavailable';
         tradePlanStatus.textContent = latestTradePlanError;
@@ -1497,9 +1603,10 @@
 
       ctx.fillStyle = '#ecf2f8';
       ctx.font = '600 15px Inter, system-ui, sans-serif';
-      ctx.fillText(`${nlTime(frame.t)} NL | ${money(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
+      const sourceName = payload.source?.name || (activeSource === 'open' ? 'Open data study' : 'Decentrader');
+      ctx.fillText(`${sourceName} | ${nlTime(frame.t)} NL | ${money(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
 
-      meta.textContent = `${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
+      meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       updateGapMonitor(frame, gap, intrusion);
       updateTradeZoneMonitor(frame, gap, tradeZones, tpHits);
       updateTradePlanMonitor(frame);
@@ -1572,7 +1679,8 @@
     }
 
     async function fetchCloudPayload() {
-      const response = await fetch(`${CLOUD_DATA_URL}?ts=${Date.now()}`, { cache: 'no-store' });
+      const dataUrl = activeSource === 'open' ? CLOUD_OPEN_DATA_URL : CLOUD_DECENTRADER_DATA_URL;
+      const response = await fetch(`${dataUrl}?market=BTC-USD&ts=${Date.now()}`, { cache: 'no-store' });
       if (!response.ok) throw new Error(`Cloud data ${response.status}`);
       return { payload: await response.json(), source: 'cloud' };
     }
@@ -1584,6 +1692,13 @@
     }
 
     async function refreshTradePlan() {
+      if (activeSource !== 'decentrader') {
+        latestTradePlan = null;
+        latestTradePlanError = '';
+        updateTradePlanMonitor(payload?.frames?.[Number(frameInput.value)]);
+        return null;
+      }
+
       const response = await fetch(`${CLOUD_TRADE_PLAN_URL}?market=BTC-USD&ts=${Date.now()}`, { cache: 'no-store' });
       const plan = await response.json();
       if (!response.ok || plan.error) throw new Error(plan.error || `Trade plan ${response.status}`);
@@ -1600,11 +1715,14 @@
       try {
         loaded = await fetchCloudPayload();
       } catch (cloudError) {
+        if (activeSource !== 'decentrader') throw cloudError;
         loaded = await fetchLocalPayload();
       }
       const nextPayload = loaded.payload;
       payload = nextPayload;
-      window.DECENTRADER_LIQUIDITY_TIMELAPSE = nextPayload;
+      if (activeSource === 'decentrader') {
+        window.DECENTRADER_LIQUIDITY_TIMELAPSE = nextPayload;
+      }
       frameInput.max = String(payload.frames.length - 1);
 
       const nextLast = payload.frames[payload.frames.length - 1]?.t;
@@ -1642,7 +1760,8 @@
     function initializeViewer() {
       frameInput.max = String(payload.frames.length - 1);
       frameInput.value = String(payload.frames.length - 1);
-      meta.textContent = `${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
+      const sourceName = payload.source?.name || (activeSource === 'open' ? 'Open data study' : 'Decentrader');
+      meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       note.textContent = payload.source.note;
       resizeCanvas();
     }
