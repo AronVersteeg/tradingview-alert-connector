@@ -552,6 +552,16 @@ export class DydxV4Client extends AbstractDexClient {
 
     const executionPrice = this.getStopExecutionPrice(isLong, trailStop);
     const size = Math.abs(position.size);
+    const openOrdersBefore = await this.getOpenOrdersForMarket(market);
+    const oldStopOrders = this.getProtectiveStopOrdersFromOrders(openOrdersBefore)
+      .filter((order: any) => this.orderSideMatches(order, side))
+      .filter((order: any) => {
+        const existingTrigger = this.getOrderTriggerPrice(order);
+        return (
+          existingTrigger === undefined ||
+          Math.abs(existingTrigger - trailStop) / trailStop >= this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
+        );
+      });
 
     console.log('Submitting add-only Decentrader fractal trailing stop:', {
       market,
@@ -561,7 +571,9 @@ export class DydxV4Client extends AbstractDexClient {
       executionPrice,
       side,
       size,
-      previousManagedStop: managedStop || null
+      previousManagedStop: managedStop || null,
+      oldVisibleStopCount: oldStopOrders.length,
+      cancelOldStopsAfterTrailSubmit: this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT
     });
 
     const placedStop = await this.placeSafetyStopOrder(
@@ -583,15 +595,62 @@ export class DydxV4Client extends AbstractDexClient {
       goodTilBlockTime: placedStop.goodTilBlockTime
     });
 
+    const verified = await this.waitForSafetyStopVisibleBestEffort(
+      market,
+      side,
+      trailStop,
+      placedStop.clientId
+    );
+    const shouldCancelOldStops = verified || this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT;
+    let oldManagedStopCancelledBestEffort = false;
+
+    if (shouldCancelOldStops) {
+      if (!verified && this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT) {
+        console.warn('Cancelling old stops after unverified Decentrader trailing stop submit because config allows it.', {
+          market,
+          trailStop,
+          placedClientId: placedStop.clientId
+        });
+      }
+
+      await this.cancelSpecificOrders(market, oldStopOrders);
+
+      const oldManagedAlreadyVisible = managedStop
+        ? oldStopOrders.some((order: any) =>
+            this.orderClientIdMatches(order, managedStop.clientId)
+          )
+        : false;
+
+      if (managedStop && !oldManagedAlreadyVisible) {
+        await this.cancelManagedStopBestEffort(
+          market,
+          managedStop,
+          'Replacing old Decentrader trailing stop.'
+        );
+        oldManagedStopCancelledBestEffort = true;
+      }
+    } else {
+      console.warn('Old stops left in place because new Decentrader trailing stop was not verified and cancel-on-submit is disabled.', {
+        market,
+        trailStop,
+        placedClientId: placedStop.clientId
+      });
+    }
+
     return {
       outcome: 'UPDATED',
-      reason: 'Submitted add-only fractal trailing stop. Older stops were preserved as fallback.',
+      reason: shouldCancelOldStops
+        ? 'Submitted fractal trailing stop and cancelled older visible/managed stops best-effort.'
+        : 'Submitted add-only fractal trailing stop. Older stops were preserved as fallback.',
       positionSize: position.size,
       trailStop,
       executionPrice,
       clientId: placedStop.clientId,
       goodTilBlockTime: placedStop.goodTilBlockTime,
-      previousManagedStop: managedStop || null
+      verified,
+      previousManagedStop: managedStop || null,
+      oldVisibleStopCount: oldStopOrders.length,
+      oldManagedStopCancelledBestEffort
     };
   }
 

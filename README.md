@@ -54,7 +54,7 @@ DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT=0.0025
 
 Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map/peak-weighted allocation. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
 
-The dynamic SL is an add-only confirmed-fractal ratchet for positions opened by this monitor. For LONG positions it only moves upward; for SHORT positions it only moves downward. Older stops are preserved as fallback because dYdX conditional order visibility can lag or be incomplete.
+The dynamic SL is a confirmed-fractal ratchet for positions opened by this monitor. For LONG positions it only moves upward; for SHORT positions it only moves downward. After a newer trailing stop is submitted, older visible/Render-managed stops are cancelled best-effort. If dYdX conditional order visibility is incomplete, the bot keeps protection conservative and logs what it could verify.
 
 Manual check:
 
