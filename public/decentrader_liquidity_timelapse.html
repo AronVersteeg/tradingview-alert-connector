@@ -897,26 +897,6 @@
     }
 
     function getGapBarsForSource(bars, frame) {
-      if (activeSource !== 'open' || !frame || !Number.isFinite(frame.price)) return bars;
-      if (!bars.length) return bars;
-
-      const leftBars = bars.filter((bar) => bar.price < frame.price);
-      const rightBars = bars.filter((bar) => bar.price > frame.price);
-      if (!leftBars.length || !rightBars.length) return bars;
-
-      const maxCount = Math.max(1, ...bars.map((bar) => bar.count));
-      const thresholds = [0.42, 0.32, 0.24, 0.16].map((fraction) => Math.max(4, maxCount * fraction));
-
-      for (const threshold of thresholds) {
-        const filtered = bars.filter((bar) => bar.count >= threshold);
-        if (
-          filtered.some((bar) => bar.price < frame.price) &&
-          filtered.some((bar) => bar.price > frame.price)
-        ) {
-          return filtered;
-        }
-      }
-
       return bars;
     }
 
@@ -1334,8 +1314,7 @@
       gapLeft.textContent = money(gap.left);
       gapPrice.textContent = money(frame.price);
       gapRight.textContent = money(gap.right);
-      const gapPrefix = activeSource === 'open' ? 'Strong-cluster gap | ' : '';
-      gapStatus.textContent = `${gapPrefix}${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`;
+      gapStatus.textContent = `${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`;
 
       if (intrusion?.entrants?.length) {
         const leftText = intrusion.left.length ? `${intrusion.left.length} left edge` : '';

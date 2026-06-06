@@ -1,7 +1,11 @@
 import axios from 'axios';
 
 const DYDX_INDEXER_URL = 'https://indexer.dydx.trade/v4';
-const LEVERAGES = [3, 5, 10];
+const GMX_GRAPHQL_URL = 'https://gmx.squids.live/gmx-synthetics-arbitrum:prod/api/graphql';
+const GMX_BTC_MARKETS = [
+  '0x47c031236e19d024b42f8AE6780E44A573170703',
+  '0x7C11F78Ce78768518D743E81Fdfa2F860C6b9A77'
+];
 
 type DydxCandle = {
   startedAt: string;
@@ -28,6 +32,15 @@ type TimelapseEvent = {
   n: 0 | 1;
 };
 
+type GmxPosition = {
+  id: string;
+  isLong: boolean;
+  sizeInUsd: string;
+  entryPrice: string;
+  leverage: string;
+  openedAt: number;
+};
+
 let cachedPayload: any | undefined;
 let cachedAt = 0;
 
@@ -38,13 +51,6 @@ function parseNumber(value: any): number | undefined {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
-}
-
-function median(values: number[]): number {
-  const filtered = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
-  if (!filtered.length) return 0;
-  const middle = Math.floor(filtered.length / 2);
-  return filtered.length % 2 ? filtered[middle] : (filtered[middle - 1] + filtered[middle]) / 2;
 }
 
 function priceKey(price: number): string {
@@ -87,9 +93,106 @@ async function fetchDydxCandles(market: string, limit: number): Promise<DydxCand
     .sort((a: DydxCandle, b: DydxCandle) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
 }
 
-function repeatCount(activity: number, sideWeight: number, leverage: number): number {
-  const leverageWeight = leverage === 10 ? 1.35 : leverage === 5 ? 1.15 : 1;
-  return Math.round(clamp(activity * sideWeight * leverageWeight, 1, 8));
+async function fetchGmxBtcPositions(): Promise<GmxPosition[]> {
+  const positions: GmxPosition[] = [];
+
+  for (const market of GMX_BTC_MARKETS) {
+    const query = `
+      query GmxBtcPositions($market: String!) {
+        positions(
+          limit: 1000
+          where: { market_eq: $market, isSnapshot_eq: false }
+          orderBy: openedAt_DESC
+        ) {
+          id
+          isLong
+          sizeInUsd
+          entryPrice
+          leverage
+          openedAt
+        }
+      }
+    `;
+    const response = await axios.post(
+      GMX_GRAPHQL_URL,
+      {
+        query,
+        variables: { market }
+      },
+      {
+        timeout: 30000,
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const rows = response.data?.data?.positions;
+    if (Array.isArray(rows)) {
+      positions.push(...(rows as GmxPosition[]));
+    }
+  }
+
+  return positions;
+}
+
+function parseGmxUsd(value: string): number | undefined {
+  const parsed = parseNumber(value);
+  if (parsed === undefined) return undefined;
+  return parsed / 1e30;
+}
+
+function parseGmxPrice(value: string): number | undefined {
+  const parsed = parseNumber(value);
+  if (parsed === undefined) return undefined;
+  return parsed / 1e22;
+}
+
+function parseGmxLeverage(value: string): number | undefined {
+  const parsed = parseNumber(value);
+  if (parsed === undefined) return undefined;
+  return parsed / 10000;
+}
+
+function leverageBucket(leverage: number): number {
+  if (leverage <= 4) return 3;
+  if (leverage <= 7.5) return 5;
+  return 10;
+}
+
+function approximateLiquidationPrice(entryPrice: number, leverage: number, isLong: boolean): number | undefined {
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(leverage) || leverage <= 1) {
+    return undefined;
+  }
+
+  const maintenanceBuffer = 0.006;
+  const liquidationDistance = clamp((1 / leverage) - maintenanceBuffer, 0.0035, 0.45);
+  return isLong
+    ? entryPrice * (1 - liquidationDistance)
+    : entryPrice * (1 + liquidationDistance);
+}
+
+function positionWeight(sizeUsd: number, leverage: number): number {
+  const sizeWeight = Math.log10(Math.max(10, sizeUsd)) - 0.7;
+  const leverageWeight = leverage >= 15 ? 1.35 : leverage >= 8 ? 1.15 : 1;
+  return Math.round(clamp(sizeWeight * leverageWeight, 1, 12));
+}
+
+function frameIndexForOpenedAt(frames: Array<{ startedAtMs: number }>, openedAtSeconds: number): number {
+  const openedAtMs = openedAtSeconds * 1000;
+  if (!frames.length || !Number.isFinite(openedAtMs)) return 0;
+  let bestIndex = 0;
+
+  for (let index = 0; index < frames.length; index += 1) {
+    if (frames[index].startedAtMs <= openedAtMs) {
+      bestIndex = index;
+    } else {
+      break;
+    }
+  }
+
+  return bestIndex;
 }
 
 export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Promise<any> {
@@ -99,56 +202,33 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
     return cachedPayload;
   }
 
-  const candles = await fetchDydxCandles(normalizedMarket, 500);
+  const [candles, gmxPositions] = await Promise.all([
+    fetchDydxCandles(normalizedMarket, 500),
+    fetchGmxBtcPositions()
+  ]);
   const parsed = candles
     .map((candle) => {
-      const open = parseNumber(candle.open);
-      const high = parseNumber(candle.high);
-      const low = parseNumber(candle.low);
       const close = parseNumber(candle.close);
-      const volume = parseNumber(candle.usdVolume) || 0;
-      const trades = Number(candle.trades || 0);
-      const oi = parseNumber(candle.startingOpenInterest) || 0;
-      if (
-        open === undefined ||
-        high === undefined ||
-        low === undefined ||
-        close === undefined ||
-        close <= 0
-      ) {
+      const startedAtMs = new Date(candle.startedAt).getTime();
+      if (close === undefined || close <= 0 || !Number.isFinite(startedAtMs)) {
         return undefined;
       }
       return {
         candle,
-        open,
-        high,
-        low,
         close,
-        volume,
-        trades,
-        oi,
-        rangePct: Math.max(0, high - low) / close
+        startedAtMs
       };
     })
     .filter(Boolean) as Array<{
       candle: DydxCandle;
-      open: number;
-      high: number;
-      low: number;
       close: number;
-      volume: number;
-      trades: number;
-      oi: number;
-      rangePct: number;
+      startedAtMs: number;
     }>;
 
   if (!parsed.length) {
     throw new Error(`No usable dYdX candles for ${normalizedMarket}.`);
   }
 
-  const medianVolume = Math.max(1, median(parsed.map((item) => item.volume)));
-  const medianTrades = Math.max(1, median(parsed.map((item) => item.trades)));
-  const medianRangePct = Math.max(0.001, median(parsed.map((item) => item.rangePct)));
   const events: TimelapseEvent[] = [];
   const prices: number[] = [];
   const firstSeen = new Set<string>();
@@ -185,55 +265,47 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
     currentZoneCounts.set(key, existing);
   }
 
-  parsed.forEach((item, index) => {
+  for (const item of parsed) {
     prices.push(item.close);
-    const previous = index > 0 ? parsed[index - 1] : undefined;
-    const oiChangePct = previous?.oi ? (item.oi - previous.oi) / Math.max(1, previous.oi) : 0;
-    const body = item.close - item.open;
-    const candleRange = Math.max(1, item.high - item.low);
-    const trend = clamp(body / candleRange, -1, 1);
-    const volumeFactor = clamp(item.volume / medianVolume, 0.25, 3.5);
-    const tradesFactor = clamp(item.trades / medianTrades, 0.25, 3.5);
-    const rangeFactor = clamp(item.rangePct / medianRangePct, 0.35, 3.5);
-    const oiFactor = clamp(1 + Math.abs(oiChangePct) * 35, 0.8, 3);
-    const activity = clamp(
-      (volumeFactor * 0.42 + tradesFactor * 0.2 + rangeFactor * 0.18 + oiFactor * 0.2),
-      0.75,
-      5.5
-    );
+  }
 
-    const longBuildWeight = clamp(1 + Math.max(0, trend) * 0.45 + Math.max(0, oiChangePct) * 18, 0.65, 1.85);
-    const shortBuildWeight = clamp(1 + Math.max(0, -trend) * 0.45 + Math.max(0, oiChangePct) * 18, 0.65, 1.85);
-    const anchors = [item.open, item.close];
-    const mid = (item.open + item.close + item.high + item.low) / 4;
-    if (Math.abs(mid - item.close) > bucketStepForPrice(item.close) * 0.5 || activity > 2.2) {
-      anchors.push(mid);
+  for (const position of gmxPositions) {
+    const sizeUsd = parseGmxUsd(position.sizeInUsd);
+    const entryPrice = parseGmxPrice(position.entryPrice);
+    const leverage = parseGmxLeverage(position.leverage);
+    if (
+      sizeUsd === undefined ||
+      entryPrice === undefined ||
+      leverage === undefined ||
+      sizeUsd <= 0 ||
+      entryPrice <= 0 ||
+      leverage <= 1
+    ) {
+      continue;
     }
 
-    for (const leverage of LEVERAGES) {
-      const baseDistancePct = 0.86 / leverage;
-      const volatilityBuffer = clamp(item.rangePct * 1.6, 0, 0.035);
-      const step = bucketStepForPrice(item.close);
+    const liquidationPrice = approximateLiquidationPrice(entryPrice, leverage, position.isLong);
+    if (liquidationPrice === undefined) continue;
 
-      for (const anchor of anchors) {
-        const longLiq = roundToStep(anchor * (1 - baseDistancePct - volatilityBuffer), step);
-        const shortLiq = roundToStep(anchor * (1 + baseDistancePct + volatilityBuffer), step);
-        addZone(index, 'L', leverage, longLiq, repeatCount(activity, longBuildWeight, leverage));
-        addZone(index, 'S', leverage, shortLiq, repeatCount(activity, shortBuildWeight, leverage));
-      }
-    }
-  });
+    const referencePrice = parsed[parsed.length - 1]?.close || entryPrice;
+    const step = bucketStepForPrice(referencePrice);
+    const roundedPrice = roundToStep(liquidationPrice, step);
+    const frameIndex = frameIndexForOpenedAt(parsed, position.openedAt);
+    const side = position.isLong ? 'L' : 'S';
+    const leverageLevel = leverageBucket(leverage);
+    addZone(frameIndex, side, leverageLevel, roundedPrice, positionWeight(sizeUsd, leverage));
+  }
 
   const payload = {
     source: {
       name: 'Open data study',
       market: normalizedMarket,
-      url: 'https://indexer.dydx.trade',
-      api: `${DYDX_INDEXER_URL}/candles/perpetualMarkets/${normalizedMarket}`,
-      method: 'public dYdX 1H candles + startingOpenInterest proxy',
-      params: ['resolution=1HOUR', `limit=${candles.length}`],
+      url: 'https://docs.gmx.io/docs/api/graphql/',
+      api: GMX_GRAPHQL_URL,
+      method: 'GMX active BTC positions -> approximate liquidation buckets; dYdX candles only provide the price/time axis',
+      params: [`gmxPositions=${gmxPositions.length}`, `dydxCandles=${candles.length}`],
       note:
-        'Study-only open-data liquidity proxy built from public dYdX candles, volume, trades and starting open interest. It does not use Decentrader and does not place or size trades.'
+        'Study-only open-data liquidity map built from public GMX active BTC positions and approximate liquidation buckets. It does not use Decentrader and does not place or size trades.'
     },
     range: {
       minPrice: Math.min(...prices),
