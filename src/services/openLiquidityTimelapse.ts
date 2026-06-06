@@ -7,6 +7,7 @@ const BYBIT_API_URL = 'https://api.bybit.com';
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
 const OKX_API_URL = 'https://www.okx.com';
 const BITGET_API_URL = 'https://api.bitget.com';
+const DEFAULT_ACTIVE_STUDY_SOURCES = ['bybit-oi', 'hyper-oi', 'bitget-oi'];
 const GMX_BTC_MARKETS = [
   '0x47c031236e19d024b42f8AE6780E44A573170703',
   '0x7C11F78Ce78768518D743E81Fdfa2F860C6b9A77'
@@ -774,6 +775,17 @@ function sourceFloor(event: TimelapseEvent): number {
   return 0.25;
 }
 
+function activeStudySources(): Set<string> {
+  const configured = String(process.env.OPEN_LIQUIDITY_ACTIVE_SOURCES || '').trim();
+  const sources = configured
+    ? configured
+        .split(',')
+        .map((source) => source.trim())
+        .filter(Boolean)
+    : DEFAULT_ACTIVE_STUDY_SOURCES;
+  return new Set(sources);
+}
+
 function markLifecycleLiquidationEvents(
   events: TimelapseEvent[],
   frames: StudyFrame[],
@@ -1112,8 +1124,15 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
 
   const marketStateFrames = buildMarketStateFrames(frames, [binanceOi, bybitOi, okxOi]);
   const lifecycleResult = markLifecycleLiquidationEvents(events, frames, marketStateFrames);
-  const lifecycleEvents = lifecycleResult.events;
+  const activeSources = activeStudySources();
+  const lifecycleEvents = lifecycleResult.events.map((event) => {
+    if (!event.a || !event.z || activeSources.has(event.z)) return event;
+    return { ...event, a: 0 as 0 };
+  });
   const inactiveCount = lifecycleEvents.filter((event) => event.a === 0).length;
+  const sourceFilteredCount = lifecycleResult.events.filter(
+    (event) => event.a && event.z && !activeSources.has(event.z)
+  ).length;
   const activeZoneCounts = new Map<string, { s: 'L' | 'S'; l: number; p: number; c: number }>();
   for (const event of lifecycleEvents) {
     if (!event.a || event.i > latestFrame.i) continue;
@@ -1174,7 +1193,9 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
         `inactiveImpulse=${lifecycleResult.inactive.impulse}`,
         `inactiveOiDecay=${lifecycleResult.inactive.oiDecay}`,
         `inactiveAgeDecay=${lifecycleResult.inactive.ageDecay}`,
-        `inactiveLifecycle=${lifecycleResult.inactive.probabilistic}`
+        `inactiveLifecycle=${lifecycleResult.inactive.probabilistic}`,
+        `inactiveSourceFiltered=${sourceFilteredCount}`,
+        `activeSources=${Array.from(activeSources).join('+')}`
       ],
       sourceStatuses,
       marketDepth: {
@@ -1183,7 +1204,7 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
         hyperliquid: hyperBookResult.data || null
       },
       note:
-        'Study-only public perp liquidity estimate from GMX positions, Binance/Bybit/OKX open-interest buildups, Binance/Bybit/OKX trader ratios, Bitget current OI and Hyperliquid public context. It applies a lifecycle model so stale, swept, decayed or impulse-cleared zones stop being active. It does not use Decentrader and does not place or size trades.'
+        'Study-only public perp liquidity estimate from GMX positions, Binance/Bybit/OKX open-interest buildups, Binance/Bybit/OKX trader ratios, Bitget current OI and Hyperliquid public context. It applies a lifecycle model so stale, swept, decayed or impulse-cleared zones stop being active, then renders a calibrated active-source subset. It does not use Decentrader and does not place or size trades.'
     },
     range: {
       minPrice: Math.min(...prices),
