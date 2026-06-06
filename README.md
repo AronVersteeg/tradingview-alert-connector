@@ -45,12 +45,16 @@ GET /decentrader/gap-status
 When auto-trading is enabled, TP prices come from the latest qualifying liquidity-map zones. Zones are clustered from active Decentrader histograms and selected by liquidity peak strength, overlap across leverage bands, freshness, and gap context before they are ordered along the trade path. While a BTC position opened by this monitor is active, every monitor poll can replace only the dYdX take-profit ladder when the map changes. Unknown/manual positions, position size, direction, and stop orders are not changed by this TP-only sync.
 
 ```text
+DECENTRADER_TRADE_RISK_PCT=0.0075
+DECENTRADER_TRADE_RISK_USD=
 DECENTRADER_TP_MAX_LEVELS=6
 DECENTRADER_TP_SIZE_FRACTIONS=
 DECENTRADER_DYNAMIC_TP_ENABLED=true
 DECENTRADER_DYNAMIC_SL_ENABLED=true
 DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT=0.0025
 ```
+
+Set `DECENTRADER_TRADE_RISK_USD` to target a fixed dollar risk per trade, such as `2`. The fixed dollar value is still capped by `DECENTRADER_TRADE_RISK_PCT` of live equity so small accounts cannot accidentally over-risk. Leave it empty to use pure equity-percentage risk.
 
 Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map/peak-weighted allocation. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
 

@@ -141,6 +141,7 @@ type MonitorStatus = {
   autoTradeEnabled?: boolean;
   hasTradeExecutor?: boolean;
   tradeRiskPct?: number;
+  tradeRiskUsd?: number;
   slMaxDistancePct?: number;
   tpMaxLevels?: number;
   tpAllocation?: 'fixed-fractions' | 'map-weighted';
@@ -1065,6 +1066,41 @@ function decentraderTradeRiskPct(): number {
   return envFraction('DECENTRADER_TRADE_RISK_PCT', 0.0075);
 }
 
+function decentraderTradeRiskUsd(): number | undefined {
+  const parsed = Number(process.env.DECENTRADER_TRADE_RISK_USD);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function decentraderTradeRiskBudget(equity: number): {
+  riskBudgetUsd: number;
+  riskPct: number;
+  configuredRiskUsd?: number;
+  cappedByPct: boolean;
+  source: 'fixed-usd' | 'equity-pct';
+} {
+  const pct = decentraderTradeRiskPct();
+  const pctBudget = Math.max(0, numberOrZero(equity) * pct);
+  const configuredRiskUsd = decentraderTradeRiskUsd();
+
+  if (configuredRiskUsd !== undefined) {
+    const riskBudgetUsd = Math.min(configuredRiskUsd, pctBudget);
+    return {
+      riskBudgetUsd,
+      riskPct: pct,
+      configuredRiskUsd,
+      cappedByPct: riskBudgetUsd < configuredRiskUsd,
+      source: 'fixed-usd'
+    };
+  }
+
+  return {
+    riskBudgetUsd: pctBudget,
+    riskPct: pct,
+    cappedByPct: false,
+    source: 'equity-pct'
+  };
+}
+
 function decentraderSlFractalWindow(): number {
   return Math.max(1, Math.floor(envPositiveNumber('DECENTRADER_SL_FRACTAL_WINDOW', 2)));
 }
@@ -1382,7 +1418,8 @@ function buildDirectionalPlan(
   const collateralBudget = flatCollateral * modeConfig.collateralUse * Math.max(weight, modeConfig.minWeight);
   const collateralCappedNotional = collateralBudget / marginFraction;
   const equityCappedNotional = equity * modeConfig.equityLeverage * Math.max(weight, modeConfig.minWeight);
-  const riskBudgetUsd = equity * decentraderTradeRiskPct();
+  const riskBudget = decentraderTradeRiskBudget(equity);
+  const riskBudgetUsd = riskBudget.riskBudgetUsd;
   const riskCappedNotional =
     stop.valid && stopDistance > 0
       ? (riskBudgetUsd / stopDistance) * marketPrice
@@ -1470,8 +1507,11 @@ function buildDirectionalPlan(
       minimumOrderRiskUsd,
       minimumOrderRiskPctOfEquity,
       equityFraction: weight,
-      riskPct: decentraderTradeRiskPct(),
+      riskPct: riskBudget.riskPct,
       riskBudgetUsd,
+      configuredRiskUsd: riskBudget.configuredRiskUsd,
+      riskBudgetSource: riskBudget.source,
+      riskBudgetCappedByPct: riskBudget.cappedByPct,
       confidenceScore: mapScore,
       confidenceMultiplier: confidence,
       stopBrake,
@@ -1896,6 +1936,7 @@ export class DecentraderGapMonitor {
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined,
       tradeRiskPct: decentraderTradeRiskPct(),
+      tradeRiskUsd: decentraderTradeRiskUsd(),
       slMaxDistancePct: decentraderSlMaxDistancePct(),
       tpMaxLevels: decentraderMaxTpLevels(),
       tpAllocation: decentraderTpAllocationMode(),
