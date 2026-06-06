@@ -995,6 +995,17 @@
       return publicPeakBars(bars, frame);
     }
 
+    function isSuppressedPublicGapBar(bar, gap, threshold) {
+      return Boolean(
+        activeSource === 'open' &&
+        gap &&
+        threshold &&
+        bar.price > gap.left &&
+        bar.price < gap.right &&
+        bar.count < threshold
+      );
+    }
+
     function getGapIntrusion(frameIndex, xFor, xToPrice) {
       if (frameIndex <= 0) return null;
 
@@ -1409,7 +1420,7 @@
       gapLeft.textContent = money(gap.left);
       gapPrice.textContent = money(frame.price);
       gapRight.textContent = money(gap.right);
-      const gapPrefix = activeSource === 'open' ? 'Public-perp peak gap | ' : '';
+      const gapPrefix = activeSource === 'open' ? 'Filtered public gap | ' : '';
       gapStatus.textContent = `${gapPrefix}${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`;
 
       if (intrusion?.entrants?.length) {
@@ -1620,6 +1631,7 @@
       drawGap(area, gap, priceColor);
 
       for (const bar of visibleBars) {
+        if (isSuppressedPublicGapBar(bar, gap, publicNoiseThreshold)) continue;
         const x = xFor(bar.price) + leverageOffset(bar.leverage);
         const barHeight = Math.max(2, (bar.count / maxCount) * area.height);
         const barWidth = Math.max(2, BAR_WIDTH);
@@ -1633,6 +1645,7 @@
       ctx.globalAlpha = 1;
       for (const item of firstSeen) {
         if (item.price < minPrice || item.price > maxPrice) continue;
+        if (isSuppressedPublicGapBar(item, gap, publicNoiseThreshold)) continue;
         const x = xFor(item.price) + leverageOffset(item.leverage);
         ctx.strokeStyle = newColor;
         ctx.lineWidth = 4;
