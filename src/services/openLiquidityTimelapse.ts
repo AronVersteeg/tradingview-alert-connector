@@ -380,6 +380,15 @@ function valueAtOrBefore<T extends { timestampMs: number }>(rows: T[], timestamp
   return value;
 }
 
+function frameAtOrBefore(frames: StudyFrame[], timestampMs: number): StudyFrame | undefined {
+  let value: StudyFrame | undefined;
+  for (const frame of frames) {
+    if (frame.startedAtMs <= timestampMs) value = frame;
+    else break;
+  }
+  return value;
+}
+
 function addRepeatedEvent(
   events: TimelapseEvent[],
   prices: number[],
@@ -518,7 +527,7 @@ function normalizedBybitOi(rows: BybitOi[], frames: StudyFrame[]): Array<{ times
     .map((row) => {
       const timestampMs = Number(row.timestamp);
       const btcOi = Number(row.openInterest);
-      const frame = valueAtOrBefore(frames, timestampMs) || frames[frames.length - 1];
+      const frame = frameAtOrBefore(frames, timestampMs) || frames[frames.length - 1];
       return {
         timestampMs,
         oiUsd: btcOi * (frame?.price || 0)
