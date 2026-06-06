@@ -896,7 +896,25 @@
       return { bars: [...bins.values()], firstSeen };
     }
 
+    function publicMajorThreshold(bars) {
+      if (activeSource !== 'open' || !bars?.length) return 0;
+      const maxCount = Math.max(1, ...bars.map((bar) => bar.count || 0));
+      return Math.max(4, Math.ceil(maxCount * 0.14));
+    }
+
     function getGapBarsForSource(bars, frame) {
+      if (activeSource !== 'open' || !frame || !Number.isFinite(frame.price)) return bars;
+      const threshold = publicMajorThreshold(bars);
+      if (!threshold) return bars;
+
+      const majorBars = bars.filter((bar) => bar.count >= threshold);
+      if (
+        majorBars.some((bar) => bar.price < frame.price) &&
+        majorBars.some((bar) => bar.price > frame.price)
+      ) {
+        return majorBars;
+      }
+
       return bars;
     }
 
@@ -1314,7 +1332,8 @@
       gapLeft.textContent = money(gap.left);
       gapPrice.textContent = money(frame.price);
       gapRight.textContent = money(gap.right);
-      gapStatus.textContent = `${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`;
+      const gapPrefix = activeSource === 'open' ? 'Major public-perp gap | ' : '';
+      gapStatus.textContent = `${gapPrefix}${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`;
 
       if (intrusion?.entrants?.length) {
         const leftText = intrusion.left.length ? `${intrusion.left.length} left edge` : '';
@@ -1472,6 +1491,7 @@
       const { bars, firstSeen } = getFrameEvents(frameIndex);
       const rawMonitorBars = getFrameEvents(frameIndex, { mode: 'active' }).bars;
       const monitorBars = getGapBarsForSource(rawMonitorBars, frame);
+      const publicNoiseThreshold = publicMajorThreshold(rawMonitorBars);
       const visibleBars = bars.filter((bar) => bar.price >= minPrice && bar.price <= maxPrice);
       const maxCount = Math.max(1, ...visibleBars.map((bar) => bar.count));
       const css = getComputedStyle(document.documentElement);
@@ -1527,8 +1547,9 @@
         const barHeight = Math.max(2, (bar.count / maxCount) * area.height);
         const barWidth = Math.max(2, BAR_WIDTH);
         const crispX = Math.round(x - barWidth / 2);
+        const isPublicMinor = activeSource === 'open' && publicNoiseThreshold && bar.count < publicNoiseThreshold;
         ctx.fillStyle = colorForZone(bar.side, bar.leverage);
-        ctx.globalAlpha = modeInput.value === 'new' ? 0.86 : 0.58;
+        ctx.globalAlpha = isPublicMinor ? 0.2 : modeInput.value === 'new' ? 0.86 : 0.62;
         ctx.fillRect(crispX, Math.round(area.bottom - barHeight), barWidth, Math.round(barHeight));
       }
 
