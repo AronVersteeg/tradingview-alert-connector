@@ -518,15 +518,15 @@
 
     <section class="comparison" id="openStudySection">
       <div class="comparison-header">
-        <h2 class="comparison-title">Open-data BTC/USD study</h2>
+        <h2 class="comparison-title">Public perp BTC/USD study</h2>
         <div class="comparison-note">
-          Zelfde kaartlogica, andere databron. Deze studie gebruikt geen Decentrader en is niet gekoppeld aan orderplaatsing.
+          Zelfde kaartlogica, brede publieke perp-data. Deze studie gebruikt geen Decentrader en is niet gekoppeld aan orderplaatsing.
         </div>
       </div>
       <iframe
         class="comparison-frame"
         id="openStudyFrame"
-        title="Open-data BTC/USD liquidity study"
+        title="Public perp BTC/USD liquidity study"
         src="/decentrader/map?source=open&embedded=1"
       ></iframe>
     </section>
@@ -610,7 +610,7 @@
     }
 
     if (activeSource === 'open') {
-      pageTitle.textContent = 'BTC/USD Open-Data Liquidity Study';
+      pageTitle.textContent = 'BTC/USD Public Perp Liquidity Study';
     } else {
       pageTitle.textContent = 'BTC/USD Decentrader Liquidity Timelapse';
     }
@@ -1385,7 +1385,7 @@
     function updateTradePlanMonitor(frame) {
       if (activeSource !== 'decentrader') {
         tradePlanValue.textContent = 'Study only';
-        tradePlanStatus.textContent = 'Open-data comparison is visual research only; no sizing, signals or dYdX orders.';
+        tradePlanStatus.textContent = 'Public perp study is visual research only; no sizing, signals or dYdX orders.';
         return;
       }
 
@@ -1608,7 +1608,7 @@
 
       ctx.fillStyle = '#ecf2f8';
       ctx.font = '600 15px Inter, system-ui, sans-serif';
-      const sourceName = payload.source?.name || (activeSource === 'open' ? 'Open data study' : 'Decentrader');
+      const sourceName = payload.source?.name || (activeSource === 'open' ? 'Public perp study' : 'Decentrader');
       ctx.fillText(`${sourceName} | ${nlTime(frame.t)} NL | ${money(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
 
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
@@ -1765,7 +1765,7 @@
     function initializeViewer() {
       frameInput.max = String(payload.frames.length - 1);
       frameInput.value = String(payload.frames.length - 1);
-      const sourceName = payload.source?.name || (activeSource === 'open' ? 'Open data study' : 'Decentrader');
+      const sourceName = payload.source?.name || (activeSource === 'open' ? 'Public perp study' : 'Decentrader');
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       note.textContent = payload.source.note;
       resizeCanvas();
