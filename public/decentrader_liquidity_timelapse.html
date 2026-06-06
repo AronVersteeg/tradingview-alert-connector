@@ -902,108 +902,9 @@
       return Math.max(10, Math.ceil(maxCount * 0.035));
     }
 
-    function publicClusterStep(bars) {
-      if (!bars?.length) return 250;
-      const prices = bars.map((bar) => bar.price).filter((price) => Number.isFinite(price));
-      if (!prices.length) return 250;
-      const span = Math.max(...prices) - Math.min(...prices);
-      if (span > 60000) return 1000;
-      if (span > 30000) return 500;
-      if (span > 12000) return 250;
-      return 100;
-    }
-
-    function publicPeakBars(bars, frame) {
-      if (activeSource !== 'open' || !frame || !Number.isFinite(frame.price) || !bars?.length) return bars;
-
-      const step = publicClusterStep(bars);
-      const clusters = new Map();
-      for (const bar of bars) {
-        const bucket = Math.round(bar.price / step) * step;
-        const key = `${bar.side}|${bucket}`;
-        const cluster = clusters.get(key) || {
-          key,
-          side: bar.side,
-          leverage: bar.leverage,
-          bucket,
-          priceSum: 0,
-          count: 0,
-          leverageScores: new Map(),
-        };
-        cluster.priceSum += bar.price * bar.count;
-        cluster.count += bar.count;
-        cluster.leverageScores.set(bar.leverage, (cluster.leverageScores.get(bar.leverage) || 0) + bar.count);
-        clusters.set(key, cluster);
-      }
-
-      const clusterBars = [...clusters.values()]
-        .map((cluster) => {
-          const dominantLeverage = [...cluster.leverageScores.entries()]
-            .sort((a, b) => b[1] - a[1] || b[0] - a[0])[0]?.[0] || cluster.leverage;
-          return {
-            key: `PUBLIC_CLUSTER|${cluster.side}|${cluster.bucket}`,
-            side: cluster.side,
-            leverage: dominantLeverage,
-            price: Math.round((cluster.priceSum / Math.max(1, cluster.count)) / 50) * 50,
-            count: cluster.count,
-            first: false,
-            cluster: true,
-          };
-        })
-        .sort((a, b) => a.price - b.price);
-
-      const maxCount = Math.max(1, ...clusterBars.map((bar) => bar.count));
-      const threshold = Math.max(8, Math.ceil(maxCount * 0.22));
-      let peaks = clusterBars.filter((bar, index) => {
-        if (bar.count < threshold) return false;
-        const previous = clusterBars[index - 1];
-        const next = clusterBars[index + 1];
-        return (!previous || bar.count >= previous.count * 0.82) && (!next || bar.count >= next.count * 0.82);
-      });
-
-      if (
-        !peaks.some((bar) => bar.price < frame.price) ||
-        !peaks.some((bar) => bar.price > frame.price)
-      ) {
-        peaks = clusterBars
-          .filter((bar) => bar.count >= Math.max(6, maxCount * 0.14))
-          .sort((a, b) => b.count - a.count)
-          .slice(0, 80)
-          .sort((a, b) => a.price - b.price);
-      }
-
-      if (
-        peaks.some((bar) => bar.price < frame.price) &&
-        peaks.some((bar) => bar.price > frame.price)
-      ) {
-        return peaks;
-      }
-
-      return bars;
-    }
-
     function getGapBarsForSource(bars, frame) {
       if (activeSource !== 'open' || !frame || !Number.isFinite(frame.price)) return bars;
-      const threshold = publicMajorThreshold(bars);
-      const majorBars = threshold ? bars.filter((bar) => bar.count >= threshold) : bars;
-      if (
-        majorBars.some((bar) => bar.price < frame.price) &&
-        majorBars.some((bar) => bar.price > frame.price)
-      ) {
-        return majorBars;
-      }
-      return publicPeakBars(bars, frame);
-    }
-
-    function isSuppressedPublicGapBar(bar, gap, threshold) {
-      return Boolean(
-        activeSource === 'open' &&
-        gap &&
-        threshold &&
-        bar.price > gap.left &&
-        bar.price < gap.right &&
-        bar.count < threshold
-      );
+      return bars;
     }
 
     function getGapIntrusion(frameIndex, xFor, xToPrice) {
@@ -1420,7 +1321,7 @@
       gapLeft.textContent = money(gap.left);
       gapPrice.textContent = money(frame.price);
       gapRight.textContent = money(gap.right);
-      const gapPrefix = activeSource === 'open' ? 'Filtered public gap | ' : '';
+      const gapPrefix = activeSource === 'open' ? 'Raw public gap | ' : '';
       gapStatus.textContent = `${gapPrefix}${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`;
 
       if (intrusion?.entrants?.length) {
@@ -1631,7 +1532,6 @@
       drawGap(area, gap, priceColor);
 
       for (const bar of visibleBars) {
-        if (isSuppressedPublicGapBar(bar, gap, publicNoiseThreshold)) continue;
         const x = xFor(bar.price) + leverageOffset(bar.leverage);
         const barHeight = Math.max(2, (bar.count / maxCount) * area.height);
         const barWidth = Math.max(2, BAR_WIDTH);
@@ -1645,7 +1545,6 @@
       ctx.globalAlpha = 1;
       for (const item of firstSeen) {
         if (item.price < minPrice || item.price > maxPrice) continue;
-        if (isSuppressedPublicGapBar(item, gap, publicNoiseThreshold)) continue;
         const x = xFor(item.price) + leverageOffset(item.leverage);
         ctx.strokeStyle = newColor;
         ctx.lineWidth = 4;
