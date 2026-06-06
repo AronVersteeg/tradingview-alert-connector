@@ -17,6 +17,7 @@ type DydxCandle = {
   startedAt: string;
   low?: string;
   high?: string;
+  usdVolume?: string;
   close: string;
 };
 
@@ -66,6 +67,7 @@ type StudyFrame = {
   price: number;
   low: number;
   high: number;
+  volumeUsd: number;
 };
 
 type TimelapseEvent = {
@@ -75,6 +77,17 @@ type TimelapseEvent = {
   p: number;
   a: 0 | 1;
   n: 0 | 1;
+  z?: string;
+};
+
+type MarketStateFrame = {
+  i: number;
+  t: number;
+  price: number;
+  oiUsd?: number;
+  oiDropFromPrevious?: number;
+  rangePct: number;
+  impulse: number;
 };
 
 type StudySourceResult<T> = {
@@ -498,7 +511,8 @@ function addRepeatedEvent(
   side: 'L' | 'S',
   leverage: number,
   price: number,
-  count: number
+  count: number,
+  source = 'derived'
 ): void {
   if (!Number.isFinite(price) || price <= 0 || count <= 0) return;
 
@@ -514,7 +528,8 @@ function addRepeatedEvent(
       l: leverage,
       p: price,
       a: 1,
-      n: isFirstSeen && repeat === 0 ? 1 : 0
+      n: isFirstSeen && repeat === 0 ? 1 : 0,
+      z: source
     });
   }
 
@@ -539,7 +554,8 @@ function addEstimatedLiquidationBuild(
   referencePrice: number,
   deltaOiUsd: number,
   longShare: number,
-  sourceWeight: number
+  sourceWeight: number,
+  source = 'cex-oi'
 ): void {
   if (!Number.isFinite(referencePrice) || referencePrice <= 0 || !Number.isFinite(deltaOiUsd) || deltaOiUsd <= 0) {
     return;
@@ -566,7 +582,8 @@ function addEstimatedLiquidationBuild(
         'L',
         leverage,
         roundToStep(longLiq, step),
-        longCount
+        longCount,
+        source
       );
     }
 
@@ -580,7 +597,8 @@ function addEstimatedLiquidationBuild(
         'S',
         leverage,
         roundToStep(shortLiq, step),
-        shortCount
+        shortCount,
+        source
       );
     }
   }
@@ -592,6 +610,7 @@ function buildFrames(candles: DydxCandle[]): StudyFrame[] {
       const price = parseNumber(candle.close);
       const low = parseNumber(candle.low);
       const high = parseNumber(candle.high);
+      const volumeUsd = parseNumber(candle.usdVolume);
       const startedAtMs = new Date(candle.startedAt).getTime();
       if (price === undefined || price <= 0 || !Number.isFinite(startedAtMs)) return undefined;
       return {
@@ -600,7 +619,8 @@ function buildFrames(candles: DydxCandle[]): StudyFrame[] {
         startedAtMs,
         price,
         low: low !== undefined && low > 0 ? low : price,
-        high: high !== undefined && high > 0 ? high : price
+        high: high !== undefined && high > 0 ? high : price,
+        volumeUsd: volumeUsd !== undefined && volumeUsd > 0 ? volumeUsd : 0
       } as StudyFrame;
     })
     .filter(Boolean) as StudyFrame[];
@@ -692,31 +712,166 @@ function weightedLongShareAt(
   return totalWeight > 0 ? weighted / totalWeight : undefined;
 }
 
-function markSweptLiquidationEvents(events: TimelapseEvent[], frames: StudyFrame[]): TimelapseEvent[] {
-  if (!events.length || !frames.length) return events;
+function buildMarketStateFrames(
+  frames: StudyFrame[],
+  oiSources: Array<Array<{ timestampMs: number; oiUsd: number }>>
+): MarketStateFrame[] {
+  const stateFrames: MarketStateFrame[] = [];
+  const ranges = frames.map((frame) => Math.max(0, (frame.high - frame.low) / Math.max(1, frame.price)));
+
+  for (const frame of frames) {
+    const oiValues = oiSources
+      .map((source) => valueAtOrBefore(source, frame.startedAtMs)?.oiUsd)
+      .filter((value): value is number => value !== undefined && Number.isFinite(value) && value > 0);
+    const oiUsd = oiValues.length ? oiValues.reduce((sum, value) => sum + value, 0) : undefined;
+    const start = Math.max(0, frame.i - 24);
+    const recentRanges = ranges.slice(start, frame.i + 1).filter((value) => value > 0);
+    const averageRange =
+      recentRanges.length > 0 ? recentRanges.reduce((sum, value) => sum + value, 0) / recentRanges.length : ranges[frame.i] || 0;
+    const rangePct = ranges[frame.i] || 0;
+    const volumeFactor = frame.volumeUsd > 0 ? Math.log10(Math.max(10_000, frame.volumeUsd)) / 7 : 0.6;
+    const rangeFactor = averageRange > 0 ? rangePct / averageRange : 1;
+
+    stateFrames.push({
+      i: frame.i,
+      t: frame.startedAtMs,
+      price: frame.price,
+      oiUsd,
+      rangePct,
+      impulse: clamp(rangeFactor * volumeFactor, 0, 4)
+    });
+  }
+
+  for (let index = 1; index < stateFrames.length; index += 1) {
+    const previous = stateFrames[index - 1].oiUsd;
+    const current = stateFrames[index].oiUsd;
+    stateFrames[index].oiDropFromPrevious =
+      previous && current && previous > 0 ? Math.max(0, (previous - current) / previous) : 0;
+  }
+
+  return stateFrames;
+}
+
+function deterministicUnit(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967295;
+}
+
+function liquidationHalfLifeHours(event: TimelapseEvent): number {
+  if (event.z === 'gmx-position') return 720;
+  if (event.l >= 10) return 120;
+  if (event.l >= 5) return 216;
+  return 336;
+}
+
+function sourceFloor(event: TimelapseEvent): number {
+  if (event.z === 'gmx-position') return 0.55;
+  if (event.z === 'hyper-volume') return 0.18;
+  return 0.25;
+}
+
+function markLifecycleLiquidationEvents(
+  events: TimelapseEvent[],
+  frames: StudyFrame[],
+  marketStateFrames: MarketStateFrame[]
+): { events: TimelapseEvent[]; inactive: Record<string, number> } {
+  if (!events.length || !frames.length) {
+    return {
+      events,
+      inactive: {
+        swept: 0,
+        impulse: 0,
+        oiDecay: 0,
+        ageDecay: 0,
+        probabilistic: 0
+      }
+    };
+  }
 
   const futureLow = Array(frames.length).fill(Infinity);
   const futureHigh = Array(frames.length).fill(-Infinity);
+  const futureImpulseLow = Array(frames.length).fill(Infinity);
+  const futureImpulseHigh = Array(frames.length).fill(-Infinity);
   let minLow = Infinity;
   let maxHigh = -Infinity;
+  let impulseLow = Infinity;
+  let impulseHigh = -Infinity;
 
   for (let index = frames.length - 1; index >= 0; index -= 1) {
-    minLow = Math.min(minLow, frames[index].low || frames[index].price);
-    maxHigh = Math.max(maxHigh, frames[index].high || frames[index].price);
+    const frame = frames[index];
+    const state = marketStateFrames[index];
+    minLow = Math.min(minLow, frame.low || frame.price);
+    maxHigh = Math.max(maxHigh, frame.high || frame.price);
     futureLow[index] = minLow;
     futureHigh[index] = maxHigh;
+
+    if ((state?.impulse || 0) >= 1.35 || (state?.oiDropFromPrevious || 0) >= 0.025) {
+      impulseLow = Math.min(impulseLow, frame.low || frame.price);
+      impulseHigh = Math.max(impulseHigh, frame.high || frame.price);
+    }
+
+    futureImpulseLow[index] = impulseLow;
+    futureImpulseHigh[index] = impulseHigh;
   }
 
   const touchBufferPct = 0.003;
-  return events.map((event) => {
+  const impulseBufferPct = 0.006;
+  const latestFrameIndex = frames.length - 1;
+  const inactive: Record<string, number> = {
+    swept: 0,
+    impulse: 0,
+    oiDecay: 0,
+    ageDecay: 0,
+    probabilistic: 0
+  };
+
+  const nextEvents = events.map((event, eventIndex) => {
     const nextIndex = Math.min(frames.length - 1, event.i + 1);
     const swept =
       event.s === 'L'
         ? futureLow[nextIndex] <= event.p * (1 + touchBufferPct)
         : futureHigh[nextIndex] >= event.p * (1 - touchBufferPct);
 
-    return swept ? { ...event, a: 0 as 0 } : event;
+    if (swept) {
+      inactive.swept += 1;
+      return { ...event, a: 0 as 0 };
+    }
+
+    const impulseCleared =
+      event.s === 'L'
+        ? futureImpulseLow[nextIndex] <= event.p * (1 + impulseBufferPct)
+        : futureImpulseHigh[nextIndex] >= event.p * (1 - impulseBufferPct);
+    const stateAtBirth = marketStateFrames[Math.min(event.i, marketStateFrames.length - 1)];
+    const latestState = marketStateFrames[marketStateFrames.length - 1];
+    const oiDrop =
+      stateAtBirth?.oiUsd && latestState?.oiUsd && stateAtBirth.oiUsd > 0
+        ? Math.max(0, (stateAtBirth.oiUsd - latestState.oiUsd) / stateAtBirth.oiUsd)
+        : 0;
+    const ageHours = Math.max(0, latestFrameIndex - event.i);
+    const halfLife = liquidationHalfLifeHours(event);
+    const ageSurvival = Math.pow(0.5, ageHours / halfLife);
+    const oiSurvival = oiDrop <= 0.08 ? 1 : clamp(1 - (oiDrop - 0.08) / 0.32, sourceFloor(event), 1);
+    const impulseSurvival = impulseCleared ? (event.z === 'gmx-position' ? 0.65 : 0.35) : 1;
+    const survival = clamp(ageSurvival * oiSurvival * impulseSurvival, 0, 1);
+
+    if (impulseCleared && impulseSurvival < 1) inactive.impulse += 1;
+    if (oiDrop > 0.08 && oiSurvival < 1) inactive.oiDecay += 1;
+    if (ageSurvival < 0.75) inactive.ageDecay += 1;
+
+    const unit = deterministicUnit(`${event.z || ''}|${event.s}|${event.l}|${event.p}|${event.i}|${eventIndex}`);
+    if (unit > survival) {
+      inactive.probabilistic += 1;
+      return { ...event, a: 0 as 0 };
+    }
+
+    return event;
   });
+
+  return { events: nextEvents, inactive };
 }
 
 function hyperliquidContextForBtc(context: any): any | undefined {
@@ -804,7 +959,8 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       frame?.price || 0,
       deltaOiUsd,
       longShare,
-      1.4
+      1.4,
+      'binance-oi'
     );
   }
 
@@ -828,7 +984,8 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       frame?.price || 0,
       deltaOiUsd,
       ratio?.longShare ?? trendLongShare,
-      1.15
+      1.15,
+      'bybit-oi'
     );
   }
 
@@ -850,7 +1007,8 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       frame?.price || 0,
       deltaOiUsd,
       ratio?.longShare ?? 0.5,
-      1.05
+      1.05,
+      'okx-oi'
     );
   }
 
@@ -871,7 +1029,8 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       close || frames[frameIndex]?.price || 0,
       volumeBtc * close * 0.06,
       longShare,
-      0.55
+      0.55,
+      'hyper-volume'
     );
   }
 
@@ -907,7 +1066,8 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       position.isLong ? 'L' : 'S',
       leverageBucket(leverage),
       roundedPrice,
-      Math.max(1, Math.round(positionWeight(sizeUsd, leverage) * 0.75))
+      Math.max(1, Math.round(positionWeight(sizeUsd, leverage) * 0.75)),
+      'gmx-position'
     );
   }
 
@@ -925,7 +1085,8 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       latestFrame.price,
       hyperOiUsd * 0.008,
       premium >= 0 ? 0.55 : 0.45,
-      0.75
+      0.75,
+      'hyper-oi'
     );
   }
 
@@ -944,14 +1105,17 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       latestFrame.price,
       bitgetBtcOi * latestFrame.price * 0.006,
       0.5,
-      0.55
+      0.55,
+      'bitget-oi'
     );
   }
 
-  const sweptEvents = markSweptLiquidationEvents(events, frames);
-  const sweptCount = sweptEvents.filter((event) => event.a === 0).length;
+  const marketStateFrames = buildMarketStateFrames(frames, [binanceOi, bybitOi, okxOi]);
+  const lifecycleResult = markLifecycleLiquidationEvents(events, frames, marketStateFrames);
+  const lifecycleEvents = lifecycleResult.events;
+  const inactiveCount = lifecycleEvents.filter((event) => event.a === 0).length;
   const activeZoneCounts = new Map<string, { s: 'L' | 'S'; l: number; p: number; c: number }>();
-  for (const event of sweptEvents) {
+  for (const event of lifecycleEvents) {
     if (!event.a || event.i > latestFrame.i) continue;
     const key = `${event.s}|${event.l}|${priceKey(event.p)}`;
     const existing =
@@ -995,7 +1159,7 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       url: 'https://docs.gmx.io/docs/api/graphql/',
       api: 'GMX GraphQL + Binance Futures public REST + Bybit public REST + OKX public REST + Bitget public REST + Hyperliquid public info + dYdX indexer',
       method:
-        'Multi-source public perp liquidity estimate: CEX OI buildups plus trader ratios -> estimated liquidation buckets, GMX active positions -> approximate liquidation buckets, dYdX candles -> price/time axis.',
+        'Multi-source public perp liquidity estimate: CEX OI buildups plus trader ratios -> estimated liquidation buckets, GMX active positions -> approximate liquidation buckets, dYdX candles -> price/time axis, then a survivor model removes zones after sweep, OI decay, age decay and impulse cleanup.',
       params: [
         `frames=${frames.length}`,
         `events=${events.length}`,
@@ -1005,7 +1169,12 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
         `okxOi=${okxOi.length}`,
         `bitgetOi=${bitgetOiRows.length}`,
         `hyperCandles=${hyperCandles.length}`,
-        `sweptInactive=${sweptCount}`
+        `inactive=${inactiveCount}`,
+        `inactiveSwept=${lifecycleResult.inactive.swept}`,
+        `inactiveImpulse=${lifecycleResult.inactive.impulse}`,
+        `inactiveOiDecay=${lifecycleResult.inactive.oiDecay}`,
+        `inactiveAgeDecay=${lifecycleResult.inactive.ageDecay}`,
+        `inactiveLifecycle=${lifecycleResult.inactive.probabilistic}`
       ],
       sourceStatuses,
       marketDepth: {
@@ -1014,7 +1183,7 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
         hyperliquid: hyperBookResult.data || null
       },
       note:
-        'Study-only public perp liquidity estimate from GMX positions, Binance/Bybit/OKX open-interest buildups, Binance/Bybit/OKX trader ratios, Bitget current OI and Hyperliquid public context. Orderbooks are collected as diagnostics but are not drawn as gap histograms. It does not use Decentrader and does not place or size trades.'
+        'Study-only public perp liquidity estimate from GMX positions, Binance/Bybit/OKX open-interest buildups, Binance/Bybit/OKX trader ratios, Bitget current OI and Hyperliquid public context. It applies a lifecycle model so stale, swept, decayed or impulse-cleared zones stop being active. It does not use Decentrader and does not place or size trades.'
     },
     range: {
       minPrice: Math.min(...prices),
@@ -1025,7 +1194,7 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       t: frame.t,
       price: frame.price
     })),
-    events: sweptEvents,
+    events: lifecycleEvents,
     topCurrentZones: Array.from(activeZoneCounts.values())
       .sort((a, b) => b.c - a.c || a.p - b.p)
       .slice(0, 40)
