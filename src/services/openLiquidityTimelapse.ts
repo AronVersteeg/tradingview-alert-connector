@@ -5,6 +5,8 @@ const GMX_GRAPHQL_URL = 'https://gmx.squids.live/gmx-synthetics-arbitrum:prod/ap
 const BINANCE_FAPI_URL = 'https://fapi.binance.com';
 const BYBIT_API_URL = 'https://api.bybit.com';
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info';
+const OKX_API_URL = 'https://www.okx.com';
+const BITGET_API_URL = 'https://api.bitget.com';
 const GMX_BTC_MARKETS = [
   '0x47c031236e19d024b42f8AE6780E44A573170703',
   '0x7C11F78Ce78768518D743E81Fdfa2F860C6b9A77'
@@ -30,6 +32,20 @@ type BinanceRatio = {
 type BybitOi = {
   openInterest: string;
   timestamp: string;
+};
+
+type BybitRatio = {
+  buyRatio: string;
+  sellRatio: string;
+  timestamp: string;
+};
+
+type OkxOpenInterestVolume = [string, string, string];
+type OkxLongShortRatio = [string, string];
+
+type BitgetOpenInterest = {
+  symbol: string;
+  openInterest: string;
 };
 
 type GmxPosition = {
@@ -160,6 +176,32 @@ async function fetchBinanceRatios(): Promise<BinanceRatio[]> {
   return response.data;
 }
 
+async function fetchBinanceTopAccountRatios(): Promise<BinanceRatio[]> {
+  const response = await axios.get(`${BINANCE_FAPI_URL}/futures/data/topLongShortAccountRatio`, {
+    timeout: 30000,
+    params: {
+      symbol: 'BTCUSDT',
+      period: '1h',
+      limit: STUDY_FRAME_LIMIT
+    }
+  });
+  if (!Array.isArray(response.data)) throw new Error('Binance top account ratio response is not an array.');
+  return response.data;
+}
+
+async function fetchBinanceTopPositionRatios(): Promise<BinanceRatio[]> {
+  const response = await axios.get(`${BINANCE_FAPI_URL}/futures/data/topLongShortPositionRatio`, {
+    timeout: 30000,
+    params: {
+      symbol: 'BTCUSDT',
+      period: '1h',
+      limit: STUDY_FRAME_LIMIT
+    }
+  });
+  if (!Array.isArray(response.data)) throw new Error('Binance top position ratio response is not an array.');
+  return response.data;
+}
+
 async function fetchBinanceDepth(): Promise<any> {
   const response = await axios.get(`${BINANCE_FAPI_URL}/fapi/v1/depth`, {
     timeout: 20000,
@@ -190,6 +232,21 @@ async function fetchBybitOpenInterest(): Promise<BybitOi[]> {
   return rows.slice().sort((a: BybitOi, b: BybitOi) => Number(a.timestamp) - Number(b.timestamp));
 }
 
+async function fetchBybitAccountRatio(): Promise<BybitRatio[]> {
+  const response = await axios.get(`${BYBIT_API_URL}/v5/market/account-ratio`, {
+    timeout: 30000,
+    params: {
+      category: 'linear',
+      symbol: 'BTCUSDT',
+      period: '1h',
+      limit: 200
+    }
+  });
+  const rows = response.data?.result?.list;
+  if (!Array.isArray(rows)) throw new Error('Bybit account ratio response did not contain list.');
+  return rows.slice().sort((a: BybitRatio, b: BybitRatio) => Number(a.timestamp) - Number(b.timestamp));
+}
+
 async function fetchBybitDepth(): Promise<any> {
   const response = await axios.get(`${BYBIT_API_URL}/v5/market/orderbook`, {
     timeout: 20000,
@@ -204,6 +261,45 @@ async function fetchBybitDepth(): Promise<any> {
     asks: Array.isArray(response.data?.result?.a) ? response.data.result.a.length : 0,
     time: response.data?.time
   };
+}
+
+async function fetchOkxOpenInterestVolume(): Promise<OkxOpenInterestVolume[]> {
+  const response = await axios.get(`${OKX_API_URL}/api/v5/rubik/stat/contracts/open-interest-volume`, {
+    timeout: 30000,
+    params: {
+      ccy: 'BTC',
+      period: '1H'
+    }
+  });
+  const rows = response.data?.data;
+  if (!Array.isArray(rows)) throw new Error('OKX open-interest response did not contain data.');
+  return rows.slice().sort((a: OkxOpenInterestVolume, b: OkxOpenInterestVolume) => Number(a[0]) - Number(b[0]));
+}
+
+async function fetchOkxLongShortRatio(): Promise<OkxLongShortRatio[]> {
+  const response = await axios.get(`${OKX_API_URL}/api/v5/rubik/stat/contracts/long-short-account-ratio`, {
+    timeout: 30000,
+    params: {
+      ccy: 'BTC',
+      period: '1H'
+    }
+  });
+  const rows = response.data?.data;
+  if (!Array.isArray(rows)) throw new Error('OKX long-short ratio response did not contain data.');
+  return rows.slice().sort((a: OkxLongShortRatio, b: OkxLongShortRatio) => Number(a[0]) - Number(b[0]));
+}
+
+async function fetchBitgetOpenInterest(): Promise<BitgetOpenInterest[]> {
+  const response = await axios.get(`${BITGET_API_URL}/api/v3/market/open-interest`, {
+    timeout: 20000,
+    params: {
+      category: 'USDT-FUTURES',
+      symbol: 'BTCUSDT'
+    }
+  });
+  const rows = response.data?.data?.list;
+  if (!Array.isArray(rows)) throw new Error('Bitget open-interest response did not contain list.');
+  return rows;
 }
 
 async function fetchHyperliquidCandles(frames: StudyFrame[]): Promise<any[]> {
@@ -522,6 +618,16 @@ function normalizedBinanceRatios(rows: BinanceRatio[]): Array<{ timestampMs: num
     .sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
+function normalizedBybitRatios(rows: BybitRatio[]): Array<{ timestampMs: number; longShare: number }> {
+  return rows
+    .map((row) => ({
+      timestampMs: Number(row.timestamp),
+      longShare: Number(row.buyRatio)
+    }))
+    .filter((row) => Number.isFinite(row.timestampMs) && Number.isFinite(row.longShare))
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+}
+
 function normalizedBybitOi(rows: BybitOi[], frames: StudyFrame[]): Array<{ timestampMs: number; oiUsd: number }> {
   return rows
     .map((row) => {
@@ -535,6 +641,47 @@ function normalizedBybitOi(rows: BybitOi[], frames: StudyFrame[]): Array<{ times
     })
     .filter((row) => Number.isFinite(row.timestampMs) && Number.isFinite(row.oiUsd))
     .sort((a, b) => a.timestampMs - b.timestampMs);
+}
+
+function normalizedOkxOpenInterest(rows: OkxOpenInterestVolume[]): Array<{ timestampMs: number; oiUsd: number }> {
+  return rows
+    .map((row) => ({
+      timestampMs: Number(row[0]),
+      oiUsd: Number(row[1])
+    }))
+    .filter((row) => Number.isFinite(row.timestampMs) && Number.isFinite(row.oiUsd))
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+}
+
+function normalizedOkxRatios(rows: OkxLongShortRatio[]): Array<{ timestampMs: number; longShare: number }> {
+  return rows
+    .map((row) => {
+      const ratio = Number(row[1]);
+      return {
+        timestampMs: Number(row[0]),
+        longShare: ratio > 0 ? ratio / (1 + ratio) : 0.5
+      };
+    })
+    .filter((row) => Number.isFinite(row.timestampMs) && Number.isFinite(row.longShare))
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+}
+
+function weightedLongShareAt(
+  timestampMs: number,
+  sources: Array<{ rows: Array<{ timestampMs: number; longShare: number }>; weight: number }>
+): number | undefined {
+  let weighted = 0;
+  let totalWeight = 0;
+
+  for (const source of sources) {
+    const value = valueAtOrBefore(source.rows, timestampMs);
+    if (value && Number.isFinite(value.longShare)) {
+      weighted += clamp(value.longShare, 0.15, 0.85) * source.weight;
+      totalWeight += source.weight;
+    }
+  }
+
+  return totalWeight > 0 ? weighted / totalWeight : undefined;
 }
 
 function hyperliquidContextForBtc(context: any): any | undefined {
@@ -562,9 +709,15 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
     gmxPositionsResult,
     binanceOiResult,
     binanceRatioResult,
+    binanceTopAccountRatioResult,
+    binanceTopPositionRatioResult,
     binanceDepthResult,
     bybitOiResult,
+    bybitRatioResult,
     bybitDepthResult,
+    okxOiResult,
+    okxRatioResult,
+    bitgetOiResult,
     hyperCandlesResult,
     hyperContextResult,
     hyperBookResult
@@ -572,9 +725,15 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
     safeFetch('GMX positions', fetchGmxBtcPositions),
     safeFetch('Binance OI', fetchBinanceOpenInterest),
     safeFetch('Binance ratios', fetchBinanceRatios),
+    safeFetch('Binance top account ratios', fetchBinanceTopAccountRatios),
+    safeFetch('Binance top position ratios', fetchBinanceTopPositionRatios),
     safeFetch('Binance depth', fetchBinanceDepth),
     safeFetch('Bybit OI', fetchBybitOpenInterest),
+    safeFetch('Bybit account ratio', fetchBybitAccountRatio),
     safeFetch('Bybit depth', fetchBybitDepth),
+    safeFetch('OKX OI', fetchOkxOpenInterestVolume),
+    safeFetch('OKX ratios', fetchOkxLongShortRatio),
+    safeFetch('Bitget OI', fetchBitgetOpenInterest),
     safeFetch('Hyperliquid candles', () => fetchHyperliquidCandles(frames)),
     safeFetch('Hyperliquid context', fetchHyperliquidContext),
     safeFetch('Hyperliquid book', fetchHyperliquidBook)
@@ -587,13 +746,66 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
 
   const binanceOi = normalizedBinanceOi(binanceOiResult.data || []);
   const binanceRatios = normalizedBinanceRatios(binanceRatioResult.data || []);
+  const binanceTopAccountRatios = normalizedBinanceRatios(binanceTopAccountRatioResult.data || []);
+  const binanceTopPositionRatios = normalizedBinanceRatios(binanceTopPositionRatioResult.data || []);
   for (let index = 1; index < binanceOi.length; index += 1) {
     const current = binanceOi[index];
     const previous = binanceOi[index - 1];
     const deltaOiUsd = current.oiUsd - previous.oiUsd;
     const frameIndex = frameIndexForTimestamp(frames, current.timestampMs);
     const frame = frames[frameIndex];
-    const ratio = valueAtOrBefore(binanceRatios, current.timestampMs);
+    const longShare =
+      weightedLongShareAt(current.timestampMs, [
+        { rows: binanceRatios, weight: 0.45 },
+        { rows: binanceTopAccountRatios, weight: 0.25 },
+        { rows: binanceTopPositionRatios, weight: 0.3 }
+      ]) ?? 0.5;
+    addEstimatedLiquidationBuild(
+      events,
+      prices,
+      firstSeen,
+      currentZoneCounts,
+      frameIndex,
+      frame?.price || 0,
+      deltaOiUsd,
+      longShare,
+      1.4
+    );
+  }
+
+  const bybitOi = normalizedBybitOi(bybitOiResult.data || [], frames);
+  const bybitRatios = normalizedBybitRatios(bybitRatioResult.data || []);
+  for (let index = 1; index < bybitOi.length; index += 1) {
+    const current = bybitOi[index];
+    const previous = bybitOi[index - 1];
+    const deltaOiUsd = current.oiUsd - previous.oiUsd;
+    const frameIndex = frameIndexForTimestamp(frames, current.timestampMs);
+    const frame = frames[frameIndex];
+    const previousFrame = frames[Math.max(0, frameIndex - 1)];
+    const trendLongShare = frame && previousFrame && frame.price > previousFrame.price ? 0.57 : 0.43;
+    const ratio = valueAtOrBefore(bybitRatios, current.timestampMs);
+    addEstimatedLiquidationBuild(
+      events,
+      prices,
+      firstSeen,
+      currentZoneCounts,
+      frameIndex,
+      frame?.price || 0,
+      deltaOiUsd,
+      ratio?.longShare ?? trendLongShare,
+      1.15
+    );
+  }
+
+  const okxOi = normalizedOkxOpenInterest(okxOiResult.data || []);
+  const okxRatios = normalizedOkxRatios(okxRatioResult.data || []);
+  for (let index = 1; index < okxOi.length; index += 1) {
+    const current = okxOi[index];
+    const previous = okxOi[index - 1];
+    const deltaOiUsd = current.oiUsd - previous.oiUsd;
+    const frameIndex = frameIndexForTimestamp(frames, current.timestampMs);
+    const frame = frames[frameIndex];
+    const ratio = valueAtOrBefore(okxRatios, current.timestampMs);
     addEstimatedLiquidationBuild(
       events,
       prices,
@@ -603,29 +815,7 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       frame?.price || 0,
       deltaOiUsd,
       ratio?.longShare ?? 0.5,
-      1.4
-    );
-  }
-
-  const bybitOi = normalizedBybitOi(bybitOiResult.data || [], frames);
-  for (let index = 1; index < bybitOi.length; index += 1) {
-    const current = bybitOi[index];
-    const previous = bybitOi[index - 1];
-    const deltaOiUsd = current.oiUsd - previous.oiUsd;
-    const frameIndex = frameIndexForTimestamp(frames, current.timestampMs);
-    const frame = frames[frameIndex];
-    const previousFrame = frames[Math.max(0, frameIndex - 1)];
-    const trendLongShare = frame && previousFrame && frame.price > previousFrame.price ? 0.57 : 0.43;
-    addEstimatedLiquidationBuild(
-      events,
-      prices,
-      firstSeen,
-      currentZoneCounts,
-      frameIndex,
-      frame?.price || 0,
-      deltaOiUsd,
-      trendLongShare,
-      1.15
+      1.05
     );
   }
 
@@ -704,13 +894,38 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
     );
   }
 
+  const bitgetOiRows = bitgetOiResult.data || [];
+  const bitgetBtcOi = bitgetOiRows
+    .map((row) => Number(row.openInterest))
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .reduce((sum, value) => sum + value, 0);
+  if (bitgetBtcOi > 0 && latestFrame) {
+    addEstimatedLiquidationBuild(
+      events,
+      prices,
+      firstSeen,
+      currentZoneCounts,
+      latestFrame.i,
+      latestFrame.price,
+      bitgetBtcOi * latestFrame.price * 0.006,
+      0.5,
+      0.55
+    );
+  }
+
   const sourceStatuses = [
     gmxPositionsResult,
     binanceOiResult,
     binanceRatioResult,
+    binanceTopAccountRatioResult,
+    binanceTopPositionRatioResult,
     binanceDepthResult,
     bybitOiResult,
+    bybitRatioResult,
     bybitDepthResult,
+    okxOiResult,
+    okxRatioResult,
+    bitgetOiResult,
     hyperCandlesResult,
     hyperContextResult,
     hyperBookResult
@@ -725,15 +940,17 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
       name: 'Public perp study',
       market: normalizedMarket,
       url: 'https://docs.gmx.io/docs/api/graphql/',
-      api: 'GMX GraphQL + Binance Futures public REST + Bybit public REST + Hyperliquid public info + dYdX indexer',
+      api: 'GMX GraphQL + Binance Futures public REST + Bybit public REST + OKX public REST + Bitget public REST + Hyperliquid public info + dYdX indexer',
       method:
-        'Multi-source public perp liquidity estimate: CEX OI buildups -> estimated liquidation buckets, GMX active positions -> approximate liquidation buckets, dYdX candles -> price/time axis.',
+        'Multi-source public perp liquidity estimate: CEX OI buildups plus trader ratios -> estimated liquidation buckets, GMX active positions -> approximate liquidation buckets, dYdX candles -> price/time axis.',
       params: [
         `frames=${frames.length}`,
         `events=${events.length}`,
         `gmxPositions=${gmxPositions.length}`,
         `binanceOi=${binanceOi.length}`,
         `bybitOi=${bybitOi.length}`,
+        `okxOi=${okxOi.length}`,
+        `bitgetOi=${bitgetOiRows.length}`,
         `hyperCandles=${hyperCandles.length}`
       ],
       sourceStatuses,
@@ -743,7 +960,7 @@ export async function getOpenLiquidityTimelapsePayload(market = 'BTC-USD'): Prom
         hyperliquid: hyperBookResult.data || null
       },
       note:
-        'Study-only public perp liquidity estimate from GMX positions, Binance/Bybit open-interest buildups and Hyperliquid public context. Orderbooks are collected as diagnostics but are not drawn as gap histograms. It does not use Decentrader and does not place or size trades.'
+        'Study-only public perp liquidity estimate from GMX positions, Binance/Bybit/OKX open-interest buildups, Binance/Bybit/OKX trader ratios, Bitget current OI and Hyperliquid public context. Orderbooks are collected as diagnostics but are not drawn as gap histograms. It does not use Decentrader and does not place or size trades.'
     },
     range: {
       minPrice: Math.min(...prices),
