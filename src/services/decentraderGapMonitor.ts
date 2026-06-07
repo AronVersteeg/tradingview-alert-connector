@@ -1788,6 +1788,29 @@ function buildDecentraderStopBreachFlatAlert(
   } as AlertObject;
 }
 
+function buildDecentraderFlatCleanupAlert(
+  market: string,
+  managedPosition: NonNullable<AlertState['managedPosition']>
+): AlertObject {
+  return {
+    exchange: 'dydxv4',
+    strategy: 'decentrader_flat_order_cleanup',
+    market,
+    price: managedPosition.entryPrice || 1,
+    entry_price: managedPosition.entryPrice || 1,
+    desired_position: 'FLAT',
+    time: Date.now(),
+    signal: 'FLAT',
+    profile: 'MANAGED',
+    decentrader: {
+      direction: managedPosition.direction,
+      entrySignature: managedPosition.entrySignature,
+      flatOrderCleanup: true,
+      note: 'Position is already flat; run dYdX FLAT target flow to cancel remaining managed TP/SL orders.'
+    }
+  } as AlertObject;
+}
+
 function gapAlertSignature(alert: GapAlert): string {
   return `${alert.timestamp}|${alert.entrants
     .map((bar) => `${bar.key}:${bar.count}`)
@@ -2290,6 +2313,35 @@ export class DecentraderGapMonitor {
       const position = existingMarketPosition(account, market);
 
       if (!position) {
+        const managedPosition = state.managedPosition;
+
+        if (managedPosition) {
+          const flatCleanupAlert = buildDecentraderFlatCleanupAlert(market, managedPosition);
+
+          console.warn('Decentrader managed position is flat; running dYdX FLAT cleanup for remaining TP/SL orders:', {
+            market,
+            managedPosition
+          });
+
+          await executor.placeOrder(flatCleanupAlert);
+          delete state.managedPosition;
+          result.dynamicSlSync = {
+            outcome: 'FLAT_CLEANED_UP',
+            reason: `${market} is flat; dYdX FLAT target flow was run to cancel remaining managed TP/SL orders.`,
+            market,
+            managedPosition,
+            flatAlert: {
+              strategy: flatCleanupAlert.strategy,
+              market: flatCleanupAlert.market,
+              desired_position: (flatCleanupAlert as any).desired_position,
+              signal: (flatCleanupAlert as any).signal,
+              profile: (flatCleanupAlert as any).profile
+            }
+          };
+          console.log('Decentrader flat managed-order cleanup:', result.dynamicSlSync);
+          return;
+        }
+
         delete state.managedPosition;
         result.dynamicSlSync = {
           outcome: 'SKIPPED',
