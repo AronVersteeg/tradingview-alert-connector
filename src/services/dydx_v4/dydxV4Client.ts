@@ -536,9 +536,14 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     const managedStop = this.managedStops.get(market);
+    const positionAbsSize = Math.abs(position.size);
+    const managedStopCoversPosition =
+      managedStop &&
+      managedStop.size + this.TOLERANCE >= positionAbsSize;
     if (
       managedStop &&
       String(managedStop.side).toUpperCase() === String(side).toUpperCase() &&
+      managedStopCoversPosition &&
       Math.abs(managedStop.triggerPrice - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
     ) {
       return {
@@ -551,15 +556,83 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     const executionPrice = this.getStopExecutionPrice(isLong, trailStop);
-    const size = Math.abs(position.size);
+    const size = Math.max(positionAbsSize, managedStop?.size ?? 0);
     const openOrdersBefore = await this.getOpenOrdersForMarket(market);
-    const oldStopOrders = this.getProtectiveStopOrdersFromOrders(openOrdersBefore)
-      .filter((order: any) => this.orderSideMatches(order, side))
+    const protectiveStopOrders = this.getProtectiveStopOrdersFromOrders(openOrdersBefore)
+      .filter((order: any) => this.orderSideMatches(order, side));
+    const visibleCoveredStop = protectiveStopOrders.find((order: any) => {
+      const existingTrigger = this.getOrderTriggerPrice(order);
+      const existingSize = this.parsePositiveNumber(
+        order.size ??
+        order.remainingSize ??
+        order.remaining_size ??
+        order.quantity ??
+        order.qty
+      );
+
+      return (
+        existingTrigger !== undefined &&
+        existingSize !== undefined &&
+        Math.abs(existingTrigger - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT &&
+        existingSize + this.TOLERANCE >= positionAbsSize
+      );
+    });
+
+    if (visibleCoveredStop) {
+      const visibleSize = this.parsePositiveNumber(
+        visibleCoveredStop.size ??
+        visibleCoveredStop.remainingSize ??
+        visibleCoveredStop.remaining_size ??
+        visibleCoveredStop.quantity ??
+        visibleCoveredStop.qty
+      ) ?? positionAbsSize;
+      const visibleClientId = this.getOrderClientId(visibleCoveredStop);
+
+      if (Number.isFinite(visibleClientId)) {
+        this.managedStops.set(market, {
+          market,
+          side,
+          triggerPrice: trailStop,
+          clientId: visibleClientId,
+          size: Math.max(visibleSize, positionAbsSize),
+          source: managedStop?.source ?? 'TRAIL',
+          updatedAt: Date.now(),
+          goodTilBlockTime: this.getOrderGoodTilBlockTime(visibleCoveredStop)
+        });
+      }
+
+      return {
+        outcome: 'UNCHANGED',
+        reason: 'A visible dYdX protective stop already covers the full current position; Render-managed stop memory was refreshed.',
+        positionSize: position.size,
+        trailStop,
+        stopSize: visibleSize,
+        visibility: 'DYDX_OPEN_ORDER',
+        matchedOrder: this.summarizeOrder(visibleCoveredStop)
+      };
+    }
+
+    const oldStopOrders = protectiveStopOrders
       .filter((order: any) => {
         const existingTrigger = this.getOrderTriggerPrice(order);
+        const existingSize = this.parsePositiveNumber(
+          order.size ??
+          order.remainingSize ??
+          order.remaining_size ??
+          order.quantity ??
+          order.qty
+        );
+        const triggerMatches =
+          existingTrigger !== undefined &&
+          Math.abs(existingTrigger - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT;
+        const sizeMatches =
+          existingSize !== undefined &&
+          Math.abs(existingSize - size) < this.TOLERANCE;
+
         return (
           existingTrigger === undefined ||
-          Math.abs(existingTrigger - trailStop) / trailStop >= this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
+          !triggerMatches ||
+          !sizeMatches
         );
       });
 

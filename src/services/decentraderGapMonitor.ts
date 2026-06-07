@@ -1759,6 +1759,35 @@ function buildDecentraderLiveTestFlatAlert(orderAlert: AlertObject): AlertObject
   } as AlertObject;
 }
 
+function buildDecentraderStopBreachFlatAlert(
+  market: string,
+  price: number,
+  position: DydxOpenPosition,
+  stopPrice: number
+): AlertObject {
+  const direction: TradePlanDirection = position.size > 0 ? 'long' : 'short';
+
+  return {
+    exchange: 'dydxv4',
+    strategy: 'decentrader_stop_breach_residual_flat',
+    market,
+    price,
+    entry_price: price,
+    size: Math.abs(numberOrZero(position.size)),
+    desired_position: 'FLAT',
+    time: Date.now(),
+    signal: 'FLAT',
+    profile: 'MANAGED',
+    decentrader: {
+      direction,
+      stopPrice,
+      residualSize: position.size,
+      stopBreachResidualFlat: true,
+      note: 'Automatic residual flatten after managed Decentrader SL was already breached.'
+    }
+  } as AlertObject;
+}
+
 function gapAlertSignature(alert: GapAlert): string {
   return `${alert.timestamp}|${alert.entrants
     .map((bar) => `${bar.key}:${bar.count}`)
@@ -2311,6 +2340,64 @@ export class DecentraderGapMonitor {
       const plan = await this.getTradePlan(account, market);
       const directionalPlan = plan?.plans?.[positionDirection];
       const candidateStop = numberOrZero(directionalPlan?.stop?.price);
+      const currentPrice =
+        numberOrZero(directionalPlan?.entryReference?.price) ||
+        numberOrZero(plan?.marketInfo?.oraclePrice) ||
+        numberOrZero(plan?.price);
+      const stopBreached =
+        currentPrice > 0 &&
+        (positionDirection === 'long'
+          ? currentPrice <= managedPosition.currentStop
+          : currentPrice >= managedPosition.currentStop);
+
+      if (stopBreached) {
+        const flatAlert = buildDecentraderStopBreachFlatAlert(
+          market,
+          currentPrice,
+          position,
+          managedPosition.currentStop
+        );
+
+        console.error('Managed Decentrader SL was breached while residual position remained open; flattening residual:', {
+          market,
+          position,
+          currentPrice,
+          currentStop: managedPosition.currentStop,
+          managedPosition
+        });
+
+        await executor.placeOrder(flatAlert);
+
+        const accountAfterFlat = await executor.getAccountSnapshot([market]);
+        const remainingPosition = existingMarketPosition(accountAfterFlat, market);
+
+        if (!remainingPosition) {
+          delete state.managedPosition;
+        }
+
+        result.dynamicSlSync = {
+          outcome: remainingPosition ? 'FLATTEN_ATTEMPTED' : 'FLATTENED',
+          reason: remainingPosition
+            ? 'Managed SL was breached; residual flatten was attempted but a position is still visible.'
+            : 'Managed SL was breached; residual position was flattened through the dYdX FLAT target flow.',
+          market,
+          position,
+          remainingPosition: remainingPosition || null,
+          currentPrice,
+          breachedStop: managedPosition.currentStop,
+          flatAlert: {
+            strategy: flatAlert.strategy,
+            market: flatAlert.market,
+            desired_position: (flatAlert as any).desired_position,
+            size: flatAlert.size,
+            signal: (flatAlert as any).signal,
+            profile: (flatAlert as any).profile
+          }
+        };
+        console.log('Decentrader stop-breach residual flat:', result.dynamicSlSync);
+        return;
+      }
+
       const minImprovementPct = decentraderDynamicSlMinImprovementPct();
       const improves =
         positionDirection === 'long'
@@ -2322,9 +2409,20 @@ export class DecentraderGapMonitor {
         !candidateStop ||
         !improves
       ) {
+        const coverageAlert = buildDecentraderDynamicSlAlert(
+          plan,
+          position,
+          managedPosition.currentStop
+        );
+        const coverageSyncResult = await syncTrailingStop(coverageAlert);
+
         result.dynamicSlSync = {
-          outcome: 'UNCHANGED',
-          reason: 'Latest confirmed fractal stop does not improve the managed SL enough.',
+          ...coverageSyncResult,
+          outcome: coverageSyncResult?.outcome === 'UPDATED' ? 'UPDATED' : 'UNCHANGED',
+          reason:
+            coverageSyncResult?.outcome === 'UPDATED'
+              ? 'Latest confirmed fractal stop does not improve the managed SL enough, but protective stop coverage was resized/refreshed.'
+              : 'Latest confirmed fractal stop does not improve the managed SL enough; protective stop coverage was checked.',
           market,
           position,
           currentStop: managedPosition.currentStop,
@@ -2332,6 +2430,11 @@ export class DecentraderGapMonitor {
           minImprovementPct,
           stop: directionalPlan?.stop || null
         };
+
+        if (coverageSyncResult?.outcome === 'UPDATED') {
+          managedPosition.currentStopUpdatedAt = nowNlIso();
+        }
+
         return;
       }
 
