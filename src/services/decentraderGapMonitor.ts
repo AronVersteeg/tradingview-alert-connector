@@ -919,7 +919,11 @@ function backtestTpZones(rows: DecentraderRow[], options: TpBacktestOptions = {}
     return existing;
   }
 
-  for (let frameIndex = rows.length - 2; frameIndex >= 1 && trades.length < maxTrades; frameIndex -= 1) {
+  for (
+    let frameIndex = rows.length - 1 - lookaheadBars;
+    frameIndex >= 1 && trades.length < maxTrades;
+    frameIndex -= 1
+  ) {
     const alert = detectGapIntrusion(rows, frameIndex);
     const direction = mapDirectionFromAlert(alert);
     if (!alert || !direction) continue;
