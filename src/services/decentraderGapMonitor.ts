@@ -65,6 +65,11 @@ type TpHit = {
   zone: TradeZone;
 };
 
+type TpBacktestOptions = {
+  lookaheadBars?: number;
+  maxTrades?: number;
+};
+
 type DydxOpenPosition = {
   market: string;
   side?: string;
@@ -865,6 +870,195 @@ function tpHitsSince(rows: DecentraderRow[], lastDataTimestamp?: string): TpHit[
   }
 
   return hits;
+}
+
+function rowHighLow(row: DecentraderRow): { high: number; low: number; price: number } | undefined {
+  const price = parseNumber(row?.ohlc4);
+  if (price === undefined) return undefined;
+
+  const high = Math.max(
+    price,
+    parseNumber(row?.highRef) ?? price,
+    parseNumber(row?.high) ?? price,
+    parseNumber(row?.h) ?? price
+  );
+  const low = Math.min(
+    price,
+    parseNumber(row?.lowRef) ?? price,
+    parseNumber(row?.low) ?? price,
+    parseNumber(row?.l) ?? price
+  );
+
+  return { high, low, price };
+}
+
+function backtestTpZones(rows: DecentraderRow[], options: TpBacktestOptions = {}): any {
+  const lookaheadBars = Math.max(1, Math.min(240, Math.floor(options.lookaheadBars || 48)));
+  const maxTrades = Math.max(1, Math.min(1000, Math.floor(options.maxTrades || 300)));
+  const trades: any[] = [];
+  const byRank = new Map<number, any>();
+  const byFeature = {
+    peak: { candidates: 0, hitsBeforeStop: 0 },
+    overlap2Plus: { candidates: 0, hitsBeforeStop: 0 },
+    fresh: { candidates: 0, hitsBeforeStop: 0 }
+  };
+
+  function rankStats(rank: number): any {
+    const existing =
+      byRank.get(rank) ||
+      {
+        rank,
+        candidates: 0,
+        hitsBeforeStop: 0,
+        ambiguousSameBar: 0,
+        avgBarsToHit: 0,
+        avgSelectionScore: 0,
+        avgDistancePct: 0
+      };
+    byRank.set(rank, existing);
+    return existing;
+  }
+
+  for (let frameIndex = rows.length - 2; frameIndex >= 1 && trades.length < maxTrades; frameIndex -= 1) {
+    const alert = detectGapIntrusion(rows, frameIndex);
+    const direction = mapDirectionFromAlert(alert);
+    if (!alert || !direction) continue;
+
+    const entry = rowHighLow(rows[frameIndex]);
+    if (!entry) continue;
+
+    const stop = buildFractalStop(rows, frameIndex, direction, entry.price);
+    if (!stop.valid || !stop.price) continue;
+
+    const zones = tradeZonesForFrame(rows, frameIndex);
+    const takeProfits = direction === 'long' ? zones.longTp : zones.shortTp;
+    if (!takeProfits.length) continue;
+
+    const tpResults = takeProfits.map((zone) => ({
+      label: `${direction === 'long' ? 'L' : 'S'} TP${zone.rank}`,
+      rank: zone.rank,
+      price: zone.price,
+      score: zone.score,
+      selectionScore: zone.selectionScore || zone.score,
+      peak: Boolean(zone.peak),
+      fresh: zone.fresh,
+      leverages: zone.leverages,
+      distancePct: Math.abs(zone.price - entry.price) / Math.max(1, entry.price),
+      hit: false,
+      hitBeforeStop: false,
+      ambiguousSameBar: false,
+      barsToHit: null as number | null
+    }));
+
+    let stopHitAt: number | null = null;
+    let stopped = false;
+
+    for (
+      let offset = 1;
+      offset <= lookaheadBars && frameIndex + offset < rows.length;
+      offset += 1
+    ) {
+      const future = rowHighLow(rows[frameIndex + offset]);
+      if (!future) continue;
+
+      const stopTouched = direction === 'long'
+        ? future.low <= stop.price
+        : future.high >= stop.price;
+
+      for (const tp of tpResults) {
+        if (tp.hit) continue;
+
+        const tpTouched = direction === 'long'
+          ? future.high >= tp.price
+          : future.low <= tp.price;
+
+        if (!tpTouched) continue;
+
+        tp.hit = true;
+        tp.barsToHit = offset;
+        tp.ambiguousSameBar = stopTouched;
+        tp.hitBeforeStop = !stopped && !stopTouched;
+      }
+
+      if (stopTouched) {
+        stopHitAt = offset;
+        stopped = true;
+        break;
+      }
+    }
+
+    for (const tp of tpResults) {
+      const stats = rankStats(tp.rank);
+      stats.candidates += 1;
+      stats.hitsBeforeStop += tp.hitBeforeStop ? 1 : 0;
+      stats.ambiguousSameBar += tp.ambiguousSameBar ? 1 : 0;
+      stats.avgSelectionScore += tp.selectionScore;
+      stats.avgDistancePct += tp.distancePct;
+      stats.avgBarsToHit += tp.hitBeforeStop && tp.barsToHit ? tp.barsToHit : 0;
+
+      if (tp.peak) {
+        byFeature.peak.candidates += 1;
+        byFeature.peak.hitsBeforeStop += tp.hitBeforeStop ? 1 : 0;
+      }
+      if (tp.leverages.length >= 2) {
+        byFeature.overlap2Plus.candidates += 1;
+        byFeature.overlap2Plus.hitsBeforeStop += tp.hitBeforeStop ? 1 : 0;
+      }
+      if (tp.fresh > 0) {
+        byFeature.fresh.candidates += 1;
+        byFeature.fresh.hitsBeforeStop += tp.hitBeforeStop ? 1 : 0;
+      }
+    }
+
+    trades.push({
+      timestamp: alert.timestamp,
+      timestampNl: alert.timestampNl,
+      direction,
+      entryPrice: entry.price,
+      stopPrice: stop.price,
+      stopHitAt,
+      lookaheadBars,
+      gap: {
+        left: alert.previousGap.left,
+        right: alert.previousGap.right,
+        width: alert.previousGap.width
+      },
+      takeProfits: tpResults
+    });
+  }
+
+  trades.reverse();
+
+  const rankSummary = Array.from(byRank.values()).map((stats) => ({
+    ...stats,
+    hitRateBeforeStop: stats.candidates ? stats.hitsBeforeStop / stats.candidates : 0,
+    ambiguousRate: stats.candidates ? stats.ambiguousSameBar / stats.candidates : 0,
+    avgSelectionScore: stats.candidates ? stats.avgSelectionScore / stats.candidates : 0,
+    avgDistancePct: stats.candidates ? stats.avgDistancePct / stats.candidates : 0,
+    avgBarsToHit: stats.hitsBeforeStop ? stats.avgBarsToHit / stats.hitsBeforeStop : null
+  }));
+
+  const featureSummary = Object.fromEntries(
+    Object.entries(byFeature).map(([key, stats]) => [
+      key,
+      {
+        ...stats,
+        hitRateBeforeStop: stats.candidates ? stats.hitsBeforeStop / stats.candidates : 0
+      }
+    ])
+  );
+
+  return {
+    ok: true,
+    methodology:
+      'Historical Decentrader edge replay. For each edge alert, the current TP selector is frozen, then future candles are scanned for TP touches before the fractal SL. Same-candle TP+SL is treated as ambiguous, not a clean hit.',
+    lookaheadBars,
+    maxTrades,
+    tradeCount: trades.length,
+    rankSummary,
+    featureSummary,
+    trades: trades.slice(-50)
+  };
 }
 
 function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
@@ -2959,6 +3153,15 @@ export class DecentraderGapMonitor {
     this.latestRows = rows;
     this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
     return this.latestTimelapsePayload;
+  }
+
+  async getTpBacktest(options: TpBacktestOptions = {}): Promise<any> {
+    const config = this.config();
+    const cachedRows = this.latestRows;
+    const rows = cachedRows && cachedRows.length ? cachedRows : await fetchSnapshot(config.symbol);
+    this.latestRows = rows;
+
+    return backtestTpZones(rows, options);
   }
 
   async getTradePlan(

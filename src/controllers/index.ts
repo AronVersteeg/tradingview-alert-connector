@@ -268,6 +268,25 @@ router.get('/decentrader/trade-plan', async (req, res) => {
   }
 });
 
+router.get('/decentrader/tp-backtest', async (req, res) => {
+  try {
+    const lookaheadBars = Number(req.query.lookaheadBars || 48);
+    const maxTrades = Number(req.query.maxTrades || 300);
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(await decentraderGapMonitor.getTpBacktest({
+      lookaheadBars,
+      maxTrades
+    }));
+  } catch (error) {
+    console.error('Decentrader TP backtest request failed:', error);
+    res.status(500).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
 router.post('/decentrader/simulate-edge', async (req, res) => {
   if (!isMonitorRequestAuthorized(req)) {
     return res.status(401).send({ ok: false, error: 'Unauthorized' });
