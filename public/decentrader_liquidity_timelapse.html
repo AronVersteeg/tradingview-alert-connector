@@ -1222,12 +1222,20 @@
         ctx.strokeStyle = isMajor ? 'rgba(236, 242, 248, 0.22)' : 'rgba(236, 242, 248, 0.10)';
         ctx.beginPath();
         ctx.moveTo(x, area.top);
-        ctx.lineTo(x, area.bottom + 8);
+        ctx.lineTo(x, area.bottom);
+        ctx.stroke();
+
+        ctx.strokeStyle = isMajor ? 'rgba(236, 242, 248, 0.42)' : 'rgba(236, 242, 248, 0.26)';
+        ctx.beginPath();
+        ctx.moveTo(x, area.bottom);
+        ctx.lineTo(x, area.bottom + (isMajor ? 12 : 8));
         ctx.stroke();
 
         ctx.save();
-        ctx.translate(Math.round(x) - 3, area.bottom + 18);
-        ctx.rotate(Math.PI / 3);
+        ctx.translate(Math.round(x) + 3, area.bottom + 16);
+        ctx.rotate(Math.PI / 4);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
         ctx.fillStyle = isMajor ? '#ecf2f8' : '#9aa8b8';
         ctx.fillText(money(price), 0, 0);
         ctx.restore();
