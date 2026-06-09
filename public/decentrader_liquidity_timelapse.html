@@ -997,8 +997,8 @@
 
       if (!leftEdge || !rightEdge || leftEdge.visualRight >= rightEdge.visualLeft) return null;
 
-      const left = xToPrice(leftEdge.visualRight);
-      const right = xToPrice(rightEdge.visualLeft);
+      const left = leftEdge.price;
+      const right = rightEdge.price;
       return {
         left,
         right,
