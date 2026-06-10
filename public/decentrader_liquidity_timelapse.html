@@ -944,8 +944,15 @@
         getFrameEvents(frameIndex - 1, { mode: 'active', includeContext: includeContextForGap }).bars,
         previousFrame
       );
-      const previousSignalBars = getGapBarsForSource(getFrameEvents(frameIndex - 1, { mode: 'active' }).bars, previousFrame);
-      const currentSignalBars = getGapBarsForSource(getFrameEvents(frameIndex, { mode: 'active' }).bars, currentFrame);
+      const includeContextForSignal = activeSource === 'open';
+      const previousSignalBars = getGapBarsForSource(
+        getFrameEvents(frameIndex - 1, { mode: 'active', includeContext: includeContextForSignal }).bars,
+        previousFrame
+      );
+      const currentSignalBars = getGapBarsForSource(
+        getFrameEvents(frameIndex, { mode: 'active', includeContext: includeContextForSignal }).bars,
+        currentFrame
+      );
       const previousGap = getVisualGapForBars(previousFrame, previousGapBars, xFor, xToPrice);
       if (!previousGap || !currentFrame || !Number.isFinite(currentFrame.price)) return null;
 
