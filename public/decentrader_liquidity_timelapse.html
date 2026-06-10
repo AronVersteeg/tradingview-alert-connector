@@ -939,13 +939,18 @@
 
       const previousFrame = payload.frames[frameIndex - 1];
       const currentFrame = payload.frames[frameIndex];
-      const previousBars = getGapBarsForSource(getFrameEvents(frameIndex - 1, { mode: 'active' }).bars, previousFrame);
-      const currentBars = getGapBarsForSource(getFrameEvents(frameIndex, { mode: 'active' }).bars, currentFrame);
-      const previousGap = getVisualGapForBars(previousFrame, previousBars, xFor, xToPrice);
+      const includeContextForGap = activeSource === 'open';
+      const previousGapBars = getGapBarsForSource(
+        getFrameEvents(frameIndex - 1, { mode: 'active', includeContext: includeContextForGap }).bars,
+        previousFrame
+      );
+      const previousSignalBars = getGapBarsForSource(getFrameEvents(frameIndex - 1, { mode: 'active' }).bars, previousFrame);
+      const currentSignalBars = getGapBarsForSource(getFrameEvents(frameIndex, { mode: 'active' }).bars, currentFrame);
+      const previousGap = getVisualGapForBars(previousFrame, previousGapBars, xFor, xToPrice);
       if (!previousGap || !currentFrame || !Number.isFinite(currentFrame.price)) return null;
 
-      const previousCounts = new Map(previousBars.map((bar) => [bar.key, bar.count]));
-      const entrants = currentBars
+      const previousCounts = new Map(previousSignalBars.map((bar) => [bar.key, bar.count]));
+      const entrants = currentSignalBars
         .filter((bar) => bar.count > (previousCounts.get(bar.key) || 0))
         .filter((bar) => bar.price > previousGap.left && bar.price < previousGap.right)
         .map((bar) => ({
@@ -1159,7 +1164,7 @@
       if (!previousFrame || !currentFrame) return [];
       if (!Number.isFinite(previousFrame.price) || !Number.isFinite(currentFrame.price)) return [];
 
-      const previous = getFrameEvents(frameIndex - 1, { mode: 'active' });
+      const previous = getFrameEvents(frameIndex - 1, { mode: 'active', includeContext: activeSource === 'open' });
       const previousGap = getVisualGapForBars(previousFrame, previous.bars, xFor, xToPrice);
       const previousZones = getTradeZones(previousFrame, previous.bars, previous.firstSeen, previousGap, minPrice, maxPrice);
       const hits = [];
@@ -1515,8 +1520,11 @@
       const includeContext = activeSource === 'open';
       const { bars, firstSeen } = getFrameEvents(frameIndex, { includeContext });
       const rawMonitorBars = getFrameEvents(frameIndex, { mode: 'active' }).bars;
-      const monitorBars = getGapBarsForSource(rawMonitorBars, frame);
-      const publicNoiseThreshold = publicMajorThreshold(rawMonitorBars);
+      const gapSourceBars = activeSource === 'open'
+        ? getFrameEvents(frameIndex, { mode: 'active', includeContext: true }).bars
+        : rawMonitorBars;
+      const monitorBars = getGapBarsForSource(gapSourceBars, frame);
+      const publicNoiseThreshold = publicMajorThreshold(gapSourceBars);
       const visibleBars = bars.filter((bar) => bar.price >= minPrice && bar.price <= maxPrice);
       const css = getComputedStyle(document.documentElement);
       const newColor = css.getPropertyValue('--new').trim();
