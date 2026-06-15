@@ -793,25 +793,37 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
 
     const maxLevels = decentraderMaxTpLevels();
     const nearTpMaxDistancePct = envFraction('DECENTRADER_TP1_MAX_DISTANCE_PCT', 0.045);
+    const stagedTpDistanceCaps = [
+      nearTpMaxDistancePct,
+      envFraction('DECENTRADER_TP2_MAX_DISTANCE_PCT', 0.09),
+      envFraction('DECENTRADER_TP3_MAX_DISTANCE_PCT', 0.14)
+    ];
     const nearTpMinimumScore = Math.max(2, strongestScore * 0.12);
-    const nearCandidate = eligible
-      .filter((zone) =>
-        zone.distance / Math.max(1, price) <= nearTpMaxDistancePct &&
-        (
-          zone.score >= nearTpMinimumScore ||
-          zone.leverages.length >= 2 ||
-          zone.peak ||
-          zone.fresh > 0
-        )
-      )
-      .sort((a, b) =>
-        a.distance - b.distance ||
-        (b.selectionScore || b.score) - (a.selectionScore || a.score) ||
-        b.score - a.score
-      )[0];
 
     const selected = new Map<number, TradeZone>();
-    if (nearCandidate) selected.set(nearCandidate.price, nearCandidate);
+
+    for (const cap of stagedTpDistanceCaps) {
+      if (selected.size >= maxLevels) break;
+
+      const stagedCandidate = eligible
+        .filter((zone) =>
+          !selected.has(zone.price) &&
+          zone.distance / Math.max(1, price) <= cap &&
+          (
+            zone.score >= nearTpMinimumScore ||
+            zone.leverages.length >= 2 ||
+            zone.peak ||
+            zone.fresh > 0
+          )
+        )
+        .sort((a, b) =>
+          a.distance - b.distance ||
+          (b.selectionScore || b.score) - (a.selectionScore || a.score) ||
+          b.score - a.score
+        )[0];
+
+      if (stagedCandidate) selected.set(stagedCandidate.price, stagedCandidate);
+    }
 
     for (const zone of eligible
       .sort((a, b) =>
