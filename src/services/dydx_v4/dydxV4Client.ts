@@ -65,6 +65,7 @@ type ExplicitTakeProfitLevel = {
 
 type PlacedConditionalOrder = {
   clientId: number;
+  size: number;
   goodTilBlockTime?: number;
 };
 
@@ -662,7 +663,7 @@ export class DydxV4Client extends AbstractDexClient {
       side,
       triggerPrice: trailStop,
       clientId: placedStop.clientId,
-      size,
+      size: placedStop.size,
       source: 'TRAIL',
       updatedAt: Date.now(),
       goodTilBlockTime: placedStop.goodTilBlockTime
@@ -676,6 +677,7 @@ export class DydxV4Client extends AbstractDexClient {
     );
     const shouldCancelOldStops = verified || this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT;
     let oldManagedStopCancelledBestEffort = false;
+    let remainingOldStops: any[] = [];
 
     if (shouldCancelOldStops) {
       if (!verified && this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT) {
@@ -687,6 +689,12 @@ export class DydxV4Client extends AbstractDexClient {
       }
 
       await this.cancelSpecificOrders(market, oldStopOrders);
+      remainingOldStops = await this.cancelOtherProtectiveStopsBestEffort(
+        market,
+        side,
+        placedStop.clientId,
+        'Replacing old Decentrader trailing stop.'
+      );
 
       const oldManagedAlreadyVisible = managedStop
         ? oldStopOrders.some((order: any) =>
@@ -723,6 +731,7 @@ export class DydxV4Client extends AbstractDexClient {
       verified,
       previousManagedStop: managedStop || null,
       oldVisibleStopCount: oldStopOrders.length,
+      remainingOldStopCount: remainingOldStops?.length ?? 0,
       oldManagedStopCancelledBestEffort
     };
   }
@@ -1368,7 +1377,7 @@ export class DydxV4Client extends AbstractDexClient {
       side,
       triggerPrice: trailStop,
       clientId: placedStop.clientId,
-      size,
+      size: placedStop.size,
       source: 'TRAIL',
       updatedAt: Date.now(),
       goodTilBlockTime: placedStop.goodTilBlockTime
@@ -1418,6 +1427,12 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     await this.cancelSpecificOrders(market, oldStopOrders);
+    const remainingOldStops = await this.cancelOtherProtectiveStopsBestEffort(
+      market,
+      side,
+      placedStop.clientId,
+      'Replacing old Render-managed stop with new fractal trail stop.'
+    );
 
     const oldManagedAlreadyVisible = oldManagedStop
       ? oldStopOrders.some((order: any) =>
@@ -1441,6 +1456,7 @@ export class DydxV4Client extends AbstractDexClient {
       placedClientId: placedStop.clientId,
       verified,
       oldVisibleStopCount: oldStopOrders.length,
+      remainingOldStopCount: remainingOldStops.length,
       oldManagedStopCancelledBestEffort: Boolean(oldManagedStop && !oldManagedAlreadyVisible)
     });
   }
@@ -2210,7 +2226,7 @@ export class DydxV4Client extends AbstractDexClient {
     const baseQuantumMultiplier = 10 ** (-1 * atomicResolution);
     const rawQuantums = size * baseQuantumMultiplier;
     const roundedQuantums =
-      Math.floor(rawQuantums / stepBaseQuantums) * stepBaseQuantums;
+      Math.floor((rawQuantums + stepBaseQuantums * 1e-9) / stepBaseQuantums) * stepBaseQuantums;
     const finalQuantums = Math.max(roundedQuantums, stepBaseQuantums);
     const stepSize = stepBaseQuantums / baseQuantumMultiplier;
     const roundedOrderSize = finalQuantums / baseQuantumMultiplier;
@@ -2520,7 +2536,7 @@ export class DydxV4Client extends AbstractDexClient {
       side,
       triggerPrice,
       clientId: placedStop.clientId,
-      size,
+      size: placedStop.size,
       source: 'STATIC',
       updatedAt: Date.now(),
       goodTilBlockTime: placedStop.goodTilBlockTime
@@ -2984,6 +3000,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     return {
       clientId,
+      size,
       goodTilBlockTime
     };
   }
@@ -3109,19 +3126,27 @@ export class DydxV4Client extends AbstractDexClient {
     triggerPrice: number,
     executionPrice: number
   ): Promise<PlacedConditionalOrder> {
+    const marketInfo = await this.getMarketInfoBestEffort(market);
+    const sizeCheck = this.getCorrectionOrderSizeCheck(market, size, marketInfo);
+    const submittedSize = sizeCheck.roundedOrderSize ?? size;
     const clientId = this.createClientId();
     const goodTilBlockTime = Math.floor(Date.now() / 1000) + this.SAFETY_STOP_LIFETIME_SECONDS;
 
     console.log('Submitting safety stop order:', {
       market,
       side,
-      size,
+      requestedSize: size,
+      size: submittedSize,
       triggerPrice,
       executionPrice,
       clientId,
       reduceOnly: true,
       orderType: OrderType.STOP_MARKET,
-      goodTilBlockTime
+      goodTilBlockTime,
+      minOrderSize: sizeCheck.minOrderSize,
+      roundedOrderSize: sizeCheck.roundedOrderSize,
+      stepSize: sizeCheck.stepSize,
+      sizeSource: sizeCheck.source
     });
 
     await this.submitDydxTransaction(
@@ -3132,7 +3157,7 @@ export class DydxV4Client extends AbstractDexClient {
         OrderType.STOP_MARKET,
         side,
         executionPrice,
-        size,
+        submittedSize,
         clientId,
         OrderTimeInForce.IOC,
         this.SAFETY_STOP_LIFETIME_SECONDS,
@@ -3144,18 +3169,24 @@ export class DydxV4Client extends AbstractDexClient {
       {
         market,
         side,
-        size,
+        requestedSize: size,
+        size: submittedSize,
         triggerPrice,
         executionPrice,
         clientId,
         reduceOnly: true,
         orderType: OrderType.STOP_MARKET,
-        goodTilBlockTime
+        goodTilBlockTime,
+        minOrderSize: sizeCheck.minOrderSize,
+        roundedOrderSize: sizeCheck.roundedOrderSize,
+        stepSize: sizeCheck.stepSize,
+        sizeSource: sizeCheck.source
       }
     );
 
     return {
       clientId,
+      size: submittedSize,
       goodTilBlockTime
     };
   }
@@ -3546,6 +3577,48 @@ export class DydxV4Client extends AbstractDexClient {
         });
       }
     }
+  }
+
+  private async cancelOtherProtectiveStopsBestEffort(
+    market: string,
+    side: OrderSide,
+    keepClientId: number,
+    reason: string
+  ): Promise<any[]> {
+    let remaining: any[] = [];
+
+    for (let poll = 1; poll <= this.SAFETY_STOP_VERIFY_POLLS; poll += 1) {
+      const orders = await this.getOpenOrdersForMarket(market);
+      remaining = this.getProtectiveStopOrdersFromOrders(orders)
+        .filter((order: any) => this.orderSideMatches(order, side))
+        .filter((order: any) => !this.orderClientIdMatches(order, keepClientId));
+
+      console.log(`Protective stop replacement verify ${poll}/${this.SAFETY_STOP_VERIFY_POLLS}`, {
+        market,
+        side,
+        keepClientId,
+        remainingOldStopCount: remaining.length,
+        reason
+      });
+
+      if (!remaining.length) {
+        return [];
+      }
+
+      await this.cancelSpecificOrders(market, remaining);
+      await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
+    }
+
+    console.warn('Protective stop replacement left older stop orders visible after retries. Check dYdX UI.', {
+      market,
+      side,
+      keepClientId,
+      remainingOldStopCount: remaining.length,
+      remainingOldStops: remaining.map((order: any) => this.summarizeOrder(order)),
+      reason
+    });
+
+    return remaining;
   }
 
   private async cancelOrderByFlags(
