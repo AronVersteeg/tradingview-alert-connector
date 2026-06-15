@@ -541,20 +541,12 @@ export class DydxV4Client extends AbstractDexClient {
     const managedStopCoversPosition =
       managedStop &&
       managedStop.size + this.TOLERANCE >= positionAbsSize;
-    if (
+    const managedStopMatchesLatest = Boolean(
       managedStop &&
       String(managedStop.side).toUpperCase() === String(side).toUpperCase() &&
       managedStopCoversPosition &&
       Math.abs(managedStop.triggerPrice - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
-    ) {
-      return {
-        outcome: 'UNCHANGED',
-        reason: 'Render-managed stop memory already matches the latest fractal trailing stop.',
-        positionSize: position.size,
-        trailStop,
-        visibility: 'MANAGED_MEMORY_ONLY'
-      };
-    }
+    );
 
     const executionPrice = this.getStopExecutionPrice(isLong, trailStop);
     const size = Math.max(positionAbsSize, managedStop?.size ?? 0);
@@ -602,13 +594,26 @@ export class DydxV4Client extends AbstractDexClient {
         });
       }
 
+      const remainingOldStops = Number.isFinite(visibleClientId)
+        ? await this.cancelOtherProtectiveStopsBestEffort(
+            market,
+            side,
+            visibleClientId,
+            'Latest protective stop already covers the position; cleaning up older duplicates.'
+          )
+        : [];
+
       return {
-        outcome: 'UNCHANGED',
-        reason: 'A visible dYdX protective stop already covers the full current position; Render-managed stop memory was refreshed.',
+        outcome: remainingOldStops.length ? 'UNCHANGED_WITH_DUPLICATES' : 'UNCHANGED',
+        reason: remainingOldStops.length
+          ? 'A visible dYdX protective stop covers the position, but older duplicate stops remain visible after cleanup retries.'
+          : 'A visible dYdX protective stop already covers the full current position; older duplicates were cleaned up.',
         positionSize: position.size,
         trailStop,
         stopSize: visibleSize,
         visibility: 'DYDX_OPEN_ORDER',
+        managedStopMatchesLatest,
+        remainingOldStopCount: remainingOldStops.length,
         matchedOrder: this.summarizeOrder(visibleCoveredStop)
       };
     }
