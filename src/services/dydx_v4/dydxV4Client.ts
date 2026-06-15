@@ -553,32 +553,38 @@ export class DydxV4Client extends AbstractDexClient {
     const openOrdersBefore = await this.getOpenOrdersForMarket(market);
     const protectiveStopOrders = this.getProtectiveStopOrdersFromOrders(openOrdersBefore)
       .filter((order: any) => this.orderSideMatches(order, side));
-    const visibleCoveredStop = protectiveStopOrders.find((order: any) => {
+    const matchingTriggerStops = protectiveStopOrders.filter((order: any) => {
       const existingTrigger = this.getOrderTriggerPrice(order);
-      const existingSize = this.parsePositiveNumber(
-        order.size ??
-        order.remainingSize ??
-        order.remaining_size ??
-        order.quantity ??
-        order.qty
-      );
 
       return (
         existingTrigger !== undefined &&
-        existingSize !== undefined &&
-        Math.abs(existingTrigger - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT &&
-        existingSize + this.TOLERANCE >= positionAbsSize
+        Math.abs(existingTrigger - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
       );
     });
+    const visibleCoveredStop = matchingTriggerStops
+      .map((order: any) => ({ order, size: this.getOrderSize(order) }))
+      .filter(({ size }) => size === undefined || size + this.TOLERANCE >= positionAbsSize)
+      .sort((a, b) => (b.size ?? 0) - (a.size ?? 0))[0]?.order;
+    const matchingTriggerKnownSize = matchingTriggerStops
+      .map((order: any) => this.getOrderSize(order))
+      .filter((value): value is number => value !== undefined)
+      .reduce((sum, value) => sum + value, 0);
+
+    if (!visibleCoveredStop && matchingTriggerKnownSize + this.TOLERANCE >= positionAbsSize) {
+      return {
+        outcome: 'UNCHANGED_WITH_DUPLICATES',
+        reason: 'Existing visible stops at the latest trigger already cover the position in aggregate; no additional stop was placed.',
+        positionSize: position.size,
+        trailStop,
+        aggregateStopSize: matchingTriggerKnownSize,
+        matchingStopCount: matchingTriggerStops.length,
+        visibility: 'DYDX_OPEN_ORDER_AGGREGATE',
+        matchedOrders: matchingTriggerStops.map((order: any) => this.summarizeOrder(order))
+      };
+    }
 
     if (visibleCoveredStop) {
-      const visibleSize = this.parsePositiveNumber(
-        visibleCoveredStop.size ??
-        visibleCoveredStop.remainingSize ??
-        visibleCoveredStop.remaining_size ??
-        visibleCoveredStop.quantity ??
-        visibleCoveredStop.qty
-      ) ?? positionAbsSize;
+      const visibleSize = this.getOrderSize(visibleCoveredStop) ?? positionAbsSize;
       const visibleClientId = this.getOrderClientId(visibleCoveredStop);
 
       if (Number.isFinite(visibleClientId)) {
@@ -621,13 +627,7 @@ export class DydxV4Client extends AbstractDexClient {
     const oldStopOrders = protectiveStopOrders
       .filter((order: any) => {
         const existingTrigger = this.getOrderTriggerPrice(order);
-        const existingSize = this.parsePositiveNumber(
-          order.size ??
-          order.remainingSize ??
-          order.remaining_size ??
-          order.quantity ??
-          order.qty
-        );
+        const existingSize = this.getOrderSize(order);
         const triggerMatches =
           existingTrigger !== undefined &&
           Math.abs(existingTrigger - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT;
@@ -3429,13 +3429,7 @@ export class DydxV4Client extends AbstractDexClient {
       const expectedSize = sizeCheck.roundedOrderSize ?? requestedSize;
       const matchIndex = unmatchedOrders.findIndex((order: any) => {
         const triggerPrice = this.getOrderTriggerPrice(order) ?? this.getOrderPrice(order);
-        const orderSize = this.parsePositiveNumber(
-          order.size ??
-          order.remainingSize ??
-          order.remaining_size ??
-          order.quantity ??
-          order.qty
-        );
+        const orderSize = this.getOrderSize(order);
 
         return (
           triggerPrice !== undefined &&
@@ -4137,6 +4131,7 @@ export class DydxV4Client extends AbstractDexClient {
       status: order.status,
       reduceOnly: order.reduceOnly ?? order.reduce_only,
       size: order.size,
+      parsedSize: this.getOrderSize(order),
       totalFilled: order.totalFilled ?? order.total_filled,
       price: order.price,
       triggerPrice: this.getOrderTriggerPrice(order),
@@ -4161,6 +4156,33 @@ export class DydxV4Client extends AbstractDexClient {
       order.order?.price ??
       order.order?.limitPrice ??
       order.order?.limit_price
+    );
+  }
+
+  private getOrderSize(order: any): number | undefined {
+    return this.parsePositiveNumber(
+      order.size ??
+      order.remainingSize ??
+      order.remaining_size ??
+      order.quantity ??
+      order.qty ??
+      order.baseSize ??
+      order.base_size ??
+      order.originalSize ??
+      order.original_size ??
+      order.totalSize ??
+      order.total_size ??
+      order.order?.size ??
+      order.order?.remainingSize ??
+      order.order?.remaining_size ??
+      order.order?.quantity ??
+      order.order?.qty ??
+      order.order?.baseSize ??
+      order.order?.base_size ??
+      order.order?.originalSize ??
+      order.order?.original_size ??
+      order.order?.totalSize ??
+      order.order?.total_size
     );
   }
 
