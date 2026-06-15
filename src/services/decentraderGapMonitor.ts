@@ -470,6 +470,29 @@ async function sendEmail(settings: SmtpSettings, subject: string, body: string):
   await new SmtpSession(settings).send(subject, body);
 }
 
+async function sendEmailBestEffort(
+  settings: SmtpSettings,
+  subject: string,
+  body: string
+): Promise<{ sent: boolean; error?: string }> {
+  try {
+    await sendEmail(settings, subject, body);
+    return { sent: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    console.error('Decentrader email send failed; monitor/trading will continue:', {
+      subject,
+      error: message
+    });
+
+    return {
+      sent: false,
+      error: message
+    };
+  }
+}
+
 function eventForRow(row: DecentraderRow, rowIndex: number, side: 'long' | 'short', leverage: number) {
   const prefix = `${side}${leverage}`;
   return {
@@ -2278,6 +2301,7 @@ export class DecentraderGapMonitor {
         emailConfigured: smtpSettingsFromEnv() !== undefined,
         emailSent: false,
         emailSentCount: 0,
+        emailErrors: [],
         autoTradeEnabled: decentraderAutoTradeEnabled(),
         tradeExecutorConfigured: this.tradeExecutor !== undefined,
         tradeAttempted: false,
@@ -2335,15 +2359,26 @@ export class DecentraderGapMonitor {
         if (emailDuplicate) {
           result.duplicate = true;
         } else if (smtpSettings) {
-          await sendEmail(
+          const emailResult = await sendEmailBestEffort(
             smtpSettings,
             `[${smtpSettings.jobName}] ${alert.timestampNl} | ${sideCounts(alert)}`,
             alertBody(alert, config.symbol)
           );
-          state.lastAlertSentSignature = signature;
-          state.lastAlertSentAt = nowNlIso();
-          result.emailSent = true;
-          result.emailSentCount += 1;
+
+          if (emailResult.sent) {
+            state.lastAlertSentSignature = signature;
+            state.lastAlertSentAt = nowNlIso();
+            result.emailSent = true;
+            result.emailSentCount += 1;
+          } else {
+            result.emailErrors.push({
+              type: 'gap-alert',
+              signature,
+              timestamp: alert.timestamp,
+              timestampNl: alert.timestampNl,
+              error: emailResult.error
+            });
+          }
         }
 
         await this.maybeExecuteTradeForAlert(alert, signature, state, result);
@@ -2376,16 +2411,28 @@ export class DecentraderGapMonitor {
         }
 
         if (smtpSettings) {
-          await sendEmail(
+          const emailResult = await sendEmailBestEffort(
             smtpSettings,
             `[${smtpSettings.jobName}] ${hit.timestampNl} | ${hit.label} hit ${money(hit.zone.price)}`,
             tpHitBody(hit, config.symbol)
           );
-          state.lastTpHitSentSignature = signature;
-          sentTpHitSignatures.add(signature);
-          state.lastTpHitSentAt = nowNlIso();
-          result.emailSent = true;
-          result.emailSentCount += 1;
+
+          if (emailResult.sent) {
+            state.lastTpHitSentSignature = signature;
+            sentTpHitSignatures.add(signature);
+            state.lastTpHitSentAt = nowNlIso();
+            result.emailSent = true;
+            result.emailSentCount += 1;
+          } else {
+            result.emailErrors.push({
+              type: 'tp-hit',
+              signature,
+              timestamp: hit.timestamp,
+              timestampNl: hit.timestampNl,
+              label: hit.label,
+              error: emailResult.error
+            });
+          }
         }
       }
       state.lastTpHitSentSignatures = Array.from(sentTpHitSignatures).slice(-50);
@@ -2723,6 +2770,7 @@ export class DecentraderGapMonitor {
           managedPosition.currentStopUpdatedAt = nowNlIso();
         }
 
+        console.log('Decentrader dynamic SL coverage sync:', result.dynamicSlSync);
         return;
       }
 

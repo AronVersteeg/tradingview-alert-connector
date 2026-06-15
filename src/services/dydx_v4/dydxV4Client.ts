@@ -553,6 +553,16 @@ export class DydxV4Client extends AbstractDexClient {
     const openOrdersBefore = await this.getOpenOrdersForMarket(market);
     const protectiveStopOrders = this.getProtectiveStopOrdersFromOrders(openOrdersBefore)
       .filter((order: any) => this.orderSideMatches(order, side));
+    const unknownTriggerCoveredStop = protectiveStopOrders
+      .map((order: any) => ({
+        order,
+        trigger: this.getOrderTriggerPrice(order),
+        size: this.getOrderSize(order)
+      }))
+      .find(({ trigger, size }) =>
+        trigger === undefined &&
+        (size === undefined || size + this.TOLERANCE >= positionAbsSize)
+      );
     const matchingTriggerStops = protectiveStopOrders.filter((order: any) => {
       const existingTrigger = this.getOrderTriggerPrice(order);
 
@@ -570,6 +580,26 @@ export class DydxV4Client extends AbstractDexClient {
       .filter((value): value is number => value !== undefined)
       .reduce((sum, value) => sum + value, 0);
 
+    if (managedStopMatchesLatest) {
+      const managedStopVisible = protectiveStopOrders.some((order: any) =>
+        this.orderClientIdMatches(order, managedStop!.clientId)
+      );
+
+      return {
+        outcome: 'UNCHANGED',
+        reason: managedStopVisible
+          ? 'Render-managed protective stop already matches the latest trigger and covers the position; no additional stop was placed.'
+          : 'Render-managed stop memory already matches the latest trigger and covers the position; no additional stop was placed while dYdX visibility catches up.',
+        positionSize: position.size,
+        trailStop,
+        stopSize: managedStop!.size,
+        visibility: managedStopVisible ? 'DYDX_OPEN_ORDER_AND_MEMORY' : 'RENDER_MEMORY',
+        managedStop,
+        matchingStopCount: matchingTriggerStops.length,
+        aggregateStopSize: matchingTriggerKnownSize
+      };
+    }
+
     if (!visibleCoveredStop && matchingTriggerKnownSize + this.TOLERANCE >= positionAbsSize) {
       return {
         outcome: 'UNCHANGED_WITH_DUPLICATES',
@@ -580,6 +610,18 @@ export class DydxV4Client extends AbstractDexClient {
         matchingStopCount: matchingTriggerStops.length,
         visibility: 'DYDX_OPEN_ORDER_AGGREGATE',
         matchedOrders: matchingTriggerStops.map((order: any) => this.summarizeOrder(order))
+      };
+    }
+
+    if (!visibleCoveredStop && matchingTriggerKnownSize <= this.TOLERANCE && unknownTriggerCoveredStop) {
+      return {
+        outcome: 'UNCHANGED',
+        reason: 'A visible protective stop covers the position but its trigger price could not be parsed; no additional stop was placed to avoid duplicate SL spam.',
+        positionSize: position.size,
+        trailStop,
+        stopSize: unknownTriggerCoveredStop.size,
+        visibility: 'DYDX_OPEN_ORDER_UNKNOWN_TRIGGER',
+        matchedOrder: this.summarizeOrder(unknownTriggerCoveredStop.order)
       };
     }
 
