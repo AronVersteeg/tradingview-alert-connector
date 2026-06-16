@@ -17,6 +17,8 @@ import { AlertObject } from '../../types';
 import 'dotenv/config';
 import config from 'config';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { AbstractDexClient } from '../abstractDexClient';
 
 type ProgressResult =
@@ -54,6 +56,10 @@ type ExtraTakeProfitLevel = {
   name: string;
   distancePct: number;
   remainingSizePct: number;
+};
+
+type ManagedOrdersState = {
+  stops?: Record<string, ManagedStop>;
 };
 
 type ExplicitTakeProfitLevel = {
@@ -237,6 +243,10 @@ export class DydxV4Client extends AbstractDexClient {
 
   private readonly managedStops = new Map<string, ManagedStop>();
   private readonly managedTakeProfits = new Map<string, ManagedTakeProfit[]>();
+
+  private readonly MANAGED_ORDERS_STATE_FILE =
+    process.env.DYDX_V4_MANAGED_ORDERS_STATE_FILE ||
+    path.join(process.cwd(), 'data', 'dydx-v4-managed-orders.json');
 
   private readonly TOLERANCE = parseEnvPositiveNumber(
     process.env.DYDX_V4_SIZE_TOLERANCE,
@@ -427,6 +437,8 @@ export class DydxV4Client extends AbstractDexClient {
   private readonly LONG_TERM_ORDER_FLAGS = 64;
 
   async init(): Promise<void> {
+    this.loadManagedOrdersState();
+
     this.wallet = await LocalWallet.fromMnemonic(
       process.env.DYDX_V4_MNEMONIC!,
       BECH32_PREFIX
@@ -631,7 +643,7 @@ export class DydxV4Client extends AbstractDexClient {
       const visibleClientId = this.getOrderClientId(visibleCoveredStop);
 
       if (Number.isFinite(visibleClientId)) {
-        this.managedStops.set(market, {
+        this.setManagedStop(market, {
           market,
           side,
           triggerPrice: trailStop,
@@ -706,7 +718,7 @@ export class DydxV4Client extends AbstractDexClient {
       executionPrice
     );
 
-    this.managedStops.set(market, {
+    this.setManagedStop(market, {
       market,
       side,
       triggerPrice: trailStop,
@@ -1230,7 +1242,7 @@ export class DydxV4Client extends AbstractDexClient {
       });
     }
 
-    this.managedStops.set(market, {
+    this.setManagedStop(market, {
       market,
       side,
       triggerPrice: manualStop,
@@ -1420,7 +1432,7 @@ export class DydxV4Client extends AbstractDexClient {
       executionPrice
     );
 
-    this.managedStops.set(market, {
+    this.setManagedStop(market, {
       market,
       side,
       triggerPrice: trailStop,
@@ -1524,8 +1536,94 @@ export class DydxV4Client extends AbstractDexClient {
       await this.cancelManagedTakeProfitBestEffort(market, managedTakeProfit, reason);
     }
 
-    this.managedStops.delete(market);
+    this.deleteManagedStop(market);
     this.managedTakeProfits.delete(market);
+  }
+
+  private loadManagedOrdersState(): void {
+    try {
+      if (!fs.existsSync(this.MANAGED_ORDERS_STATE_FILE)) {
+        return;
+      }
+
+      const raw = fs.readFileSync(this.MANAGED_ORDERS_STATE_FILE, 'utf8');
+      const state = JSON.parse(raw) as ManagedOrdersState;
+      const stops = state?.stops || {};
+
+      this.managedStops.clear();
+
+      for (const [marketKey, stop] of Object.entries(stops)) {
+        if (
+          stop &&
+          Number.isFinite(Number(stop.clientId)) &&
+          Number.isFinite(Number(stop.triggerPrice)) &&
+          Number.isFinite(Number(stop.size))
+        ) {
+          const market = this.normalizeMarket(stop.market || marketKey);
+          this.managedStops.set(market, {
+            ...stop,
+            market,
+            triggerPrice: Number(stop.triggerPrice),
+            clientId: Number(stop.clientId),
+            size: Number(stop.size),
+            updatedAt: Number(stop.updatedAt || Date.now()),
+            goodTilBlockTime:
+              stop.goodTilBlockTime === undefined
+                ? undefined
+                : Number(stop.goodTilBlockTime)
+          });
+        }
+      }
+
+      console.log('Loaded dYdX managed order state.', {
+        file: this.MANAGED_ORDERS_STATE_FILE,
+        managedStopCount: this.managedStops.size
+      });
+    } catch (error) {
+      console.warn('Failed to load dYdX managed order state; continuing with empty memory.', {
+        file: this.MANAGED_ORDERS_STATE_FILE,
+        error: this.serializeError(error)
+      });
+    }
+  }
+
+  private saveManagedOrdersState(): void {
+    try {
+      const dir = path.dirname(this.MANAGED_ORDERS_STATE_FILE);
+      fs.mkdirSync(dir, { recursive: true });
+
+      const stops: Record<string, ManagedStop> = {};
+      for (const [market, stop] of this.managedStops.entries()) {
+        stops[market] = stop;
+      }
+
+      fs.writeFileSync(
+        this.MANAGED_ORDERS_STATE_FILE,
+        JSON.stringify({ stops }, null, 2)
+      );
+    } catch (error) {
+      console.warn('Failed to save dYdX managed order state.', {
+        file: this.MANAGED_ORDERS_STATE_FILE,
+        error: this.serializeError(error)
+      });
+    }
+  }
+
+  private setManagedStop(market: string, stop: ManagedStop): void {
+    const normalizedMarket = this.normalizeMarket(market || stop.market);
+    const normalizedStop = {
+      ...stop,
+      market: normalizedMarket,
+      updatedAt: stop.updatedAt || Date.now()
+    };
+
+    this.managedStops.set(normalizedMarket, normalizedStop);
+    this.saveManagedOrdersState();
+  }
+
+  private deleteManagedStop(market: string): void {
+    this.managedStops.delete(this.normalizeMarket(market));
+    this.saveManagedOrdersState();
   }
 
   private async cancelManagedStopBestEffort(
@@ -2596,7 +2694,7 @@ export class DydxV4Client extends AbstractDexClient {
       goodTilBlockTime: placedStop.goodTilBlockTime
     };
 
-    this.managedStops.set(market, managedStop);
+    this.setManagedStop(market, managedStop);
 
     await this.waitForSafetyStopVisibleBestEffort(
       market,
@@ -3578,7 +3676,7 @@ export class DydxV4Client extends AbstractDexClient {
       }
     }
 
-    this.managedStops.delete(market);
+    this.deleteManagedStop(market);
     this.managedTakeProfits.delete(market);
   }
 

@@ -153,6 +153,7 @@ type MonitorStatus = {
   dynamicTpEnabled?: boolean;
   hasDynamicTpExecutor?: boolean;
   dynamicSlEnabled?: boolean;
+  dynamicSlLiveUpdatesEnabled?: boolean;
   hasDynamicSlExecutor?: boolean;
   lastStartedAt?: string;
   lastFinishedAt?: string;
@@ -2262,6 +2263,7 @@ export class DecentraderGapMonitor {
       dynamicTpEnabled: decentraderDynamicTpEnabled(),
       hasDynamicTpExecutor: typeof this.tradeExecutor?.syncTakeProfits === 'function',
       dynamicSlEnabled: decentraderDynamicSlEnabled(),
+      dynamicSlLiveUpdatesEnabled: decentraderDynamicSlLiveUpdatesEnabled(),
       hasDynamicSlExecutor: typeof this.tradeExecutor?.syncTrailingStop === 'function',
       lastTradeDecision: state.lastTradeDecision
     };
