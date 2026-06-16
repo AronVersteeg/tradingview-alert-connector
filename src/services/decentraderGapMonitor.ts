@@ -1265,6 +1265,10 @@ function decentraderDynamicSlCoverageSyncEnabled(): boolean {
   return parseBool(process.env.DECENTRADER_DYNAMIC_SL_COVERAGE_SYNC_ENABLED, false);
 }
 
+function decentraderDynamicSlLiveUpdatesEnabled(): boolean {
+  return parseBool(process.env.DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED, false);
+}
+
 function decentraderDynamicSlMinImprovementPct(): number {
   return envFraction('DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT', 0.0025);
 }
@@ -2792,6 +2796,24 @@ export class DecentraderGapMonitor {
         }
 
         console.log('Decentrader dynamic SL coverage sync:', result.dynamicSlSync);
+        return;
+      }
+
+      if (!decentraderDynamicSlLiveUpdatesEnabled()) {
+        result.dynamicSlSync = {
+          outcome: 'READY',
+          reason: 'Latest confirmed fractal stop improves the managed SL, but live dynamic SL order updates are disabled to avoid duplicate dYdX conditional stops while indexer visibility is unreliable.',
+          market,
+          position,
+          previousStop: managedPosition.currentStop,
+          candidateStop,
+          liveUpdatesEnabled: false,
+          timestamp: plan.timestamp,
+          timestampNl: plan.timestampNl,
+          stop: directionalPlan.stop
+        };
+
+        console.log('Decentrader dynamic SL live update skipped:', result.dynamicSlSync);
         return;
       }
 

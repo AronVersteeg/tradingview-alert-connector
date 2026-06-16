@@ -157,6 +157,7 @@ type CorrectionOrderSizeCheck = {
   roundedOrderSize?: number;
   stepSize?: number;
   source: string;
+  roundingMode?: 'floor' | 'ceil';
 };
 
 type MarketOrderGoodTilBlock = {
@@ -2254,7 +2255,8 @@ export class DydxV4Client extends AbstractDexClient {
   private getCorrectionOrderSizeCheck(
     market: string,
     size: number,
-    marketInfo?: any
+    marketInfo?: any,
+    roundingMode: 'floor' | 'ceil' = 'floor'
   ): CorrectionOrderSizeCheck {
     const atomicResolution = Number(marketInfo?.atomicResolution);
     const stepBaseQuantums = Number(marketInfo?.stepBaseQuantums);
@@ -2272,8 +2274,12 @@ export class DydxV4Client extends AbstractDexClient {
 
     const baseQuantumMultiplier = 10 ** (-1 * atomicResolution);
     const rawQuantums = size * baseQuantumMultiplier;
-    const roundedQuantums =
-      Math.floor((rawQuantums + stepBaseQuantums * 1e-9) / stepBaseQuantums) * stepBaseQuantums;
+    const rawSteps = rawQuantums / stepBaseQuantums;
+    const roundedSteps =
+      roundingMode === 'ceil'
+        ? Math.ceil(rawSteps - 1e-9)
+        : Math.floor(rawSteps + 1e-9);
+    const roundedQuantums = roundedSteps * stepBaseQuantums;
     const finalQuantums = Math.max(roundedQuantums, stepBaseQuantums);
     const stepSize = stepBaseQuantums / baseQuantumMultiplier;
     const roundedOrderSize = finalQuantums / baseQuantumMultiplier;
@@ -2283,7 +2289,8 @@ export class DydxV4Client extends AbstractDexClient {
       minOrderSize: stepSize,
       roundedOrderSize,
       stepSize,
-      source: `DYDX_MARKET_INFO:${this.normalizeMarket(market)}`
+      source: `DYDX_MARKET_INFO:${this.normalizeMarket(market)}`,
+      roundingMode
     };
   }
 
@@ -3174,7 +3181,7 @@ export class DydxV4Client extends AbstractDexClient {
     executionPrice: number
   ): Promise<PlacedConditionalOrder> {
     const marketInfo = await this.getMarketInfoBestEffort(market);
-    const sizeCheck = this.getCorrectionOrderSizeCheck(market, size, marketInfo);
+    const sizeCheck = this.getCorrectionOrderSizeCheck(market, size, marketInfo, 'ceil');
     const submittedSize = sizeCheck.roundedOrderSize ?? size;
     const clientId = this.createClientId();
     const goodTilBlockTime = Math.floor(Date.now() / 1000) + this.SAFETY_STOP_LIFETIME_SECONDS;
