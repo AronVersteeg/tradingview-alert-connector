@@ -147,6 +147,7 @@ type MonitorStatus = {
   hasTradeExecutor?: boolean;
   tradeRiskPct?: number;
   tradeRiskUsd?: number;
+  tradeRiskUsdCapByPct?: boolean;
   slMaxDistancePct?: number;
   tpMaxLevels?: number;
   tpAllocation?: 'fixed-fractions' | 'map-weighted';
@@ -1339,6 +1340,10 @@ function decentraderTradeRiskUsd(): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function decentraderTradeRiskUsdCapByPct(): boolean {
+  return parseBool(process.env.DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT, false);
+}
+
 function decentraderTradeRiskBudget(equity: number): {
   riskBudgetUsd: number;
   riskPct: number;
@@ -1351,12 +1356,15 @@ function decentraderTradeRiskBudget(equity: number): {
   const configuredRiskUsd = decentraderTradeRiskUsd();
 
   if (configuredRiskUsd !== undefined) {
-    const riskBudgetUsd = Math.min(configuredRiskUsd, pctBudget);
+    const capByPct = decentraderTradeRiskUsdCapByPct();
+    const riskBudgetUsd = capByPct
+      ? Math.min(configuredRiskUsd, pctBudget)
+      : configuredRiskUsd;
     return {
       riskBudgetUsd,
       riskPct: pct,
       configuredRiskUsd,
-      cappedByPct: riskBudgetUsd < configuredRiskUsd,
+      cappedByPct: capByPct && riskBudgetUsd < configuredRiskUsd,
       source: 'fixed-usd'
     };
   }
@@ -2257,6 +2265,7 @@ export class DecentraderGapMonitor {
       hasTradeExecutor: this.tradeExecutor !== undefined,
       tradeRiskPct: decentraderTradeRiskPct(),
       tradeRiskUsd: decentraderTradeRiskUsd(),
+      tradeRiskUsdCapByPct: decentraderTradeRiskUsdCapByPct(),
       slMaxDistancePct: decentraderSlMaxDistancePct(),
       tpMaxLevels: decentraderMaxTpLevels(),
       tpAllocation: decentraderTpAllocationMode(),
