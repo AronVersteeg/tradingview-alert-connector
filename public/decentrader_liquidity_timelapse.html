@@ -212,6 +212,90 @@
       color: var(--new);
     }
 
+    .liquidity-counter-card {
+      grid-column: span 3;
+    }
+
+    .liquidity-counter-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+
+    .liquidity-window-select {
+      width: 74px;
+      height: 30px;
+      padding: 0 8px;
+      font-size: 12px;
+    }
+
+    .liquidity-counter-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 86px minmax(0, 1fr);
+      overflow: hidden;
+      border: 1px solid rgba(78, 92, 112, 0.54);
+      border-radius: 7px;
+      background: rgba(7, 10, 15, 0.36);
+    }
+
+    .liquidity-counter-cell {
+      min-width: 0;
+      padding: 8px 10px;
+      text-align: center;
+      border-left: 1px solid rgba(78, 92, 112, 0.54);
+    }
+
+    .liquidity-counter-cell:first-child {
+      border-left: 0;
+    }
+
+    .liquidity-counter-cell--long {
+      background: linear-gradient(180deg, rgba(0, 200, 120, 0.18), rgba(0, 200, 120, 0.06));
+    }
+
+    .liquidity-counter-cell--short {
+      background: linear-gradient(180deg, rgba(255, 85, 95, 0.26), rgba(255, 85, 95, 0.08));
+    }
+
+    .liquidity-counter-cell.is-dominant-long {
+      background: linear-gradient(180deg, rgba(0, 220, 132, 0.32), rgba(0, 220, 132, 0.12));
+      border-color: rgba(0, 220, 132, 0.48);
+    }
+
+    .liquidity-counter-cell.is-dominant-short {
+      background: linear-gradient(180deg, rgba(255, 78, 88, 0.42), rgba(255, 78, 88, 0.14));
+      border-color: rgba(255, 78, 88, 0.52);
+    }
+
+    .liquidity-counter-value {
+      color: var(--text);
+      font-size: 21px;
+      font-weight: 760;
+      line-height: 1.05;
+      white-space: nowrap;
+    }
+
+    .liquidity-counter-label,
+    .liquidity-counter-meta {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+    }
+
+    .liquidity-counter-label {
+      margin-top: 4px;
+      text-transform: uppercase;
+    }
+
+    .liquidity-counter-meta {
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .stage {
       position: relative;
       min-height: 0;
@@ -360,6 +444,23 @@
         grid-column: 1 / -1;
       }
 
+      .liquidity-counter-card {
+        grid-column: 1 / -1;
+      }
+
+      .liquidity-counter-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .liquidity-counter-cell {
+        border-left: 0;
+        border-top: 1px solid rgba(78, 92, 112, 0.54);
+      }
+
+      .liquidity-counter-cell:first-child {
+        border-top: 0;
+      }
+
       .stage {
         display: flex;
         flex-direction: column;
@@ -488,6 +589,38 @@
         <div class="gap-label">Gap alert</div>
         <div class="gap-alert" id="gapAlert">No intrusions</div>
       </div>
+      <div class="gap-card liquidity-counter-card">
+        <div class="liquidity-counter-head">
+          <div>
+            <div class="gap-label">New liquidation buildup</div>
+            <div class="gap-status" id="liquidityCounterStatus">Waiting for data</div>
+          </div>
+          <select class="liquidity-window-select" id="liquidityWindow" aria-label="Liquidation buildup timeframe">
+            <option value="24">24h</option>
+            <option value="12">12h</option>
+            <option value="4">4h</option>
+            <option value="2">2h</option>
+            <option value="1">1h</option>
+          </select>
+        </div>
+        <div class="liquidity-counter-grid">
+          <div class="liquidity-counter-cell liquidity-counter-cell--long" id="liqLongCell">
+            <div class="liquidity-counter-value" id="liqLongValue">-</div>
+            <div class="liquidity-counter-label">Long side</div>
+            <div class="liquidity-counter-meta" id="liqLongMeta">-</div>
+          </div>
+          <div class="liquidity-counter-cell">
+            <div class="liquidity-counter-value" id="liqWindowValue">24h</div>
+            <div class="liquidity-counter-label">Window</div>
+            <div class="liquidity-counter-meta" id="liqTotalMeta">-</div>
+          </div>
+          <div class="liquidity-counter-cell liquidity-counter-cell--short" id="liqShortCell">
+            <div class="liquidity-counter-value" id="liqShortValue">-</div>
+            <div class="liquidity-counter-label">Short side</div>
+            <div class="liquidity-counter-meta" id="liqShortMeta">-</div>
+          </div>
+        </div>
+      </div>
       <div class="gap-card gap-card--wide">
         <div class="gap-label">Trade zones</div>
         <div class="gap-value" id="tradeZoneValue">-</div>
@@ -577,6 +710,16 @@
     const gapRight = document.getElementById('gapRight');
     const liveStatus = document.getElementById('liveStatus');
     const gapAlert = document.getElementById('gapAlert');
+    const liquidityWindow = document.getElementById('liquidityWindow');
+    const liquidityCounterStatus = document.getElementById('liquidityCounterStatus');
+    const liqLongCell = document.getElementById('liqLongCell');
+    const liqLongValue = document.getElementById('liqLongValue');
+    const liqLongMeta = document.getElementById('liqLongMeta');
+    const liqWindowValue = document.getElementById('liqWindowValue');
+    const liqTotalMeta = document.getElementById('liqTotalMeta');
+    const liqShortCell = document.getElementById('liqShortCell');
+    const liqShortValue = document.getElementById('liqShortValue');
+    const liqShortMeta = document.getElementById('liqShortMeta');
     const tradeZoneValue = document.getElementById('tradeZoneValue');
     const tradeZoneStatus = document.getElementById('tradeZoneStatus');
     const tradePlanValue = document.getElementById('tradePlanValue');
@@ -628,6 +771,21 @@
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return '$0.00';
       return '$' + parsed.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function compactUsd(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed <= 0) return '$0';
+      if (parsed >= 1_000_000_000) return '$' + (parsed / 1_000_000_000).toFixed(parsed >= 10_000_000_000 ? 0 : 1) + 'B';
+      if (parsed >= 1_000_000) return '$' + (parsed / 1_000_000).toFixed(parsed >= 10_000_000 ? 0 : 1) + 'M';
+      if (parsed >= 1_000) return '$' + (parsed / 1_000).toFixed(parsed >= 10_000 ? 0 : 1) + 'K';
+      return money2(parsed);
+    }
+
+    function histoUnits(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed <= 0) return '0u';
+      return Math.round(parsed).toLocaleString('en-US') + 'u';
     }
 
     function pct(value) {
@@ -972,6 +1130,120 @@
       const left = entrants.filter((bar) => bar.gapSide === 'left');
       const right = entrants.filter((bar) => bar.gapSide === 'right');
       return { previousGap, entrants, left, right };
+    }
+
+    function getLiquiditySplit(frame, gap) {
+      if (gap && Number.isFinite(gap.left) && Number.isFinite(gap.right)) {
+        return {
+          mode: 'gap edges',
+          longMax: gap.left,
+          shortMin: gap.right,
+        };
+      }
+
+      const price = Number(frame?.price);
+      if (Number.isFinite(price)) {
+        return {
+          mode: 'current price',
+          longMax: price,
+          shortMin: price,
+        };
+      }
+
+      return null;
+    }
+
+    function estimateHistoUsd(bar, count) {
+      const price = Number(bar?.price);
+      if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(count) || count <= 0) return 0;
+      return price * count;
+    }
+
+    function getLiquidityBuildupStats(frameIndex, frame, gap) {
+      const hours = Math.max(1, Number(liquidityWindow?.value) || 24);
+      const split = getLiquiditySplit(frame, gap);
+      const empty = {
+        hours,
+        startFrame: frame,
+        endFrame: frame,
+        split,
+        longUnits: 0,
+        shortUnits: 0,
+        longUsd: 0,
+        shortUsd: 0,
+        ignoredUnits: 0,
+      };
+      if (!payload || !frame || !split || frameIndex <= 0) return empty;
+
+      const includeContext = activeSource === 'open';
+      const startIndex = Math.max(1, frameIndex - hours + 1);
+      const stats = {
+        ...empty,
+        startFrame: payload.frames[startIndex],
+        endFrame: frame,
+      };
+
+      for (let index = startIndex; index <= frameIndex; index += 1) {
+        const previousBars = getGapBarsForSource(
+          getFrameEvents(index - 1, { mode: 'active', includeContext }).bars,
+          payload.frames[index - 1]
+        );
+        const currentBars = getGapBarsForSource(
+          getFrameEvents(index, { mode: 'active', includeContext }).bars,
+          payload.frames[index]
+        );
+        const previousCounts = new Map(previousBars.map((bar) => [bar.key, bar.count || 0]));
+
+        for (const bar of currentBars) {
+          const newCount = Math.max(0, (bar.count || 0) - (previousCounts.get(bar.key) || 0));
+          if (!newCount) continue;
+
+          if (bar.side === 'L' && bar.price <= split.longMax) {
+            stats.longUnits += newCount;
+            stats.longUsd += estimateHistoUsd(bar, newCount);
+          } else if (bar.side === 'S' && bar.price >= split.shortMin) {
+            stats.shortUnits += newCount;
+            stats.shortUsd += estimateHistoUsd(bar, newCount);
+          } else {
+            stats.ignoredUnits += newCount;
+          }
+        }
+      }
+
+      return stats;
+    }
+
+    function updateLiquidityCounter(frameIndex, frame, gap) {
+      const stats = getLiquidityBuildupStats(frameIndex, frame, gap);
+      const totalUnits = stats.longUnits + stats.shortUnits;
+      const totalUsd = stats.longUsd + stats.shortUsd;
+      const longDominant = stats.longUnits > stats.shortUnits * 1.08;
+      const shortDominant = stats.shortUnits > stats.longUnits * 1.08;
+
+      liqLongCell.classList.toggle('is-dominant-long', longDominant);
+      liqShortCell.classList.toggle('is-dominant-short', shortDominant);
+      liqLongValue.textContent = histoUnits(stats.longUnits);
+      liqShortValue.textContent = histoUnits(stats.shortUnits);
+      liqWindowValue.textContent = `${stats.hours}h`;
+      liqLongMeta.textContent = `${compactUsd(stats.longUsd)} est.`;
+      liqShortMeta.textContent = `${compactUsd(stats.shortUsd)} est.`;
+      liqTotalMeta.textContent = `${histoUnits(totalUnits)} | ${compactUsd(totalUsd)}`;
+
+      if (!frame || !stats.split) {
+        liquidityCounterStatus.textContent = 'Waiting for data';
+        return;
+      }
+
+      const dominance = longDominant
+        ? 'long overhand'
+        : shortDominant
+          ? 'short overhand'
+          : totalUnits
+            ? 'balanced'
+            : 'no new buildup';
+      const start = stats.startFrame?.t ? nlTime(stats.startFrame.t, false) : '-';
+      const end = stats.endFrame?.t ? nlTime(stats.endFrame.t, false) : '-';
+      liquidityCounterStatus.textContent = `${dominance} | ${start}-${end} | split by ${stats.split.mode}`;
     }
 
     function formatZone(zone) {
@@ -1711,6 +1983,7 @@
 
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       updateGapMonitor(frame, gap, intrusion);
+      updateLiquidityCounter(frameIndex, frame, gap);
       updateTradeZoneMonitor(frame, gap, tradeZones, tpHits);
       updateTradePlanMonitor(frame);
       maybeSendGapAlert(frameIndex, frame, intrusion);
@@ -1870,7 +2143,7 @@
     }
 
     function wireViewer() {
-      for (const input of [frameInput, modeInput, sideInput, levInput]) {
+      for (const input of [frameInput, modeInput, sideInput, levInput, liquidityWindow]) {
         input.addEventListener('input', draw);
       }
       prevHourButton.addEventListener('click', () => stepFrame(-1));
