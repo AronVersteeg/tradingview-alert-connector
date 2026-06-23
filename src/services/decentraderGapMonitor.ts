@@ -65,6 +65,29 @@ type TpHit = {
   zone: TradeZone;
 };
 
+type LiquidityBalanceDirection = 'long' | 'short' | 'balanced';
+
+type LiquidityBalanceStats = {
+  timestamp: string;
+  timestampNl: string;
+  price: number;
+  windowHours: number;
+  splitMode: 'gap edges' | 'current price';
+  longUsd: number;
+  shortUsd: number;
+  totalUsd: number;
+  longShare: number;
+  shortShare: number;
+  netUsd: number;
+  direction: LiquidityBalanceDirection;
+  previousDirection?: 'long' | 'short';
+  gap?: {
+    left: number;
+    right: number;
+    width: number;
+  };
+};
+
 type TpBacktestOptions = {
   lookaheadBars?: number;
   maxTrades?: number;
@@ -184,6 +207,11 @@ type AlertState = {
   lastTpHitSentSignature?: string;
   lastTpHitSentSignatures?: string[];
   lastTpHitSentAt?: string;
+  lastLiquidityBalanceDirection?: LiquidityBalanceDirection;
+  lastLiquidityBalanceNonNeutralDirection?: 'long' | 'short';
+  lastLiquidityBalanceTimestamp?: string;
+  lastLiquidityBalanceFlipSentSignature?: string;
+  lastLiquidityBalanceFlipSentAt?: string;
   lastTradeExecutedSignature?: string;
   lastTradeExecutedAt?: string;
   lastTradeExecutionError?: string;
@@ -933,6 +961,135 @@ function tpHitsSince(rows: DecentraderRow[], lastDataTimestamp?: string): TpHit[
   }
 
   return hits;
+}
+
+function compactMoney(value: number | undefined): string {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return '$0';
+  if (parsed >= 1_000_000_000) {
+    return '$' + (parsed / 1_000_000_000).toFixed(parsed >= 10_000_000_000 ? 0 : 1) + 'B';
+  }
+  if (parsed >= 1_000_000) {
+    return '$' + (parsed / 1_000_000).toFixed(parsed >= 10_000_000 ? 0 : 1) + 'M';
+  }
+  if (parsed >= 1_000) {
+    return '$' + (parsed / 1_000).toFixed(parsed >= 10_000 ? 0 : 1) + 'K';
+  }
+  return '$' + parsed.toFixed(2);
+}
+
+function liquidityShare(value: number, total: number): number {
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return 0;
+  return value / total;
+}
+
+function liquidityBalanceSignature(stats: LiquidityBalanceStats): string {
+  return [
+    stats.timestamp,
+    stats.previousDirection || '-',
+    stats.direction,
+    Math.round(stats.longUsd),
+    Math.round(stats.shortUsd),
+    stats.splitMode
+  ].join('|');
+}
+
+function liquidityFlipLabel(previous: 'long' | 'short' | undefined, current: LiquidityBalanceDirection): string {
+  if (!previous || current === 'balanced') return 'FLIP';
+  return `FLIP ${previous.toUpperCase()}-${current.toUpperCase()}`;
+}
+
+function latestOneHourLiquidityBalance(rows: DecentraderRow[]): LiquidityBalanceStats | undefined {
+  const frameIndex = rows.length - 1;
+  if (frameIndex <= 0) return undefined;
+
+  const previousFrame = rows[frameIndex - 1];
+  const currentFrame = rows[frameIndex];
+  const price = parseNumber(currentFrame?.ohlc4);
+  if (price === undefined) return undefined;
+
+  const previousBars = activeBarsForFrame(rows, frameIndex - 1);
+  const currentBars = activeBarsForFrame(rows, frameIndex);
+  const gap = cleanGapForBars(currentFrame, currentBars);
+  const split = gap
+    ? { mode: 'gap edges' as const, longMax: gap.left, shortMin: gap.right }
+    : { mode: 'current price' as const, longMax: price, shortMin: price };
+  const previousCounts = new Map(previousBars.map((bar) => [bar.key, bar.count || 0]));
+
+  let longUsd = 0;
+  let shortUsd = 0;
+
+  for (const bar of currentBars) {
+    const newCount = Math.max(0, (bar.count || 0) - (previousCounts.get(bar.key) || 0));
+    if (!newCount) continue;
+
+    const estimatedUsd = bar.price * newCount;
+    if (bar.side === 'L' && bar.price <= split.longMax) {
+      longUsd += estimatedUsd;
+    } else if (bar.side === 'S' && bar.price >= split.shortMin) {
+      shortUsd += estimatedUsd;
+    }
+  }
+
+  const totalUsd = longUsd + shortUsd;
+  const longShare = liquidityShare(longUsd, totalUsd);
+  const shortShare = liquidityShare(shortUsd, totalUsd);
+  const dominanceBuffer = 1.08;
+  const direction: LiquidityBalanceDirection =
+    longUsd > shortUsd * dominanceBuffer
+      ? 'long'
+      : shortUsd > longUsd * dominanceBuffer
+        ? 'short'
+        : 'balanced';
+
+  return {
+    timestamp: String(currentFrame.timestamp || ''),
+    timestampNl: nlTime(currentFrame.timestamp),
+    price,
+    windowHours: 1,
+    splitMode: split.mode,
+    longUsd,
+    shortUsd,
+    totalUsd,
+    longShare,
+    shortShare,
+    netUsd: Math.abs(longUsd - shortUsd),
+    direction,
+    gap: gap
+      ? {
+          left: gap.left,
+          right: gap.right,
+          width: gap.width
+        }
+      : undefined
+  };
+}
+
+function liquidityBalanceFlipBody(stats: LiquidityBalanceStats, symbol: string): string {
+  const flipLabel = liquidityFlipLabel(stats.previousDirection, stats.direction);
+  const lines = [
+    flipLabel,
+    '',
+    `Decentrader ${symbol.toUpperCase()} 1H liquidity balance flip`,
+    `Time: ${stats.timestampNl} (${stats.timestamp} UTC)`,
+    `Flip: ${stats.previousDirection?.toUpperCase()} -> ${stats.direction.toUpperCase()}`,
+    `Price: ${money(stats.price)}`,
+    `Long side: ${compactMoney(stats.longUsd)} (${Math.round(stats.longShare * 100)}% share)`,
+    `Short side: ${compactMoney(stats.shortUsd)} (${Math.round(stats.shortShare * 100)}% share)`,
+    `Net difference: ${compactMoney(stats.netUsd)}`,
+    `Window: ${stats.windowHours}H`,
+    `Split: ${stats.splitMode}`
+  ];
+
+  if (stats.gap) {
+    lines.push(
+      `Gap: ${money(stats.gap.left)} -> ${money(stats.gap.right)} (${money(stats.gap.width)})`
+    );
+  }
+
+  lines.push('', 'Bron: https://www.decentrader.com/liquidity-maps/?coin=btc');
+  lines.push('Let op: dit is een liquidity-balance event, geen automatisch trade-advies.');
+  return lines.join('\n');
 }
 
 function rowHighLow(row: DecentraderRow): { high: number; low: number; price: number } | undefined {
@@ -2332,12 +2489,72 @@ export class DecentraderGapMonitor {
         tradeDecision: null,
         dynamicSlSync: null,
         dynamicTpSync: null,
+        liquidityBalance: null,
+        liquidityBalanceFlip: null,
+        liquidityBalanceFlipCount: 0,
         lastTradeDecision: state.lastTradeDecision || null,
         duplicate: false
       };
 
       await this.maybeSyncDynamicStopLoss(state, result);
       await this.maybeSyncDynamicTakeProfits(state, result);
+
+      const smtpSettings = smtpSettingsFromEnv();
+      const liquidityBalance = latestOneHourLiquidityBalance(rows);
+      if (liquidityBalance) {
+        const previousNonNeutral = state.lastLiquidityBalanceNonNeutralDirection;
+        liquidityBalance.previousDirection = previousNonNeutral;
+        const flipped =
+          liquidityBalance.direction !== 'balanced' &&
+          previousNonNeutral !== undefined &&
+          liquidityBalance.direction !== previousNonNeutral;
+        const signature = liquidityBalanceSignature(liquidityBalance);
+        const balanceSummary = {
+          ...liquidityBalance,
+          signature,
+          longSharePct: Math.round(liquidityBalance.longShare * 100),
+          shortSharePct: Math.round(liquidityBalance.shortShare * 100)
+        };
+
+        result.liquidityBalance = balanceSummary;
+        state.lastLiquidityBalanceDirection = liquidityBalance.direction;
+        state.lastLiquidityBalanceTimestamp = liquidityBalance.timestamp;
+
+        if (flipped && signature !== state.lastLiquidityBalanceFlipSentSignature) {
+          result.liquidityBalanceFlip = balanceSummary;
+          result.liquidityBalanceFlipCount = 1;
+          result.alertCount += 1;
+          console.log('Decentrader 1H liquidity balance flip detected:', balanceSummary);
+
+          if (smtpSettings) {
+            const flipLabel = liquidityFlipLabel(previousNonNeutral, liquidityBalance.direction);
+            const emailResult = await sendEmailBestEffort(
+              smtpSettings,
+              `[${smtpSettings.jobName}] ${flipLabel} | ${liquidityBalance.timestampNl}`,
+              liquidityBalanceFlipBody(liquidityBalance, config.symbol)
+            );
+
+            if (emailResult.sent) {
+              state.lastLiquidityBalanceFlipSentSignature = signature;
+              state.lastLiquidityBalanceFlipSentAt = nowNlIso();
+              result.emailSent = true;
+              result.emailSentCount += 1;
+            } else {
+              result.emailErrors.push({
+                type: 'liquidity-balance-flip',
+                signature,
+                timestamp: liquidityBalance.timestamp,
+                timestampNl: liquidityBalance.timestampNl,
+                error: emailResult.error
+              });
+            }
+          }
+        }
+
+        if (liquidityBalance.direction !== 'balanced') {
+          state.lastLiquidityBalanceNonNeutralDirection = liquidityBalance.direction;
+        }
+      }
 
       if (!alerts.length) {
         state.lastAlertObservedSignature = null;
@@ -2357,7 +2574,6 @@ export class DecentraderGapMonitor {
         return result;
       }
 
-      const smtpSettings = smtpSettingsFromEnv();
       for (const alert of alerts) {
         const signature = gapAlertSignature(alert);
         const alertSummary = {
