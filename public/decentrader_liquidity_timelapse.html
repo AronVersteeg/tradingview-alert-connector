@@ -252,11 +252,11 @@
     }
 
     .liquidity-counter-cell--long {
-      background: linear-gradient(180deg, rgba(0, 200, 120, 0.18), rgba(0, 200, 120, 0.06));
+      background: rgba(13, 17, 24, 0.32);
     }
 
     .liquidity-counter-cell--short {
-      background: linear-gradient(180deg, rgba(255, 85, 95, 0.26), rgba(255, 85, 95, 0.08));
+      background: rgba(13, 17, 24, 0.32);
     }
 
     .liquidity-counter-cell.is-dominant-long {
@@ -267,6 +267,11 @@
     .liquidity-counter-cell.is-dominant-short {
       background: linear-gradient(180deg, rgba(255, 78, 88, 0.42), rgba(255, 78, 88, 0.14));
       border-color: rgba(255, 78, 88, 0.52);
+    }
+
+    .liquidity-counter-cell.is-dominant-long .liquidity-counter-value,
+    .liquidity-counter-cell.is-dominant-short .liquidity-counter-value {
+      color: #ffffff;
     }
 
     .liquidity-counter-value {
@@ -782,10 +787,11 @@
       return money2(parsed);
     }
 
-    function histoUnits(value) {
+    function sharePct(value, total) {
       const parsed = Number(value);
-      if (!Number.isFinite(parsed) || parsed <= 0) return '0u';
-      return Math.round(parsed).toLocaleString('en-US') + 'u';
+      const parsedTotal = Number(total);
+      if (!Number.isFinite(parsed) || !Number.isFinite(parsedTotal) || parsedTotal <= 0) return '0% share';
+      return Math.round((parsed / parsedTotal) * 100) + '% share';
     }
 
     function pct(value) {
@@ -1215,19 +1221,19 @@
 
     function updateLiquidityCounter(frameIndex, frame, gap) {
       const stats = getLiquidityBuildupStats(frameIndex, frame, gap);
-      const totalUnits = stats.longUnits + stats.shortUnits;
       const totalUsd = stats.longUsd + stats.shortUsd;
-      const longDominant = stats.longUnits > stats.shortUnits * 1.08;
-      const shortDominant = stats.shortUnits > stats.longUnits * 1.08;
+      const netUsd = Math.abs(stats.longUsd - stats.shortUsd);
+      const longDominant = stats.longUsd > stats.shortUsd * 1.08;
+      const shortDominant = stats.shortUsd > stats.longUsd * 1.08;
 
       liqLongCell.classList.toggle('is-dominant-long', longDominant);
       liqShortCell.classList.toggle('is-dominant-short', shortDominant);
-      liqLongValue.textContent = histoUnits(stats.longUnits);
-      liqShortValue.textContent = histoUnits(stats.shortUnits);
+      liqLongValue.textContent = compactUsd(stats.longUsd);
+      liqShortValue.textContent = compactUsd(stats.shortUsd);
       liqWindowValue.textContent = `${stats.hours}h`;
-      liqLongMeta.textContent = `${compactUsd(stats.longUsd)} est.`;
-      liqShortMeta.textContent = `${compactUsd(stats.shortUsd)} est.`;
-      liqTotalMeta.textContent = `${histoUnits(totalUnits)} | ${compactUsd(totalUsd)}`;
+      liqLongMeta.textContent = sharePct(stats.longUsd, totalUsd);
+      liqShortMeta.textContent = sharePct(stats.shortUsd, totalUsd);
+      liqTotalMeta.textContent = `${compactUsd(totalUsd)} total`;
 
       if (!frame || !stats.split) {
         liquidityCounterStatus.textContent = 'Waiting for data';
@@ -1235,10 +1241,10 @@
       }
 
       const dominance = longDominant
-        ? 'long overhand'
+        ? `long overhand by ${compactUsd(netUsd)}`
         : shortDominant
-          ? 'short overhand'
-          : totalUnits
+          ? `short overhand by ${compactUsd(netUsd)}`
+          : totalUsd
             ? 'balanced'
             : 'no new buildup';
       const start = stats.startFrame?.t ? nlTime(stats.startFrame.t, false) : '-';
