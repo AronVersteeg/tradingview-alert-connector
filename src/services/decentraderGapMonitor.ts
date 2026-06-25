@@ -812,6 +812,26 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
     } as TradeZone;
   });
 
+  function gapEdgeTakeProfit(direction: 'long' | 'short'): TradeZone | undefined {
+    if (!gap) return undefined;
+
+    const edge = direction === 'long' ? gap.rightEdge : gap.leftEdge;
+    const edgePrice = direction === 'long' ? gap.right : gap.left;
+
+    return {
+      direction,
+      rank: 0,
+      price: edgePrice,
+      count: edge.count,
+      score: Math.max(1, edge.count),
+      selectionScore: Math.max(1, edge.count),
+      peak: false,
+      distance: Math.abs(edgePrice - price),
+      leverages: [edge.leverage],
+      fresh: firstSeenKeys.has(edge.key) ? 1 : 0
+    };
+  }
+
   function ranked(direction: 'long' | 'short'): TradeZone[] {
     const priceOrdered = zones
       .filter((zone) => zone.direction === direction)
@@ -888,12 +908,20 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
       if (selected.size >= maxLevels) break;
     }
 
-    return Array.from(selected.values())
+    const rankedZones = Array.from(selected.values())
       .sort((a, b) => {
         if (direction === 'long') return a.price - b.price || b.score - a.score;
         return b.price - a.price || b.score - a.score;
-      })
-      .map((zone, index) => ({ ...zone, rank: index + 1 }));
+      });
+    const edgeTp = gapEdgeTakeProfit(direction);
+    const withGapEdgeTp = edgeTp
+      ? [
+          edgeTp,
+          ...rankedZones.filter((zone) => Math.abs(zone.price - edgeTp.price) > 1e-9)
+        ].slice(0, maxLevels)
+      : rankedZones;
+
+    return withGapEdgeTp.map((zone, index) => ({ ...zone, rank: index + 1 }));
   }
 
   return {
@@ -2596,7 +2624,7 @@ export class DecentraderGapMonitor {
         } else if (smtpSettings) {
           const emailResult = await sendEmailBestEffort(
             smtpSettings,
-            `[${smtpSettings.jobName}] ${alert.timestampNl} | ${sideCounts(alert)}`,
+            `${sideCounts(alert)} | ${alert.timestampNl}`,
             alertBody(alert, config.symbol)
           );
 
