@@ -3791,7 +3791,7 @@ export class DydxV4Client extends AbstractDexClient {
         clientId,
         orderFlags,
         market,
-        usesGoodTilTime ? undefined : goodTilBlock,
+        usesGoodTilTime ? 0 : goodTilBlock,
         usesGoodTilTime ? goodTilBlockTime : undefined
       ),
       {
