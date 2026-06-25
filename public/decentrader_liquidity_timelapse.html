@@ -1386,6 +1386,10 @@
         if (!gap) return null;
         const edge = direction === 'long' ? gap.rightEdge : gap.leftEdge;
         const edgePrice = direction === 'long' ? gap.right : gap.left;
+        const isStillAhead = direction === 'long'
+          ? edgePrice > frame.price
+          : edgePrice < frame.price;
+        if (!isStillAhead) return null;
 
         return {
           direction,

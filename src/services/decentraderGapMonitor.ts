@@ -817,6 +817,10 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
 
     const edge = direction === 'long' ? gap.rightEdge : gap.leftEdge;
     const edgePrice = direction === 'long' ? gap.right : gap.left;
+    const isStillAhead = direction === 'long'
+      ? edgePrice > price
+      : edgePrice < price;
+    if (!isStillAhead) return undefined;
 
     return {
       direction,
@@ -1855,9 +1859,12 @@ function buildDirectionalPlan(
   mode: string
 ) {
   const isLong = direction === 'long';
-  const tpZones = isLong ? zones.longTp : zones.shortTp;
+  const rawTpZones = isLong ? zones.longTp : zones.shortTp;
   const triggerPrice = gap ? (isLong ? gap.left : gap.right) : fallbackPrice;
   const marketPrice = marketInfo.oraclePrice || fallbackPrice;
+  const tpZones = rawTpZones
+    .filter((zone) => isLong ? zone.price > marketPrice : zone.price < marketPrice)
+    .map((zone, index) => ({ ...zone, rank: index + 1 }));
   const stop = buildFractalStop(rows, frameIndex, direction, marketPrice);
   const stopPrice = stop.valid ? stop.price : undefined;
   const equity = numberOrZero(account.equity);
