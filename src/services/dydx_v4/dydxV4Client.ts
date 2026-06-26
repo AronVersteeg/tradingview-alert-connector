@@ -4669,6 +4669,15 @@ export class DydxV4Client extends AbstractDexClient {
       try {
         return await fn();
       } catch (error) {
+        if (this.isTxAlreadyExistsInCacheError(error)) {
+          console.warn(`${label} returned tx already exists in cache; treating broadcast as accepted/pending.`, {
+            context,
+            error: this.serializeError(error)
+          });
+
+          return undefined as T;
+        }
+
         if (!this.isRetriableDydxBroadcastError(error)) {
           throw error;
         }
@@ -4683,6 +4692,16 @@ export class DydxV4Client extends AbstractDexClient {
         try {
           return await fn();
         } catch (retryError) {
+          if (this.isTxAlreadyExistsInCacheError(retryError)) {
+            console.warn(`${label} retry returned tx already exists in cache; treating original broadcast as accepted/pending.`, {
+              context,
+              originalError: this.serializeError(error),
+              retryError: this.serializeError(retryError)
+            });
+
+            return undefined as T;
+          }
+
           console.error(`${label} retry failed after reconnect.`, {
             context,
             originalError: this.serializeError(error),
@@ -4759,10 +4778,16 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 
+  private isTxAlreadyExistsInCacheError(error: unknown): boolean {
+    const text = this.getErrorSearchText(error).toLowerCase();
+    return text.includes('tx already exists in cache');
+  }
+
   private isRetriableDydxBroadcastError(error: unknown): boolean {
     const text = this.getErrorSearchText(error).toLowerCase();
 
     return (
+      this.isTxAlreadyExistsInCacheError(error) ||
       text.includes('signature verification failed') ||
       text.includes('unable to verify single signer signature') ||
       text.includes('unauthorized') ||
