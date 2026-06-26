@@ -150,7 +150,16 @@ type FractalStop = {
   maxDistancePct: number;
   valid: boolean;
   adjustedToMinDistance?: boolean;
+  anchorFractalIndex?: number;
+  newerFractalCount?: number;
+  fractalDelay?: number;
   reason?: string;
+};
+
+type FractalStopOptions = {
+  afterFractalIndex?: number;
+  fractalDelay?: number;
+  missingReason?: string;
 };
 
 type DecentraderTradeExecutor = {
@@ -178,6 +187,7 @@ type MonitorStatus = {
   hasDynamicTpExecutor?: boolean;
   dynamicSlEnabled?: boolean;
   dynamicSlLiveUpdatesEnabled?: boolean;
+  dynamicSlFractalDelay?: number;
   hasDynamicSlExecutor?: boolean;
   lastStartedAt?: string;
   lastFinishedAt?: string;
@@ -225,6 +235,10 @@ type AlertState = {
     entryPrice?: number;
     currentStop?: number;
     currentStopUpdatedAt?: string;
+    currentStopFractalIndex?: number;
+    currentStopFractalTimestamp?: string;
+    currentStopFractalPrice?: number;
+    currentStopFractalSource?: 'highRef' | 'lowRef' | 'ohlc4';
   };
   lastCheckedAt?: string;
   lastDataTimestamp?: string;
@@ -1464,6 +1478,18 @@ function decentraderDynamicSlMinImprovementPct(): number {
   return envFraction('DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT', 0.0025);
 }
 
+function decentraderDynamicSlFractalDelay(): number {
+  const parsed = Number(
+    process.env.DECENTRADER_DYNAMIC_SL_FRACTAL_DELAY ||
+    process.env.DECENTRADER_TRAIL_FRACTAL_DELAY ||
+    1
+  );
+
+  return Number.isFinite(parsed) && parsed >= 0
+    ? Math.floor(clamp(parsed, 0, 10))
+    : 1;
+}
+
 function decentraderTpFractions(takeProfits: any[]): number[] {
   if (!takeProfits.length) return [];
 
@@ -1672,34 +1698,73 @@ function latestValidFractal(
   rows: DecentraderRow[],
   frameIndex: number,
   direction: TradePlanDirection,
-  entryPrice: number
+  entryPrice: number,
+  options: FractalStopOptions = {}
 ): FractalLevel | undefined {
   const kind = direction === 'long' ? 'bottom' : 'top';
-  const fractals = confirmedFractals(
-    rows,
-    frameIndex,
-    kind,
-    decentraderSlFractalWindow(),
-    decentraderSlLookbackBars()
+  const selectLatest = (fractals: FractalLevel[]): FractalLevel | undefined => {
+    const validFractals = fractals.filter((fractal) =>
+      direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice
+    );
+    const newerFractals = options.afterFractalIndex === undefined
+      ? validFractals
+      : validFractals.filter((fractal) => fractal.index > Number(options.afterFractalIndex));
+    const delay = Math.max(0, Math.floor(numberOrZero(options.fractalDelay)));
+
+    if (!newerFractals.length || newerFractals.length <= delay) {
+      return undefined;
+    }
+
+    return newerFractals[newerFractals.length - 1];
+  };
+
+  const validRefFractal = selectLatest(
+    confirmedFractals(
+      rows,
+      frameIndex,
+      kind,
+      decentraderSlFractalWindow(),
+      decentraderSlLookbackBars()
+    )
   );
-  const validRefFractal = fractals
-    .reverse()
-    .find((fractal) => direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice);
 
   if (validRefFractal) {
     return validRefFractal;
   }
 
+  return selectLatest(
+    confirmedFractals(
+      rows,
+      frameIndex,
+      kind,
+      decentraderSlFractalWindow(),
+      decentraderSlLookbackBars(),
+      'ohlc4'
+    )
+  );
+}
+
+function newerValidFractalCount(
+  rows: DecentraderRow[],
+  frameIndex: number,
+  direction: TradePlanDirection,
+  entryPrice: number,
+  afterFractalIndex: number | undefined
+): number | undefined {
+  if (afterFractalIndex === undefined) return undefined;
+
+  const kind = direction === 'long' ? 'bottom' : 'top';
   return confirmedFractals(
     rows,
     frameIndex,
     kind,
     decentraderSlFractalWindow(),
-    decentraderSlLookbackBars(),
-    'ohlc4'
+    decentraderSlLookbackBars()
   )
-    .reverse()
-    .find((fractal) => direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice);
+    .filter((fractal) =>
+      fractal.index > afterFractalIndex &&
+      (direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice)
+    ).length;
 }
 
 function wickGuardForFractal(
@@ -1739,11 +1804,19 @@ function buildFractalStop(
   rows: DecentraderRow[],
   frameIndex: number,
   direction: TradePlanDirection,
-  entryPrice: number
+  entryPrice: number,
+  options: FractalStopOptions = {}
 ): FractalStop {
   const minDistancePct = decentraderSlMinDistancePct();
   const maxDistancePct = decentraderSlMaxDistancePct();
-  const fractal = latestValidFractal(rows, frameIndex, direction, entryPrice);
+  const fractal = latestValidFractal(rows, frameIndex, direction, entryPrice, options);
+  const newerFractalCount = newerValidFractalCount(
+    rows,
+    frameIndex,
+    direction,
+    entryPrice,
+    options.afterFractalIndex
+  );
   const rangeBuffer = (medianHourlyRange(rows, frameIndex, decentraderSlLookbackBars()) || 0) *
     decentraderSlRangeBufferMultiplier();
   const pctBuffer = entryPrice * decentraderSlBufferPct();
@@ -1755,9 +1828,12 @@ function buildFractalStop(
       minDistancePct,
       maxDistancePct,
       valid: false,
+      anchorFractalIndex: options.afterFractalIndex,
+      newerFractalCount,
+      fractalDelay: options.fractalDelay,
       reason: decentraderSkipTradeWithoutSl()
-        ? 'No confirmed fractal stop found; trade will be skipped.'
-        : 'No confirmed fractal stop found.'
+        ? (options.missingReason || 'No confirmed fractal stop found; trade will be skipped.')
+        : (options.missingReason || 'No confirmed fractal stop found.')
     };
   }
 
@@ -1792,6 +1868,9 @@ function buildFractalStop(
       minDistancePct,
       maxDistancePct,
       valid: false,
+      anchorFractalIndex: options.afterFractalIndex,
+      newerFractalCount,
+      fractalDelay: options.fractalDelay,
       reason: `Fractal stop distance ${riskPct} is above maximum ${maxDistancePct}.`
     };
   }
@@ -1810,6 +1889,9 @@ function buildFractalStop(
     maxDistancePct,
     valid: true,
     adjustedToMinDistance,
+    anchorFractalIndex: options.afterFractalIndex,
+    newerFractalCount,
+    fractalDelay: options.fractalDelay,
     reason: adjustedToMinDistance
       ? `Fractal stop was widened to minimum distance ${minDistancePct}.`
       : undefined
@@ -2129,7 +2211,8 @@ function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): 
 function buildDecentraderDynamicSlAlert(
   plan: any,
   position: DydxOpenPosition,
-  trailStop: number
+  trailStop: number,
+  stop: any = undefined
 ): AlertObject {
   const direction: TradePlanDirection = position.size > 0 ? 'long' : 'short';
   const directionalPlan = plan?.plans?.[direction];
@@ -2156,8 +2239,8 @@ function buildDecentraderDynamicSlAlert(
       timestampNl: plan.timestampNl,
       direction,
       dynamicSlSync: true,
-      stop: directionalPlan?.stop,
-      note: 'Add-only fractal trailing SL from latest confirmed Decentrader fractal; older stops are preserved as fallback.'
+      stop: stop || directionalPlan?.stop,
+      note: 'Add-only delayed fractal trailing SL; older stops are preserved as fallback.'
     }
   } as AlertObject;
 }
@@ -2465,6 +2548,7 @@ export class DecentraderGapMonitor {
       hasDynamicTpExecutor: typeof this.tradeExecutor?.syncTakeProfits === 'function',
       dynamicSlEnabled: decentraderDynamicSlEnabled(),
       dynamicSlLiveUpdatesEnabled: decentraderDynamicSlLiveUpdatesEnabled(),
+      dynamicSlFractalDelay: decentraderDynamicSlFractalDelay(),
       hasDynamicSlExecutor: typeof this.tradeExecutor?.syncTrailingStop === 'function',
       lastTradeDecision: state.lastTradeDecision
     };
@@ -2944,11 +3028,35 @@ export class DecentraderGapMonitor {
 
       const plan = await this.getTradePlan(account, market);
       const directionalPlan = plan?.plans?.[positionDirection];
-      const candidateStop = numberOrZero(directionalPlan?.stop?.price);
       const currentPrice =
         numberOrZero(directionalPlan?.entryReference?.price) ||
         numberOrZero(plan?.marketInfo?.oraclePrice) ||
         numberOrZero(plan?.price);
+      const rows = this.latestRows || [];
+      const frameIndex = rows.length - 1;
+      const fractalDelay = decentraderDynamicSlFractalDelay();
+
+      if (managedPosition.currentStopFractalIndex === undefined) {
+        const anchorFractal = directionalPlan?.stop?.fractal;
+        if (anchorFractal && typeof anchorFractal.index === 'number') {
+          managedPosition.currentStopFractalIndex = anchorFractal.index;
+          managedPosition.currentStopFractalTimestamp = anchorFractal.timestamp;
+          managedPosition.currentStopFractalPrice = anchorFractal.price;
+          managedPosition.currentStopFractalSource = anchorFractal.source;
+        }
+      }
+
+      const delayedStop = rows.length && frameIndex >= 0 && currentPrice > 0
+        ? buildFractalStop(rows, frameIndex, positionDirection, currentPrice, {
+            afterFractalIndex: managedPosition.currentStopFractalIndex,
+            fractalDelay,
+            missingReason: `Waiting for ${fractalDelay + 1} confirmed newer fractal(s) after the current SL fractal before moving the trailing stop.`
+          })
+        : undefined;
+      const candidateStopDetails = managedPosition.currentStopFractalIndex === undefined
+        ? directionalPlan?.stop
+        : delayedStop;
+      const candidateStop = numberOrZero(candidateStopDetails?.price);
       const stopBreached =
         currentPrice > 0 &&
         (positionDirection === 'long'
@@ -3010,21 +3118,23 @@ export class DecentraderGapMonitor {
           : candidateStop < managedPosition.currentStop * (1 - minImprovementPct);
 
       if (
-        !directionalPlan?.stop?.valid ||
+        !candidateStopDetails?.valid ||
         !candidateStop ||
         !improves
       ) {
         if (!decentraderDynamicSlCoverageSyncEnabled()) {
           result.dynamicSlSync = {
             outcome: 'UNCHANGED',
-            reason: 'Latest confirmed fractal stop does not improve the managed SL enough; coverage refresh is disabled to avoid duplicate dYdX conditional stops when indexer visibility lags.',
+            reason: 'Delayed confirmed fractal stop does not improve the managed SL enough, or the next delayed fractal is not confirmed yet; coverage refresh is disabled to avoid duplicate dYdX conditional stops when indexer visibility lags.',
             market,
             position,
             currentStop: managedPosition.currentStop,
             candidateStop: candidateStop || null,
             minImprovementPct,
+            fractalDelay,
+            currentStopFractalIndex: managedPosition.currentStopFractalIndex,
             coverageSyncEnabled: false,
-            stop: directionalPlan?.stop || null
+            stop: candidateStopDetails || null
           };
 
           console.log('Decentrader dynamic SL coverage sync skipped:', result.dynamicSlSync);
@@ -3043,14 +3153,16 @@ export class DecentraderGapMonitor {
           outcome: coverageSyncResult?.outcome === 'UPDATED' ? 'UPDATED' : 'UNCHANGED',
           reason:
             coverageSyncResult?.outcome === 'UPDATED'
-              ? 'Latest confirmed fractal stop does not improve the managed SL enough, but protective stop coverage was resized/refreshed.'
-              : 'Latest confirmed fractal stop does not improve the managed SL enough; protective stop coverage was checked.',
+              ? 'Delayed confirmed fractal stop does not improve the managed SL enough, but protective stop coverage was resized/refreshed.'
+              : 'Delayed confirmed fractal stop does not improve the managed SL enough, or the next delayed fractal is not confirmed yet; protective stop coverage was checked.',
           market,
           position,
           currentStop: managedPosition.currentStop,
           candidateStop: candidateStop || null,
           minImprovementPct,
-          stop: directionalPlan?.stop || null
+          fractalDelay,
+          currentStopFractalIndex: managedPosition.currentStopFractalIndex,
+          stop: candidateStopDetails || null
         };
 
         if (coverageSyncResult?.outcome === 'UPDATED') {
@@ -3064,7 +3176,7 @@ export class DecentraderGapMonitor {
       if (!decentraderDynamicSlLiveUpdatesEnabled()) {
         result.dynamicSlSync = {
           outcome: 'READY',
-          reason: 'Latest confirmed fractal stop improves the managed SL, but live dynamic SL order updates are disabled to avoid duplicate dYdX conditional stops while indexer visibility is unreliable.',
+          reason: 'Delayed confirmed fractal stop improves the managed SL, but live dynamic SL order updates are disabled to avoid duplicate dYdX conditional stops while indexer visibility is unreliable.',
           market,
           position,
           previousStop: managedPosition.currentStop,
@@ -3072,14 +3184,16 @@ export class DecentraderGapMonitor {
           liveUpdatesEnabled: false,
           timestamp: plan.timestamp,
           timestampNl: plan.timestampNl,
-          stop: directionalPlan.stop
+          fractalDelay,
+          currentStopFractalIndex: managedPosition.currentStopFractalIndex,
+          stop: candidateStopDetails
         };
 
         console.log('Decentrader dynamic SL live update skipped:', result.dynamicSlSync);
         return;
       }
 
-      const alert = buildDecentraderDynamicSlAlert(plan, position, candidateStop);
+      const alert = buildDecentraderDynamicSlAlert(plan, position, candidateStop, candidateStopDetails);
       const syncResult = await syncTrailingStop(alert);
       result.dynamicSlSync = {
         ...syncResult,
@@ -3089,12 +3203,20 @@ export class DecentraderGapMonitor {
         candidateStop,
         timestamp: plan.timestamp,
         timestampNl: plan.timestampNl,
-        stop: directionalPlan.stop
+        fractalDelay,
+        previousStopFractalIndex: managedPosition.currentStopFractalIndex,
+        stop: candidateStopDetails
       };
 
       if (syncResult?.outcome === 'UPDATED' || syncResult?.outcome === 'UNCHANGED') {
         managedPosition.currentStop = candidateStop;
         managedPosition.currentStopUpdatedAt = nowNlIso();
+        if (candidateStopDetails?.fractal) {
+          managedPosition.currentStopFractalIndex = candidateStopDetails.fractal.index;
+          managedPosition.currentStopFractalTimestamp = candidateStopDetails.fractal.timestamp;
+          managedPosition.currentStopFractalPrice = candidateStopDetails.fractal.price;
+          managedPosition.currentStopFractalSource = candidateStopDetails.fractal.source;
+        }
       }
 
       console.log('Decentrader dynamic SL sync:', result.dynamicSlSync);
@@ -3505,6 +3627,7 @@ export class DecentraderGapMonitor {
       state.lastTradeExecutedSignature = signature;
       state.lastTradeExecutedAt = nowNlIso();
       state.lastTradeExecutionError = undefined;
+      const initialStopFractal = (orderAlert as any).decentrader?.stop?.fractal;
       state.managedPosition = {
         market: orderAlert.market,
         direction,
@@ -3513,7 +3636,15 @@ export class DecentraderGapMonitor {
         initialSize: Math.abs(observedEntryPosition.size),
         entryPrice: observedEntryPosition.entryPrice,
         currentStop: numberOrZero((orderAlert as any).static_sl),
-        currentStopUpdatedAt: state.lastTradeExecutedAt
+        currentStopUpdatedAt: state.lastTradeExecutedAt,
+        currentStopFractalIndex: typeof initialStopFractal?.index === 'number'
+          ? initialStopFractal.index
+          : undefined,
+        currentStopFractalTimestamp: initialStopFractal?.timestamp,
+        currentStopFractalPrice: typeof initialStopFractal?.price === 'number'
+          ? initialStopFractal.price
+          : undefined,
+        currentStopFractalSource: initialStopFractal?.source
       };
       result.tradePlaced = true;
       result.tradeSkipped = null;
