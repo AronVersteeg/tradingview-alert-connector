@@ -549,6 +549,31 @@ export class DydxV4Client extends AbstractDexClient {
       };
     }
 
+    const referencePrice = this.getFirstPositiveNumber([
+      (alert as any).current_price,
+      (alert as any).currentPrice,
+      (alert as any).price,
+      (alert as any).oracle_price,
+      (alert as any).oraclePrice,
+      (alert as any).entry_price,
+      (alert as any).entryPrice
+    ]);
+
+    if (
+      referencePrice &&
+      (isLong ? trailStop >= referencePrice : trailStop <= referencePrice)
+    ) {
+      return {
+        outcome: 'SKIPPED',
+        reason: isLong
+          ? 'Trailing stop rejected: LONG stop must stay below the current reference price.'
+          : 'Trailing stop rejected: SHORT stop must stay above the current reference price.',
+        positionSize: position.size,
+        referencePrice,
+        trailStop
+      };
+    }
+
     const managedStop = this.managedStops.get(market);
     const positionAbsSize = Math.abs(position.size);
     const managedStopCoversPosition =
@@ -1359,6 +1384,22 @@ export class DydxV4Client extends AbstractDexClient {
         longTrailPreview,
         shortTrailPreview,
         telemetry: this.compactObject(telemetry as Record<string, unknown>)
+      });
+      return;
+    }
+
+    const trailReferencePrice = telemetry.currentPrice ?? telemetry.alertPrice;
+
+    if (
+      trailReferencePrice &&
+      (isLong ? trailStop >= trailReferencePrice : trailStop <= trailReferencePrice)
+    ) {
+      console.warn('Fractal trail ignored because stop is on the wrong side of the current reference price.', {
+        market,
+        signal,
+        direction,
+        trailStop,
+        trailReferencePrice
       });
       return;
     }

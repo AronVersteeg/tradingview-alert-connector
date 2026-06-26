@@ -3057,6 +3057,12 @@ export class DecentraderGapMonitor {
         ? directionalPlan?.stop
         : delayedStop;
       const candidateStop = numberOrZero(candidateStopDetails?.price);
+      const candidateStopOnCorrectSide =
+        candidateStop > 0 &&
+        currentPrice > 0 &&
+        (positionDirection === 'long'
+          ? candidateStop < currentPrice
+          : candidateStop > currentPrice);
       const stopBreached =
         currentPrice > 0 &&
         (positionDirection === 'long'
@@ -3120,6 +3126,7 @@ export class DecentraderGapMonitor {
       if (
         !candidateStopDetails?.valid ||
         !candidateStop ||
+        !candidateStopOnCorrectSide ||
         !improves
       ) {
         if (!decentraderDynamicSlCoverageSyncEnabled()) {
@@ -3130,6 +3137,8 @@ export class DecentraderGapMonitor {
             position,
             currentStop: managedPosition.currentStop,
             candidateStop: candidateStop || null,
+            currentPrice,
+            candidateStopOnCorrectSide,
             minImprovementPct,
             fractalDelay,
             currentStopFractalIndex: managedPosition.currentStopFractalIndex,
@@ -3159,6 +3168,8 @@ export class DecentraderGapMonitor {
           position,
           currentStop: managedPosition.currentStop,
           candidateStop: candidateStop || null,
+          currentPrice,
+          candidateStopOnCorrectSide,
           minImprovementPct,
           fractalDelay,
           currentStopFractalIndex: managedPosition.currentStopFractalIndex,
