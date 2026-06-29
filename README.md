@@ -47,16 +47,20 @@ When auto-trading is enabled, TP prices come from the latest qualifying liquidit
 ```text
 DECENTRADER_TRADE_RISK_PCT=0.0075
 DECENTRADER_TRADE_RISK_USD=
+DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT=false
 DECENTRADER_TP_MAX_LEVELS=6
+DECENTRADER_TP1_EDGE_FRONT_RUN_USD=50
+DECENTRADER_TP1_EDGE_FRONT_RUN_PCT=0.0005
+DECENTRADER_TP_BEYOND_EDGE_ONLY=true
 DECENTRADER_TP_SIZE_FRACTIONS=
 DECENTRADER_DYNAMIC_TP_ENABLED=true
 DECENTRADER_DYNAMIC_SL_ENABLED=true
 DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT=0.0025
 ```
 
-Set `DECENTRADER_TRADE_RISK_USD` to target a fixed dollar risk per trade, such as `2`. The fixed dollar value is still capped by `DECENTRADER_TRADE_RISK_PCT` of live equity so small accounts cannot accidentally over-risk. Leave it empty to use pure equity-percentage risk.
+Set `DECENTRADER_TRADE_RISK_USD` to target a fixed dollar risk per trade, such as `2`. With `DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT=false`, that dollar value is leading. Set `DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT=true` if you also want the fixed dollar value capped by `DECENTRADER_TRADE_RISK_PCT` of live equity. Leave `DECENTRADER_TRADE_RISK_USD` empty to use pure equity-percentage risk.
 
-Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map/peak-weighted allocation. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
+Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map/peak-weighted allocation. TP1 front-runs the opposite gap edge by the larger of `DECENTRADER_TP1_EDGE_FRONT_RUN_USD` and `DECENTRADER_TP1_EDGE_FRONT_RUN_PCT`; TP2+ prefers continuation clusters beyond that edge when `DECENTRADER_TP_BEYOND_EDGE_ONLY=true`. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
 
 The dynamic SL is a confirmed-fractal ratchet for positions opened by this monitor. For LONG positions it only moves upward; for SHORT positions it only moves downward. After a newer trailing stop is submitted, older visible/Render-managed stops are cancelled best-effort. If dYdX conditional order visibility is incomplete, the bot keeps protection conservative and logs what it could verify.
 

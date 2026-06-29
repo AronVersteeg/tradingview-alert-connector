@@ -50,6 +50,10 @@ type TradeZone = {
   score: number;
   selectionScore?: number;
   peak?: boolean;
+  edge?: boolean;
+  edgePrice?: number;
+  frontRunBuffer?: number;
+  continuation?: boolean;
   distance: number;
   leverages: number[];
   fresh: number;
@@ -831,20 +835,31 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
 
     const edge = direction === 'long' ? gap.rightEdge : gap.leftEdge;
     const edgePrice = direction === 'long' ? gap.right : gap.left;
+    const frontRunBuffer = Math.max(
+      decentraderTp1EdgeFrontRunUsd(),
+      price * decentraderTp1EdgeFrontRunPct()
+    );
+    const frontRunPrice = direction === 'long'
+      ? Math.floor((edgePrice - frontRunBuffer) / 50) * 50
+      : Math.ceil((edgePrice + frontRunBuffer) / 50) * 50;
     const isStillAhead = direction === 'long'
-      ? edgePrice > price
-      : edgePrice < price;
+      ? frontRunPrice > price
+      : frontRunPrice < price;
     if (!isStillAhead) return undefined;
 
     return {
       direction,
       rank: 0,
-      price: edgePrice,
+      price: frontRunPrice,
       count: edge.count,
       score: Math.max(1, edge.count),
       selectionScore: Math.max(1, edge.count),
       peak: false,
-      distance: Math.abs(edgePrice - price),
+      edge: true,
+      edgePrice,
+      frontRunBuffer,
+      continuation: false,
+      distance: Math.abs(frontRunPrice - price),
       leverages: [edge.leverage],
       fresh: firstSeenKeys.has(edge.key) ? 1 : 0
     };
@@ -891,12 +906,29 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
     ];
     const nearTpMinimumScore = Math.max(2, strongestScore * 0.12);
 
+    const edgeTp = gapEdgeTakeProfit(direction);
+    const beyondEdgeEligible = edgeTp && decentraderTpBeyondEdgeOnly()
+      ? eligible.filter((zone) =>
+          direction === 'long'
+            ? zone.price > edgeTp.edgePrice!
+            : zone.price < edgeTp.edgePrice!
+        )
+      : eligible;
+    const fallbackEligible = edgeTp && decentraderTpBeyondEdgeOnly()
+      ? eligible.filter((zone) =>
+          direction === 'long'
+            ? zone.price <= edgeTp.edgePrice!
+            : zone.price >= edgeTp.edgePrice!
+        )
+      : [];
+    const usingBeyondEdgeZones = beyondEdgeEligible.length > 0;
+    const continuationEligible = usingBeyondEdgeZones ? beyondEdgeEligible : eligible;
     const selected = new Map<number, TradeZone>();
 
     for (const cap of stagedTpDistanceCaps) {
       if (selected.size >= maxLevels) break;
 
-      const stagedCandidate = eligible
+      const stagedCandidate = continuationEligible
         .filter((zone) =>
           !selected.has(zone.price) &&
           zone.distance / Math.max(1, price) <= cap &&
@@ -913,17 +945,34 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
           b.score - a.score
         )[0];
 
-      if (stagedCandidate) selected.set(stagedCandidate.price, stagedCandidate);
+      if (stagedCandidate) {
+        selected.set(stagedCandidate.price, { ...stagedCandidate, continuation: Boolean(edgeTp && usingBeyondEdgeZones) });
+      }
     }
 
-    for (const zone of eligible
+    for (const zone of continuationEligible
       .sort((a, b) =>
+        (Number(b.peak) - Number(a.peak)) ||
+        (b.leverages.length - a.leverages.length) ||
+        (Number(b.leverages.includes(10)) - Number(a.leverages.includes(10))) ||
         (b.selectionScore || b.score) - (a.selectionScore || a.score) ||
         b.score - a.score ||
         a.distance - b.distance
       )) {
-      selected.set(zone.price, zone);
+      selected.set(zone.price, { ...zone, continuation: Boolean(edgeTp && usingBeyondEdgeZones) });
       if (selected.size >= maxLevels) break;
+    }
+
+    if (edgeTp && selected.size < maxLevels) {
+      for (const zone of fallbackEligible
+        .sort((a, b) =>
+          (b.selectionScore || b.score) - (a.selectionScore || a.score) ||
+          b.score - a.score ||
+          a.distance - b.distance
+        )) {
+        selected.set(zone.price, { ...zone, continuation: false });
+        if (selected.size >= maxLevels) break;
+      }
     }
 
     const rankedZones = Array.from(selected.values())
@@ -931,11 +980,13 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
         if (direction === 'long') return a.price - b.price || b.score - a.score;
         return b.price - a.price || b.score - a.score;
       });
-    const edgeTp = gapEdgeTakeProfit(direction);
     const withGapEdgeTp = edgeTp
       ? [
           edgeTp,
-          ...rankedZones.filter((zone) => Math.abs(zone.price - edgeTp.price) > 1e-9)
+          ...rankedZones.filter((zone) =>
+            Math.abs(zone.price - edgeTp.price) > 1e-9 &&
+            Math.abs(zone.price - edgeTp.edgePrice!) > 1e-9
+          )
         ].slice(0, maxLevels)
       : rankedZones;
 
@@ -1450,6 +1501,19 @@ function decentraderMaxTpLevels(): number {
   return Number.isFinite(parsed) && parsed > 0
     ? clamp(Math.floor(parsed), 1, 6)
     : 6;
+}
+
+function decentraderTp1EdgeFrontRunUsd(): number {
+  const parsed = Number(process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 50;
+}
+
+function decentraderTp1EdgeFrontRunPct(): number {
+  return envFraction('DECENTRADER_TP1_EDGE_FRONT_RUN_PCT', 0.0005);
+}
+
+function decentraderTpBeyondEdgeOnly(): boolean {
+  return parseBool(process.env.DECENTRADER_TP_BEYOND_EDGE_ONLY, true);
 }
 
 function decentraderTpAllocationMode(): 'fixed-fractions' | 'map-weighted' {
@@ -2043,6 +2107,10 @@ function buildDirectionalPlan(
       count: zone.count,
       fresh: zone.fresh,
       leverages: zone.leverages,
+      edge: zone.edge,
+      edgePrice: zone.edgePrice,
+      frontRunBuffer: zone.frontRunBuffer,
+      continuation: zone.continuation,
       distance: Math.abs(zone.price - marketPrice)
     })),
     sizing: {
@@ -2138,6 +2206,10 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
         zone_count: numberOrZero(tp.count),
         zone_fresh: numberOrZero(tp.fresh),
         zone_leverages: Array.isArray(tp.leverages) ? tp.leverages : [],
+        zone_edge: Boolean(tp.edge),
+        zone_edge_price: numberOrZero(tp.edgePrice),
+        zone_front_run_buffer: numberOrZero(tp.frontRunBuffer),
+        zone_continuation: Boolean(tp.continuation),
         distance: numberOrZero(tp.distance)
       }))
       .filter((tp: any) => tp.size > 0),
@@ -2195,6 +2267,10 @@ function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): 
         zone_count: numberOrZero(tp.count),
         zone_fresh: numberOrZero(tp.fresh),
         zone_leverages: Array.isArray(tp.leverages) ? tp.leverages : [],
+        zone_edge: Boolean(tp.edge),
+        zone_edge_price: numberOrZero(tp.edgePrice),
+        zone_front_run_buffer: numberOrZero(tp.frontRunBuffer),
+        zone_continuation: Boolean(tp.continuation),
         distance: numberOrZero(tp.distance)
       }))
       .filter((tp: any) => tp.size > 0),

@@ -1386,19 +1386,27 @@
         if (!gap) return null;
         const edge = direction === 'long' ? gap.rightEdge : gap.leftEdge;
         const edgePrice = direction === 'long' ? gap.right : gap.left;
+        const frontRunBuffer = Math.max(50, frame.price * 0.0005);
+        const frontRunPrice = direction === 'long'
+          ? Math.floor((edgePrice - frontRunBuffer) / 50) * 50
+          : Math.ceil((edgePrice + frontRunBuffer) / 50) * 50;
         const isStillAhead = direction === 'long'
-          ? edgePrice > frame.price
-          : edgePrice < frame.price;
+          ? frontRunPrice > frame.price
+          : frontRunPrice < frame.price;
         if (!isStillAhead) return null;
 
         return {
           direction,
-          price: edgePrice,
+          price: frontRunPrice,
           count: edge.count,
           score: Math.max(1, edge.count),
           selectionScore: Math.max(1, edge.count),
           peak: false,
-          distance: Math.abs(edgePrice - frame.price),
+          edge: true,
+          edgePrice,
+          frontRunBuffer,
+          continuation: false,
+          distance: Math.abs(frontRunPrice - frame.price),
           leverages: [edge.leverage],
           fresh: firstSeenKeys.has(edge.key) ? 1 : 0,
         };
@@ -1440,12 +1448,30 @@
         const stagedTpDistanceCaps = [nearTpMaxDistancePct, 0.09, 0.14];
         const nearTpMinimumScore = Math.max(2, strongestScore * 0.12);
 
+        const edgeTp = gapEdgeTakeProfit(direction);
+        const beyondEdgeOnly = true;
+        const beyondEdgeEligible = edgeTp && beyondEdgeOnly
+          ? eligible.filter((zone) =>
+              direction === 'long'
+                ? zone.price > edgeTp.edgePrice
+                : zone.price < edgeTp.edgePrice
+            )
+          : eligible;
+        const fallbackEligible = edgeTp && beyondEdgeOnly
+          ? eligible.filter((zone) =>
+              direction === 'long'
+                ? zone.price <= edgeTp.edgePrice
+                : zone.price >= edgeTp.edgePrice
+            )
+          : [];
+        const usingBeyondEdgeZones = beyondEdgeEligible.length > 0;
+        const continuationEligible = usingBeyondEdgeZones ? beyondEdgeEligible : eligible;
         const selected = new Map();
 
         for (const cap of stagedTpDistanceCaps) {
           if (selected.size >= maxLevels) break;
 
-          const stagedCandidate = eligible
+          const stagedCandidate = continuationEligible
             .filter((zone) =>
               !selected.has(zone.price) &&
               zone.distance / Math.max(1, frame.price) <= cap &&
@@ -1462,17 +1488,34 @@
               b.score - a.score
             )[0];
 
-          if (stagedCandidate) selected.set(stagedCandidate.price, stagedCandidate);
+          if (stagedCandidate) {
+            selected.set(stagedCandidate.price, { ...stagedCandidate, continuation: Boolean(edgeTp && usingBeyondEdgeZones) });
+          }
         }
 
-        for (const zone of eligible
+        for (const zone of continuationEligible
           .sort((a, b) =>
+            (Number(b.peak) - Number(a.peak)) ||
+            (b.leverages.length - a.leverages.length) ||
+            (Number(b.leverages.includes(10)) - Number(a.leverages.includes(10))) ||
             (b.selectionScore || b.score) - (a.selectionScore || a.score) ||
             b.score - a.score ||
             a.distance - b.distance
           )) {
-          selected.set(zone.price, zone);
+          selected.set(zone.price, { ...zone, continuation: Boolean(edgeTp && usingBeyondEdgeZones) });
           if (selected.size >= maxLevels) break;
+        }
+
+        if (edgeTp && selected.size < maxLevels) {
+          for (const zone of fallbackEligible
+            .sort((a, b) =>
+              (b.selectionScore || b.score) - (a.selectionScore || a.score) ||
+              b.score - a.score ||
+              a.distance - b.distance
+            )) {
+            selected.set(zone.price, { ...zone, continuation: false });
+            if (selected.size >= maxLevels) break;
+          }
         }
 
         const rankedZones = [...selected.values()]
@@ -1480,11 +1523,13 @@
             if (direction === 'long') return a.price - b.price || b.score - a.score;
             return b.price - a.price || b.score - a.score;
           });
-        const edgeTp = gapEdgeTakeProfit(direction);
         const withGapEdgeTp = edgeTp
           ? [
               edgeTp,
-              ...rankedZones.filter((zone) => Math.abs(zone.price - edgeTp.price) > 1e-9),
+              ...rankedZones.filter((zone) =>
+                Math.abs(zone.price - edgeTp.price) > 1e-9 &&
+                Math.abs(zone.price - edgeTp.edgePrice) > 1e-9
+              ),
             ].slice(0, maxLevels)
           : rankedZones;
 
