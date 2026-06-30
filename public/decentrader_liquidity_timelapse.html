@@ -1797,13 +1797,29 @@
     function drawCoinGlassWhaleLevels(area, levels, xFor, minPrice, maxPrice, colors, snapshot, gap) {
       if (!levels.length) return;
 
-      const visible = levels
-        .filter((level) =>
-          Number.isFinite(Number(level.price)) &&
-          level.price >= minPrice &&
-          level.price <= maxPrice &&
-          !isPriceInsideGap(level.price, gap)
-        )
+      const strongestByPrice = new Map();
+      for (const level of levels) {
+        if (
+          !Number.isFinite(Number(level.price)) ||
+          level.price < minPrice ||
+          level.price > maxPrice ||
+          isPriceInsideGap(level.price, gap)
+        ) {
+          continue;
+        }
+
+        const key = priceLevel(level.price);
+        const strength = Math.max(Number(level.volumeUsd || 0), Number(level.maxVolumeUsd || 0));
+        const existing = strongestByPrice.get(key);
+        const existingStrength = existing
+          ? Math.max(Number(existing.volumeUsd || 0), Number(existing.maxVolumeUsd || 0))
+          : -1;
+        if (!existing || strength > existingStrength) {
+          strongestByPrice.set(key, level);
+        }
+      }
+
+      const visible = [...strongestByPrice.values()]
         .sort((a, b) => Number(b.volumeUsd || 0) - Number(a.volumeUsd || 0))
         .slice(0, 60);
       if (!visible.length) return;
