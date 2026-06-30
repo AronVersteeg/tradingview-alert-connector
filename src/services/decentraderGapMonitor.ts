@@ -54,6 +54,7 @@ type TradeZone = {
   count: number;
   score: number;
   selectionScore?: number;
+  cgConfluence?: CoinGlassTpConfluence;
   peak?: boolean;
   edge?: boolean;
   edgePrice?: number;
@@ -87,6 +88,17 @@ type CoinGlassWhaleHistoryLevel = CoinGlassWhaleLevel & {
   lastSeenAt: string;
   maxVolumeUsd: number;
   active: boolean;
+};
+
+type CoinGlassTpConfluence = {
+  price: number;
+  distance: number;
+  volumeUsd: number;
+  durationHours: number;
+  durationDays: number;
+  side: CoinGlassWhaleSide;
+  multiplier: number;
+  longDuration: boolean;
 };
 
 type CoinGlassWhaleSnapshot = {
@@ -1353,6 +1365,134 @@ function tradeClusterStep(span: number): number {
   return 100;
 }
 
+function coinGlassTpConfluenceEnabled(): boolean {
+  return parseBool(process.env.COINGLASS_TP_CONFLUENCE_ENABLED, true);
+}
+
+function coinGlassTpConfluenceMaxDistanceUsd(): number {
+  return envPositiveNumber('COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD', 200);
+}
+
+function coinGlassTpConfluenceMinUsd(): number {
+  return envPositiveNumber('COINGLASS_TP_CONFLUENCE_MIN_USD', coinglassWhaleMinUsd());
+}
+
+function coinGlassTpConfluenceLongDurationHours(): number {
+  return envPositiveNumber('COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS', 14 * 24);
+}
+
+function coinGlassFrameTimeMs(timestamp: any): number | undefined {
+  if (!timestamp) return undefined;
+  const parsed = Date.parse(String(timestamp).replace(' ', 'T') + 'Z');
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function coinGlassLevelVolumeUsd(level: CoinGlassWhaleLevel | CoinGlassWhaleHistoryLevel): number {
+  return Math.max(
+    numberOrZero(level.volumeUsd),
+    numberOrZero((level as CoinGlassWhaleHistoryLevel).maxVolumeUsd)
+  );
+}
+
+function coinGlassLevelStartMs(level: CoinGlassWhaleLevel | CoinGlassWhaleHistoryLevel): number | undefined {
+  const startedAt = normalizeCoinGlassTimestampMs(parseNumber(level.startedAt), NaN);
+  if (Number.isFinite(startedAt)) return startedAt;
+
+  const firstSeenAt = Date.parse(String((level as CoinGlassWhaleHistoryLevel).firstSeenAt || ''));
+  if (Number.isFinite(firstSeenAt)) return firstSeenAt;
+
+  const updatedAt = Date.parse(String(level.updatedAt || ''));
+  return Number.isFinite(updatedAt) ? updatedAt : undefined;
+}
+
+function coinGlassLevelsForFrame(
+  snapshot: CoinGlassWhaleSnapshot,
+  frameTimestamp: any
+): (CoinGlassWhaleLevel | CoinGlassWhaleHistoryLevel)[] {
+  const frameMs = coinGlassFrameTimeMs(frameTimestamp);
+  const graceMs = 70 * 60 * 1000;
+
+  if (frameMs && Array.isArray(snapshot.history) && snapshot.history.length) {
+    return snapshot.history.filter((level) => {
+      const firstSeenMs = Date.parse(level.firstSeenAt || level.updatedAt);
+      const lastSeenMs = Date.parse(level.lastSeenAt || level.updatedAt);
+      if (!Number.isFinite(firstSeenMs) || !Number.isFinite(lastSeenMs)) return false;
+      return firstSeenMs <= frameMs && frameMs <= lastSeenMs + graceMs;
+    });
+  }
+
+  return Array.isArray(snapshot.levels) ? snapshot.levels : [];
+}
+
+function coinGlassTpConfluenceForZone(
+  direction: 'long' | 'short',
+  zonePrice: number,
+  frameTimestamp: any,
+  gap: Gap | undefined,
+  levels: (CoinGlassWhaleLevel | CoinGlassWhaleHistoryLevel)[]
+): CoinGlassTpConfluence | undefined {
+  if (!coinGlassTpConfluenceEnabled()) return undefined;
+
+  const frameMs = coinGlassFrameTimeMs(frameTimestamp) || Date.now();
+  const maxDistance = coinGlassTpConfluenceMaxDistanceUsd();
+  const minUsd = coinGlassTpConfluenceMinUsd();
+  const longDurationHours = coinGlassTpConfluenceLongDurationHours();
+  const wantedSide: CoinGlassWhaleSide = direction === 'long' ? 'sell' : 'buy';
+  let best: CoinGlassTpConfluence | undefined;
+
+  for (const level of levels) {
+    const price = numberOrZero(level.price);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    if (gap && price > gap.left && price < gap.right) continue;
+    if (level.side !== wantedSide) continue;
+
+    const distance = Math.abs(price - zonePrice);
+    if (distance > maxDistance) continue;
+
+    const volumeUsd = coinGlassLevelVolumeUsd(level);
+    if (volumeUsd < minUsd) continue;
+
+    const startedAtMs = coinGlassLevelStartMs(level);
+    const durationHours = startedAtMs && Number.isFinite(startedAtMs)
+      ? Math.max(0, (frameMs - startedAtMs) / (60 * 60 * 1000))
+      : 0;
+    const longDuration = durationHours >= longDurationHours;
+    const volumeBoost =
+      volumeUsd >= 35_000_000 ? 0.2 :
+      volumeUsd >= 20_000_000 ? 0.14 :
+      volumeUsd >= 10_000_000 ? 0.08 :
+      0.04;
+    const durationBoost =
+      longDuration ? 0.25 :
+      durationHours >= longDurationHours / 2 ? 0.12 :
+      durationHours >= 24 ? 0.06 :
+      0;
+    const distanceBoost = (1 - distance / Math.max(1, maxDistance)) * 0.08;
+    const multiplier = Math.min(1.45, 1 + volumeBoost + durationBoost + Math.max(0, distanceBoost));
+    const candidate: CoinGlassTpConfluence = {
+      price,
+      distance,
+      volumeUsd,
+      durationHours,
+      durationDays: durationHours / 24,
+      side: level.side,
+      multiplier,
+      longDuration
+    };
+
+    if (
+      !best ||
+      candidate.multiplier > best.multiplier ||
+      (candidate.multiplier === best.multiplier && candidate.volumeUsd > best.volumeUsd) ||
+      (candidate.multiplier === best.multiplier && candidate.volumeUsd === best.volumeUsd && candidate.distance < best.distance)
+    ) {
+      best = candidate;
+    }
+  }
+
+  return best;
+}
+
 function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longTp: TradeZone[]; shortTp: TradeZone[] } {
   const frame = rows[frameIndex];
   const price = parseNumber(frame?.ohlc4);
@@ -1361,6 +1501,8 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
   const bars = activeBarsForFrame(rows, frameIndex);
   const firstSeenKeys = firstSeenKeysForFrame(rows, frameIndex);
   const gap = cleanGapForBars(frame, bars);
+  const coinGlassSnapshot = coinglassWhaleSnapshot();
+  const coinGlassLevels = coinGlassLevelsForFrame(coinGlassSnapshot, frame?.timestamp);
   const prices = [price, ...bars.map((bar) => bar.price)];
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
@@ -1512,11 +1654,20 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
         const overlapBoost = 1 + Math.max(0, zone.leverages.length - 1) * 0.08;
         const freshBoost = 1 + Math.min(zone.fresh, 3) * 0.05;
         const peakBoost = peak ? 1.18 : 1;
+        const baseSelectionScore = zone.score * overlapBoost * freshBoost * peakBoost;
+        const cgConfluence = coinGlassTpConfluenceForZone(
+          direction,
+          zone.price,
+          frame?.timestamp,
+          gap,
+          coinGlassLevels
+        );
 
         return {
           ...zone,
           peak,
-          selectionScore: Math.round(zone.score * overlapBoost * freshBoost * peakBoost)
+          cgConfluence,
+          selectionScore: Math.round(baseSelectionScore * (cgConfluence?.multiplier || 1))
         };
       });
 
@@ -2071,6 +2222,12 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
     })),
     events,
     coinGlassWhaleLevels: coinglassWhaleSnapshot(),
+    coinGlassTpConfluence: {
+      enabled: coinGlassTpConfluenceEnabled(),
+      minUsd: coinGlassTpConfluenceMinUsd(),
+      maxDistanceUsd: coinGlassTpConfluenceMaxDistanceUsd(),
+      longDurationHours: coinGlassTpConfluenceLongDurationHours()
+    },
     topCurrentZones: Array.from(currentZoneCounts.values())
       .sort((a, b) => b.c - a.c || a.p - b.p)
       .slice(0, 40)
@@ -2735,6 +2892,7 @@ function buildDirectionalPlan(
       edgePrice: zone.edgePrice,
       frontRunBuffer: zone.frontRunBuffer,
       continuation: zone.continuation,
+      cgConfluence: zone.cgConfluence,
       distance: Math.abs(zone.price - marketPrice)
     })),
     sizing: {
@@ -2834,6 +2992,12 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
         zone_edge_price: numberOrZero(tp.edgePrice),
         zone_front_run_buffer: numberOrZero(tp.frontRunBuffer),
         zone_continuation: Boolean(tp.continuation),
+        zone_cg_price: numberOrZero(tp.cgConfluence?.price),
+        zone_cg_distance: numberOrZero(tp.cgConfluence?.distance),
+        zone_cg_volume_usd: numberOrZero(tp.cgConfluence?.volumeUsd),
+        zone_cg_duration_hours: numberOrZero(tp.cgConfluence?.durationHours),
+        zone_cg_boost_multiplier: numberOrZero(tp.cgConfluence?.multiplier),
+        zone_cg_long_duration: Boolean(tp.cgConfluence?.longDuration),
         distance: numberOrZero(tp.distance)
       }))
       .filter((tp: any) => tp.size > 0),
@@ -2895,6 +3059,12 @@ function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): 
         zone_edge_price: numberOrZero(tp.edgePrice),
         zone_front_run_buffer: numberOrZero(tp.frontRunBuffer),
         zone_continuation: Boolean(tp.continuation),
+        zone_cg_price: numberOrZero(tp.cgConfluence?.price),
+        zone_cg_distance: numberOrZero(tp.cgConfluence?.distance),
+        zone_cg_volume_usd: numberOrZero(tp.cgConfluence?.volumeUsd),
+        zone_cg_duration_hours: numberOrZero(tp.cgConfluence?.durationHours),
+        zone_cg_boost_multiplier: numberOrZero(tp.cgConfluence?.multiplier),
+        zone_cg_long_duration: Boolean(tp.cgConfluence?.longDuration),
         distance: numberOrZero(tp.distance)
       }))
       .filter((tp: any) => tp.size > 0),
