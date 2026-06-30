@@ -23,6 +23,10 @@
       --price: #21d3a3;
       --tp-long: #fbbf24;
       --tp-short: #09d0ff;
+      --cg-whale-10: #fbbf24;
+      --cg-whale-15: #fb923c;
+      --cg-whale-20: #ef4444;
+      --cg-whale-30: #ff1f3d;
       --border: rgba(236, 242, 248, 0.14);
     }
 
@@ -651,6 +655,8 @@
         <span><i class="swatch" style="background: var(--price)"></i>Price</span>
         <span><i class="swatch" style="background: var(--tp-long)"></i>Long TP</span>
         <span><i class="swatch" style="background: var(--tp-short)"></i>Short TP</span>
+        <span><i class="swatch" style="background: var(--cg-whale-10)"></i>CG &gt;10M</span>
+        <span><i class="swatch" style="background: var(--cg-whale-20)"></i>CG &gt;20M</span>
       </div>
     </section>
 
@@ -1739,6 +1745,89 @@
       ctx.globalAlpha = 1;
     }
 
+    function getCoinGlassWhaleSnapshot() {
+      const snapshot = payload?.coinGlassWhaleLevels;
+      if (!snapshot || snapshot.enabled === false) return null;
+      return snapshot;
+    }
+
+    function getCoinGlassWhaleLevels() {
+      const snapshot = getCoinGlassWhaleSnapshot();
+      if (!snapshot) return [];
+      if (Array.isArray(snapshot.levels)) return snapshot.levels;
+      return [];
+    }
+
+    function coinGlassWhaleColor(level, colors, snapshot) {
+      const volume = Number(level?.volumeUsd) || 0;
+      const minUsd = Number(snapshot?.minUsd) || 10_000_000;
+      const strongUsd = Number(snapshot?.strongUsd) || 20_000_000;
+      if (volume >= Math.max(strongUsd * 1.5, 30_000_000)) return colors.cg30;
+      if (volume >= strongUsd) return colors.cg20;
+      if (volume >= Math.max(minUsd * 1.5, 15_000_000)) return colors.cg15;
+      return colors.cg10;
+    }
+
+    function drawCoinGlassWhaleLevels(area, levels, xFor, minPrice, maxPrice, colors, snapshot) {
+      if (!levels.length) return;
+
+      const visible = levels
+        .filter((level) => Number.isFinite(Number(level.price)) && level.price >= minPrice && level.price <= maxPrice)
+        .sort((a, b) => Number(b.volumeUsd || 0) - Number(a.volumeUsd || 0))
+        .slice(0, 60);
+      if (!visible.length) return;
+
+      ctx.save();
+      ctx.font = '700 11px Inter, system-ui, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+
+      for (const [index, level] of visible.entries()) {
+        const volume = Number(level.volumeUsd) || 0;
+        const color = coinGlassWhaleColor(level, colors, snapshot);
+        const x = xFor(Number(level.price));
+        const isStrong = volume >= (Number(snapshot?.strongUsd) || 20_000_000);
+
+        ctx.globalAlpha = isStrong ? 0.78 : 0.48;
+        ctx.setLineDash(level.side === 'sell' ? [9, 5] : [2, 5]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isStrong ? 2.3 : 1.3;
+        ctx.beginPath();
+        ctx.moveTo(x, area.top);
+        ctx.lineTo(x, area.bottom);
+        ctx.stroke();
+
+        if (index >= 24 && !isStrong) continue;
+
+        const side = level.side === 'sell' ? 'S' : level.side === 'buy' ? 'B' : '?';
+        const label = `CG ${side} ${compactUsd(volume)}`;
+        const labelWidth = Math.ceil(ctx.measureText(label).width) + 14;
+        const labelHeight = 20;
+        const lane = index % 5;
+        const labelX = Math.max(area.left + 6, Math.min(x + 6, area.right - labelWidth - 6));
+        const labelY = area.top + 18 + lane * 23;
+
+        ctx.setLineDash([]);
+        ctx.globalAlpha = isStrong ? 0.94 : 0.76;
+        ctx.fillStyle = 'rgba(13, 17, 24, 0.9)';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(labelX, labelY, labelWidth, labelHeight, 5);
+        } else {
+          ctx.rect(labelX, labelY, labelWidth, labelHeight);
+        }
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.fillText(label, labelX + 7, labelY + labelHeight / 2);
+      }
+
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
     function updateGapMonitor(frame, gap, intrusion) {
       if (!gap || !frame) {
         gapWidth.textContent = '-';
@@ -1927,6 +2016,12 @@
         long: css.getPropertyValue('--tp-long').trim(),
         short: css.getPropertyValue('--tp-short').trim(),
       };
+      const coinGlassColors = {
+        cg10: css.getPropertyValue('--cg-whale-10').trim(),
+        cg15: css.getPropertyValue('--cg-whale-15').trim(),
+        cg20: css.getPropertyValue('--cg-whale-20').trim(),
+        cg30: css.getPropertyValue('--cg-whale-30').trim(),
+      };
       const zoneColors = {
         L3: css.getPropertyValue('--long-3').trim(),
         L5: css.getPropertyValue('--long-5').trim(),
@@ -2018,6 +2113,16 @@
         ctx.restore();
       }
 
+      const coinGlassWhaleSnapshot = getCoinGlassWhaleSnapshot();
+      drawCoinGlassWhaleLevels(
+        area,
+        getCoinGlassWhaleLevels(),
+        xFor,
+        minPrice,
+        maxPrice,
+        coinGlassColors,
+        coinGlassWhaleSnapshot
+      );
       drawTradeZones(area, tradeZones, xFor, minPrice, maxPrice, tradeZoneColors);
 
       if (frame && frame.price && frame.price >= minPrice && frame.price <= maxPrice) {

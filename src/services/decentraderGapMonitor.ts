@@ -1,12 +1,17 @@
 import axios from 'axios';
+import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
 import tls from 'tls';
+import zlib from 'zlib';
 import { AlertObject } from '../types';
 
 const API_URL = 'https://www.decentrader.com/api';
 const LEVERAGES = [3, 5, 10];
+const COINGLASS_WS_HOST = 'wss.coinglass.com';
+const COINGLASS_WS_PATH = '/v2/ws';
+const COINGLASS_WHALE_URL = 'https://www.coinglass.com/large-orderbook-statistics';
 
 type DecentraderRow = Record<string, any>;
 
@@ -57,6 +62,36 @@ type TradeZone = {
   distance: number;
   leverages: number[];
   fresh: number;
+};
+
+type CoinGlassWhaleSide = 'buy' | 'sell' | 'unknown';
+
+type CoinGlassWhaleLevel = {
+  source: 'coinglass';
+  symbol: string;
+  instrument?: string;
+  id?: string;
+  side: CoinGlassWhaleSide;
+  price: number;
+  volumeUsd: number;
+  startUsd?: number;
+  currentUsd?: number;
+  startedAt?: number;
+  updatedAt: string;
+};
+
+type CoinGlassWhaleSnapshot = {
+  enabled: boolean;
+  source: 'coinglass';
+  url: string;
+  symbol: string;
+  interval: string;
+  minUsd: number;
+  strongUsd: number;
+  fetchedAt?: string;
+  lastAttemptAt?: string;
+  error?: string;
+  levels: CoinGlassWhaleLevel[];
 };
 
 type TpHit = {
@@ -193,6 +228,9 @@ type MonitorStatus = {
   dynamicSlLiveUpdatesEnabled?: boolean;
   dynamicSlFractalDelay?: number;
   hasDynamicSlExecutor?: boolean;
+  coinGlassWhaleLevelsEnabled?: boolean;
+  coinGlassWhaleLevels?: number;
+  coinGlassWhaleError?: string;
   lastStartedAt?: string;
   lastFinishedAt?: string;
   lastError?: string;
@@ -308,8 +346,473 @@ function money(value: number | undefined): string {
   return '$' + Math.round(value as number).toLocaleString('en-US');
 }
 
+const coinGlassWhaleCache: {
+  enabled: boolean;
+  levels: CoinGlassWhaleLevel[];
+  fetchedAt?: number;
+  lastAttemptAt?: number;
+  error?: string;
+  symbol?: string;
+  interval?: string;
+  minUsd?: number;
+} = {
+  enabled: false,
+  levels: []
+};
+let coinGlassWhaleFetchPromise: Promise<CoinGlassWhaleLevel[]> | null = null;
+
 function priceKey(price: number): string {
   return price.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function coinglassWhaleLevelsEnabled(): boolean {
+  return parseBool(process.env.COINGLASS_WHALE_LEVELS_ENABLED, true);
+}
+
+function coinglassWhaleSymbol(): string {
+  return String(process.env.COINGLASS_WHALE_SYMBOL || 'Binance_BTCUSDT').trim() || 'Binance_BTCUSDT';
+}
+
+function coinglassWhaleInterval(): string {
+  return String(process.env.COINGLASS_WHALE_INTERVAL || 'm1').trim() || 'm1';
+}
+
+function coinglassWhaleMinUsd(): number {
+  const parsed = Number(process.env.COINGLASS_WHALE_LEVEL_MIN_USD || 10_000_000);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10_000_000;
+}
+
+function coinglassWhaleStrongUsd(): number {
+  const minUsd = coinglassWhaleMinUsd();
+  const parsed = Number(process.env.COINGLASS_WHALE_LEVEL_STRONG_USD || 20_000_000);
+  return Number.isFinite(parsed) && parsed >= minUsd ? parsed : Math.max(20_000_000, minUsd);
+}
+
+function coinglassWhaleMaxLevels(): number {
+  const parsed = Number(process.env.COINGLASS_WHALE_LEVEL_MAX || 80);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(clamp(parsed, 5, 200)) : 80;
+}
+
+function coinglassWhaleTimeoutMs(): number {
+  const parsed = Number(process.env.COINGLASS_WHALE_TIMEOUT_MS || 12_000);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(clamp(parsed, 3_000, 30_000)) : 12_000;
+}
+
+function coinglassWhalePollMs(): number {
+  const parsed = Number(process.env.COINGLASS_WHALE_POLL_MINUTES || process.env.DECENTRADER_GAP_POLL_MINUTES || 10);
+  const minutes = Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+  return Math.max(60_000, minutes * 60_000);
+}
+
+function coinglassWhaleSnapshot(): CoinGlassWhaleSnapshot {
+  const enabled = coinglassWhaleLevelsEnabled();
+  return {
+    enabled,
+    source: 'coinglass',
+    url: COINGLASS_WHALE_URL,
+    symbol: coinglassWhaleSymbol(),
+    interval: coinglassWhaleInterval(),
+    minUsd: coinglassWhaleMinUsd(),
+    strongUsd: coinglassWhaleStrongUsd(),
+    fetchedAt: coinGlassWhaleCache.fetchedAt
+      ? new Date(coinGlassWhaleCache.fetchedAt).toISOString()
+      : undefined,
+    lastAttemptAt: coinGlassWhaleCache.lastAttemptAt
+      ? new Date(coinGlassWhaleCache.lastAttemptAt).toISOString()
+      : undefined,
+    error: coinGlassWhaleCache.error,
+    levels: enabled ? coinGlassWhaleCache.levels : []
+  };
+}
+
+function buildWebSocketFrame(payload: Buffer | string, opcode = 0x1): Buffer {
+  const data = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+  const mask = crypto.randomBytes(4);
+  const headerLength = data.length < 126 ? 2 : data.length <= 0xffff ? 4 : 10;
+  const frame = Buffer.alloc(headerLength + 4 + data.length);
+  frame[0] = 0x80 | opcode;
+
+  if (data.length < 126) {
+    frame[1] = 0x80 | data.length;
+    mask.copy(frame, 2);
+    for (let index = 0; index < data.length; index += 1) {
+      frame[6 + index] = data[index] ^ mask[index % 4];
+    }
+    return frame;
+  }
+
+  if (data.length <= 0xffff) {
+    frame[1] = 0x80 | 126;
+    frame.writeUInt16BE(data.length, 2);
+    mask.copy(frame, 4);
+    for (let index = 0; index < data.length; index += 1) {
+      frame[8 + index] = data[index] ^ mask[index % 4];
+    }
+    return frame;
+  }
+
+  frame[1] = 0x80 | 127;
+  frame.writeUInt32BE(Math.floor(data.length / 2 ** 32), 2);
+  frame.writeUInt32BE(data.length >>> 0, 6);
+  mask.copy(frame, 10);
+  for (let index = 0; index < data.length; index += 1) {
+    frame[14 + index] = data[index] ^ mask[index % 4];
+  }
+  return frame;
+}
+
+function parseWebSocketFrames(buffer: Buffer): {
+  frames: Array<{ opcode: number; payload: Buffer }>;
+  remaining: Buffer;
+} {
+  const frames: Array<{ opcode: number; payload: Buffer }> = [];
+  let offset = 0;
+
+  while (offset + 2 <= buffer.length) {
+    const first = buffer[offset];
+    const second = buffer[offset + 1];
+    const opcode = first & 0x0f;
+    const masked = Boolean(second & 0x80);
+    let length = second & 0x7f;
+    let headerLength = 2;
+
+    if (length === 126) {
+      if (offset + 4 > buffer.length) break;
+      length = buffer.readUInt16BE(offset + 2);
+      headerLength = 4;
+    } else if (length === 127) {
+      if (offset + 10 > buffer.length) break;
+      length = buffer.readUInt32BE(offset + 2) * 2 ** 32 + buffer.readUInt32BE(offset + 6);
+      headerLength = 10;
+    }
+
+    const maskLength = masked ? 4 : 0;
+    const payloadStart = offset + headerLength + maskLength;
+    const frameEnd = payloadStart + length;
+    if (frameEnd > buffer.length) break;
+
+    const payload = Buffer.from(buffer.slice(payloadStart, frameEnd));
+    if (masked) {
+      const mask = buffer.slice(offset + headerLength, offset + headerLength + 4);
+      for (let index = 0; index < payload.length; index += 1) {
+        payload[index] = payload[index] ^ mask[index % 4];
+      }
+    }
+
+    frames.push({ opcode, payload });
+    offset = frameEnd;
+  }
+
+  return { frames, remaining: buffer.slice(offset) };
+}
+
+function decodeCoinGlassWebSocketPayload(payload: Buffer): string {
+  const attempts = [
+    () => zlib.inflateSync(payload).toString('utf8'),
+    () => zlib.inflateRawSync(payload).toString('utf8'),
+    () => zlib.gunzipSync(payload).toString('utf8'),
+    () => payload.toString('utf8')
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      const decoded = attempt();
+      if (decoded) return decoded;
+    } catch {
+      // Try the next wire format; CoinGlass currently uses zlib inflate.
+    }
+  }
+
+  return '';
+}
+
+function normalizeCoinGlassWhaleLevels(
+  message: any,
+  symbol: string,
+  minUsd: number
+): CoinGlassWhaleLevel[] | undefined {
+  const data =
+    Array.isArray(message?.data)
+      ? message.data
+      : Array.isArray(message?.result)
+        ? message.result
+        : Array.isArray(message)
+          ? message
+          : undefined;
+
+  if (!data) return undefined;
+
+  const deduped = new Map<string, CoinGlassWhaleLevel>();
+  const updatedAt = new Date().toISOString();
+
+  for (const group of data) {
+    const instrument = String(group?.instrument || group?.symbol || symbol || '').trim() || symbol;
+    const list = Array.isArray(group?.list)
+      ? group.list
+      : Array.isArray(group?.data)
+        ? group.data
+        : group?.price !== undefined
+          ? [group]
+          : [];
+
+    for (const item of list) {
+      if (item?.endTime) continue;
+      const price = parseNumber(item?.price);
+      const currentUsd = parseNumber(item?.currentUsd);
+      const startUsd = parseNumber(item?.startUsd);
+      const volumeUsd =
+        currentUsd ||
+        startUsd ||
+        parseNumber(item?.volUsd) ||
+        parseNumber(item?.usd) ||
+        parseNumber(item?.amountUsd);
+      if (price === undefined || volumeUsd === undefined || volumeUsd < minUsd) continue;
+
+      const side: CoinGlassWhaleSide =
+        Number(item?.side) === 1
+          ? 'sell'
+          : Number(item?.side) === 2
+            ? 'buy'
+            : 'unknown';
+      const id = item?.id !== undefined ? String(item.id) : undefined;
+      const key = id || `${instrument}|${side}|${priceKey(price)}`;
+      const level: CoinGlassWhaleLevel = {
+        source: 'coinglass',
+        symbol,
+        instrument,
+        id,
+        side,
+        price,
+        volumeUsd,
+        startUsd,
+        currentUsd,
+        startedAt: parseNumber(item?.startTime),
+        updatedAt
+      };
+      const existing = deduped.get(key);
+      if (!existing || existing.volumeUsd < level.volumeUsd) {
+        deduped.set(key, level);
+      }
+    }
+  }
+
+  return Array.from(deduped.values())
+    .sort((a, b) => b.volumeUsd - a.volumeUsd || a.price - b.price)
+    .slice(0, coinglassWhaleMaxLevels());
+}
+
+function fetchCoinGlassWhaleLevelsViaWebSocket(
+  symbol: string,
+  interval: string,
+  minUsd: number,
+  timeoutMs: number
+): Promise<CoinGlassWhaleLevel[]> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let handshakeDone = false;
+    let handshakeBuffer = Buffer.alloc(0);
+    let frameBuffer = Buffer.alloc(0);
+
+    const socket = tls.connect({
+      host: COINGLASS_WS_HOST,
+      port: 443,
+      servername: COINGLASS_WS_HOST
+    });
+
+    const timer = setTimeout(() => finish(new Error('CoinGlass whale WebSocket timed out.')), timeoutMs);
+    const heartbeat = setInterval(() => {
+      if (handshakeDone && !settled) {
+        socket.write(buildWebSocketFrame('ping'));
+      }
+    }, 5_000);
+
+    function finish(error: Error | null, levels?: CoinGlassWhaleLevel[]): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(heartbeat);
+      socket.destroy();
+      if (error) {
+        reject(error);
+      } else {
+        resolve(levels || []);
+      }
+    }
+
+    function handleText(text: string): void {
+      const trimmed = text.trim();
+      if (!trimmed || trimmed === 'pong' || trimmed === 'ping') return;
+
+      try {
+        const parsed = JSON.parse(trimmed);
+        const levels = normalizeCoinGlassWhaleLevels(parsed, symbol, minUsd);
+        if (levels !== undefined) {
+          finish(null, levels);
+        }
+      } catch {
+        // Ignore non-JSON heartbeat/status messages.
+      }
+    }
+
+    function handleFrames(): void {
+      const parsed = parseWebSocketFrames(frameBuffer);
+      frameBuffer = parsed.remaining;
+
+      for (const frame of parsed.frames) {
+        if (frame.opcode === 0x8) {
+          finish(new Error('CoinGlass whale WebSocket closed before a snapshot arrived.'));
+          return;
+        }
+        if (frame.opcode === 0x9) {
+          socket.write(buildWebSocketFrame(frame.payload, 0x0a));
+          continue;
+        }
+        if (frame.opcode === 0x1 || frame.opcode === 0x2) {
+          handleText(frame.opcode === 0x1 ? frame.payload.toString('utf8') : decodeCoinGlassWebSocketPayload(frame.payload));
+        }
+      }
+    }
+
+    socket.on('secureConnect', () => {
+      const key = crypto.randomBytes(16).toString('base64');
+      const request = [
+        `GET ${COINGLASS_WS_PATH} HTTP/1.1`,
+        `Host: ${COINGLASS_WS_HOST}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Key: ${key}`,
+        'Sec-WebSocket-Version: 13',
+        'Origin: https://www.coinglass.com',
+        'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36',
+        '',
+        ''
+      ].join('\r\n');
+      socket.write(request);
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      if (settled) return;
+
+      if (!handshakeDone) {
+        handshakeBuffer = Buffer.concat([handshakeBuffer, chunk]);
+        const separatorIndex = handshakeBuffer.indexOf('\r\n\r\n');
+        if (separatorIndex === -1) return;
+
+        const header = handshakeBuffer.slice(0, separatorIndex).toString('utf8');
+        if (!/^HTTP\/1\.1 101/i.test(header)) {
+          finish(new Error(`CoinGlass whale WebSocket handshake failed: ${header.split('\r\n')[0] || 'unknown'}`));
+          return;
+        }
+
+        handshakeDone = true;
+        const rest = handshakeBuffer.slice(separatorIndex + 4);
+        handshakeBuffer = Buffer.alloc(0);
+
+        const channel = 'largeTakerOrder';
+        const subscription = JSON.stringify({
+          method: 'subscribe',
+          params: [
+            {
+              listenerGuid: `${symbol}#_${channel}_${interval}`,
+              symbol,
+              interval,
+              channel
+            }
+          ]
+        });
+        socket.write(buildWebSocketFrame(subscription));
+
+        if (rest.length) {
+          frameBuffer = Buffer.concat([frameBuffer, rest]);
+          handleFrames();
+        }
+        return;
+      }
+
+      frameBuffer = Buffer.concat([frameBuffer, chunk]);
+      handleFrames();
+    });
+
+    socket.on('error', (error) => finish(error));
+    socket.on('close', () => {
+      if (!settled) finish(new Error('CoinGlass whale WebSocket closed before a snapshot arrived.'));
+    });
+  });
+}
+
+async function refreshCoinGlassWhaleLevels(reason: string): Promise<CoinGlassWhaleLevel[]> {
+  if (!coinglassWhaleLevelsEnabled()) {
+    coinGlassWhaleCache.enabled = false;
+    coinGlassWhaleCache.levels = [];
+    coinGlassWhaleCache.error = undefined;
+    return [];
+  }
+
+  const symbol = coinglassWhaleSymbol();
+  const interval = coinglassWhaleInterval();
+  const minUsd = coinglassWhaleMinUsd();
+  const now = Date.now();
+  const cacheMatches =
+    coinGlassWhaleCache.symbol === symbol &&
+    coinGlassWhaleCache.interval === interval &&
+    coinGlassWhaleCache.minUsd === minUsd;
+
+  if (cacheMatches && coinGlassWhaleCache.fetchedAt && now - coinGlassWhaleCache.fetchedAt < coinglassWhalePollMs()) {
+    return coinGlassWhaleCache.levels;
+  }
+
+  if (coinGlassWhaleFetchPromise) return coinGlassWhaleFetchPromise;
+
+  coinGlassWhaleCache.enabled = true;
+  coinGlassWhaleCache.lastAttemptAt = now;
+  coinGlassWhaleCache.symbol = symbol;
+  coinGlassWhaleCache.interval = interval;
+  coinGlassWhaleCache.minUsd = minUsd;
+
+  const refreshPromise = fetchCoinGlassWhaleLevelsViaWebSocket(
+    symbol,
+    interval,
+    minUsd,
+    coinglassWhaleTimeoutMs()
+  )
+    .then((levels) => {
+      coinGlassWhaleCache.levels = levels;
+      coinGlassWhaleCache.fetchedAt = Date.now();
+      coinGlassWhaleCache.error = undefined;
+      console.log('CoinGlass whale levels refreshed:', {
+        reason,
+        symbol,
+        interval,
+        minUsd,
+        levels: levels.length
+      });
+      return levels;
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      coinGlassWhaleCache.error = message;
+      console.warn('CoinGlass whale levels refresh failed; using cached levels if available.', {
+        reason,
+        symbol,
+        interval,
+        minUsd,
+        error: message
+      });
+      return coinGlassWhaleCache.levels;
+    });
+
+  coinGlassWhaleFetchPromise = refreshPromise.then(
+    (levels) => {
+      coinGlassWhaleFetchPromise = null;
+      return levels;
+    },
+    (error) => {
+      coinGlassWhaleFetchPromise = null;
+      throw error;
+    }
+  );
+
+  return coinGlassWhaleFetchPromise;
 }
 
 function nlTime(timestamp: string | undefined): string {
@@ -1447,6 +1950,7 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
       price: parseNumber(row.ohlc4)
     })),
     events,
+    coinGlassWhaleLevels: coinglassWhaleSnapshot(),
     topCurrentZones: Array.from(currentZoneCounts.values())
       .sort((a, b) => b.c - a.c || a.p - b.p)
       .slice(0, 40)
@@ -2626,6 +3130,9 @@ export class DecentraderGapMonitor {
       dynamicSlLiveUpdatesEnabled: decentraderDynamicSlLiveUpdatesEnabled(),
       dynamicSlFractalDelay: decentraderDynamicSlFractalDelay(),
       hasDynamicSlExecutor: typeof this.tradeExecutor?.syncTrailingStop === 'function',
+      coinGlassWhaleLevelsEnabled: coinglassWhaleLevelsEnabled(),
+      coinGlassWhaleLevels: coinglassWhaleSnapshot().levels.length,
+      coinGlassWhaleError: coinglassWhaleSnapshot().error,
       lastTradeDecision: state.lastTradeDecision
     };
   }
@@ -2648,6 +3155,7 @@ export class DecentraderGapMonitor {
     try {
       const rows = await fetchSnapshot(config.symbol);
       this.latestRows = rows;
+      void refreshCoinGlassWhaleLevels('gap-check');
       this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
       const state = readState(config.stateFile);
       const previousDataTimestamp = state.lastDataTimestamp;
@@ -2687,6 +3195,7 @@ export class DecentraderGapMonitor {
         liquidityBalance: null,
         liquidityBalanceFlip: null,
         liquidityBalanceFlipCount: 0,
+        coinGlassWhaleLevels: coinglassWhaleSnapshot(),
         lastTradeDecision: state.lastTradeDecision || null,
         duplicate: false
       };
@@ -3758,7 +4267,9 @@ export class DecentraderGapMonitor {
 
   async getTimelapsePayload(): Promise<any> {
     const config = this.config();
+    await refreshCoinGlassWhaleLevels('timelapse');
     if (this.latestTimelapsePayload) {
+      this.latestTimelapsePayload.coinGlassWhaleLevels = coinglassWhaleSnapshot();
       return this.latestTimelapsePayload;
     }
 
@@ -3785,7 +4296,10 @@ export class DecentraderGapMonitor {
     const config = this.config();
     const rows = this.latestRows || (await fetchSnapshot(config.symbol));
     this.latestRows = rows;
-    this.latestTimelapsePayload = this.latestTimelapsePayload || buildTimelapsePayload(rows, config.symbol);
+    if (!this.latestTimelapsePayload) {
+      void refreshCoinGlassWhaleLevels('trade-plan');
+      this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
+    }
 
     const frameIndex = rows.length - 1;
     const frame = rows[frameIndex];
@@ -3913,6 +4427,7 @@ export class DecentraderGapMonitor {
     };
 
     this.latestRows = rows;
+    void refreshCoinGlassWhaleLevels('simulate-edge');
     this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
     console.log('Decentrader end-to-end edge simulation detected:', {
       dryRun: Boolean(options.dryRun),
