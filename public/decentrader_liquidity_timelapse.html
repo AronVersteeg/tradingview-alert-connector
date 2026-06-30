@@ -1100,13 +1100,20 @@
       return bars;
     }
 
+    function isPriceInsideGap(price, gap) {
+      return Boolean(
+        gap &&
+        Number.isFinite(Number(price)) &&
+        Number(price) > gap.left &&
+        Number(price) < gap.right
+      );
+    }
+
     function isContextInsideGap(bar, gap) {
       return Boolean(
         activeSource === 'open' &&
         bar.contextOnly &&
-        gap &&
-        bar.price > gap.left &&
-        bar.price < gap.right
+        isPriceInsideGap(bar.price, gap)
       );
     }
 
@@ -1787,11 +1794,16 @@
       return colors.cg10;
     }
 
-    function drawCoinGlassWhaleLevels(area, levels, xFor, minPrice, maxPrice, colors, snapshot) {
+    function drawCoinGlassWhaleLevels(area, levels, xFor, minPrice, maxPrice, colors, snapshot, gap) {
       if (!levels.length) return;
 
       const visible = levels
-        .filter((level) => Number.isFinite(Number(level.price)) && level.price >= minPrice && level.price <= maxPrice)
+        .filter((level) =>
+          Number.isFinite(Number(level.price)) &&
+          level.price >= minPrice &&
+          level.price <= maxPrice &&
+          !isPriceInsideGap(level.price, gap)
+        )
         .sort((a, b) => Number(b.volumeUsd || 0) - Number(a.volumeUsd || 0))
         .slice(0, 60);
       if (!visible.length) return;
@@ -2139,7 +2151,8 @@
         minPrice,
         maxPrice,
         coinGlassColors,
-        coinGlassWhaleSnapshot
+        coinGlassWhaleSnapshot,
+        gap
       );
       drawTradeZones(area, tradeZones, xFor, minPrice, maxPrice, tradeZoneColors);
 
