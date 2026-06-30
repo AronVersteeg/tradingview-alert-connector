@@ -1799,8 +1799,7 @@
 
         if (index >= 24 && !isStrong) continue;
 
-        const side = level.side === 'sell' ? 'S' : level.side === 'buy' ? 'B' : '?';
-        const label = `CG ${side} ${compactUsd(volume)}`;
+        const label = `CG ${Math.round(Number(level.price)).toLocaleString('nl-NL')}`;
         const labelWidth = Math.ceil(ctx.measureText(label).width) + 14;
         const labelHeight = 20;
         const lane = index % 5;
