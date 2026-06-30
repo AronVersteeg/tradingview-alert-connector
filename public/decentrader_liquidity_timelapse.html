@@ -1757,9 +1757,22 @@
       return snapshot;
     }
 
-    function getCoinGlassWhaleLevels() {
+    function getCoinGlassWhaleLevels(frame) {
       const snapshot = getCoinGlassWhaleSnapshot();
       if (!snapshot) return [];
+      const frameDate = parseDecentraderUtc(frame?.t);
+      const frameMs = frameDate ? frameDate.getTime() : null;
+      const graceMs = 70 * 60 * 1000;
+
+      if (frameMs && Array.isArray(snapshot.history) && snapshot.history.length) {
+        return snapshot.history.filter((level) => {
+          const firstSeenMs = Date.parse(level.firstSeenAt || level.startedAt || level.updatedAt);
+          const lastSeenMs = Date.parse(level.lastSeenAt || level.updatedAt);
+          if (!Number.isFinite(firstSeenMs) || !Number.isFinite(lastSeenMs)) return false;
+          return firstSeenMs <= frameMs && frameMs <= lastSeenMs + graceMs;
+        });
+      }
+
       if (Array.isArray(snapshot.levels)) return snapshot.levels;
       return [];
     }
@@ -2121,7 +2134,7 @@
       const coinGlassWhaleSnapshot = getCoinGlassWhaleSnapshot();
       drawCoinGlassWhaleLevels(
         area,
-        getCoinGlassWhaleLevels(),
+        getCoinGlassWhaleLevels(frame),
         xFor,
         minPrice,
         maxPrice,

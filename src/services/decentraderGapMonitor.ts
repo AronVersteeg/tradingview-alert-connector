@@ -71,6 +71,7 @@ type CoinGlassWhaleLevel = {
   symbol: string;
   instrument?: string;
   id?: string;
+  key?: string;
   side: CoinGlassWhaleSide;
   price: number;
   volumeUsd: number;
@@ -78,6 +79,14 @@ type CoinGlassWhaleLevel = {
   currentUsd?: number;
   startedAt?: number;
   updatedAt: string;
+};
+
+type CoinGlassWhaleHistoryLevel = CoinGlassWhaleLevel & {
+  key: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  maxVolumeUsd: number;
+  active: boolean;
 };
 
 type CoinGlassWhaleSnapshot = {
@@ -92,6 +101,9 @@ type CoinGlassWhaleSnapshot = {
   lastAttemptAt?: string;
   error?: string;
   levels: CoinGlassWhaleLevel[];
+  history: CoinGlassWhaleHistoryLevel[];
+  historyUpdatedAt?: string;
+  historyRetentionHours: number;
 };
 
 type TpHit = {
@@ -230,6 +242,7 @@ type MonitorStatus = {
   hasDynamicSlExecutor?: boolean;
   coinGlassWhaleLevelsEnabled?: boolean;
   coinGlassWhaleLevels?: number;
+  coinGlassWhaleHistoryLevels?: number;
   coinGlassWhaleError?: string;
   lastStartedAt?: string;
   lastFinishedAt?: string;
@@ -404,8 +417,61 @@ function coinglassWhalePollMs(): number {
   return Math.max(60_000, minutes * 60_000);
 }
 
+function coinglassWhaleHistoryRetentionHours(): number {
+  const parsed = Number(process.env.COINGLASS_WHALE_HISTORY_RETENTION_HOURS || 720);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(clamp(parsed, 24, 2160)) : 720;
+}
+
+function coinglassWhaleHistoryMaxRecords(): number {
+  const parsed = Number(process.env.COINGLASS_WHALE_HISTORY_MAX_RECORDS || 1500);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(clamp(parsed, 100, 5000)) : 1500;
+}
+
+function coinglassWhaleHistoryFile(): string {
+  return (
+    String(process.env.COINGLASS_WHALE_HISTORY_FILE || '').trim() ||
+    path.join(process.cwd(), 'data', 'coinglass-whale-history.json')
+  );
+}
+
+function normalizeCoinGlassTimestampMs(value: number | undefined, fallbackMs: number): number {
+  if (!Number.isFinite(value) || (value as number) <= 0) return fallbackMs;
+  return (value as number) < 1_000_000_000_000 ? (value as number) * 1000 : (value as number);
+}
+
+function coinGlassWhaleLevelKey(level: Pick<CoinGlassWhaleLevel, 'id' | 'instrument' | 'side' | 'price'>): string {
+  if (level.id) return String(level.id);
+  return `${level.instrument || 'unknown'}|${level.side}|${priceKey(Number(level.price) || 0)}`;
+}
+
+function readCoinGlassWhaleHistory(): { updatedAt?: string; levels: CoinGlassWhaleHistoryLevel[] } {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(coinglassWhaleHistoryFile(), 'utf8'));
+    const levels = Array.isArray(parsed?.levels) ? parsed.levels : [];
+    return {
+      updatedAt: typeof parsed?.updatedAt === 'string' ? parsed.updatedAt : undefined,
+      levels: levels.filter(
+        (level: any) =>
+          level &&
+          typeof level.key === 'string' &&
+          Number.isFinite(Number(level.price)) &&
+          Number.isFinite(Number(level.volumeUsd))
+      )
+    };
+  } catch {
+    return { levels: [] };
+  }
+}
+
+function writeCoinGlassWhaleHistory(levels: CoinGlassWhaleHistoryLevel[], updatedAt: string): void {
+  const file = coinglassWhaleHistoryFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ updatedAt, levels }, null, 2));
+}
+
 function coinglassWhaleSnapshot(): CoinGlassWhaleSnapshot {
   const enabled = coinglassWhaleLevelsEnabled();
+  const history = enabled ? readCoinGlassWhaleHistory() : { levels: [] as CoinGlassWhaleHistoryLevel[] };
   return {
     enabled,
     source: 'coinglass',
@@ -421,7 +487,10 @@ function coinglassWhaleSnapshot(): CoinGlassWhaleSnapshot {
       ? new Date(coinGlassWhaleCache.lastAttemptAt).toISOString()
       : undefined,
     error: coinGlassWhaleCache.error,
-    levels: enabled ? coinGlassWhaleCache.levels : []
+    levels: enabled ? coinGlassWhaleCache.levels : [],
+    history: history.levels,
+    historyUpdatedAt: history.updatedAt,
+    historyRetentionHours: coinglassWhaleHistoryRetentionHours()
   };
 }
 
@@ -581,6 +650,7 @@ function normalizeCoinGlassWhaleLevels(
         symbol,
         instrument,
         id,
+        key,
         side,
         price,
         volumeUsd,
@@ -599,6 +669,54 @@ function normalizeCoinGlassWhaleLevels(
   return Array.from(deduped.values())
     .sort((a, b) => b.volumeUsd - a.volumeUsd || a.price - b.price)
     .slice(0, coinglassWhaleMaxLevels());
+}
+
+function mergeCoinGlassWhaleHistory(levels: CoinGlassWhaleLevel[]): CoinGlassWhaleHistoryLevel[] {
+  if (!coinglassWhaleLevelsEnabled()) return [];
+
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const retentionMs = coinglassWhaleHistoryRetentionHours() * 60 * 60 * 1000;
+  const existing = readCoinGlassWhaleHistory();
+  const byKey = new Map<string, CoinGlassWhaleHistoryLevel>();
+
+  for (const level of existing.levels) {
+    byKey.set(level.key, {
+      ...level,
+      active: false
+    });
+  }
+
+  for (const level of levels) {
+    const key = level.key || coinGlassWhaleLevelKey(level);
+    const previous = byKey.get(key);
+    const firstSeenMs = normalizeCoinGlassTimestampMs(level.startedAt, previous?.firstSeenAt ? Date.parse(previous.firstSeenAt) : nowMs);
+    const firstSeenAt = Number.isFinite(firstSeenMs) ? new Date(firstSeenMs).toISOString() : previous?.firstSeenAt || nowIso;
+    const volumeUsd = numberOrZero(level.volumeUsd);
+    const maxVolumeUsd = Math.max(volumeUsd, numberOrZero(previous?.maxVolumeUsd), numberOrZero(previous?.volumeUsd));
+
+    byKey.set(key, {
+      ...previous,
+      ...level,
+      key,
+      firstSeenAt,
+      lastSeenAt: nowIso,
+      maxVolumeUsd,
+      active: true
+    });
+  }
+
+  const cutoffMs = nowMs - retentionMs;
+  const merged = Array.from(byKey.values())
+    .filter((level) => {
+      const lastSeenMs = Date.parse(level.lastSeenAt);
+      return Number.isFinite(lastSeenMs) && lastSeenMs >= cutoffMs;
+    })
+    .sort((a, b) => Date.parse(b.lastSeenAt) - Date.parse(a.lastSeenAt) || b.maxVolumeUsd - a.maxVolumeUsd)
+    .slice(0, coinglassWhaleHistoryMaxRecords());
+
+  writeCoinGlassWhaleHistory(merged, nowIso);
+  return merged;
 }
 
 function fetchCoinGlassWhaleLevelsViaWebSocket(
@@ -779,12 +897,14 @@ async function refreshCoinGlassWhaleLevels(reason: string): Promise<CoinGlassWha
       coinGlassWhaleCache.levels = levels;
       coinGlassWhaleCache.fetchedAt = Date.now();
       coinGlassWhaleCache.error = undefined;
+      const history = mergeCoinGlassWhaleHistory(levels);
       console.log('CoinGlass whale levels refreshed:', {
         reason,
         symbol,
         interval,
         minUsd,
-        levels: levels.length
+        levels: levels.length,
+        history: history.length
       });
       return levels;
     })
@@ -3109,6 +3229,7 @@ export class DecentraderGapMonitor {
   getStatus(): MonitorStatus {
     const config = this.config();
     const state = readState(config.stateFile);
+    const coinGlassSnapshot = coinglassWhaleSnapshot();
 
     return {
       ...this.status,
@@ -3131,8 +3252,9 @@ export class DecentraderGapMonitor {
       dynamicSlFractalDelay: decentraderDynamicSlFractalDelay(),
       hasDynamicSlExecutor: typeof this.tradeExecutor?.syncTrailingStop === 'function',
       coinGlassWhaleLevelsEnabled: coinglassWhaleLevelsEnabled(),
-      coinGlassWhaleLevels: coinglassWhaleSnapshot().levels.length,
-      coinGlassWhaleError: coinglassWhaleSnapshot().error,
+      coinGlassWhaleLevels: coinGlassSnapshot.levels.length,
+      coinGlassWhaleHistoryLevels: coinGlassSnapshot.history.length,
+      coinGlassWhaleError: coinGlassSnapshot.error,
       lastTradeDecision: state.lastTradeDecision
     };
   }

@@ -64,7 +64,7 @@ Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map/peak-weighted allocation. TP
 
 The dynamic SL is a confirmed-fractal ratchet for positions opened by this monitor. For LONG positions it only moves upward; for SHORT positions it only moves downward. After a newer trailing stop is submitted, older visible/Render-managed stops are cancelled best-effort. If dYdX conditional order visibility is incomplete, the bot keeps protection conservative and logs what it could verify.
 
-The map can also show a read-only CoinGlass large-orderbook/whale overlay. The monitor reads the public CoinGlass page feed, keeps levels above the configured dollar threshold, and draws them as vertical `CG` lines on the Decentrader map. This is a visual study layer only; it does not affect entries, TP/SL sync, or dYdX order placement.
+The map can also show a read-only CoinGlass large-orderbook/whale overlay. The monitor reads the public CoinGlass page feed, keeps levels above the configured dollar threshold, and draws them as vertical `CG` lines on the Decentrader map. Successful snapshots are also stored as a forward-looking timelapse history so replay can show which CG levels were active during each map frame. This is a visual study layer only; it does not affect entries, TP/SL sync, or dYdX order placement.
 
 ```text
 COINGLASS_WHALE_LEVELS_ENABLED=true
@@ -73,6 +73,8 @@ COINGLASS_WHALE_INTERVAL=m1
 COINGLASS_WHALE_LEVEL_MIN_USD=10000000
 COINGLASS_WHALE_LEVEL_STRONG_USD=20000000
 COINGLASS_WHALE_POLL_MINUTES=10
+COINGLASS_WHALE_HISTORY_RETENTION_HOURS=720
+COINGLASS_WHALE_HISTORY_MAX_RECORDS=1500
 ```
 
 Manual check:
