@@ -778,6 +778,12 @@
       return '$' + Math.round(value).toLocaleString('en-US');
     }
 
+    function priceLevel(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return '-';
+      return Math.round(parsed).toLocaleString('nl-NL');
+    }
+
     function money2(value) {
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return '$0.00';
@@ -1642,7 +1648,7 @@
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
         ctx.fillStyle = isMajor ? '#ecf2f8' : '#9aa8b8';
-        ctx.fillText(money(price), 0, 0);
+        ctx.fillText(priceLevel(price), 0, 0);
         ctx.restore();
       }
 
@@ -1672,7 +1678,7 @@
       }
       ctx.restore();
 
-      const label = `GAP ${money(gap.width)}`;
+      const label = `GAP ${priceLevel(gap.width)}`;
       ctx.font = '600 12px Inter, system-ui, sans-serif';
       const labelWidth = Math.ceil(ctx.measureText(label).width) + 18;
       const labelX = Math.max(area.left + 6, Math.min(leftX + width / 2 - labelWidth / 2, area.right - labelWidth - 6));
@@ -1710,7 +1716,7 @@
         if (zone.price < minPrice || zone.price > maxPrice) continue;
         const x = xFor(zone.price);
         const lane = zone.direction === 'long' ? zone.rank - 1 : zone.rank + 2;
-        const label = `${zone.prefix}${zone.rank} ${money(zone.price)} · ${zone.score}`;
+        const label = `${zone.prefix}${zone.rank} ${priceLevel(zone.price)} · ${zone.score}`;
         const labelWidth = Math.ceil(ctx.measureText(label).width) + 16;
         const labelHeight = 22;
         const labelX = Math.max(area.left + 6, Math.min(x - labelWidth / 2, area.right - labelWidth - 6));
@@ -1799,7 +1805,7 @@
 
         if (index >= 24 && !isStrong) continue;
 
-        const label = `CG ${Math.round(Number(level.price)).toLocaleString('nl-NL')}`;
+        const label = `CG ${priceLevel(level.price)}`;
         const labelWidth = Math.ceil(ctx.measureText(label).width) + 14;
         const labelHeight = 20;
         const lane = index % 5;
@@ -2126,7 +2132,7 @@
 
       if (frame && frame.price && frame.price >= minPrice && frame.price <= maxPrice) {
         const x = xFor(frame.price);
-        const priceLabel = `Price ${money(frame.price)}`;
+        const priceLabel = `Price ${priceLevel(frame.price)}`;
         ctx.font = '600 12px Inter, system-ui, sans-serif';
         const labelWidth = Math.ceil(ctx.measureText(priceLabel).width) + 18;
         const labelHeight = 24;
@@ -2164,7 +2170,7 @@
       ctx.fillStyle = '#ecf2f8';
       ctx.font = '600 15px Inter, system-ui, sans-serif';
       const sourceName = payload.source?.name || (activeSource === 'open' ? 'Public perp study' : 'Decentrader');
-      ctx.fillText(`${sourceName} | ${nlTime(frame.t)} NL | ${money(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
+      ctx.fillText(`${sourceName} | ${nlTime(frame.t)} NL | ${priceLevel(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
 
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       updateGapMonitor(frame, gap, intrusion);
