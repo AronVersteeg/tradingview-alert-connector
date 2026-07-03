@@ -1201,17 +1201,72 @@
       return `RSI 4H ${h4} / D ${d1}${tags.length ? ` | ${tags.join(' + ')}` : ''}`;
     }
 
-    function rsiSignalForIntrusion(intrusion, context) {
+    function rsiSide(context) {
+      if (!context) return 'neutral';
+      const values = [context.h4?.rsi, context.d1?.rsi]
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value));
+      if (!values.length) return 'neutral';
+      const above = values.filter((value) => value >= 52).length;
+      const below = values.filter((value) => value <= 48).length;
+      if (above > below && above >= 1) return 'above';
+      if (below > above && below >= 1) return 'below';
+      return 'neutral';
+    }
+
+    function previousIntrusionRsiSide(frameIndex, xFor, xToPrice, maxLookback = 72) {
+      const start = Math.max(1, frameIndex - maxLookback);
+      for (let index = frameIndex - 1; index >= start; index -= 1) {
+        const previousIntrusion = getGapIntrusion(index, xFor, xToPrice);
+        if (!previousIntrusion?.entrants?.length) continue;
+
+        const context = getRsiContext(index);
+        const side = rsiSide(context);
+        if (side === 'neutral') continue;
+
+        return {
+          frameIndex: index,
+          timestamp: payload.frames[index]?.t,
+          side,
+          hasLeft: previousIntrusion.left?.length > 0,
+          hasRight: previousIntrusion.right?.length > 0,
+        };
+      }
+
+      return null;
+    }
+
+    function rsiSignalForIntrusion(intrusion, context, previousRsiSide = null) {
       if (!intrusion?.entrants?.length || !context) return null;
       const hasLeft = intrusion.left?.length > 0;
       const hasRight = intrusion.right?.length > 0;
+      const currentSide = rsiSide(context);
+      const previousSide = previousRsiSide?.side;
+      const regimeFlipDown = hasRight && currentSide === 'below' && previousSide === 'above';
+      const regimeFlipUp = hasLeft && currentSide === 'above' && previousSide === 'below';
 
       if (hasRight && context.shortImpulseCandidate) {
-        return { direction: 'short', kind: 'fresh-cross', label: 'RSI fresh <50' };
+        return {
+          direction: 'short',
+          kind: regimeFlipDown ? 'fresh-cross-regime-flip' : 'fresh-cross',
+          label: regimeFlipDown ? 'RSI fresh <50 + prev >50' : 'RSI fresh <50',
+        };
       }
 
       if (hasLeft && context.longImpulseCandidate) {
-        return { direction: 'long', kind: 'fresh-cross', label: 'RSI fresh >50' };
+        return {
+          direction: 'long',
+          kind: regimeFlipUp ? 'fresh-cross-regime-flip' : 'fresh-cross',
+          label: regimeFlipUp ? 'RSI fresh >50 + prev <50' : 'RSI fresh >50',
+        };
+      }
+
+      if (regimeFlipDown) {
+        return { direction: 'short', kind: 'regime-flip', label: 'RSI prev >50 / now <50' };
+      }
+
+      if (regimeFlipUp) {
+        return { direction: 'long', kind: 'regime-flip', label: 'RSI prev <50 / now >50' };
       }
 
       if ((hasLeft || hasRight) && context.bothNearOrCross) {
@@ -2284,7 +2339,8 @@
       const gap = getVisualGapForBars(frame, monitorBars, xFor, xToPrice);
       const intrusion = getGapIntrusion(frameIndex, xFor, xToPrice);
       const rsiContext = getRsiContext(frameIndex);
-      const rsiSignal = rsiSignalForIntrusion(intrusion, rsiContext);
+      const previousRsiSide = previousIntrusionRsiSide(frameIndex, xFor, xToPrice);
+      const rsiSignal = rsiSignalForIntrusion(intrusion, rsiContext, previousRsiSide);
       const tradeRange = getTradeRange();
       const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, tradeRange.min, tradeRange.max);
       const tpHits = getTpHits(frameIndex, xFor, xToPrice, tradeRange.min, tradeRange.max);
