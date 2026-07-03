@@ -147,6 +147,12 @@ type RsiFrameContext = {
   h4FreshCross?: 'up' | 'down';
   d1FreshCross?: 'up' | 'down';
   freshCrossDirection?: 'up' | 'down';
+  h4Regime?: 'bullish' | 'bearish' | 'neutral';
+  h4RegimeStartedAt?: string;
+  h4RegimeAgeHours?: number;
+  d1Regime?: 'bullish' | 'bearish' | 'neutral';
+  d1RegimeStartedAt?: string;
+  d1RegimeAgeHours?: number;
   longImpulseCandidate: boolean;
   shortImpulseCandidate: boolean;
   bias: 'long' | 'short' | 'neutral';
@@ -2357,6 +2363,30 @@ function freshRsiCrossDirection(
     : undefined;
 }
 
+function rsiRegimeFromPoint(point: RsiPoint | undefined): 'bullish' | 'bearish' | 'neutral' {
+  if (!Number.isFinite(Number(point?.rsi))) return 'neutral';
+  if (Number(point?.rsi) > 50) return 'bullish';
+  if (Number(point?.rsi) < 50) return 'bearish';
+  return 'neutral';
+}
+
+function latestRsiCrossForRegime(
+  points: RsiPoint[],
+  timestampMs: number,
+  regime: 'bullish' | 'bearish' | 'neutral'
+): RsiPoint | undefined {
+  if (regime === 'neutral') return undefined;
+  const wantedDirection = regime === 'bullish' ? 'up' : 'down';
+
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    const point = points[index];
+    if (point.startedAtMs > timestampMs) continue;
+    if (point.cross50 && point.crossDirection === wantedDirection) return point;
+  }
+
+  return undefined;
+}
+
 async function buildRsiStudyPayload(rows: DecentraderRow[], market: string): Promise<RsiStudyPayload | undefined> {
   if (!decentraderRsiStudyEnabled()) return undefined;
 
@@ -2383,6 +2413,16 @@ async function buildRsiStudyPayload(rows: DecentraderRow[], market: string): Pro
     const anyNearOrCross = h4Match || d1Match;
     const h4FreshCross = freshRsiCrossDirection(h4, timestampMs, 4 * 60 * 60 * 1000);
     const d1FreshCross = freshRsiCrossDirection(d1, timestampMs, 24 * 60 * 60 * 1000);
+    const h4Regime = rsiRegimeFromPoint(h4);
+    const h4RegimeStart = latestRsiCrossForRegime(h4Points, timestampMs, h4Regime);
+    const h4RegimeAgeHours = h4RegimeStart
+      ? Math.max(0, (timestampMs - h4RegimeStart.startedAtMs) / (60 * 60 * 1000))
+      : undefined;
+    const d1Regime = rsiRegimeFromPoint(d1);
+    const d1RegimeStart = latestRsiCrossForRegime(d1Points, timestampMs, d1Regime);
+    const d1RegimeAgeHours = d1RegimeStart
+      ? Math.max(0, (timestampMs - d1RegimeStart.startedAtMs) / (60 * 60 * 1000))
+      : undefined;
     const hasFreshCrossUp = h4FreshCross === 'up' || d1FreshCross === 'up';
     const hasFreshCrossDown = h4FreshCross === 'down' || d1FreshCross === 'down';
     const longImpulseCandidate = hasFreshCrossUp && (h4Match || d1Match);
@@ -2397,6 +2437,12 @@ async function buildRsiStudyPayload(rows: DecentraderRow[], market: string): Pro
       h4FreshCross,
       d1FreshCross,
       freshCrossDirection: hasFreshCrossUp ? 'up' : hasFreshCrossDown ? 'down' : undefined,
+      h4Regime,
+      h4RegimeStartedAt: h4RegimeStart?.startedAt,
+      h4RegimeAgeHours: h4RegimeAgeHours !== undefined ? Number(h4RegimeAgeHours.toFixed(1)) : undefined,
+      d1Regime,
+      d1RegimeStartedAt: d1RegimeStart?.startedAt,
+      d1RegimeAgeHours: d1RegimeAgeHours !== undefined ? Number(d1RegimeAgeHours.toFixed(1)) : undefined,
       longImpulseCandidate,
       shortImpulseCandidate,
       bias: rsiFrameBias(h4, d1),

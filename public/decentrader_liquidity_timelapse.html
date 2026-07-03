@@ -30,6 +30,10 @@
       --rsi-long: #22c55e;
       --rsi-short: #ef4444;
       --rsi-watch: #38bdf8;
+      --rsi-master-d-long: #00e676;
+      --rsi-master-d-short: #ff1744;
+      --rsi-master-4h-long: #86efac;
+      --rsi-master-4h-short: #fb7185;
       --border: rgba(236, 242, 248, 0.14);
     }
 
@@ -1196,9 +1200,33 @@
       const tags = [];
       if (context.h4FreshCross) tags.push(`4H ${context.h4FreshCross === 'down' ? '<50' : '>50'}`);
       if (context.d1FreshCross) tags.push(`D ${context.d1FreshCross === 'down' ? '<50' : '>50'}`);
+      if (!tags.length && context.h4RegimeStartedAt && context.h4Regime !== 'neutral') tags.push(`4H ${context.h4Regime}`);
+      if (!tags.length && context.d1RegimeStartedAt && context.d1Regime !== 'neutral') tags.push(`D ${context.d1Regime}`);
       if (!tags.length && context.bothNearOrCross) tags.push('4H+D near 50');
       if (!tags.length && context.anyNearOrCross) tags.push('near 50');
       return `RSI 4H ${h4} / D ${d1}${tags.length ? ` | ${tags.join(' + ')}` : ''}`;
+    }
+
+    function dailyRsiSide(context) {
+      if (!context) return 'neutral';
+      if (context.d1Regime === 'bullish' || context.d1Regime === 'bearish') return context.d1Regime;
+      const d1 = Number(context.d1?.rsi);
+      if (!Number.isFinite(d1)) return 'neutral';
+      if (d1 > 50) return 'bullish';
+      if (d1 < 50) return 'bearish';
+      return 'neutral';
+    }
+
+    function timeframeRsiSide(context, timeframe) {
+      if (!context) return 'neutral';
+      const regime = timeframe === 'h4' ? context.h4Regime : context.d1Regime;
+      if (regime === 'bullish' || regime === 'bearish') return regime;
+      const point = timeframe === 'h4' ? context.h4 : context.d1;
+      const value = Number(point?.rsi);
+      if (!Number.isFinite(value)) return 'neutral';
+      if (value > 50) return 'bullish';
+      if (value < 50) return 'bearish';
+      return 'neutral';
     }
 
     function rsiSide(context) {
@@ -1228,6 +1256,7 @@
           frameIndex: index,
           timestamp: payload.frames[index]?.t,
           side,
+          dailySide: dailyRsiSide(context),
           hasLeft: previousIntrusion.left?.length > 0,
           hasRight: previousIntrusion.right?.length > 0,
         };
@@ -1236,14 +1265,212 @@
       return null;
     }
 
-    function rsiSignalForIntrusion(intrusion, context, previousRsiSide = null) {
+    function intrusionDirection(intrusion) {
+      const hasLeft = intrusion?.left?.length > 0;
+      const hasRight = intrusion?.right?.length > 0;
+      if (hasRight && !hasLeft) return 'short';
+      if (hasLeft && !hasRight) return 'long';
+      if (hasRight) return 'short';
+      if (hasLeft) return 'long';
+      return null;
+    }
+
+    function matchingRsiSideForDirection(direction) {
+      if (direction === 'short') return 'bearish';
+      if (direction === 'long') return 'bullish';
+      return 'neutral';
+    }
+
+    function oppositeRsiSideForDirection(direction) {
+      if (direction === 'short') return 'bullish';
+      if (direction === 'long') return 'bearish';
+      return 'neutral';
+    }
+
+    function rsiMasterState(frameIndex, direction, timeframe, xFor, xToPrice, maxLookback = 720) {
+      const targetSide = matchingRsiSideForDirection(direction);
+      const oppositeSide = oppositeRsiSideForDirection(direction);
+      if (targetSide === 'neutral' || oppositeSide === 'neutral') return { master: false, followUp: false };
+
+      const start = Math.max(1, frameIndex - maxLookback);
+      let sawSameRegimeIntrusion = false;
+
+      for (let index = frameIndex - 1; index >= start; index -= 1) {
+        const previousIntrusion = getGapIntrusion(index, xFor, xToPrice);
+        if (!previousIntrusion?.entrants?.length) continue;
+
+        const previousContext = getRsiContext(index);
+        if (!previousContext) continue;
+
+        const previousSide = timeframeRsiSide(previousContext, timeframe);
+        if (previousSide === 'neutral') continue;
+
+        const previousDirection = intrusionDirection(previousIntrusion);
+        if (previousDirection === direction && previousSide === targetSide) {
+          sawSameRegimeIntrusion = true;
+          continue;
+        }
+
+        if (previousSide === oppositeSide) {
+          return {
+            master: !sawSameRegimeIntrusion,
+            followUp: sawSameRegimeIntrusion,
+            previousOpposite: {
+              frameIndex: index,
+              timestamp: payload.frames[index]?.t,
+              side: previousSide,
+              direction: previousDirection,
+            },
+          };
+        }
+      }
+
+      return {
+        master: !sawSameRegimeIntrusion,
+        followUp: sawSameRegimeIntrusion,
+      };
+    }
+
+    function masterIntrusionContext(frameIndex, intrusion, context, xFor, xToPrice) {
+      if (!intrusion?.entrants?.length || !context) {
+        return {
+          shortDMaster: false,
+          longDMaster: false,
+          shortH4Master: false,
+          longH4Master: false,
+          shortDFollowUp: false,
+          longDFollowUp: false,
+          shortH4FollowUp: false,
+          longH4FollowUp: false,
+        };
+      }
+
+      const hasLeft = intrusion.left?.length > 0;
+      const hasRight = intrusion.right?.length > 0;
+      const dSide = timeframeRsiSide(context, 'd1');
+      const h4Side = timeframeRsiSide(context, 'h4');
+      const shortDState = hasRight && dSide === 'bearish'
+        ? rsiMasterState(frameIndex, 'short', 'd1', xFor, xToPrice)
+        : { master: false, followUp: false };
+      const longDState = hasLeft && dSide === 'bullish'
+        ? rsiMasterState(frameIndex, 'long', 'd1', xFor, xToPrice)
+        : { master: false, followUp: false };
+      const shortH4State = hasRight && h4Side === 'bearish'
+        ? rsiMasterState(frameIndex, 'short', 'h4', xFor, xToPrice)
+        : { master: false, followUp: false };
+      const longH4State = hasLeft && h4Side === 'bullish'
+        ? rsiMasterState(frameIndex, 'long', 'h4', xFor, xToPrice)
+        : { master: false, followUp: false };
+
+      return {
+        shortDMaster: shortDState.master,
+        shortDFollowUp: shortDState.followUp,
+        longDMaster: longDState.master,
+        longDFollowUp: longDState.followUp,
+        shortH4Master: shortH4State.master,
+        shortH4FollowUp: shortH4State.followUp,
+        longH4Master: longH4State.master,
+        longH4FollowUp: longH4State.followUp,
+      };
+    }
+
+    function rsiSignalForIntrusion(intrusion, context, previousRsiSide = null, masterContext = null) {
       if (!intrusion?.entrants?.length || !context) return null;
       const hasLeft = intrusion.left?.length > 0;
       const hasRight = intrusion.right?.length > 0;
       const currentSide = rsiSide(context);
       const previousSide = previousRsiSide?.side;
-      const regimeFlipDown = hasRight && currentSide === 'below' && previousSide === 'above';
-      const regimeFlipUp = hasLeft && currentSide === 'above' && previousSide === 'below';
+      const currentDailySide = dailyRsiSide(context);
+      const previousDailySide = previousRsiSide?.dailySide;
+      const regimeFlipDown =
+        hasRight &&
+        currentDailySide === 'bearish' &&
+        (previousDailySide === 'bullish' || previousSide === 'above');
+      const regimeFlipUp =
+        hasLeft &&
+        currentDailySide === 'bullish' &&
+        (previousDailySide === 'bearish' || previousSide === 'below');
+      const currentH4Side = timeframeRsiSide(context, 'h4');
+      const isBearishDMaster = hasRight && currentDailySide === 'bearish' && masterContext?.shortDMaster;
+      const isBullishDMaster = hasLeft && currentDailySide === 'bullish' && masterContext?.longDMaster;
+      const isBearishH4Master = hasRight && currentH4Side === 'bearish' && masterContext?.shortH4Master;
+      const isBullishH4Master = hasLeft && currentH4Side === 'bullish' && masterContext?.longH4Master;
+      const isBearishDFollowUp = hasRight && currentDailySide === 'bearish' && masterContext?.shortDFollowUp;
+      const isBullishDFollowUp = hasLeft && currentDailySide === 'bullish' && masterContext?.longDFollowUp;
+      const isBearishH4FollowUp = hasRight && currentH4Side === 'bearish' && masterContext?.shortH4FollowUp;
+      const isBullishH4FollowUp = hasLeft && currentH4Side === 'bullish' && masterContext?.longH4FollowUp;
+
+      if (isBearishDMaster) {
+        return {
+          direction: 'short',
+          colorKey: 'dShort',
+          kind: masterContext?.shortH4Master ? 'master-daily-h4-regime' : 'master-daily-regime',
+          label: masterContext?.shortH4Master ? 'MASTER D+4H RSI <50' : 'MASTER D RSI <50',
+        };
+      }
+
+      if (isBullishDMaster) {
+        return {
+          direction: 'long',
+          colorKey: 'dLong',
+          kind: masterContext?.longH4Master ? 'master-daily-h4-regime' : 'master-daily-regime',
+          label: masterContext?.longH4Master ? 'MASTER D+4H RSI >50' : 'MASTER D RSI >50',
+        };
+      }
+
+      if (isBearishDFollowUp) {
+        return {
+          direction: 'short',
+          colorKey: 'dShort',
+          kind: masterContext?.shortH4FollowUp ? 'daily-h4-master-follow-up' : 'daily-master-follow-up',
+          label: masterContext?.shortH4FollowUp ? 'D+4H RSI <50 follow-up' : 'D RSI <50 follow-up',
+        };
+      }
+
+      if (isBullishDFollowUp) {
+        return {
+          direction: 'long',
+          colorKey: 'dLong',
+          kind: masterContext?.longH4FollowUp ? 'daily-h4-master-follow-up' : 'daily-master-follow-up',
+          label: masterContext?.longH4FollowUp ? 'D+4H RSI >50 follow-up' : 'D RSI >50 follow-up',
+        };
+      }
+
+      if (isBearishH4Master) {
+        return {
+          direction: 'short',
+          colorKey: 'h4Short',
+          kind: 'master-h4-regime',
+          label: 'MASTER 4H RSI <50',
+        };
+      }
+
+      if (isBullishH4Master) {
+        return {
+          direction: 'long',
+          colorKey: 'h4Long',
+          kind: 'master-h4-regime',
+          label: 'MASTER 4H RSI >50',
+        };
+      }
+
+      if (isBearishH4FollowUp) {
+        return {
+          direction: 'short',
+          colorKey: 'h4Short',
+          kind: 'h4-master-follow-up',
+          label: '4H RSI <50 follow-up',
+        };
+      }
+
+      if (isBullishH4FollowUp) {
+        return {
+          direction: 'long',
+          colorKey: 'h4Long',
+          kind: 'h4-master-follow-up',
+          label: '4H RSI >50 follow-up',
+        };
+      }
 
       if (hasRight && context.shortImpulseCandidate) {
         return {
@@ -2303,6 +2530,10 @@
         long: css.getPropertyValue('--rsi-long').trim(),
         short: css.getPropertyValue('--rsi-short').trim(),
         watch: css.getPropertyValue('--rsi-watch').trim(),
+        dLong: css.getPropertyValue('--rsi-master-d-long').trim(),
+        dShort: css.getPropertyValue('--rsi-master-d-short').trim(),
+        h4Long: css.getPropertyValue('--rsi-master-4h-long').trim(),
+        h4Short: css.getPropertyValue('--rsi-master-4h-short').trim(),
       };
       const zoneColors = {
         L3: css.getPropertyValue('--long-3').trim(),
@@ -2340,7 +2571,8 @@
       const intrusion = getGapIntrusion(frameIndex, xFor, xToPrice);
       const rsiContext = getRsiContext(frameIndex);
       const previousRsiSide = previousIntrusionRsiSide(frameIndex, xFor, xToPrice);
-      const rsiSignal = rsiSignalForIntrusion(intrusion, rsiContext, previousRsiSide);
+      const masterContext = masterIntrusionContext(frameIndex, intrusion, rsiContext, xFor, xToPrice);
+      const rsiSignal = rsiSignalForIntrusion(intrusion, rsiContext, previousRsiSide, masterContext);
       const tradeRange = getTradeRange();
       const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, tradeRange.min, tradeRange.max);
       const tpHits = getTpHits(frameIndex, xFor, xToPrice, tradeRange.min, tradeRange.max);
@@ -2351,7 +2583,7 @@
         for (const item of intrusion.entrants) {
           if (rsiSignal.direction === 'short' && item.gapSide !== 'right') continue;
           if (rsiSignal.direction === 'long' && item.gapSide !== 'left') continue;
-          intrusionColorByKey.set(item.key, rsiColors[rsiSignal.direction] || rsiColors.watch);
+          intrusionColorByKey.set(item.key, rsiColors[rsiSignal.colorKey] || rsiColors[rsiSignal.direction] || rsiColors.watch);
         }
       }
 
