@@ -27,6 +27,9 @@
       --cg-whale-15: #fb923c;
       --cg-whale-20: #ef4444;
       --cg-whale-30: #ff1f3d;
+      --rsi-long: #22c55e;
+      --rsi-short: #ef4444;
+      --rsi-watch: #38bdf8;
       --border: rgba(236, 242, 248, 0.14);
     }
 
@@ -214,6 +217,18 @@
 
     .gap-alert.is-hot {
       color: var(--new);
+    }
+
+    .gap-alert.is-rsi-long {
+      color: var(--rsi-long);
+    }
+
+    .gap-alert.is-rsi-short {
+      color: var(--rsi-short);
+    }
+
+    .rsi-study-card {
+      grid-column: span 2;
     }
 
     .liquidity-counter-card {
@@ -630,6 +645,11 @@
           </div>
         </div>
       </div>
+      <div class="gap-card rsi-study-card">
+        <div class="gap-label">4H/D RSI study</div>
+        <div class="gap-value" id="rsiStudyValue">-</div>
+        <div class="gap-status" id="rsiStudyStatus">Waiting for data</div>
+      </div>
       <div class="gap-card gap-card--wide">
         <div class="gap-label">Trade zones</div>
         <div class="gap-value" id="tradeZoneValue">-</div>
@@ -731,6 +751,8 @@
     const liqShortCell = document.getElementById('liqShortCell');
     const liqShortValue = document.getElementById('liqShortValue');
     const liqShortMeta = document.getElementById('liqShortMeta');
+    const rsiStudyValue = document.getElementById('rsiStudyValue');
+    const rsiStudyStatus = document.getElementById('rsiStudyStatus');
     const tradeZoneValue = document.getElementById('tradeZoneValue');
     const tradeZoneStatus = document.getElementById('tradeZoneStatus');
     const tradePlanValue = document.getElementById('tradePlanValue');
@@ -1155,6 +1177,65 @@
       const left = entrants.filter((bar) => bar.gapSide === 'left');
       const right = entrants.filter((bar) => bar.gapSide === 'right');
       return { previousGap, entrants, left, right };
+    }
+
+    function getRsiContext(frameIndex) {
+      const frames = payload?.rsiStudy?.frames;
+      if (!Array.isArray(frames)) return null;
+      return frames.find((item) => item.i === frameIndex) || null;
+    }
+
+    function rsiValueText(point) {
+      return Number.isFinite(Number(point?.rsi)) ? Number(point.rsi).toFixed(1) : '-';
+    }
+
+    function rsiContextLabel(context) {
+      if (!context) return 'RSI -';
+      const h4 = rsiValueText(context.h4);
+      const d1 = rsiValueText(context.d1);
+      const tags = [];
+      if (context.h4FreshCross) tags.push(`4H ${context.h4FreshCross === 'down' ? '<50' : '>50'}`);
+      if (context.d1FreshCross) tags.push(`D ${context.d1FreshCross === 'down' ? '<50' : '>50'}`);
+      if (!tags.length && context.bothNearOrCross) tags.push('4H+D near 50');
+      if (!tags.length && context.anyNearOrCross) tags.push('near 50');
+      return `RSI 4H ${h4} / D ${d1}${tags.length ? ` | ${tags.join(' + ')}` : ''}`;
+    }
+
+    function rsiSignalForIntrusion(intrusion, context) {
+      if (!intrusion?.entrants?.length || !context) return null;
+      const hasLeft = intrusion.left?.length > 0;
+      const hasRight = intrusion.right?.length > 0;
+
+      if (hasRight && context.shortImpulseCandidate) {
+        return { direction: 'short', kind: 'fresh-cross', label: 'RSI fresh <50' };
+      }
+
+      if (hasLeft && context.longImpulseCandidate) {
+        return { direction: 'long', kind: 'fresh-cross', label: 'RSI fresh >50' };
+      }
+
+      if ((hasLeft || hasRight) && context.bothNearOrCross) {
+        return { direction: 'watch', kind: 'near-50', label: 'RSI 4H+D near 50' };
+      }
+
+      return null;
+    }
+
+    function updateRsiStudyMonitor(frameIndex) {
+      const study = payload?.rsiStudy;
+      const context = getRsiContext(frameIndex);
+      if (!study?.enabled) {
+        rsiStudyValue.textContent = '-';
+        rsiStudyStatus.textContent = 'No RSI study data';
+        return;
+      }
+
+      rsiStudyValue.textContent = context ? rsiContextLabel(context) : 'Outside coverage';
+      const coverage = study.coverage?.h4
+        ? `4H ${nlTime(study.coverage.h4.from)}-${nlTime(study.coverage.h4.to)}`
+        : '4H coverage unavailable';
+      const zone = `${study.zoneLow}-${study.zoneHigh}`;
+      rsiStudyStatus.textContent = `${study.market} RSI${study.period} zone ${zone} | ${coverage}`;
     }
 
     function getLiquiditySplit(frame, gap) {
@@ -1963,7 +2044,7 @@
       ctx.globalAlpha = 1;
     }
 
-    function updateGapMonitor(frame, gap, intrusion) {
+    function updateGapMonitor(frame, gap, intrusion, rsiSignal) {
       if (!gap || !frame) {
         gapWidth.textContent = '-';
         gapLeft.textContent = '-';
@@ -1971,7 +2052,7 @@
         gapRight.textContent = '-';
         gapStatus.textContent = 'No clean two-sided gap for current filters';
         gapAlert.textContent = 'No intrusions';
-        gapAlert.classList.remove('is-hot');
+        gapAlert.classList.remove('is-hot', 'is-rsi-long', 'is-rsi-short');
         return;
       }
 
@@ -1990,11 +2071,17 @@
           .slice(0, 4)
           .map((bar) => `${bar.side}${bar.leverage} ${money(bar.price)}`)
           .join(', ');
-        gapAlert.textContent = `${nlTime(frame.t)}: ${sides || 'inside'} gap intrusion | ${zones}`;
-        gapAlert.classList.add('is-hot');
+        gapAlert.textContent = [
+          `${nlTime(frame.t)}: ${sides || 'inside'} gap intrusion`,
+          zones,
+          rsiSignal?.label
+        ].filter(Boolean).join(' | ');
+        gapAlert.classList.toggle('is-rsi-long', rsiSignal?.direction === 'long');
+        gapAlert.classList.toggle('is-rsi-short', rsiSignal?.direction === 'short');
+        gapAlert.classList.toggle('is-hot', !rsiSignal || rsiSignal.direction === 'watch');
       } else {
         gapAlert.textContent = 'No intrusions';
-        gapAlert.classList.remove('is-hot');
+        gapAlert.classList.remove('is-hot', 'is-rsi-long', 'is-rsi-short');
       }
     }
 
@@ -2157,6 +2244,11 @@
         cg20: css.getPropertyValue('--cg-whale-20').trim(),
         cg30: css.getPropertyValue('--cg-whale-30').trim(),
       };
+      const rsiColors = {
+        long: css.getPropertyValue('--rsi-long').trim(),
+        short: css.getPropertyValue('--rsi-short').trim(),
+        watch: css.getPropertyValue('--rsi-watch').trim(),
+      };
       const zoneColors = {
         L3: css.getPropertyValue('--long-3').trim(),
         L5: css.getPropertyValue('--long-5').trim(),
@@ -2191,11 +2283,21 @@
 
       const gap = getVisualGapForBars(frame, monitorBars, xFor, xToPrice);
       const intrusion = getGapIntrusion(frameIndex, xFor, xToPrice);
+      const rsiContext = getRsiContext(frameIndex);
+      const rsiSignal = rsiSignalForIntrusion(intrusion, rsiContext);
       const tradeRange = getTradeRange();
       const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, tradeRange.min, tradeRange.max);
       const tpHits = getTpHits(frameIndex, xFor, xToPrice, tradeRange.min, tradeRange.max);
       const drawableVisibleBars = visibleBars.filter((bar) => !isContextInsideGap(bar, gap));
       const maxCount = Math.max(1, ...drawableVisibleBars.map((bar) => bar.count));
+      const intrusionColorByKey = new Map();
+      if (intrusion?.entrants?.length && rsiSignal) {
+        for (const item of intrusion.entrants) {
+          if (rsiSignal.direction === 'short' && item.gapSide !== 'right') continue;
+          if (rsiSignal.direction === 'long' && item.gapSide !== 'left') continue;
+          intrusionColorByKey.set(item.key, rsiColors[rsiSignal.direction] || rsiColors.watch);
+        }
+      }
 
       drawGrid(area, minPrice, maxPrice, maxCount);
       drawGap(area, gap, priceColor);
@@ -2207,8 +2309,9 @@
         const crispX = Math.round(x - barWidth / 2);
         const isPublicMinor = activeSource === 'open' && publicNoiseThreshold && bar.count < publicNoiseThreshold;
         const isPublicContext = activeSource === 'open' && bar.contextOnly;
-        ctx.fillStyle = colorForZone(bar.side, bar.leverage);
-        ctx.globalAlpha = isPublicContext ? 0.36 : isPublicMinor ? 0.2 : modeInput.value === 'new' ? 0.86 : 0.62;
+        const rsiIntrusionColor = intrusionColorByKey.get(bar.key);
+        ctx.fillStyle = rsiIntrusionColor || colorForZone(bar.side, bar.leverage);
+        ctx.globalAlpha = rsiIntrusionColor ? 0.95 : isPublicContext ? 0.36 : isPublicMinor ? 0.2 : modeInput.value === 'new' ? 0.86 : 0.62;
         ctx.fillRect(crispX, Math.round(area.bottom - barHeight), barWidth, Math.round(barHeight));
       }
 
@@ -2235,10 +2338,10 @@
       if (intrusion?.entrants?.length) {
         ctx.save();
         ctx.setLineDash([3, 3]);
-        ctx.strokeStyle = newColor;
-        ctx.lineWidth = 5;
         for (const item of intrusion.entrants) {
           if (item.price < minPrice || item.price > maxPrice) continue;
+          ctx.strokeStyle = intrusionColorByKey.get(item.key) || newColor;
+          ctx.lineWidth = intrusionColorByKey.has(item.key) ? 6 : 5;
           const x = xFor(item.price) + leverageOffset(item.leverage);
           ctx.beginPath();
           ctx.moveTo(x, area.top);
@@ -2304,8 +2407,9 @@
       ctx.fillText(`${sourceName} | ${nlTime(frame.t)} NL | ${priceLevel(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
 
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
-      updateGapMonitor(frame, gap, intrusion);
+      updateGapMonitor(frame, gap, intrusion, rsiSignal);
       updateLiquidityCounter(frameIndex, frame, gap);
+      updateRsiStudyMonitor(frameIndex);
       updateTradeZoneMonitor(frame, gap, tradeZones, tpHits);
       updateTradePlanMonitor(frame);
       maybeSendGapAlert(frameIndex, frame, intrusion);

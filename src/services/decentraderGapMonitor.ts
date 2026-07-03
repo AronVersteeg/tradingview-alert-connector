@@ -12,6 +12,7 @@ const LEVERAGES = [3, 5, 10];
 const COINGLASS_WS_HOST = 'wss.coinglass.com';
 const COINGLASS_WS_PATH = '/v2/ws';
 const COINGLASS_WHALE_URL = 'https://www.coinglass.com/large-orderbook-statistics';
+const DYDX_INDEXER_URL = 'https://indexer.dydx.trade/v4';
 
 type DecentraderRow = Record<string, any>;
 
@@ -116,6 +117,55 @@ type CoinGlassWhaleSnapshot = {
   history: CoinGlassWhaleHistoryLevel[];
   historyUpdatedAt?: string;
   historyRetentionHours: number;
+};
+
+type DydxRsiCandle = {
+  startedAt: string;
+  resolution: string;
+  close: string;
+};
+
+type RsiPoint = {
+  startedAt: string;
+  startedAtMs: number;
+  close: number;
+  rsi?: number;
+  previousRsi?: number;
+  near50?: boolean;
+  cross50?: boolean;
+  crossDirection?: 'up' | 'down';
+  slope?: number;
+};
+
+type RsiFrameContext = {
+  i: number;
+  t: string;
+  h4?: RsiPoint;
+  d1?: RsiPoint;
+  bothNearOrCross: boolean;
+  anyNearOrCross: boolean;
+  h4FreshCross?: 'up' | 'down';
+  d1FreshCross?: 'up' | 'down';
+  freshCrossDirection?: 'up' | 'down';
+  longImpulseCandidate: boolean;
+  shortImpulseCandidate: boolean;
+  bias: 'long' | 'short' | 'neutral';
+  score: number;
+};
+
+type RsiStudyPayload = {
+  enabled: boolean;
+  source: 'dydx';
+  market: string;
+  period: number;
+  zoneLow: number;
+  zoneHigh: number;
+  fetchedAt: string;
+  coverage: {
+    h4?: { from: string; to: string; count: number };
+    d1?: { from: string; to: string; count: number };
+  };
+  frames: RsiFrameContext[];
 };
 
 type TpHit = {
@@ -385,6 +435,13 @@ const coinGlassWhaleCache: {
   levels: []
 };
 let coinGlassWhaleFetchPromise: Promise<CoinGlassWhaleLevel[]> | null = null;
+const rsiStudyCache: {
+  market?: string;
+  fetchedAt?: number;
+  payload?: RsiStudyPayload;
+  error?: string;
+} = {};
+let rsiStudyFetchPromise: Promise<RsiStudyPayload | undefined> | null = null;
 
 function priceKey(price: number): string {
   return price.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
@@ -2154,6 +2211,260 @@ function backtestTpZones(rows: DecentraderRow[], options: TpBacktestOptions = {}
     featureSummary,
     trades: trades.slice(-50)
   };
+}
+
+function decentraderRsiStudyEnabled(): boolean {
+  return parseBool(process.env.DECENTRADER_RSI_STUDY_ENABLED, true);
+}
+
+function decentraderRsiPeriod(): number {
+  return Math.max(2, Math.min(50, Math.floor(envPositiveNumber('DECENTRADER_RSI_PERIOD', 14))));
+}
+
+function decentraderRsiZoneLow(): number {
+  return clamp(envPositiveNumber('DECENTRADER_RSI_ZONE_LOW', 45), 1, 99);
+}
+
+function decentraderRsiZoneHigh(): number {
+  return clamp(envPositiveNumber('DECENTRADER_RSI_ZONE_HIGH', 55), 1, 99);
+}
+
+function decentraderRsiStudyCacheMs(): number {
+  return envPositiveNumber('DECENTRADER_RSI_STUDY_CACHE_SECONDS', 600) * 1000;
+}
+
+function decentraderRsiMarket(): string {
+  return String(process.env.DECENTRADER_RSI_MARKET || decentraderTradeMarket() || 'BTC-USD')
+    .replace(/_/g, '-')
+    .toUpperCase();
+}
+
+async function fetchDydxRsiCandles(market: string, resolution: '4HOURS' | '1DAY', limit: number): Promise<DydxRsiCandle[]> {
+  const response = await axios.get(`${DYDX_INDEXER_URL}/candles/perpetualMarkets/${encodeURIComponent(market)}`, {
+    timeout: 30000,
+    params: { resolution, limit }
+  });
+  const candles = response.data?.candles;
+  if (!Array.isArray(candles)) {
+    throw new Error(`dYdX ${resolution} candle response did not contain candles.`);
+  }
+
+  return candles
+    .slice()
+    .sort((a: DydxRsiCandle, b: DydxRsiCandle) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+}
+
+function calculateRsiPoints(candles: DydxRsiCandle[], period: number, zoneLow: number, zoneHigh: number): RsiPoint[] {
+  const closes = candles.map((candle) => parseNumber(candle.close));
+  const points = candles.map((candle, index) => ({
+    startedAt: candle.startedAt,
+    startedAtMs: Date.parse(candle.startedAt),
+    close: closes[index] || 0
+  })) as RsiPoint[];
+
+  if (candles.length <= period) return points;
+
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let index = 1; index <= period; index += 1) {
+    const change = numberOrZero(closes[index]) - numberOrZero(closes[index - 1]);
+    avgGain += Math.max(0, change);
+    avgLoss += Math.max(0, -change);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+
+  function rsiFromAverages(): number {
+    if (avgLoss === 0) return 100;
+    const rs = avgGain / avgLoss;
+    return 100 - 100 / (1 + rs);
+  }
+
+  for (let index = period; index < candles.length; index += 1) {
+    if (index > period) {
+      const change = numberOrZero(closes[index]) - numberOrZero(closes[index - 1]);
+      avgGain = (avgGain * (period - 1) + Math.max(0, change)) / period;
+      avgLoss = (avgLoss * (period - 1) + Math.max(0, -change)) / period;
+    }
+
+    const rsi = rsiFromAverages();
+    const previousRsi = points[index - 1]?.rsi;
+    const cross50 = previousRsi !== undefined && ((previousRsi < 50 && rsi >= 50) || (previousRsi > 50 && rsi <= 50));
+    points[index] = {
+      ...points[index],
+      rsi: Number(rsi.toFixed(2)),
+      previousRsi,
+      near50: rsi >= zoneLow && rsi <= zoneHigh,
+      cross50,
+      crossDirection: cross50 ? (rsi >= 50 ? 'up' : 'down') : undefined,
+      slope: previousRsi !== undefined ? Number((rsi - previousRsi).toFixed(2)) : undefined
+    };
+  }
+
+  return points;
+}
+
+function rsiPointAtOrBefore(points: RsiPoint[], timestampMs: number): RsiPoint | undefined {
+  let low = 0;
+  let high = points.length - 1;
+  let best: RsiPoint | undefined;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const point = points[mid];
+    if (point.startedAtMs <= timestampMs) {
+      best = point;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return best?.rsi !== undefined ? best : undefined;
+}
+
+function compactRsiPoint(point: RsiPoint | undefined): RsiPoint | undefined {
+  if (!point) return undefined;
+  return {
+    startedAt: point.startedAt,
+    startedAtMs: point.startedAtMs,
+    close: point.close,
+    rsi: point.rsi,
+    previousRsi: point.previousRsi,
+    near50: point.near50,
+    cross50: point.cross50,
+    crossDirection: point.crossDirection,
+    slope: point.slope
+  };
+}
+
+function rsiFrameBias(h4: RsiPoint | undefined, d1: RsiPoint | undefined): 'long' | 'short' | 'neutral' {
+  const slopes = [h4?.slope, d1?.slope].filter((value): value is number => Number.isFinite(value));
+  if (slopes.length < 2) return 'neutral';
+  if (slopes.every((value) => value > 0)) return 'long';
+  if (slopes.every((value) => value < 0)) return 'short';
+  return 'neutral';
+}
+
+function freshRsiCrossDirection(
+  point: RsiPoint | undefined,
+  timestampMs: number,
+  resolutionMs: number
+): 'up' | 'down' | undefined {
+  if (!point?.cross50 || !point.crossDirection) return undefined;
+  return timestampMs >= point.startedAtMs && timestampMs < point.startedAtMs + resolutionMs
+    ? point.crossDirection
+    : undefined;
+}
+
+async function buildRsiStudyPayload(rows: DecentraderRow[], market: string): Promise<RsiStudyPayload | undefined> {
+  if (!decentraderRsiStudyEnabled()) return undefined;
+
+  const period = decentraderRsiPeriod();
+  const zoneLow = decentraderRsiZoneLow();
+  const zoneHigh = Math.max(zoneLow, decentraderRsiZoneHigh());
+  const [h4Candles, d1Candles] = await Promise.all([
+    fetchDydxRsiCandles(market, '4HOURS', 1000),
+    fetchDydxRsiCandles(market, '1DAY', 500)
+  ]);
+  const h4Points = calculateRsiPoints(h4Candles, period, zoneLow, zoneHigh);
+  const d1Points = calculateRsiPoints(d1Candles, period, zoneLow, zoneHigh);
+  const frames: RsiFrameContext[] = [];
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const timestampMs = coinGlassFrameTimeMs(rows[index]?.timestamp);
+    if (!timestampMs) continue;
+
+    const h4 = rsiPointAtOrBefore(h4Points, timestampMs);
+    const d1 = rsiPointAtOrBefore(d1Points, timestampMs);
+    const h4Match = Boolean(h4?.near50 || h4?.cross50);
+    const d1Match = Boolean(d1?.near50 || d1?.cross50);
+    const bothNearOrCross = h4Match && d1Match;
+    const anyNearOrCross = h4Match || d1Match;
+    const h4FreshCross = freshRsiCrossDirection(h4, timestampMs, 4 * 60 * 60 * 1000);
+    const d1FreshCross = freshRsiCrossDirection(d1, timestampMs, 24 * 60 * 60 * 1000);
+    const hasFreshCrossUp = h4FreshCross === 'up' || d1FreshCross === 'up';
+    const hasFreshCrossDown = h4FreshCross === 'down' || d1FreshCross === 'down';
+    const longImpulseCandidate = hasFreshCrossUp && (h4Match || d1Match);
+    const shortImpulseCandidate = hasFreshCrossDown && (h4Match || d1Match);
+    frames.push({
+      i: index,
+      t: String(rows[index]?.timestamp || ''),
+      h4: compactRsiPoint(h4),
+      d1: compactRsiPoint(d1),
+      bothNearOrCross,
+      anyNearOrCross,
+      h4FreshCross,
+      d1FreshCross,
+      freshCrossDirection: hasFreshCrossUp ? 'up' : hasFreshCrossDown ? 'down' : undefined,
+      longImpulseCandidate,
+      shortImpulseCandidate,
+      bias: rsiFrameBias(h4, d1),
+      score:
+        (h4Match ? 1 : 0) +
+        (d1Match ? 1 : 0) +
+        (bothNearOrCross ? 1 : 0) +
+        (h4FreshCross ? 2 : 0) +
+        (d1FreshCross ? 2 : 0)
+    });
+  }
+
+  return {
+    enabled: true,
+    source: 'dydx',
+    market,
+    period,
+    zoneLow,
+    zoneHigh,
+    fetchedAt: new Date().toISOString(),
+    coverage: {
+      h4: h4Candles.length
+        ? { from: h4Candles[0].startedAt, to: h4Candles[h4Candles.length - 1].startedAt, count: h4Candles.length }
+        : undefined,
+      d1: d1Candles.length
+        ? { from: d1Candles[0].startedAt, to: d1Candles[d1Candles.length - 1].startedAt, count: d1Candles.length }
+        : undefined
+    },
+    frames
+  };
+}
+
+async function rsiStudyForRows(rows: DecentraderRow[] | undefined): Promise<RsiStudyPayload | undefined> {
+  if (!decentraderRsiStudyEnabled()) return undefined;
+  if (!rows?.length) return undefined;
+
+  const market = decentraderRsiMarket();
+  const now = Date.now();
+  if (
+    rsiStudyCache.payload &&
+    rsiStudyCache.market === market &&
+    rsiStudyCache.fetchedAt &&
+    now - rsiStudyCache.fetchedAt < decentraderRsiStudyCacheMs()
+  ) {
+    return rsiStudyCache.payload;
+  }
+
+  if (rsiStudyFetchPromise) return rsiStudyFetchPromise;
+
+  rsiStudyFetchPromise = buildRsiStudyPayload(rows, market)
+    .then((payload) => {
+      rsiStudyCache.market = market;
+      rsiStudyCache.fetchedAt = Date.now();
+      rsiStudyCache.payload = payload;
+      rsiStudyCache.error = undefined;
+      return payload;
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      rsiStudyCache.error = message;
+      console.warn('dYdX RSI study refresh failed; map will continue without RSI annotations.', { market, error: message });
+      return rsiStudyCache.payload;
+    })
+    .finally(() => {
+      rsiStudyFetchPromise = null;
+    });
+
+  return rsiStudyFetchPromise;
 }
 
 function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
@@ -4562,12 +4873,14 @@ export class DecentraderGapMonitor {
     await refreshCoinGlassWhaleLevels('timelapse');
     if (this.latestTimelapsePayload) {
       this.latestTimelapsePayload.coinGlassWhaleLevels = coinglassWhaleSnapshot();
+      this.latestTimelapsePayload.rsiStudy = await rsiStudyForRows(this.latestRows);
       return this.latestTimelapsePayload;
     }
 
     const rows = await fetchSnapshot(config.symbol);
     this.latestRows = rows;
     this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
+    this.latestTimelapsePayload.rsiStudy = await rsiStudyForRows(rows);
     return this.latestTimelapsePayload;
   }
 

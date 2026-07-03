@@ -81,6 +81,17 @@ COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD=200
 COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS=336
 ```
 
+The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. Intrusion histograms are colored as early impulse candidates when a right-edge intrusion coincides with a fresh move back below 50, or a left-edge intrusion coincides with a fresh move back above 50. This is visual research only until promoted into a trade filter.
+
+```text
+DECENTRADER_RSI_STUDY_ENABLED=true
+DECENTRADER_RSI_MARKET=BTC-USD
+DECENTRADER_RSI_PERIOD=14
+DECENTRADER_RSI_ZONE_LOW=45
+DECENTRADER_RSI_ZONE_HIGH=55
+DECENTRADER_RSI_STUDY_CACHE_SECONDS=600
+```
+
 Manual check:
 
 ```text
