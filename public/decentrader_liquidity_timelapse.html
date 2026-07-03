@@ -781,6 +781,7 @@
     let panStartView = null;
     const activePointers = new Map();
     let pinchStart = null;
+    let activeDrawCache = null;
     const BAR_WIDTH = 4;
     const GAP_EDGE_PADDING = 3;
 
@@ -1073,6 +1074,11 @@
 
     function getFrameEvents(frameIndex, options = {}) {
       const mode = options.mode || modeInput.value;
+      const cacheKey = `${frameIndex}|${mode}|${Boolean(options.includeContext)}|${sideInput.value}|${levInput.value}`;
+      if (activeDrawCache?.frameEvents?.has(cacheKey)) {
+        return activeDrawCache.frameEvents.get(cacheKey);
+      }
+
       const bins = new Map();
       const firstSeen = [];
       const eventGroups = [{ events: payload.events || [], context: false }];
@@ -1112,7 +1118,9 @@
         if (item.first) firstSeen.push(item);
       }
 
-      return { bars: [...bins.values()], firstSeen };
+      const result = { bars: [...bins.values()], firstSeen };
+      activeDrawCache?.frameEvents?.set(cacheKey, result);
+      return result;
     }
 
     function publicMajorThreshold(bars) {
@@ -1145,6 +1153,9 @@
 
     function getGapIntrusion(frameIndex, xFor, xToPrice) {
       if (frameIndex <= 0) return null;
+      if (activeDrawCache?.gapIntrusions?.has(frameIndex)) {
+        return activeDrawCache.gapIntrusions.get(frameIndex);
+      }
 
       const previousFrame = payload.frames[frameIndex - 1];
       const currentFrame = payload.frames[frameIndex];
@@ -1163,7 +1174,10 @@
         currentFrame
       );
       const previousGap = getVisualGapForBars(previousFrame, previousGapBars, xFor, xToPrice);
-      if (!previousGap || !currentFrame || !Number.isFinite(currentFrame.price)) return null;
+      if (!previousGap || !currentFrame || !Number.isFinite(currentFrame.price)) {
+        activeDrawCache?.gapIntrusions?.set(frameIndex, null);
+        return null;
+      }
 
       const previousCounts = new Map(previousSignalBars.map((bar) => [bar.key, bar.count]));
       const entrants = currentSignalBars
@@ -1176,11 +1190,17 @@
           sideOfPrice: bar.price < currentFrame.price ? 'left' : bar.price > currentFrame.price ? 'right' : 'price',
         }));
 
-      if (!entrants.length) return { previousGap, entrants: [], left: [], right: [] };
+      if (!entrants.length) {
+        const emptyResult = { previousGap, entrants: [], left: [], right: [] };
+        activeDrawCache?.gapIntrusions?.set(frameIndex, emptyResult);
+        return emptyResult;
+      }
 
       const left = entrants.filter((bar) => bar.gapSide === 'left');
       const right = entrants.filter((bar) => bar.gapSide === 'right');
-      return { previousGap, entrants, left, right };
+      const result = { previousGap, entrants, left, right };
+      activeDrawCache?.gapIntrusions?.set(frameIndex, result);
+      return result;
     }
 
     function getRsiContext(frameIndex) {
@@ -2499,6 +2519,10 @@
 
     function draw() {
       if (!payload) return;
+      activeDrawCache = {
+        frameEvents: new Map(),
+        gapIntrusions: new Map(),
+      };
       const frameIndex = Number(frameInput.value);
       const frame = payload.frames[frameIndex];
       const visiblePrice = ensurePriceView();
