@@ -4218,20 +4218,22 @@ export class DecentraderGapMonitor {
       if (!status.active && wasActive) {
         const signature = masterScannerDeactivationSignature(timestamp);
         events.push({ type: 'deactivated', signature, timestamp, timestampNl: nlTime(timestamp), status });
-        console.log('Decentrader Daily RSI master scanner deactivated:', {
+        console.log('Decentrader Daily RSI master zone deactivated:', {
           signature,
           timestamp,
           timestampNl: nlTime(timestamp),
           dRsi: status.dRsi,
-          usedIntrusions: state.masterScannerFertileCount || 0
+          usedIntrusions: state.masterScannerFertileCount || 0,
+          stillArmed: Boolean(state.masterScannerArmed)
         });
 
         if (smtpSettings && signature !== state.masterScannerDeactivatedSignature) {
           const emailResult = await sendEmailBestEffort(
             smtpSettings,
-            'Master scanner deactivated',
-            masterScannerBody('Daily RSI master scanner deactivated.', row, status, this.config().symbol, [
-              `Fertile intrusions used: ${state.masterScannerFertileCount || 0}/${status.maxIntrusions}`
+            'Master RSI zone deactivated',
+            masterScannerBody('Daily RSI master zone deactivated.', row, status, this.config().symbol, [
+              `Fertile intrusions used: ${state.masterScannerFertileCount || 0}/${status.maxIntrusions}`,
+              `Fertile slots still armed: ${state.masterScannerArmed ? 'yes' : 'no'}`
             ])
           );
 
