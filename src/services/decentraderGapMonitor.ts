@@ -352,6 +352,8 @@ type AlertState = {
   masterScannerActivatedAt?: string;
   masterScannerArmed?: boolean;
   masterScannerArmedAt?: string;
+  masterScannerGapLeft?: number;
+  masterScannerGapRight?: number;
   masterScannerActivatedSignature?: string;
   masterScannerDeactivatedSignature?: string;
   masterScannerFertileCount?: number;
@@ -2057,6 +2059,24 @@ function rowHighLow(row: DecentraderRow): { high: number; low: number; price: nu
   return { high, low, price };
 }
 
+function rowCandleHighLow(row: DecentraderRow): { high: number; low: number; price: number } | undefined {
+  const price = parseNumber(row?.ohlc4);
+  if (price === undefined) return undefined;
+
+  const high = Math.max(
+    price,
+    parseNumber(row?.high) ?? price,
+    parseNumber(row?.h) ?? price
+  );
+  const low = Math.min(
+    price,
+    parseNumber(row?.low) ?? price,
+    parseNumber(row?.l) ?? price
+  );
+
+  return { high, low, price };
+}
+
 function backtestTpZones(rows: DecentraderRow[], options: TpBacktestOptions = {}): any {
   const lookaheadBars = Math.max(1, Math.min(240, Math.floor(options.lookaheadBars || 48)));
   const maxTrades = Math.max(1, Math.min(1000, Math.floor(options.maxTrades || 300)));
@@ -2628,11 +2648,49 @@ function masterScannerActionLines(
     ];
   }
 
+  if (remaining > 0) {
+    return [
+      `State: RSI zone ${zoneState}; fertile scanner ${scannerState}.`,
+      `Current action: scanner stopped before all fertile slots were used (${used}/${maxIntrusions}).`,
+      'Next action: wait for the next Daily RSI master-zone touch to arm a fresh scanner cycle.'
+    ];
+  }
+
   return [
     `State: RSI zone ${zoneState}; fertile scanner ${scannerState}.`,
     `Current action: fertile slots complete (${used}/${maxIntrusions}).`,
     'Next action: wait for the next Daily RSI master-zone touch to arm a fresh scanner cycle.'
   ];
+}
+
+function masterScannerGapForFrame(rows: DecentraderRow[], frameIndex: number): Gap | undefined {
+  const row = rows[frameIndex];
+  if (!row) return undefined;
+  return cleanGapForBars(row, activeBarsForFrame(rows, frameIndex));
+}
+
+function masterScannerEdgeTouch(
+  row: DecentraderRow,
+  state: AlertState
+): { edge: 'left' | 'right'; edgePrice: number; high: number; low: number; price: number } | undefined {
+  const range = rowCandleHighLow(row);
+  if (!range) return undefined;
+
+  const left = Number(state.masterScannerGapLeft);
+  const right = Number(state.masterScannerGapRight);
+  const touchedLeft = Number.isFinite(left) && range.low <= left;
+  const touchedRight = Number.isFinite(right) && range.high >= right;
+  if (!touchedLeft && !touchedRight) return undefined;
+
+  if (touchedLeft && touchedRight) {
+    return range.price - left <= right - range.price
+      ? { edge: 'left', edgePrice: left, ...range }
+      : { edge: 'right', edgePrice: right, ...range };
+  }
+
+  return touchedLeft
+    ? { edge: 'left', edgePrice: left, ...range }
+    : { edge: 'right', edgePrice: right, ...range };
 }
 
 function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
@@ -2697,7 +2755,9 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
     frames: rows.map((row, index) => ({
       i: index,
       t: row.timestamp,
-      price: parseNumber(row.ohlc4)
+      price: parseNumber(row.ohlc4),
+      high: rowCandleHighLow(row)?.high,
+      low: rowCandleHighLow(row)?.low
     })),
     events,
     coinGlassWhaleLevels: coinglassWhaleSnapshot(),
@@ -4198,8 +4258,11 @@ export class DecentraderGapMonitor {
         state.masterScannerActive = true;
         state.masterScannerActivatedAt = timestamp;
         if (!state.masterScannerArmed || (state.masterScannerFertileCount || 0) >= status.maxIntrusions) {
+          const armGap = masterScannerGapForFrame(rows, frameIndex);
           state.masterScannerArmed = true;
           state.masterScannerArmedAt = timestamp;
+          state.masterScannerGapLeft = armGap?.left;
+          state.masterScannerGapRight = armGap?.right;
           state.masterScannerFertileCount = 0;
           state.masterScannerFertileSentSignatures = [];
           sentFertileSignatures.clear();
@@ -4222,6 +4285,7 @@ export class DecentraderGapMonitor {
             `Master scanner active - waiting for ${status.maxIntrusions} intrusions`,
             masterScannerBody('Daily RSI master scanner active.', row, status, this.config().symbol, [
               `Waiting for: ${status.maxIntrusions} fertile intrusion histo${status.maxIntrusions === 1 ? '' : 's'}`,
+              `Gap edge disarm: ${Number.isFinite(Number(state.masterScannerGapLeft)) && Number.isFinite(Number(state.masterScannerGapRight)) ? `${money(state.masterScannerGapLeft)} / ${money(state.masterScannerGapRight)}` : 'waiting for clean gap edges'}`,
               ...masterScannerActionLines(
                 state.masterScannerFertileCount || 0,
                 status.maxIntrusions,
@@ -4296,6 +4360,78 @@ export class DecentraderGapMonitor {
 
       if (!state.masterScannerArmed) continue;
 
+      if (!Number.isFinite(Number(state.masterScannerGapLeft)) || !Number.isFinite(Number(state.masterScannerGapRight))) {
+        const currentGap = masterScannerGapForFrame(rows, frameIndex);
+        if (currentGap) {
+          state.masterScannerGapLeft = currentGap.left;
+          state.masterScannerGapRight = currentGap.right;
+        }
+      }
+
+      const edgeTouch = masterScannerEdgeTouch(row, state);
+      if (edgeTouch) {
+        state.masterScannerArmed = false;
+        state.masterScannerGapLeft = undefined;
+        state.masterScannerGapRight = undefined;
+        events.push({
+          type: 'master-scanner-disarmed',
+          timestamp,
+          timestampNl: nlTime(timestamp),
+          reason: `Gap ${edgeTouch.edge} edge was touched before remaining fertile intrusions were used.`,
+          edge: edgeTouch.edge,
+          edgePrice: edgeTouch.edgePrice,
+          high: edgeTouch.high,
+          low: edgeTouch.low,
+          price: edgeTouch.price,
+          maxIntrusions: status.maxIntrusions,
+          fertileCount: state.masterScannerFertileCount || 0,
+          status
+        });
+        console.log('Decentrader Daily RSI master scanner disarmed by gap edge touch:', {
+          timestamp,
+          timestampNl: nlTime(timestamp),
+          edge: edgeTouch.edge,
+          edgePrice: edgeTouch.edgePrice,
+          high: edgeTouch.high,
+          low: edgeTouch.low,
+          price: edgeTouch.price,
+          fertileIntrusions: state.masterScannerFertileCount || 0,
+          maxIntrusions: status.maxIntrusions
+        });
+
+        if (smtpSettings) {
+          const emailResult = await sendEmailBestEffort(
+            smtpSettings,
+            'Master scanner disarmed - gap edge touched',
+            masterScannerBody('Daily RSI master scanner disarmed by gap edge touch.', row, status, this.config().symbol, [
+              `Touched edge: ${edgeTouch.edge} ${money(edgeTouch.edgePrice)}`,
+              `Candle range: ${money(edgeTouch.low)} - ${money(edgeTouch.high)}`,
+              `Fertile intrusions used: ${state.masterScannerFertileCount || 0}/${status.maxIntrusions}`,
+              ...masterScannerActionLines(
+                state.masterScannerFertileCount || 0,
+                status.maxIntrusions,
+                false,
+                Boolean(state.masterScannerActive)
+              )
+            ])
+          );
+
+          if (emailResult.sent) {
+            result.emailSent = true;
+            result.emailSentCount += 1;
+          } else {
+            result.emailErrors.push({
+              type: 'master-scanner-disarmed-gap-edge',
+              timestamp,
+              timestampNl: nlTime(timestamp),
+              error: emailResult.error
+            });
+          }
+        }
+
+        continue;
+      }
+
       const alert = detectGapIntrusion(rows, frameIndex);
       if (!alert?.entrants.length) continue;
 
@@ -4303,6 +4439,8 @@ export class DecentraderGapMonitor {
         const currentCount = state.masterScannerFertileCount || 0;
         if (currentCount >= status.maxIntrusions) {
           state.masterScannerArmed = false;
+          state.masterScannerGapLeft = undefined;
+          state.masterScannerGapRight = undefined;
           events.push({
             type: 'master-scanner-disarmed',
             timestamp,
@@ -4375,6 +4513,8 @@ export class DecentraderGapMonitor {
         state.masterScannerFertileCount = ordinal;
         if (ordinal >= status.maxIntrusions) {
           state.masterScannerArmed = false;
+          state.masterScannerGapLeft = undefined;
+          state.masterScannerGapRight = undefined;
           events.push({
             type: 'master-scanner-disarmed',
             timestamp,
@@ -4402,6 +4542,8 @@ export class DecentraderGapMonitor {
       armed: Boolean(state.masterScannerArmed),
       activatedAt: state.masterScannerActivatedAt || null,
       armedAt: state.masterScannerArmedAt || null,
+      gapLeft: state.masterScannerGapLeft ?? null,
+      gapRight: state.masterScannerGapRight ?? null,
       dRsi: latestStatus.dRsi,
       zoneLow: latestStatus.zoneLow,
       zoneHigh: latestStatus.zoneHigh,

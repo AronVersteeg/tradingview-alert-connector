@@ -1394,6 +1394,27 @@
       return value >= zone.low && value <= zone.high;
     }
 
+    function masterGapForFrame(frameIndex, xFor, xToPrice) {
+      const frame = payload.frames[frameIndex];
+      if (!frame) return null;
+      const includeContext = activeSource === 'open';
+      const bars = getGapBarsForSource(
+        getFrameEvents(frameIndex, { mode: 'active', includeContext }).bars,
+        frame
+      );
+      return getVisualGapForBars(frame, bars, xFor, xToPrice);
+    }
+
+    function frameTouchesMasterGap(frameIndex, gap) {
+      const frame = payload.frames[frameIndex];
+      if (!frame || !gap) return false;
+      const price = Number(frame.price);
+      const high = Number.isFinite(Number(frame.high)) ? Number(frame.high) : price;
+      const low = Number.isFinite(Number(frame.low)) ? Number(frame.low) : price;
+      if (!Number.isFinite(high) || !Number.isFinite(low)) return false;
+      return low <= gap.left || high >= gap.right;
+    }
+
     function dailyMasterFertilityContext(frameIndex, intrusion, context, xFor, xToPrice) {
       const zone = masterDailyZoneConfig();
       const dRsi = dailyRsiValue(context);
@@ -1411,6 +1432,8 @@
         fertileCount: 0,
         usedAfter: 0,
         remainingAfter: zone.maxIntrusions,
+        disarmedByEdge: false,
+        disarmedAt: null,
         fertileKeys: new Set(),
       };
 
@@ -1428,13 +1451,42 @@
 
       if (activatedIndex === null) return base;
 
+      const activatedGap = masterGapForFrame(activatedIndex, xFor, xToPrice);
       let usedBefore = 0;
       for (let index = activatedIndex; index < frameIndex; index += 1) {
+        if (activatedGap && frameTouchesMasterGap(index, activatedGap)) {
+          return {
+            ...base,
+            armed: false,
+            activatedIndex,
+            activatedAt: payload.frames[activatedIndex]?.t || null,
+            usedBefore,
+            usedAfter: usedBefore,
+            remainingAfter: Math.max(0, zone.maxIntrusions - usedBefore),
+            disarmedByEdge: true,
+            disarmedAt: payload.frames[index]?.t || null,
+          };
+        }
+
         const previousIntrusion = getGapIntrusion(index, xFor, xToPrice);
         if (previousIntrusion?.entrants?.length) {
           usedBefore += previousIntrusion.entrants.length;
           if (usedBefore >= zone.maxIntrusions) break;
         }
+      }
+
+      if (activatedGap && frameTouchesMasterGap(frameIndex, activatedGap)) {
+        return {
+          ...base,
+          armed: false,
+          activatedIndex,
+          activatedAt: payload.frames[activatedIndex]?.t || null,
+          usedBefore,
+          usedAfter: usedBefore,
+          remainingAfter: Math.max(0, zone.maxIntrusions - usedBefore),
+          disarmedByEdge: true,
+          disarmedAt: payload.frames[frameIndex]?.t || null,
+        };
       }
 
       const fertileKeys = new Set();
@@ -1662,13 +1714,15 @@
       const masterZone = fertilityContext
         ? `${fertilityContext.zoneLow}-${fertilityContext.zoneHigh}`
         : `${study.masterZoneLow ?? 48}-${study.masterZoneHigh ?? 52}`;
-      if (fertilityContext?.armed || fertilityContext?.usedBefore > 0) {
+      if (fertilityContext?.armed || fertilityContext?.usedBefore > 0 || fertilityContext?.disarmedByEdge) {
         const used = Math.min(fertilityContext.maxIntrusions, fertilityContext.usedAfter);
-        rsiStudyValue.textContent = `D RSI ${dRsiText} | armed ${used}/${fertilityContext.maxIntrusions}`;
+        rsiStudyValue.textContent = `D RSI ${dRsiText} | ${fertilityContext.armed ? 'armed' : 'disarmed'} ${used}/${fertilityContext.maxIntrusions}`;
         rsiStudyStatus.textContent = fertilityContext.fertileCount > 0
           ? `Master scanner active | ${fertilityContext.fertileCount} new fertile intrusion${fertilityContext.fertileCount === 1 ? '' : 's'}`
           : fertilityContext.armed
             ? `${fertilityContext.active ? 'Master scanner active' : 'Master scanner armed'} | waiting for ${fertilityContext.remainingAfter} intrusion${fertilityContext.remainingAfter === 1 ? '' : 's'}`
+            : fertilityContext.disarmedByEdge
+              ? `Master scanner disarmed | gap edge touched at ${nlTime(fertilityContext.disarmedAt)}`
             : `Master scanner disarmed | first ${fertilityContext.maxIntrusions} intrusions already used`;
         rsiStudyCard?.classList.add(fertilityContext.armed ? 'is-master-active' : 'is-master-spent');
         if (fertilityContext.fertileCount > 0) rsiStudyCard?.classList.add('is-master-fertile');
