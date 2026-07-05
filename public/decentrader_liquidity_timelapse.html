@@ -1400,6 +1400,9 @@
       const active = isDailyRsiInMasterZone(context);
       const base = {
         active,
+        armed: false,
+        activatedIndex: null,
+        activatedAt: null,
         dRsi,
         zoneLow: zone.low,
         zoneHigh: zone.high,
@@ -1411,13 +1414,22 @@
         fertileKeys: new Set(),
       };
 
-      if (!active) return base;
+      let activatedIndex = null;
+      for (let index = frameIndex; index >= 0; index -= 1) {
+        const currentActive = isDailyRsiInMasterZone(getRsiContext(index));
+        if (!currentActive) continue;
+
+        const previousActive = index > 0 ? isDailyRsiInMasterZone(getRsiContext(index - 1)) : false;
+        if (!previousActive) {
+          activatedIndex = index;
+          break;
+        }
+      }
+
+      if (activatedIndex === null) return base;
 
       let usedBefore = 0;
-      for (let index = frameIndex - 1; index >= 1; index -= 1) {
-        const previousContext = getRsiContext(index);
-        if (!isDailyRsiInMasterZone(previousContext)) break;
-
+      for (let index = activatedIndex; index < frameIndex; index += 1) {
         const previousIntrusion = getGapIntrusion(index, xFor, xToPrice);
         if (previousIntrusion?.entrants?.length) {
           usedBefore += previousIntrusion.entrants.length;
@@ -1434,6 +1446,9 @@
       const usedAfter = Math.min(zone.maxIntrusions, usedBefore + currentEntrants.length);
       return {
         ...base,
+        armed: usedBefore < zone.maxIntrusions,
+        activatedIndex,
+        activatedAt: payload.frames[activatedIndex]?.t || null,
         usedBefore,
         fertileCount: fertileEntrants.length,
         usedAfter,
@@ -1647,15 +1662,15 @@
       const masterZone = fertilityContext
         ? `${fertilityContext.zoneLow}-${fertilityContext.zoneHigh}`
         : `${study.masterZoneLow ?? 48}-${study.masterZoneHigh ?? 52}`;
-      if (fertilityContext?.active) {
+      if (fertilityContext?.armed || fertilityContext?.usedBefore > 0) {
         const used = Math.min(fertilityContext.maxIntrusions, fertilityContext.usedAfter);
-        rsiStudyValue.textContent = `D RSI ${dRsiText} | fertile ${used}/${fertilityContext.maxIntrusions}`;
+        rsiStudyValue.textContent = `D RSI ${dRsiText} | armed ${used}/${fertilityContext.maxIntrusions}`;
         rsiStudyStatus.textContent = fertilityContext.fertileCount > 0
           ? `Master scanner active | ${fertilityContext.fertileCount} new fertile intrusion${fertilityContext.fertileCount === 1 ? '' : 's'}`
-          : fertilityContext.remainingAfter > 0
-            ? `Master scanner active | waiting for ${fertilityContext.remainingAfter} intrusion${fertilityContext.remainingAfter === 1 ? '' : 's'}`
+          : fertilityContext.armed
+            ? `${fertilityContext.active ? 'Master scanner active' : 'Master scanner armed'} | waiting for ${fertilityContext.remainingAfter} intrusion${fertilityContext.remainingAfter === 1 ? '' : 's'}`
             : `Master scanner spent | first ${fertilityContext.maxIntrusions} intrusions already used`;
-        rsiStudyCard?.classList.add(fertilityContext.remainingAfter > 0 ? 'is-master-active' : 'is-master-spent');
+        rsiStudyCard?.classList.add(fertilityContext.armed ? 'is-master-active' : 'is-master-spent');
         if (fertilityContext.fertileCount > 0) rsiStudyCard?.classList.add('is-master-fertile');
         return;
       }

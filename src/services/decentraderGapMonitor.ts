@@ -350,6 +350,8 @@ type AlertState = {
   lastLiquidityBalanceFlipSentAt?: string;
   masterScannerActive?: boolean;
   masterScannerActivatedAt?: string;
+  masterScannerArmed?: boolean;
+  masterScannerArmedAt?: string;
   masterScannerActivatedSignature?: string;
   masterScannerDeactivatedSignature?: string;
   masterScannerFertileCount?: number;
@@ -4169,9 +4171,13 @@ export class DecentraderGapMonitor {
       if (status.active && !wasActive) {
         state.masterScannerActive = true;
         state.masterScannerActivatedAt = timestamp;
-        state.masterScannerFertileCount = 0;
-        state.masterScannerFertileSentSignatures = [];
-        sentFertileSignatures.clear();
+        if (!state.masterScannerArmed || (state.masterScannerFertileCount || 0) >= status.maxIntrusions) {
+          state.masterScannerArmed = true;
+          state.masterScannerArmedAt = timestamp;
+          state.masterScannerFertileCount = 0;
+          state.masterScannerFertileSentSignatures = [];
+          sentFertileSignatures.clear();
+        }
 
         const signature = masterScannerActivationSignature(timestamp, status.zoneLow, status.zoneHigh);
         events.push({ type: 'active', signature, timestamp, timestampNl: nlTime(timestamp), status });
@@ -4246,20 +4252,19 @@ export class DecentraderGapMonitor {
 
         state.masterScannerActive = false;
         state.masterScannerActivatedAt = undefined;
-        state.masterScannerFertileCount = 0;
-        state.masterScannerFertileSentSignatures = [];
-        sentFertileSignatures.clear();
-        continue;
       }
 
-      if (!status.active) continue;
+      if (!state.masterScannerArmed) continue;
 
       const alert = detectGapIntrusion(rows, frameIndex);
       if (!alert?.entrants.length) continue;
 
       for (const entrant of alert.entrants) {
         const currentCount = state.masterScannerFertileCount || 0;
-        if (currentCount >= status.maxIntrusions) break;
+        if (currentCount >= status.maxIntrusions) {
+          state.masterScannerArmed = false;
+          break;
+        }
 
         const ordinal = currentCount + 1;
         const signature = masterScannerFertileSignature(timestamp, entrant, ordinal);
@@ -4314,6 +4319,9 @@ export class DecentraderGapMonitor {
 
         sentFertileSignatures.add(signature);
         state.masterScannerFertileCount = ordinal;
+        if (ordinal >= status.maxIntrusions) {
+          state.masterScannerArmed = false;
+        }
       }
     }
 
@@ -4322,7 +4330,9 @@ export class DecentraderGapMonitor {
     const latestStatus = dailyMasterScannerStatus(rsiStudy, latestIndex);
     result.masterScanner = {
       active: Boolean(state.masterScannerActive),
+      armed: Boolean(state.masterScannerArmed),
       activatedAt: state.masterScannerActivatedAt || null,
+      armedAt: state.masterScannerArmedAt || null,
       dRsi: latestStatus.dRsi,
       zoneLow: latestStatus.zoneLow,
       zoneHigh: latestStatus.zoneHigh,

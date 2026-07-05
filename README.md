@@ -81,7 +81,7 @@ COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD=200
 COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS=336
 ```
 
-The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. The master scanner is Daily-only: when Daily RSI is inside the configured master zone, only the first configured number of gap-intrusion histogram bars in that active zone are marked fertile. When Daily RSI leaves the zone, fertility stops and the counter resets on the next zone activation. This is visual research only until promoted into a trade filter.
+The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. The master scanner is Daily-only: when Daily RSI enters the configured master zone, the first configured number of future gap-intrusion histogram bars are armed as fertile. Those fertile slots stay armed even after Daily RSI leaves the zone; leaving the zone only sends a deactivation notification for the RSI-zone state. This is visual research only until promoted into a trade filter.
 
 ```text
 DECENTRADER_RSI_STUDY_ENABLED=true
