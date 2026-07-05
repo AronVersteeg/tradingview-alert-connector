@@ -348,6 +348,12 @@ type AlertState = {
   lastLiquidityBalanceTimestamp?: string;
   lastLiquidityBalanceFlipSentSignature?: string;
   lastLiquidityBalanceFlipSentAt?: string;
+  masterScannerActive?: boolean;
+  masterScannerActivatedAt?: string;
+  masterScannerActivatedSignature?: string;
+  masterScannerDeactivatedSignature?: string;
+  masterScannerFertileCount?: number;
+  masterScannerFertileSentSignatures?: string[];
   lastTradeExecutedSignature?: string;
   lastTradeExecutedAt?: string;
   lastTradeExecutionError?: string;
@@ -2534,6 +2540,73 @@ async function rsiStudyForRows(rows: DecentraderRow[] | undefined): Promise<RsiS
   return rsiStudyFetchPromise;
 }
 
+function rsiFrameForIndex(study: RsiStudyPayload | undefined, frameIndex: number): RsiFrameContext | undefined {
+  if (!study?.frames?.length) return undefined;
+  return study.frames.find((frame) => frame.i === frameIndex);
+}
+
+function dailyRsiValueForFrame(study: RsiStudyPayload | undefined, frameIndex: number): number | undefined {
+  const value = Number(rsiFrameForIndex(study, frameIndex)?.d1?.rsi);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function dailyMasterScannerStatus(study: RsiStudyPayload | undefined, frameIndex: number) {
+  const dRsi = dailyRsiValueForFrame(study, frameIndex);
+  const low = Number(study?.masterZoneLow ?? decentraderMasterRsiZoneLow());
+  const high = Number(study?.masterZoneHigh ?? decentraderMasterRsiZoneHigh());
+  const zoneLow = Math.min(low, high);
+  const zoneHigh = Math.max(low, high);
+  const maxIntrusions = Math.max(1, Math.floor(Number(study?.masterMaxIntrusions ?? decentraderMasterRsiMaxIntrusions())));
+
+  return {
+    active: dRsi !== undefined && dRsi >= zoneLow && dRsi <= zoneHigh,
+    dRsi,
+    zoneLow,
+    zoneHigh,
+    maxIntrusions
+  };
+}
+
+function masterScannerProcessStartIndex(rows: DecentraderRow[], lastDataTimestamp?: string): number {
+  if (!rows.length) return 0;
+  if (!lastDataTimestamp) return Math.max(0, rows.length - 1);
+
+  const lastIndex = rows.findIndex((row) => String(row.timestamp || '') === lastDataTimestamp);
+  if (lastIndex < 0) return Math.max(0, rows.length - 1);
+  return Math.min(rows.length - 1, lastIndex + 1);
+}
+
+function masterScannerActivationSignature(timestamp: string | undefined, zoneLow: number, zoneHigh: number): string {
+  return `master-active|${timestamp || '-'}|${zoneLow}-${zoneHigh}`;
+}
+
+function masterScannerDeactivationSignature(timestamp: string | undefined): string {
+  return `master-deactive|${timestamp || '-'}`;
+}
+
+function masterScannerFertileSignature(timestamp: string | undefined, bar: LiquidityBar, ordinal: number): string {
+  return `master-fertile|${timestamp || '-'}|${ordinal}|${bar.key}|${bar.newCount || 0}`;
+}
+
+function masterScannerBody(
+  title: string,
+  row: DecentraderRow | undefined,
+  status: ReturnType<typeof dailyMasterScannerStatus>,
+  symbol: string,
+  extra: string[] = []
+): string {
+  return [
+    title,
+    '',
+    `Symbol: ${symbol.toUpperCase()}`,
+    `Time: ${nlTime(String(row?.timestamp || ''))}`,
+    `Price: ${money(parseNumber(row?.ohlc4) || 0)}`,
+    `Daily RSI: ${status.dRsi !== undefined ? status.dRsi.toFixed(2) : '-'}`,
+    `Master zone: ${status.zoneLow}-${status.zoneHigh}`,
+    ...extra
+  ].join('\n');
+}
+
 function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
   const events: any[] = [];
   const prices: number[] = [];
@@ -3827,6 +3900,8 @@ export class DecentraderGapMonitor {
       this.latestRows = rows;
       void refreshCoinGlassWhaleLevels('gap-check');
       this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
+      const rsiStudy = await rsiStudyForRows(rows);
+      this.latestTimelapsePayload.rsiStudy = rsiStudy;
       const state = readState(config.stateFile);
       const previousDataTimestamp = state.lastDataTimestamp;
       const alerts = gapIntrusionsSince(rows, previousDataTimestamp);
@@ -3865,6 +3940,8 @@ export class DecentraderGapMonitor {
         liquidityBalance: null,
         liquidityBalanceFlip: null,
         liquidityBalanceFlipCount: 0,
+        masterScanner: null,
+        masterScannerEventCount: 0,
         coinGlassWhaleLevels: coinglassWhaleSnapshot(),
         lastTradeDecision: state.lastTradeDecision || null,
         duplicate: false
@@ -3874,6 +3951,7 @@ export class DecentraderGapMonitor {
       await this.maybeSyncDynamicTakeProfits(state, result);
 
       const smtpSettings = smtpSettingsFromEnv();
+      await this.processDailyMasterScanner(rows, rsiStudy, previousDataTimestamp, state, result, smtpSettings);
       const liquidityBalance = latestOneHourLiquidityBalance(rows);
       if (liquidityBalance) {
         const previousNonNeutral = state.lastLiquidityBalanceNonNeutralDirection;
@@ -4063,6 +4141,197 @@ export class DecentraderGapMonitor {
       };
       throw error;
     }
+  }
+
+  private async processDailyMasterScanner(
+    rows: DecentraderRow[],
+    rsiStudy: RsiStudyPayload | undefined,
+    previousDataTimestamp: string | undefined,
+    state: AlertState,
+    result: any,
+    smtpSettings: SmtpSettings | undefined
+  ): Promise<void> {
+    if (!rsiStudy?.enabled || !rows.length) {
+      result.masterScanner = { enabled: false, reason: 'RSI study unavailable.' };
+      return;
+    }
+
+    const startIndex = masterScannerProcessStartIndex(rows, previousDataTimestamp);
+    const sentFertileSignatures = new Set<string>(state.masterScannerFertileSentSignatures || []);
+    const events: any[] = [];
+
+    for (let frameIndex = startIndex; frameIndex < rows.length; frameIndex += 1) {
+      const row = rows[frameIndex];
+      const timestamp = String(row?.timestamp || '');
+      const status = dailyMasterScannerStatus(rsiStudy, frameIndex);
+      const wasActive = Boolean(state.masterScannerActive);
+
+      if (status.active && !wasActive) {
+        state.masterScannerActive = true;
+        state.masterScannerActivatedAt = timestamp;
+        state.masterScannerFertileCount = 0;
+        state.masterScannerFertileSentSignatures = [];
+        sentFertileSignatures.clear();
+
+        const signature = masterScannerActivationSignature(timestamp, status.zoneLow, status.zoneHigh);
+        events.push({ type: 'active', signature, timestamp, timestampNl: nlTime(timestamp), status });
+        console.log('Decentrader Daily RSI master scanner active:', {
+          signature,
+          timestamp,
+          timestampNl: nlTime(timestamp),
+          dRsi: status.dRsi,
+          zone: `${status.zoneLow}-${status.zoneHigh}`,
+          maxIntrusions: status.maxIntrusions
+        });
+
+        if (smtpSettings && signature !== state.masterScannerActivatedSignature) {
+          const emailResult = await sendEmailBestEffort(
+            smtpSettings,
+            `Master scanner active - waiting for ${status.maxIntrusions} intrusions`,
+            masterScannerBody('Daily RSI master scanner active.', row, status, this.config().symbol, [
+              `Waiting for: ${status.maxIntrusions} fertile intrusion histo${status.maxIntrusions === 1 ? '' : 's'}`
+            ])
+          );
+
+          if (emailResult.sent) {
+            state.masterScannerActivatedSignature = signature;
+            result.emailSent = true;
+            result.emailSentCount += 1;
+          } else {
+            result.emailErrors.push({
+              type: 'master-scanner-active',
+              signature,
+              timestamp,
+              timestampNl: nlTime(timestamp),
+              error: emailResult.error
+            });
+          }
+        }
+      }
+
+      if (!status.active && wasActive) {
+        const signature = masterScannerDeactivationSignature(timestamp);
+        events.push({ type: 'deactivated', signature, timestamp, timestampNl: nlTime(timestamp), status });
+        console.log('Decentrader Daily RSI master scanner deactivated:', {
+          signature,
+          timestamp,
+          timestampNl: nlTime(timestamp),
+          dRsi: status.dRsi,
+          usedIntrusions: state.masterScannerFertileCount || 0
+        });
+
+        if (smtpSettings && signature !== state.masterScannerDeactivatedSignature) {
+          const emailResult = await sendEmailBestEffort(
+            smtpSettings,
+            'Master scanner deactivated',
+            masterScannerBody('Daily RSI master scanner deactivated.', row, status, this.config().symbol, [
+              `Fertile intrusions used: ${state.masterScannerFertileCount || 0}/${status.maxIntrusions}`
+            ])
+          );
+
+          if (emailResult.sent) {
+            state.masterScannerDeactivatedSignature = signature;
+            result.emailSent = true;
+            result.emailSentCount += 1;
+          } else {
+            result.emailErrors.push({
+              type: 'master-scanner-deactivated',
+              signature,
+              timestamp,
+              timestampNl: nlTime(timestamp),
+              error: emailResult.error
+            });
+          }
+        }
+
+        state.masterScannerActive = false;
+        state.masterScannerActivatedAt = undefined;
+        state.masterScannerFertileCount = 0;
+        state.masterScannerFertileSentSignatures = [];
+        sentFertileSignatures.clear();
+        continue;
+      }
+
+      if (!status.active) continue;
+
+      const alert = detectGapIntrusion(rows, frameIndex);
+      if (!alert?.entrants.length) continue;
+
+      for (const entrant of alert.entrants) {
+        const currentCount = state.masterScannerFertileCount || 0;
+        if (currentCount >= status.maxIntrusions) break;
+
+        const ordinal = currentCount + 1;
+        const signature = masterScannerFertileSignature(timestamp, entrant, ordinal);
+        if (sentFertileSignatures.has(signature)) continue;
+
+        events.push({
+          type: 'fertile-intrusion',
+          signature,
+          timestamp,
+          timestampNl: nlTime(timestamp),
+          ordinal,
+          maxIntrusions: status.maxIntrusions,
+          entrant,
+          status
+        });
+        console.log('Decentrader Daily RSI fertile intrusion detected:', {
+          signature,
+          timestamp,
+          timestampNl: nlTime(timestamp),
+          ordinal,
+          maxIntrusions: status.maxIntrusions,
+          dRsi: status.dRsi,
+          entrant
+        });
+
+        if (smtpSettings) {
+          const emailResult = await sendEmailBestEffort(
+            smtpSettings,
+            `Intrusion Histo ${ordinal} activated`,
+            masterScannerBody(`Intrusion Histo ${ordinal} activated.`, row, status, this.config().symbol, [
+              `Histo: ${entrant.side}${entrant.leverage} ${money(entrant.price)}`,
+              `Gap side: ${entrant.gapSide || '-'}`,
+              `New count: ${entrant.newCount || 0}`,
+              `Fertile slot: ${ordinal}/${status.maxIntrusions}`
+            ])
+          );
+
+          if (emailResult.sent) {
+            result.emailSent = true;
+            result.emailSentCount += 1;
+          } else {
+            result.emailErrors.push({
+              type: 'master-scanner-fertile-intrusion',
+              signature,
+              timestamp,
+              timestampNl: nlTime(timestamp),
+              ordinal,
+              error: emailResult.error
+            });
+          }
+        }
+
+        sentFertileSignatures.add(signature);
+        state.masterScannerFertileCount = ordinal;
+      }
+    }
+
+    state.masterScannerFertileSentSignatures = Array.from(sentFertileSignatures).slice(-50);
+    const latestIndex = rows.length - 1;
+    const latestStatus = dailyMasterScannerStatus(rsiStudy, latestIndex);
+    result.masterScanner = {
+      active: Boolean(state.masterScannerActive),
+      activatedAt: state.masterScannerActivatedAt || null,
+      dRsi: latestStatus.dRsi,
+      zoneLow: latestStatus.zoneLow,
+      zoneHigh: latestStatus.zoneHigh,
+      maxIntrusions: latestStatus.maxIntrusions,
+      fertileCount: state.masterScannerFertileCount || 0,
+      events
+    };
+    result.masterScannerEventCount = events.length;
+    if (events.length) result.alertCount += events.length;
   }
 
   private async maybeSyncDynamicTakeProfits(state: AlertState, result: any): Promise<void> {
