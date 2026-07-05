@@ -1669,7 +1669,7 @@
           ? `Master scanner active | ${fertilityContext.fertileCount} new fertile intrusion${fertilityContext.fertileCount === 1 ? '' : 's'}`
           : fertilityContext.armed
             ? `${fertilityContext.active ? 'Master scanner active' : 'Master scanner armed'} | waiting for ${fertilityContext.remainingAfter} intrusion${fertilityContext.remainingAfter === 1 ? '' : 's'}`
-            : `Master scanner spent | first ${fertilityContext.maxIntrusions} intrusions already used`;
+            : `Master scanner disarmed | first ${fertilityContext.maxIntrusions} intrusions already used`;
         rsiStudyCard?.classList.add(fertilityContext.armed ? 'is-master-active' : 'is-master-spent');
         if (fertilityContext.fertileCount > 0) rsiStudyCard?.classList.add('is-master-fertile');
         return;

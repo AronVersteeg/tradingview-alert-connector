@@ -4263,6 +4263,14 @@ export class DecentraderGapMonitor {
         const currentCount = state.masterScannerFertileCount || 0;
         if (currentCount >= status.maxIntrusions) {
           state.masterScannerArmed = false;
+          events.push({
+            type: 'master-scanner-disarmed',
+            timestamp,
+            timestampNl: nlTime(timestamp),
+            reason: `First ${status.maxIntrusions} fertile intrusions already used.`,
+            maxIntrusions: status.maxIntrusions,
+            status
+          });
           break;
         }
 
@@ -4321,6 +4329,21 @@ export class DecentraderGapMonitor {
         state.masterScannerFertileCount = ordinal;
         if (ordinal >= status.maxIntrusions) {
           state.masterScannerArmed = false;
+          events.push({
+            type: 'master-scanner-disarmed',
+            timestamp,
+            timestampNl: nlTime(timestamp),
+            reason: `First ${status.maxIntrusions} fertile intrusions completed; waiting for next Daily RSI zone touch.`,
+            maxIntrusions: status.maxIntrusions,
+            status
+          });
+          console.log('Decentrader Daily RSI master scanner disarmed:', {
+            timestamp,
+            timestampNl: nlTime(timestamp),
+            fertileIntrusions: ordinal,
+            maxIntrusions: status.maxIntrusions,
+            reason: 'Configured fertile intrusion count reached; waiting for the next Daily RSI zone touch.'
+          });
         }
       }
     }
