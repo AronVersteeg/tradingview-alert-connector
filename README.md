@@ -81,7 +81,7 @@ COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD=200
 COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS=336
 ```
 
-The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. The primary concept is a master intrusion cluster: a right-edge intrusion cluster with 4H or daily RSI below 50 is marked when the previous relevant intrusion context was above 50, with the inverse rule for left-edge intrusions above 50. The first intrusion in that cluster is tagged as the master, later same-regime intrusions are tagged as follow-ups. Daily masters get the strongest direction color, 4H masters get a lighter direction color, and later fresh-regime/follow-up intrusions can still receive weaker labels. This is visual research only until promoted into a trade filter.
+The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. The master scanner is Daily-only: when Daily RSI is inside the configured master zone, only the first configured number of gap-intrusion histogram bars in that active zone are marked fertile. When Daily RSI leaves the zone, fertility stops and the counter resets on the next zone activation. This is visual research only until promoted into a trade filter.
 
 ```text
 DECENTRADER_RSI_STUDY_ENABLED=true
@@ -89,6 +89,9 @@ DECENTRADER_RSI_MARKET=BTC-USD
 DECENTRADER_RSI_PERIOD=14
 DECENTRADER_RSI_ZONE_LOW=45
 DECENTRADER_RSI_ZONE_HIGH=55
+DECENTRADER_MASTER_RSI_ZONE_LOW=48
+DECENTRADER_MASTER_RSI_ZONE_HIGH=52
+DECENTRADER_MASTER_RSI_MAX_INTRUSIONS=3
 DECENTRADER_RSI_STUDY_CACHE_SECONDS=600
 ```
 

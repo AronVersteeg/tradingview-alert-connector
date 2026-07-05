@@ -166,6 +166,9 @@ type RsiStudyPayload = {
   period: number;
   zoneLow: number;
   zoneHigh: number;
+  masterZoneLow: number;
+  masterZoneHigh: number;
+  masterMaxIntrusions: number;
   fetchedAt: string;
   coverage: {
     h4?: { from: string; to: string; count: number };
@@ -2235,6 +2238,18 @@ function decentraderRsiZoneHigh(): number {
   return clamp(envPositiveNumber('DECENTRADER_RSI_ZONE_HIGH', 55), 1, 99);
 }
 
+function decentraderMasterRsiZoneLow(): number {
+  return clamp(envPositiveNumber('DECENTRADER_MASTER_RSI_ZONE_LOW', 48), 1, 99);
+}
+
+function decentraderMasterRsiZoneHigh(): number {
+  return clamp(envPositiveNumber('DECENTRADER_MASTER_RSI_ZONE_HIGH', 52), 1, 99);
+}
+
+function decentraderMasterRsiMaxIntrusions(): number {
+  return Math.max(1, Math.min(25, Math.floor(envPositiveNumber('DECENTRADER_MASTER_RSI_MAX_INTRUSIONS', 3))));
+}
+
 function decentraderRsiStudyCacheMs(): number {
   return envPositiveNumber('DECENTRADER_RSI_STUDY_CACHE_SECONDS', 600) * 1000;
 }
@@ -2393,6 +2408,9 @@ async function buildRsiStudyPayload(rows: DecentraderRow[], market: string): Pro
   const period = decentraderRsiPeriod();
   const zoneLow = decentraderRsiZoneLow();
   const zoneHigh = Math.max(zoneLow, decentraderRsiZoneHigh());
+  const masterZoneLow = decentraderMasterRsiZoneLow();
+  const masterZoneHigh = Math.max(masterZoneLow, decentraderMasterRsiZoneHigh());
+  const masterMaxIntrusions = decentraderMasterRsiMaxIntrusions();
   const [h4Candles, d1Candles] = await Promise.all([
     fetchDydxRsiCandles(market, '4HOURS', 1000),
     fetchDydxRsiCandles(market, '1DAY', 500)
@@ -2462,6 +2480,9 @@ async function buildRsiStudyPayload(rows: DecentraderRow[], market: string): Pro
     period,
     zoneLow,
     zoneHigh,
+    masterZoneLow,
+    masterZoneHigh,
+    masterMaxIntrusions,
     fetchedAt: new Date().toISOString(),
     coverage: {
       h4: h4Candles.length

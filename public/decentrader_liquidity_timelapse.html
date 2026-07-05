@@ -34,6 +34,8 @@
       --rsi-master-d-short: #ff1744;
       --rsi-master-4h-long: #86efac;
       --rsi-master-4h-short: #fb7185;
+      --rsi-fertile-long: #00e676;
+      --rsi-fertile-short: #ff1744;
       --border: rgba(236, 242, 248, 0.14);
     }
 
@@ -233,6 +235,22 @@
 
     .rsi-study-card {
       grid-column: span 2;
+      transition: border-color 160ms ease, background 160ms ease;
+    }
+
+    .rsi-study-card.is-master-active {
+      border-color: rgba(56, 189, 248, 0.65);
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.16), rgba(24, 31, 41, 0.95));
+    }
+
+    .rsi-study-card.is-master-fertile {
+      border-color: rgba(33, 211, 163, 0.8);
+      background: linear-gradient(135deg, rgba(33, 211, 163, 0.18), rgba(24, 31, 41, 0.95));
+    }
+
+    .rsi-study-card.is-master-spent {
+      border-color: rgba(251, 191, 36, 0.65);
+      background: linear-gradient(135deg, rgba(251, 191, 36, 0.14), rgba(24, 31, 41, 0.95));
     }
 
     .liquidity-counter-card {
@@ -649,7 +667,7 @@
           </div>
         </div>
       </div>
-      <div class="gap-card rsi-study-card">
+      <div class="gap-card rsi-study-card" id="rsiStudyCard">
         <div class="gap-label">4H/D RSI study</div>
         <div class="gap-value" id="rsiStudyValue">-</div>
         <div class="gap-status" id="rsiStudyStatus">Waiting for data</div>
@@ -755,6 +773,7 @@
     const liqShortCell = document.getElementById('liqShortCell');
     const liqShortValue = document.getElementById('liqShortValue');
     const liqShortMeta = document.getElementById('liqShortMeta');
+    const rsiStudyCard = document.getElementById('rsiStudyCard');
     const rsiStudyValue = document.getElementById('rsiStudyValue');
     const rsiStudyStatus = document.getElementById('rsiStudyStatus');
     const tradeZoneValue = document.getElementById('tradeZoneValue');
@@ -1351,6 +1370,78 @@
       };
     }
 
+    function masterDailyZoneConfig() {
+      const study = payload?.rsiStudy;
+      const low = Number(study?.masterZoneLow ?? 48);
+      const high = Number(study?.masterZoneHigh ?? 52);
+      const maxIntrusions = Math.max(1, Math.floor(Number(study?.masterMaxIntrusions ?? 3)));
+      return {
+        low: Math.min(low, high),
+        high: Math.max(low, high),
+        maxIntrusions,
+      };
+    }
+
+    function dailyRsiValue(context) {
+      const value = Number(context?.d1?.rsi);
+      return Number.isFinite(value) ? value : null;
+    }
+
+    function isDailyRsiInMasterZone(context) {
+      const value = dailyRsiValue(context);
+      if (value === null) return false;
+      const zone = masterDailyZoneConfig();
+      return value >= zone.low && value <= zone.high;
+    }
+
+    function dailyMasterFertilityContext(frameIndex, intrusion, context, xFor, xToPrice) {
+      const zone = masterDailyZoneConfig();
+      const dRsi = dailyRsiValue(context);
+      const active = isDailyRsiInMasterZone(context);
+      const base = {
+        active,
+        dRsi,
+        zoneLow: zone.low,
+        zoneHigh: zone.high,
+        maxIntrusions: zone.maxIntrusions,
+        usedBefore: 0,
+        fertileCount: 0,
+        usedAfter: 0,
+        remainingAfter: zone.maxIntrusions,
+        fertileKeys: new Set(),
+      };
+
+      if (!active) return base;
+
+      let usedBefore = 0;
+      for (let index = frameIndex - 1; index >= 1; index -= 1) {
+        const previousContext = getRsiContext(index);
+        if (!isDailyRsiInMasterZone(previousContext)) break;
+
+        const previousIntrusion = getGapIntrusion(index, xFor, xToPrice);
+        if (previousIntrusion?.entrants?.length) {
+          usedBefore += previousIntrusion.entrants.length;
+          if (usedBefore >= zone.maxIntrusions) break;
+        }
+      }
+
+      const fertileKeys = new Set();
+      const available = Math.max(0, zone.maxIntrusions - usedBefore);
+      const currentEntrants = intrusion?.entrants || [];
+      const fertileEntrants = currentEntrants.slice(0, available);
+      for (const item of fertileEntrants) fertileKeys.add(item.key);
+
+      const usedAfter = Math.min(zone.maxIntrusions, usedBefore + currentEntrants.length);
+      return {
+        ...base,
+        usedBefore,
+        fertileCount: fertileEntrants.length,
+        usedAfter,
+        remainingAfter: Math.max(0, zone.maxIntrusions - usedAfter),
+        fertileKeys,
+      };
+    }
+
     function masterIntrusionContext(frameIndex, intrusion, context, xFor, xToPrice) {
       if (!intrusion?.entrants?.length || !context) {
         return {
@@ -1394,10 +1485,27 @@
       };
     }
 
-    function rsiSignalForIntrusion(intrusion, context, previousRsiSide = null, masterContext = null) {
+    function rsiSignalForIntrusion(intrusion, context, previousRsiSide = null, masterContext = null, fertilityContext = null) {
       if (!intrusion?.entrants?.length || !context) return null;
       const hasLeft = intrusion.left?.length > 0;
       const hasRight = intrusion.right?.length > 0;
+      if (fertilityContext?.fertileCount > 0) {
+        const fertileEntrants = intrusion.entrants.filter((item) => fertilityContext.fertileKeys.has(item.key));
+        const hasFertileLeft = fertileEntrants.some((item) => item.gapSide === 'left');
+        const hasFertileRight = fertileEntrants.some((item) => item.gapSide === 'right');
+        const direction = hasFertileRight && !hasFertileLeft
+          ? 'short'
+          : hasFertileLeft && !hasFertileRight
+            ? 'long'
+            : 'watch';
+        return {
+          direction,
+          colorKey: direction === 'short' ? 'fertileShort' : direction === 'long' ? 'fertileLong' : 'watch',
+          kind: 'daily-master-fertile',
+          label: `Daily fertile ${fertilityContext.usedAfter}/${fertilityContext.maxIntrusions}`,
+        };
+      }
+
       const currentSide = rsiSide(context);
       const previousSide = previousRsiSide?.side;
       const currentDailySide = dailyRsiSide(context);
@@ -1523,12 +1631,32 @@
       return null;
     }
 
-    function updateRsiStudyMonitor(frameIndex) {
+    function updateRsiStudyMonitor(frameIndex, fertilityContext = null) {
       const study = payload?.rsiStudy;
       const context = getRsiContext(frameIndex);
+      rsiStudyCard?.classList.remove('is-master-active', 'is-master-fertile', 'is-master-spent');
       if (!study?.enabled) {
         rsiStudyValue.textContent = '-';
         rsiStudyStatus.textContent = 'No RSI study data';
+        return;
+      }
+
+      const dRsiText = Number.isFinite(Number(fertilityContext?.dRsi))
+        ? Number(fertilityContext.dRsi).toFixed(1)
+        : '-';
+      const masterZone = fertilityContext
+        ? `${fertilityContext.zoneLow}-${fertilityContext.zoneHigh}`
+        : `${study.masterZoneLow ?? 48}-${study.masterZoneHigh ?? 52}`;
+      if (fertilityContext?.active) {
+        const used = Math.min(fertilityContext.maxIntrusions, fertilityContext.usedAfter);
+        rsiStudyValue.textContent = `D RSI ${dRsiText} | fertile ${used}/${fertilityContext.maxIntrusions}`;
+        rsiStudyStatus.textContent = fertilityContext.fertileCount > 0
+          ? `Master scanner active | ${fertilityContext.fertileCount} new fertile intrusion${fertilityContext.fertileCount === 1 ? '' : 's'}`
+          : fertilityContext.remainingAfter > 0
+            ? `Master scanner active | waiting for ${fertilityContext.remainingAfter} intrusion${fertilityContext.remainingAfter === 1 ? '' : 's'}`
+            : `Master scanner spent | first ${fertilityContext.maxIntrusions} intrusions already used`;
+        rsiStudyCard?.classList.add(fertilityContext.remainingAfter > 0 ? 'is-master-active' : 'is-master-spent');
+        if (fertilityContext.fertileCount > 0) rsiStudyCard?.classList.add('is-master-fertile');
         return;
       }
 
@@ -1537,7 +1665,7 @@
         ? `4H ${nlTime(study.coverage.h4.from)}-${nlTime(study.coverage.h4.to)}`
         : '4H coverage unavailable';
       const zone = `${study.zoneLow}-${study.zoneHigh}`;
-      rsiStudyStatus.textContent = `${study.market} RSI${study.period} zone ${zone} | ${coverage}`;
+      rsiStudyStatus.textContent = `${study.market} RSI${study.period} zone ${zone} | Daily master zone ${masterZone} off | ${coverage}`;
     }
 
     function getLiquiditySplit(frame, gap) {
@@ -2558,6 +2686,8 @@
         dShort: css.getPropertyValue('--rsi-master-d-short').trim(),
         h4Long: css.getPropertyValue('--rsi-master-4h-long').trim(),
         h4Short: css.getPropertyValue('--rsi-master-4h-short').trim(),
+        fertileLong: css.getPropertyValue('--rsi-fertile-long').trim(),
+        fertileShort: css.getPropertyValue('--rsi-fertile-short').trim(),
       };
       const zoneColors = {
         L3: css.getPropertyValue('--long-3').trim(),
@@ -2596,15 +2726,26 @@
       const rsiContext = getRsiContext(frameIndex);
       const previousRsiSide = previousIntrusionRsiSide(frameIndex, xFor, xToPrice);
       const masterContext = masterIntrusionContext(frameIndex, intrusion, rsiContext, xFor, xToPrice);
-      const rsiSignal = rsiSignalForIntrusion(intrusion, rsiContext, previousRsiSide, masterContext);
+      const fertilityContext = dailyMasterFertilityContext(frameIndex, intrusion, rsiContext, xFor, xToPrice);
+      const rsiSignal = rsiSignalForIntrusion(intrusion, rsiContext, previousRsiSide, masterContext, fertilityContext);
       const tradeRange = getTradeRange();
       const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, tradeRange.min, tradeRange.max);
       const tpHits = getTpHits(frameIndex, xFor, xToPrice, tradeRange.min, tradeRange.max);
       const drawableVisibleBars = visibleBars.filter((bar) => !isContextInsideGap(bar, gap));
       const maxCount = Math.max(1, ...drawableVisibleBars.map((bar) => bar.count));
       const intrusionColorByKey = new Map();
+      if (intrusion?.entrants?.length && fertilityContext?.fertileCount > 0) {
+        for (const item of intrusion.entrants) {
+          if (!fertilityContext.fertileKeys.has(item.key)) continue;
+          intrusionColorByKey.set(
+            item.key,
+            item.gapSide === 'right' ? rsiColors.fertileShort : item.gapSide === 'left' ? rsiColors.fertileLong : rsiColors.watch
+          );
+        }
+      }
       if (intrusion?.entrants?.length && rsiSignal) {
         for (const item of intrusion.entrants) {
+          if (intrusionColorByKey.has(item.key)) continue;
           if (rsiSignal.direction === 'short' && item.gapSide !== 'right') continue;
           if (rsiSignal.direction === 'long' && item.gapSide !== 'left') continue;
           intrusionColorByKey.set(item.key, rsiColors[rsiSignal.colorKey] || rsiColors[rsiSignal.direction] || rsiColors.watch);
@@ -2721,7 +2862,7 @@
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       updateGapMonitor(frame, gap, intrusion, rsiSignal);
       updateLiquidityCounter(frameIndex, frame, gap);
-      updateRsiStudyMonitor(frameIndex);
+      updateRsiStudyMonitor(frameIndex, fertilityContext);
       updateTradeZoneMonitor(frame, gap, tradeZones, tpHits);
       updateTradePlanMonitor(frame);
       maybeSendGapAlert(frameIndex, frame, intrusion);
