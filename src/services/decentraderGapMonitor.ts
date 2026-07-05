@@ -2609,6 +2609,32 @@ function masterScannerBody(
   ].join('\n');
 }
 
+function masterScannerActionLines(
+  usedIntrusions: number,
+  maxIntrusions: number,
+  armed: boolean,
+  zoneActive: boolean
+): string[] {
+  const used = Math.max(0, Math.min(maxIntrusions, Math.floor(usedIntrusions || 0)));
+  const remaining = Math.max(0, maxIntrusions - used);
+  const zoneState = zoneActive ? 'active' : 'inactive';
+  const scannerState = armed ? 'armed' : 'disarmed';
+
+  if (armed && remaining > 0) {
+    return [
+      `State: RSI zone ${zoneState}; fertile scanner ${scannerState}.`,
+      `Current action: waiting for ${remaining} fertile intrusion histo${remaining === 1 ? '' : 's'}.`,
+      'Next action: send an Intrusion Histo mail when the next qualifying intrusion appears.'
+    ];
+  }
+
+  return [
+    `State: RSI zone ${zoneState}; fertile scanner ${scannerState}.`,
+    `Current action: fertile slots complete (${used}/${maxIntrusions}).`,
+    'Next action: wait for the next Daily RSI master-zone touch to arm a fresh scanner cycle.'
+  ];
+}
+
 function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
   const events: any[] = [];
   const prices: number[] = [];
@@ -4195,7 +4221,13 @@ export class DecentraderGapMonitor {
             smtpSettings,
             `Master scanner active - waiting for ${status.maxIntrusions} intrusions`,
             masterScannerBody('Daily RSI master scanner active.', row, status, this.config().symbol, [
-              `Waiting for: ${status.maxIntrusions} fertile intrusion histo${status.maxIntrusions === 1 ? '' : 's'}`
+              `Waiting for: ${status.maxIntrusions} fertile intrusion histo${status.maxIntrusions === 1 ? '' : 's'}`,
+              ...masterScannerActionLines(
+                state.masterScannerFertileCount || 0,
+                status.maxIntrusions,
+                Boolean(state.masterScannerArmed),
+                true
+              )
             ])
           );
 
@@ -4233,7 +4265,13 @@ export class DecentraderGapMonitor {
             'Master RSI zone deactivated',
             masterScannerBody('Daily RSI master zone deactivated.', row, status, this.config().symbol, [
               `Fertile intrusions used: ${state.masterScannerFertileCount || 0}/${status.maxIntrusions}`,
-              `Fertile slots still armed: ${state.masterScannerArmed ? 'yes' : 'no'}`
+              `Fertile slots still armed: ${state.masterScannerArmed ? 'yes' : 'no'}`,
+              ...masterScannerActionLines(
+                state.masterScannerFertileCount || 0,
+                status.maxIntrusions,
+                Boolean(state.masterScannerArmed),
+                false
+              )
             ])
           );
 
@@ -4308,7 +4346,13 @@ export class DecentraderGapMonitor {
               `Histo: ${entrant.side}${entrant.leverage} ${money(entrant.price)}`,
               `Gap side: ${entrant.gapSide || '-'}`,
               `New count: ${entrant.newCount || 0}`,
-              `Fertile slot: ${ordinal}/${status.maxIntrusions}`
+              `Fertile slot: ${ordinal}/${status.maxIntrusions}`,
+              ...masterScannerActionLines(
+                ordinal,
+                status.maxIntrusions,
+                ordinal < status.maxIntrusions,
+                Boolean(state.masterScannerActive)
+              )
             ])
           );
 
