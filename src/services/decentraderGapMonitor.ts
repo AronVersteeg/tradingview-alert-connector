@@ -1534,17 +1534,18 @@ function coinGlassTpConfluenceForZone(
       : 0;
     const longDuration = durationHours >= longDurationHours;
     const volumeBoost =
-      volumeUsd >= 35_000_000 ? 0.2 :
-      volumeUsd >= 20_000_000 ? 0.14 :
-      volumeUsd >= 10_000_000 ? 0.08 :
-      0.04;
+      volumeUsd >= 50_000_000 ? 0.35 :
+      volumeUsd >= 35_000_000 ? 0.28 :
+      volumeUsd >= 20_000_000 ? 0.2 :
+      volumeUsd >= 10_000_000 ? 0.12 :
+      0.06;
     const durationBoost =
-      longDuration ? 0.25 :
-      durationHours >= longDurationHours / 2 ? 0.12 :
-      durationHours >= 24 ? 0.06 :
+      longDuration ? 0.35 :
+      durationHours >= longDurationHours / 2 ? 0.18 :
+      durationHours >= 24 ? 0.08 :
       0;
-    const distanceBoost = (1 - distance / Math.max(1, maxDistance)) * 0.08;
-    const multiplier = Math.min(1.45, 1 + volumeBoost + durationBoost + Math.max(0, distanceBoost));
+    const distanceBoost = (1 - distance / Math.max(1, maxDistance)) * 0.1;
+    const multiplier = Math.min(1.75, 1 + volumeBoost + durationBoost + Math.max(0, distanceBoost));
     const candidate: CoinGlassTpConfluence = {
       price,
       distance,
@@ -1748,14 +1749,6 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
       });
 
     const maxLevels = decentraderMaxTpLevels();
-    const nearTpMaxDistancePct = envFraction('DECENTRADER_TP1_MAX_DISTANCE_PCT', 0.045);
-    const stagedTpDistanceCaps = [
-      nearTpMaxDistancePct,
-      envFraction('DECENTRADER_TP2_MAX_DISTANCE_PCT', 0.09),
-      envFraction('DECENTRADER_TP3_MAX_DISTANCE_PCT', 0.14)
-    ];
-    const nearTpMinimumScore = Math.max(2, strongestScore * 0.12);
-
     const edgeTp = gapEdgeTakeProfit(direction);
     const beyondEdgeEligible = edgeTp && decentraderTpBeyondEdgeOnly()
       ? eligible.filter((zone) =>
@@ -1774,41 +1767,47 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
     const usingBeyondEdgeZones = beyondEdgeEligible.length > 0;
     const continuationEligible = usingBeyondEdgeZones ? beyondEdgeEligible : eligible;
     const selected = new Map<number, TradeZone>();
+    const minSpacing = Math.max(step * 2, price * decentraderTpMinSpacingPct());
 
-    for (const cap of stagedTpDistanceCaps) {
-      if (selected.size >= maxLevels) break;
+    function analyticalPriority(zone: TradeZone): number {
+      const cg = zone.cgConfluence;
+      const cgVolumeScore = cg ? Math.min(350, Math.log10(Math.max(1, cg.volumeUsd / 1_000_000)) * 85) : 0;
+      const cgDurationScore = cg ? Math.min(220, cg.durationDays * 8) : 0;
+      const cgDistanceScore = cg ? Math.max(0, 80 - cg.distance * 0.25) : 0;
+      const peakScore = zone.peak ? 120 : 0;
+      const overlapScore = Math.max(0, zone.leverages.length - 1) * 90;
+      const leverage10Score = zone.leverages.includes(10) ? 70 : 0;
+      const freshScore = Math.min(zone.fresh, 3) * 25;
+      return (
+        (zone.selectionScore || zone.score) +
+        cgVolumeScore +
+        cgDurationScore +
+        cgDistanceScore +
+        peakScore +
+        overlapScore +
+        leverage10Score +
+        freshScore
+      );
+    }
 
-      const stagedCandidate = continuationEligible
-        .filter((zone) =>
-          !selected.has(zone.price) &&
-          zone.distance / Math.max(1, price) <= cap &&
-          (
-            zone.score >= nearTpMinimumScore ||
-            zone.leverages.length >= 2 ||
-            zone.peak ||
-            zone.fresh > 0
-          )
-        )
-        .sort((a, b) =>
-          a.distance - b.distance ||
-          (b.selectionScore || b.score) - (a.selectionScore || a.score) ||
-          b.score - a.score
-        )[0];
-
-      if (stagedCandidate) {
-        selected.set(stagedCandidate.price, { ...stagedCandidate, continuation: Boolean(edgeTp && usingBeyondEdgeZones) });
-      }
+    function hasEnoughSpacing(zone: TradeZone): boolean {
+      if (edgeTp && Math.abs(edgeTp.price - zone.price) < minSpacing) return false;
+      return Array.from(selected.values()).every((selectedZone) =>
+        Math.abs(selectedZone.price - zone.price) >= minSpacing ||
+        Boolean(zone.cgConfluence && selectedZone.cgConfluence && Math.abs(selectedZone.price - zone.price) >= step)
+      );
     }
 
     for (const zone of continuationEligible
       .sort((a, b) =>
-        (Number(b.peak) - Number(a.peak)) ||
-        (b.leverages.length - a.leverages.length) ||
-        (Number(b.leverages.includes(10)) - Number(a.leverages.includes(10))) ||
-        (b.selectionScore || b.score) - (a.selectionScore || a.score) ||
+        analyticalPriority(b) - analyticalPriority(a) ||
+        Number(Boolean(b.cgConfluence)) - Number(Boolean(a.cgConfluence)) ||
+        (b.cgConfluence?.volumeUsd || 0) - (a.cgConfluence?.volumeUsd || 0) ||
+        (b.cgConfluence?.durationHours || 0) - (a.cgConfluence?.durationHours || 0) ||
         b.score - a.score ||
         a.distance - b.distance
       )) {
+      if (!hasEnoughSpacing(zone)) continue;
       selected.set(zone.price, { ...zone, continuation: Boolean(edgeTp && usingBeyondEdgeZones) });
       if (selected.size >= maxLevels) break;
     }
@@ -1820,6 +1819,7 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
           b.score - a.score ||
           a.distance - b.distance
         )) {
+        if (!hasEnoughSpacing(zone)) continue;
         selected.set(zone.price, { ...zone, continuation: false });
         if (selected.size >= maxLevels) break;
       }
@@ -2838,6 +2838,10 @@ function decentraderTp1EdgeFrontRunUsd(): number {
 
 function decentraderTp1EdgeFrontRunPct(): number {
   return envFraction('DECENTRADER_TP1_EDGE_FRONT_RUN_PCT', 0.0005);
+}
+
+function decentraderTpMinSpacingPct(): number {
+  return envFraction('DECENTRADER_TP_MIN_SPACING_PCT', 0.025);
 }
 
 function decentraderTpBeyondEdgeOnly(): boolean {

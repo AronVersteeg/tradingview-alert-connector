@@ -42,7 +42,7 @@ Status:
 GET /decentrader/gap-status
 ```
 
-When auto-trading is enabled, TP prices come from the latest qualifying liquidity-map zones. Zones are clustered from active Decentrader histograms and selected by liquidity peak strength, overlap across leverage bands, freshness, and gap context before they are ordered along the trade path. While a BTC position opened by this monitor is active, every monitor poll can replace only the dYdX take-profit ladder when the map changes. Unknown/manual positions, position size, direction, and stop orders are not changed by this TP-only sync.
+When auto-trading is enabled, TP prices come from the latest qualifying liquidity-map zones. TP1 front-runs the opposite gap edge; TP2+ is selected from active Decentrader histogram clusters by historical liquidity peak strength, overlap across leverage bands, 10x participation, freshness, and CoinGlass orderbook confluence before the final levels are ordered along the trade path. The selector does not use fixed max-distance staging for TP1/TP2/TP3; it applies a minimum spacing between selected analytical zones so nearby ladder noise does not crowd out stronger historical/CG levels. While a BTC position opened by this monitor is active, every monitor poll can replace only the dYdX take-profit ladder when the map changes. Unknown/manual positions, position size, direction, and stop orders are not changed by this TP-only sync.
 
 ```text
 DECENTRADER_TRADE_RISK_PCT=0.0075
@@ -51,6 +51,7 @@ DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT=false
 DECENTRADER_TP_MAX_LEVELS=6
 DECENTRADER_TP1_EDGE_FRONT_RUN_USD=50
 DECENTRADER_TP1_EDGE_FRONT_RUN_PCT=0.0005
+DECENTRADER_TP_MIN_SPACING_PCT=0.025
 DECENTRADER_TP_BEYOND_EDGE_ONLY=true
 DECENTRADER_TP_SIZE_FRACTIONS=
 DECENTRADER_DYNAMIC_TP_ENABLED=true
@@ -60,7 +61,7 @@ DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT=0.0025
 
 Set `DECENTRADER_TRADE_RISK_USD` to target a fixed dollar risk per trade, such as `2`. With `DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT=false`, that dollar value is leading. Set `DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT=true` if you also want the fixed dollar value capped by `DECENTRADER_TRADE_RISK_PCT` of live equity. Leave `DECENTRADER_TRADE_RISK_USD` empty to use pure equity-percentage risk.
 
-Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map/peak-weighted allocation. TP1 front-runs the opposite gap edge by the larger of `DECENTRADER_TP1_EDGE_FRONT_RUN_USD` and `DECENTRADER_TP1_EDGE_FRONT_RUN_PCT`; TP2+ prefers continuation clusters beyond that edge when `DECENTRADER_TP_BEYOND_EDGE_ONLY=true`. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
+Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map/peak-weighted allocation. TP1 front-runs the opposite gap edge by the larger of `DECENTRADER_TP1_EDGE_FRONT_RUN_USD` and `DECENTRADER_TP1_EDGE_FRONT_RUN_PCT`; TP2+ prefers continuation clusters beyond that edge when `DECENTRADER_TP_BEYOND_EDGE_ONLY=true` and keeps at least `DECENTRADER_TP_MIN_SPACING_PCT` spacing from already selected zones unless a nearby CoinGlass confluence justifies tighter grouping. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
 
 The dynamic SL is a confirmed-fractal ratchet for positions opened by this monitor. For LONG positions it only moves upward; for SHORT positions it only moves downward. After a newer trailing stop is submitted, older visible/Render-managed stops are cancelled best-effort. If dYdX conditional order visibility is incomplete, the bot keeps protection conservative and logs what it could verify.
 
