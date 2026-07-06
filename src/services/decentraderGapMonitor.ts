@@ -2606,8 +2606,16 @@ function masterScannerDeactivationSignature(timestamp: string | undefined): stri
   return `master-deactive|${timestamp || '-'}`;
 }
 
-function masterScannerFertileSignature(timestamp: string | undefined, bar: LiquidityBar, ordinal: number): string {
-  return `master-fertile|${timestamp || '-'}|${ordinal}|${bar.key}|${bar.newCount || 0}`;
+function masterScannerFertileSignature(timestamp: string | undefined, bar: LiquidityBar): string {
+  return `master-fertile|${timestamp || '-'}|${bar.key}|${bar.newCount || 0}`;
+}
+
+function normalizeMasterScannerFertileSignature(signature: string): string {
+  const parts = String(signature || '').split('|');
+  if (parts[0] === 'master-fertile' && parts.length >= 5 && /^\d+$/.test(parts[2])) {
+    return ['master-fertile', parts[1], ...parts.slice(3)].join('|');
+  }
+  return signature;
 }
 
 function masterScannerBody(
@@ -4245,7 +4253,12 @@ export class DecentraderGapMonitor {
     }
 
     const startIndex = masterScannerProcessStartIndex(rows, previousDataTimestamp);
-    const sentFertileSignatures = new Set<string>(state.masterScannerFertileSentSignatures || []);
+    const sentFertileSignatures = new Set<string>(
+      (state.masterScannerFertileSentSignatures || []).flatMap((signature) => [
+        signature,
+        normalizeMasterScannerFertileSignature(signature)
+      ])
+    );
     const events: any[] = [];
 
     for (let frameIndex = startIndex; frameIndex < rows.length; frameIndex += 1) {
@@ -4453,7 +4466,7 @@ export class DecentraderGapMonitor {
         }
 
         const ordinal = currentCount + 1;
-        const signature = masterScannerFertileSignature(timestamp, entrant, ordinal);
+        const signature = masterScannerFertileSignature(timestamp, entrant);
         if (sentFertileSignatures.has(signature)) continue;
 
         events.push({
