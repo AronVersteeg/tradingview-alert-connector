@@ -64,6 +64,12 @@ type IntrusionCandleReview = {
   reason: string;
 };
 
+type CandleOpenClose = {
+  open: number;
+  close: number;
+  source: 'dydx' | 'ohlc' | 'price-delta';
+};
+
 type TradeZone = {
   direction: 'long' | 'short';
   rank: number;
@@ -1476,7 +1482,7 @@ function dydxHourlyCandleForTimestamp(
   return candles.find((candle) => Date.parse(candle.startedAt) === targetMs);
 }
 
-function dydxOpenClose(candle: DydxRsiCandle | undefined): { open: number; close: number; source: 'dydx' } | undefined {
+function dydxOpenClose(candle: DydxRsiCandle | undefined): CandleOpenClose | undefined {
   if (!candle) return undefined;
   const open = parseNumber(candle.open);
   const close = parseNumber(candle.close);
@@ -2267,7 +2273,7 @@ function rowCandleHighLow(row: DecentraderRow): { high: number; low: number; pri
 function rowOpenClose(
   row: DecentraderRow | undefined,
   previousRow?: DecentraderRow
-): { open: number; close: number; source: 'ohlc' | 'price-delta' } | undefined {
+): CandleOpenClose | undefined {
   const close =
     parseNumber(row?.close) ??
     parseNumber(row?.c) ??
@@ -2292,7 +2298,7 @@ function rowOpenClose(
   return undefined;
 }
 
-function candleColor(openClose: ReturnType<typeof rowOpenClose>): CandleColor {
+function candleColor(openClose: CandleOpenClose | undefined): CandleColor {
   if (!openClose) return 'unknown';
   if (openClose.close > openClose.open) return 'green';
   if (openClose.close < openClose.open) return 'red';
