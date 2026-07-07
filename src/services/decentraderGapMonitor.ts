@@ -60,7 +60,7 @@ type IntrusionCandleReview = {
   nextColor: CandleColor;
   intrusionTimestamp: string;
   nextTimestamp?: string;
-  source: 'ohlc' | 'price-delta' | 'unknown';
+  source: 'dydx' | 'ohlc' | 'price-delta' | 'unknown';
   reason: string;
 };
 
@@ -138,6 +138,7 @@ type CoinGlassWhaleSnapshot = {
 type DydxRsiCandle = {
   startedAt: string;
   resolution: string;
+  open?: string;
   close: string;
 };
 
@@ -1463,18 +1464,41 @@ function decentraderIntrusionCandleFilterEnabled(): boolean {
   return parseBool(process.env.DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED, false);
 }
 
+function dydxHourlyCandleForTimestamp(
+  candles: DydxRsiCandle[] | undefined,
+  timestamp: string,
+  offsetHours = 0
+): DydxRsiCandle | undefined {
+  if (!candles?.length) return undefined;
+  const timestampMs = coinGlassFrameTimeMs(timestamp);
+  if (timestampMs === undefined) return undefined;
+  const targetMs = timestampMs + offsetHours * 60 * 60 * 1000;
+  return candles.find((candle) => Date.parse(candle.startedAt) === targetMs);
+}
+
+function dydxOpenClose(candle: DydxRsiCandle | undefined): { open: number; close: number; source: 'dydx' } | undefined {
+  if (!candle) return undefined;
+  const open = parseNumber(candle.open);
+  const close = parseNumber(candle.close);
+  if (open === undefined || close === undefined) return undefined;
+  return { open, close, source: 'dydx' };
+}
+
 function intrusionCandleReview(
   rows: DecentraderRow[],
   alert: GapAlert,
-  enabled = decentraderIntrusionCandleFilterEnabled()
+  enabled = decentraderIntrusionCandleFilterEnabled(),
+  dydxCandles?: DydxRsiCandle[]
 ): IntrusionCandleReview {
   const direction = alertDirection(alert);
   const frameIndex =
     Number.isFinite(alert.frameIndex)
       ? alert.frameIndex
       : rows.findIndex((row) => String(row.timestamp || '') === alert.timestamp);
-  const intrusionOpenClose = rowOpenClose(rows[frameIndex], rows[frameIndex - 1]);
-  const nextOpenClose = rowOpenClose(rows[frameIndex + 1], rows[frameIndex]);
+  const dydxIntrusionOpenClose = dydxOpenClose(dydxHourlyCandleForTimestamp(dydxCandles, alert.timestamp, 0));
+  const dydxNextOpenClose = dydxOpenClose(dydxHourlyCandleForTimestamp(dydxCandles, alert.timestamp, 1));
+  const intrusionOpenClose = dydxIntrusionOpenClose || rowOpenClose(rows[frameIndex], rows[frameIndex - 1]);
+  const nextOpenClose = dydxNextOpenClose || rowOpenClose(rows[frameIndex + 1], rows[frameIndex]);
   const intrusionColor = candleColor(intrusionOpenClose);
   const nextColor = candleColor(nextOpenClose);
   const source =
@@ -1509,6 +1533,36 @@ function intrusionCandleReview(
   }
 
   const expectedColor: CandleColor = direction === 'long' ? 'green' : 'red';
+  if (!dydxCandles?.length) {
+    return {
+      enabled,
+      status: 'PENDING',
+      direction,
+      expectedColor,
+      intrusionColor,
+      nextColor,
+      intrusionTimestamp: alert.timestamp,
+      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      source,
+      reason: 'Waiting for dYdX 1H candle data to confirm the intrusion.'
+    };
+  }
+
+  if (!dydxIntrusionOpenClose || !dydxNextOpenClose) {
+    return {
+      enabled,
+      status: 'PENDING',
+      direction,
+      expectedColor,
+      intrusionColor,
+      nextColor,
+      intrusionTimestamp: alert.timestamp,
+      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      source,
+      reason: 'dYdX 1H intrusion candle or following candle is not available yet.'
+    };
+  }
+
   if (frameIndex < 1 || !rows[frameIndex]) {
     return {
       enabled,
@@ -2456,7 +2510,7 @@ function decentraderRsiMarket(): string {
     .toUpperCase();
 }
 
-async function fetchDydxRsiCandles(market: string, resolution: '4HOURS' | '1DAY', limit: number): Promise<DydxRsiCandle[]> {
+async function fetchDydxRsiCandles(market: string, resolution: '1HOUR' | '4HOURS' | '1DAY', limit: number): Promise<DydxRsiCandle[]> {
   const response = await axios.get(`${DYDX_INDEXER_URL}/candles/perpetualMarkets/${encodeURIComponent(market)}`, {
     timeout: 30000,
     params: { resolution, limit }
@@ -2469,6 +2523,39 @@ async function fetchDydxRsiCandles(market: string, resolution: '4HOURS' | '1DAY'
   return candles
     .slice()
     .sort((a: DydxRsiCandle, b: DydxRsiCandle) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+}
+
+function decentraderIntrusionCandleMarket(): string {
+  return String(
+    process.env.DECENTRADER_INTRUSION_CANDLE_MARKET ||
+      decentraderTradeMarket() ||
+      decentraderRsiMarket() ||
+      'BTC-USD'
+  )
+    .replace(/_/g, '-')
+    .toUpperCase();
+}
+
+async function fetchDydxHourlyCandlesForIntrusionFilter(): Promise<DydxRsiCandle[] | undefined> {
+  const market = decentraderIntrusionCandleMarket();
+  return fetchDydxRsiCandles(market, '1HOUR', 1000);
+}
+
+function applyDydxHourlyCandleColorsToPayload(payload: any, candles: DydxRsiCandle[] | undefined): void {
+  if (!payload?.frames || !candles?.length) return;
+  const byTime = new Map(candles.map((candle) => [Date.parse(candle.startedAt), candle]));
+
+  for (const frame of payload.frames) {
+    const timestampMs = coinGlassFrameTimeMs(frame?.t);
+    if (timestampMs === undefined) continue;
+    const candle = byTime.get(timestampMs);
+    const openClose = dydxOpenClose(candle);
+    if (!openClose) continue;
+    frame.open = openClose.open;
+    frame.close = openClose.close;
+    frame.candleColor = candleColor(openClose);
+    frame.candleColorSource = 'dydx';
+  }
 }
 
 function calculateRsiPoints(candles: DydxRsiCandle[], period: number, zoneLow: number, zoneHigh: number): RsiPoint[] {
@@ -4179,7 +4266,15 @@ export class DecentraderGapMonitor {
       const rows = await fetchSnapshot(config.symbol);
       this.latestRows = rows;
       void refreshCoinGlassWhaleLevels('gap-check');
+      const intrusionCandleCandles = await fetchDydxHourlyCandlesForIntrusionFilter().catch((error) => {
+        console.warn('dYdX intrusion candle filter refresh failed; map will use Decentrader candle fallback and candle-filtered alerts will wait if enabled.', {
+          market: decentraderIntrusionCandleMarket(),
+          error: String(error?.message || error)
+        });
+        return undefined;
+      });
       this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
+      applyDydxHourlyCandleColorsToPayload(this.latestTimelapsePayload, intrusionCandleCandles);
       const rsiStudy = await rsiStudyForRows(rows);
       this.latestTimelapsePayload.rsiStudy = rsiStudy;
       const state = readState(config.stateFile);
@@ -4319,7 +4414,7 @@ export class DecentraderGapMonitor {
           gap: alert.previousGap,
           entrants: alert.entrants
         };
-        const candleReview = intrusionCandleReview(rows, alert);
+        const candleReview = intrusionCandleReview(rows, alert, decentraderIntrusionCandleFilterEnabled(), intrusionCandleCandles);
         (alertSummary as any).intrusionCandleReview = candleReview;
         result.intrusionCandleReviews.push({
           signature,
