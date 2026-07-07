@@ -57,6 +57,7 @@ DECENTRADER_TP_SIZE_FRACTIONS=
 DECENTRADER_DYNAMIC_TP_ENABLED=true
 DECENTRADER_DYNAMIC_SL_ENABLED=true
 DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT=0.0025
+DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED=false
 ```
 
 Set `DECENTRADER_TRADE_RISK_USD` to target a fixed dollar risk per trade, such as `2`. With `DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT=false`, that dollar value is leading. Set `DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT=true` if you also want the fixed dollar value capped by `DECENTRADER_TRADE_RISK_PCT` of live equity. Leave `DECENTRADER_TRADE_RISK_USD` empty to use pure equity-percentage risk.
@@ -64,6 +65,8 @@ Set `DECENTRADER_TRADE_RISK_USD` to target a fixed dollar risk per trade, such a
 Leave `DECENTRADER_TP_SIZE_FRACTIONS` empty for map/peak-weighted allocation. TP1 front-runs the opposite gap edge by the larger of `DECENTRADER_TP1_EDGE_FRONT_RUN_USD` and `DECENTRADER_TP1_EDGE_FRONT_RUN_PCT`; TP2+ prefers continuation clusters beyond that edge when `DECENTRADER_TP_BEYOND_EDGE_ONLY=true` and keeps at least `DECENTRADER_TP_MIN_SPACING_PCT` spacing from already selected zones unless a nearby CoinGlass confluence justifies tighter grouping. The actual number of TP orders is limited by the remaining position size and the dYdX market minimum.
 
 The dynamic SL is a confirmed-fractal ratchet for positions opened by this monitor. For LONG positions it only moves upward; for SHORT positions it only moves downward. After a newer trailing stop is submitted, older visible/Render-managed stops are cancelled best-effort. If dYdX conditional order visibility is incomplete, the bot keeps protection conservative and logs what it could verify.
+
+Set `DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED=true` to gate Decentrader gap-intrusion emails and auto-trades behind a two-candle confirmation. A right-edge intrusion must have a red intrusion candle and a red following candle; a left-edge intrusion must have a green intrusion candle and a green following candle. Leave it `false` to keep the original immediate intrusion-alert setup. The map also has a local `Candle on/off` toggle for replay comparison.
 
 The map can also show a CoinGlass large-orderbook/whale overlay. The monitor reads the public CoinGlass page feed, keeps levels above the configured dollar threshold, and draws them as vertical `CG` lines on the Decentrader map. Successful snapshots are also stored as a forward-looking timelapse history so replay can show which CG levels were active during each map frame. Entries and stops remain Decentrader/fractal based; TP2+ selection can use CoinGlass as a bounded confluence boost when a nearby same-side whale level has enough volume and especially when its duration is above the configured long-duration threshold.
 

@@ -39,6 +39,7 @@ type Gap = {
 };
 
 type GapAlert = {
+  frameIndex: number;
   timestamp: string;
   timestampNl: string;
   price: number;
@@ -46,6 +47,21 @@ type GapAlert = {
   entrants: LiquidityBar[];
   left: LiquidityBar[];
   right: LiquidityBar[];
+};
+
+type CandleColor = 'green' | 'red' | 'flat' | 'unknown';
+
+type IntrusionCandleReview = {
+  enabled: boolean;
+  status: 'DISABLED' | 'PASS' | 'FAIL' | 'PENDING';
+  direction?: TradePlanDirection;
+  expectedColor?: CandleColor;
+  intrusionColor: CandleColor;
+  nextColor: CandleColor;
+  intrusionTimestamp: string;
+  nextTimestamp?: string;
+  source: 'ohlc' | 'price-delta' | 'unknown';
+  reason: string;
 };
 
 type TradeZone = {
@@ -315,6 +331,7 @@ type MonitorStatus = {
   coinGlassWhaleLevels?: number;
   coinGlassWhaleHistoryLevels?: number;
   coinGlassWhaleError?: string;
+  intrusionCandleFilterEnabled?: boolean;
   lastStartedAt?: string;
   lastFinishedAt?: string;
   lastError?: string;
@@ -1367,6 +1384,7 @@ function detectGapIntrusion(rows: DecentraderRow[], frameIndex: number): GapAler
     })) as LiquidityBar[];
 
   return {
+    frameIndex,
     timestamp: String(currentFrame.timestamp || ''),
     timestampNl: nlTime(currentFrame.timestamp),
     price: currentPrice,
@@ -1406,6 +1424,7 @@ function buildSimulatedGapAlert(
   };
 
   return {
+    frameIndex,
     timestamp: String(frame.timestamp || ''),
     timestampNl: nlTime(frame.timestamp),
     price,
@@ -1432,6 +1451,120 @@ function gapIntrusionsSince(rows: DecentraderRow[], lastDataTimestamp?: string):
   }
 
   return alerts;
+}
+
+function alertDirection(alert: GapAlert): TradePlanDirection | undefined {
+  if (alert.left.length && !alert.right.length) return 'long';
+  if (alert.right.length && !alert.left.length) return 'short';
+  return undefined;
+}
+
+function decentraderIntrusionCandleFilterEnabled(): boolean {
+  return parseBool(process.env.DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED, false);
+}
+
+function intrusionCandleReview(
+  rows: DecentraderRow[],
+  alert: GapAlert,
+  enabled = decentraderIntrusionCandleFilterEnabled()
+): IntrusionCandleReview {
+  const direction = alertDirection(alert);
+  const frameIndex =
+    Number.isFinite(alert.frameIndex)
+      ? alert.frameIndex
+      : rows.findIndex((row) => String(row.timestamp || '') === alert.timestamp);
+  const intrusionOpenClose = rowOpenClose(rows[frameIndex], rows[frameIndex - 1]);
+  const nextOpenClose = rowOpenClose(rows[frameIndex + 1], rows[frameIndex]);
+  const intrusionColor = candleColor(intrusionOpenClose);
+  const nextColor = candleColor(nextOpenClose);
+  const source =
+    intrusionOpenClose?.source || nextOpenClose?.source || 'unknown';
+
+  if (!enabled) {
+    return {
+      enabled,
+      status: 'DISABLED',
+      direction,
+      intrusionColor,
+      nextColor,
+      intrusionTimestamp: alert.timestamp,
+      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      source,
+      reason: 'Intrusion candle filter is disabled.'
+    };
+  }
+
+  if (!direction) {
+    return {
+      enabled,
+      status: 'FAIL',
+      direction,
+      intrusionColor,
+      nextColor,
+      intrusionTimestamp: alert.timestamp,
+      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      source,
+      reason: 'Mixed left/right intrusion; candle confirmation needs a one-sided direction.'
+    };
+  }
+
+  const expectedColor: CandleColor = direction === 'long' ? 'green' : 'red';
+  if (frameIndex < 1 || !rows[frameIndex]) {
+    return {
+      enabled,
+      status: 'PENDING',
+      direction,
+      expectedColor,
+      intrusionColor,
+      nextColor,
+      intrusionTimestamp: alert.timestamp,
+      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      source,
+      reason: 'Intrusion frame is not available yet.'
+    };
+  }
+
+  if (!rows[frameIndex + 1]) {
+    return {
+      enabled,
+      status: 'PENDING',
+      direction,
+      expectedColor,
+      intrusionColor,
+      nextColor,
+      intrusionTimestamp: alert.timestamp,
+      source,
+      reason: 'Waiting for the next candle to confirm the intrusion.'
+    };
+  }
+
+  if (intrusionColor === expectedColor && nextColor === expectedColor) {
+    return {
+      enabled,
+      status: 'PASS',
+      direction,
+      expectedColor,
+      intrusionColor,
+      nextColor,
+      intrusionTimestamp: alert.timestamp,
+      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      source,
+      reason: `Intrusion candle and next candle are both ${expectedColor}.`
+    };
+  }
+
+  return {
+    enabled,
+    status: 'FAIL',
+    direction,
+    expectedColor,
+    intrusionColor,
+    nextColor,
+    intrusionTimestamp: alert.timestamp,
+    nextTimestamp: rows[frameIndex + 1]?.timestamp,
+    source,
+    reason: `Expected ${expectedColor}/${expectedColor}, got ${intrusionColor}/${nextColor}.`
+  };
 }
 
 function tradeClusterStep(span: number): number {
@@ -2075,6 +2208,41 @@ function rowCandleHighLow(row: DecentraderRow): { high: number; low: number; pri
   );
 
   return { high, low, price };
+}
+
+function rowOpenClose(
+  row: DecentraderRow | undefined,
+  previousRow?: DecentraderRow
+): { open: number; close: number; source: 'ohlc' | 'price-delta' } | undefined {
+  const close =
+    parseNumber(row?.close) ??
+    parseNumber(row?.c) ??
+    parseNumber(row?.ohlc4);
+  if (close === undefined) return undefined;
+
+  const explicitOpen =
+    parseNumber(row?.open) ??
+    parseNumber(row?.o);
+  if (explicitOpen !== undefined) {
+    return { open: explicitOpen, close, source: 'ohlc' };
+  }
+
+  const previousClose =
+    parseNumber(previousRow?.close) ??
+    parseNumber(previousRow?.c) ??
+    parseNumber(previousRow?.ohlc4);
+  if (previousClose !== undefined) {
+    return { open: previousClose, close, source: 'price-delta' };
+  }
+
+  return undefined;
+}
+
+function candleColor(openClose: ReturnType<typeof rowOpenClose>): CandleColor {
+  if (!openClose) return 'unknown';
+  if (openClose.close > openClose.open) return 'green';
+  if (openClose.close < openClose.open) return 'red';
+  return 'flat';
 }
 
 function backtestTpZones(rows: DecentraderRow[], options: TpBacktestOptions = {}): any {
@@ -2764,10 +2932,18 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
       i: index,
       t: row.timestamp,
       price: parseNumber(row.ohlc4),
+      open: rowOpenClose(row, rows[index - 1])?.open,
+      close: rowOpenClose(row, rows[index - 1])?.close,
+      candleColor: candleColor(rowOpenClose(row, rows[index - 1])),
+      candleColorSource: rowOpenClose(row, rows[index - 1])?.source,
       high: rowCandleHighLow(row)?.high,
       low: rowCandleHighLow(row)?.low
     })),
     events,
+    intrusionCandleFilter: {
+      enabled: decentraderIntrusionCandleFilterEnabled(),
+      note: 'When enabled, one-sided gap intrusions require the intrusion candle and following candle to match the trade direction.'
+    },
     coinGlassWhaleLevels: coinglassWhaleSnapshot(),
     coinGlassTpConfluence: {
       enabled: coinGlassTpConfluenceEnabled(),
@@ -3912,7 +4088,8 @@ export class DecentraderGapMonitor {
     this.status = {
       ...this.status,
       hasTradeExecutor: true,
-      autoTradeEnabled: decentraderAutoTradeEnabled()
+      autoTradeEnabled: decentraderAutoTradeEnabled(),
+      intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled()
     };
   }
 
@@ -3925,6 +4102,7 @@ export class DecentraderGapMonitor {
       pollMinutes: config.pollMinutes,
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
+      intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined
     };
 
@@ -3959,6 +4137,7 @@ export class DecentraderGapMonitor {
       pollMinutes: config.pollMinutes,
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
+      intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined,
       tradeRiskPct: decentraderTradeRiskPct(),
       tradeRiskUsd: decentraderTradeRiskUsd(),
@@ -3989,6 +4168,7 @@ export class DecentraderGapMonitor {
       pollMinutes: config.pollMinutes,
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
+      intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined,
       running: true,
       lastStartedAt: nowNlIso(),
@@ -4035,6 +4215,8 @@ export class DecentraderGapMonitor {
         tradeAlert: null,
         tradePlan: null,
         tradeDecision: null,
+        intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+        intrusionCandleReviews: [],
         dynamicSlSync: null,
         dynamicTpSync: null,
         liquidityBalance: null,
@@ -4137,10 +4319,36 @@ export class DecentraderGapMonitor {
           gap: alert.previousGap,
           entrants: alert.entrants
         };
+        const candleReview = intrusionCandleReview(rows, alert);
+        (alertSummary as any).intrusionCandleReview = candleReview;
+        result.intrusionCandleReviews.push({
+          signature,
+          timestamp: alert.timestamp,
+          timestampNl: alert.timestampNl,
+          sideCounts: sideCounts(alert),
+          ...candleReview
+        });
         state.lastAlertObservedSignature = signature;
         result.alert = alertSummary;
         result.alerts.push(alertSummary);
         console.log('Decentrader gap alert detected:', alertSummary);
+
+        if (candleReview.enabled && candleReview.status !== 'PASS') {
+          result.tradeSkipped = candleReview.reason;
+          result.tradeDecision = {
+            at: nowNlIso(),
+            outcome: candleReview.status === 'PENDING' ? 'PENDING' : 'SKIPPED',
+            reason: candleReview.reason,
+            signature,
+            timestamp: alert.timestamp,
+            timestampNl: alert.timestampNl,
+            price: alert.price,
+            sideCounts: sideCounts(alert),
+            intrusionCandleReview: candleReview
+          };
+          console.log('Decentrader intrusion candle filter blocked alert:', result.tradeDecision);
+          continue;
+        }
 
         const emailDuplicate = signature === state.lastAlertSentSignature;
         if (emailDuplicate) {

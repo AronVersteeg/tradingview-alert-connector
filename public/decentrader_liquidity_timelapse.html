@@ -597,6 +597,7 @@
         <label>Alerts</label>
         <div class="inline-buttons">
           <button id="enableAlerts" type="button">Notify</button>
+          <button id="candleFilter" type="button" title="Require intrusion candle and following candle to confirm direction">Candle filter</button>
           <button id="liveMonitor" type="button">Live</button>
           <button id="refreshData" type="button">Refresh</button>
         </div>
@@ -748,6 +749,7 @@
     const prevHourButton = document.getElementById('prevHour');
     const nextHourButton = document.getElementById('nextHour');
     const enableAlertsButton = document.getElementById('enableAlerts');
+    const candleFilterButton = document.getElementById('candleFilter');
     const liveMonitorButton = document.getElementById('liveMonitor');
     const refreshDataButton = document.getElementById('refreshData');
     const playButton = document.getElementById('play');
@@ -781,10 +783,19 @@
     const tradePlanValue = document.getElementById('tradePlanValue');
     const tradePlanStatus = document.getElementById('tradePlanStatus');
 
+    function storedCandleFilterEnabled() {
+      try {
+        return window.localStorage?.getItem('decentraderCandleFilterEnabled') === '1';
+      } catch (error) {
+        return false;
+      }
+    }
+
     let playing = false;
     let timer = null;
     let liveTimer = null;
     let alertsEnabled = false;
+    let candleFilterEnabled = storedCandleFilterEnabled();
     let lastSentAlertSignature = '';
     let lastSentTpHitSignature = '';
     let latestTradePlan = null;
@@ -1220,6 +1231,115 @@
       const result = { previousGap, entrants, left, right };
       activeDrawCache?.gapIntrusions?.set(frameIndex, result);
       return result;
+    }
+
+    function frameOpenClose(frameIndex) {
+      const frame = payload?.frames?.[frameIndex];
+      if (!frame) return null;
+      const close = Number.isFinite(Number(frame.close))
+        ? Number(frame.close)
+        : Number.isFinite(Number(frame.price))
+          ? Number(frame.price)
+          : null;
+      if (!Number.isFinite(close)) return null;
+
+      if (Number.isFinite(Number(frame.open))) {
+        return { open: Number(frame.open), close, source: frame.candleColorSource || 'ohlc' };
+      }
+
+      const previous = payload?.frames?.[frameIndex - 1];
+      const previousClose = Number.isFinite(Number(previous?.close))
+        ? Number(previous.close)
+        : Number.isFinite(Number(previous?.price))
+          ? Number(previous.price)
+          : null;
+      if (!Number.isFinite(previousClose)) return null;
+      return { open: previousClose, close, source: 'price-delta' };
+    }
+
+    function candleColorForFrame(frameIndex) {
+      const explicit = payload?.frames?.[frameIndex]?.candleColor;
+      if (['green', 'red', 'flat'].includes(explicit)) return explicit;
+      const openClose = frameOpenClose(frameIndex);
+      if (!openClose) return 'unknown';
+      if (openClose.close > openClose.open) return 'green';
+      if (openClose.close < openClose.open) return 'red';
+      return 'flat';
+    }
+
+    function intrusionDirection(intrusion) {
+      if (intrusion?.left?.length && !intrusion?.right?.length) return 'long';
+      if (intrusion?.right?.length && !intrusion?.left?.length) return 'short';
+      return null;
+    }
+
+    function intrusionCandleReview(frameIndex, intrusion, enabled = candleFilterEnabled) {
+      const direction = intrusionDirection(intrusion);
+      const intrusionColor = candleColorForFrame(frameIndex);
+      const nextColor = candleColorForFrame(frameIndex + 1);
+      const source = frameOpenClose(frameIndex)?.source || frameOpenClose(frameIndex + 1)?.source || 'unknown';
+
+      if (!enabled) {
+        return {
+          enabled,
+          status: 'DISABLED',
+          direction,
+          intrusionColor,
+          nextColor,
+          source,
+          reason: 'Candle filter off',
+        };
+      }
+
+      if (!direction) {
+        return {
+          enabled,
+          status: 'FAIL',
+          direction,
+          intrusionColor,
+          nextColor,
+          source,
+          reason: 'mixed left/right intrusion',
+        };
+      }
+
+      const expectedColor = direction === 'long' ? 'green' : 'red';
+      if (!payload?.frames?.[frameIndex + 1]) {
+        return {
+          enabled,
+          status: 'PENDING',
+          direction,
+          expectedColor,
+          intrusionColor,
+          nextColor,
+          source,
+          reason: 'waiting for next candle',
+        };
+      }
+
+      if (intrusionColor === expectedColor && nextColor === expectedColor) {
+        return {
+          enabled,
+          status: 'PASS',
+          direction,
+          expectedColor,
+          intrusionColor,
+          nextColor,
+          source,
+          reason: `${expectedColor}/${expectedColor}`,
+        };
+      }
+
+      return {
+        enabled,
+        status: 'FAIL',
+        direction,
+        expectedColor,
+        intrusionColor,
+        nextColor,
+        source,
+        reason: `${intrusionColor}/${nextColor}`,
+      };
     }
 
     function getRsiContext(frameIndex) {
@@ -2547,7 +2667,7 @@
       ctx.globalAlpha = 1;
     }
 
-    function updateGapMonitor(frame, gap, intrusion, rsiSignal) {
+    function updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview) {
       if (!gap || !frame) {
         gapWidth.textContent = '-';
         gapLeft.textContent = '-';
@@ -2577,6 +2697,7 @@
         gapAlert.textContent = [
           `${nlTime(frame.t)}: ${sides || 'inside'} gap intrusion`,
           zones,
+          candleReview?.enabled ? `candle ${candleReview.status.toLowerCase()} (${candleReview.reason})` : '',
           rsiSignal?.label
         ].filter(Boolean).join(' | ');
         gapAlert.classList.toggle('is-rsi-long', rsiSignal?.direction === 'long');
@@ -2687,6 +2808,8 @@
     function maybeSendGapAlert(frameIndex, frame, intrusion) {
       if (!alertsEnabled || !intrusion?.entrants?.length) return;
       if (frameIndex !== Number(frameInput.max)) return;
+      const candleReview = intrusionCandleReview(frameIndex, intrusion);
+      if (candleReview.enabled && candleReview.status !== 'PASS') return;
 
       const signature = `${frame.t}|${intrusion.entrants.map((bar) => `${bar.key}:${bar.count}`).sort().join('|')}`;
       if (signature === lastSentAlertSignature) return;
@@ -2801,6 +2924,7 @@
       const masterContext = masterIntrusionContext(frameIndex, intrusion, rsiContext, xFor, xToPrice);
       const fertilityContext = dailyMasterFertilityContext(frameIndex, intrusion, rsiContext, xFor, xToPrice);
       const rsiSignal = rsiSignalForIntrusion(intrusion, rsiContext, previousRsiSide, masterContext, fertilityContext);
+      const candleReview = intrusion?.entrants?.length ? intrusionCandleReview(frameIndex, intrusion) : null;
       const tradeRange = getTradeRange();
       const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, tradeRange.min, tradeRange.max);
       const tpHits = getTpHits(frameIndex, xFor, xToPrice, tradeRange.min, tradeRange.max);
@@ -2933,7 +3057,7 @@
       ctx.fillText(`${sourceName} | ${nlTime(frame.t)} NL | ${priceLevel(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
 
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
-      updateGapMonitor(frame, gap, intrusion, rsiSignal);
+      updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview);
       updateLiquidityCounter(frameIndex, frame, gap);
       updateRsiStudyMonitor(frameIndex, fertilityContext);
       updateTradeZoneMonitor(frame, gap, tradeZones, tpHits);
@@ -2980,6 +3104,22 @@
         : Notification.permission === 'denied'
           ? 'Notify blocked'
           : 'Notify';
+    }
+
+    function syncCandleFilterState() {
+      candleFilterButton.classList.toggle('is-active', candleFilterEnabled);
+      candleFilterButton.textContent = candleFilterEnabled ? 'Candle on' : 'Candle off';
+    }
+
+    function toggleCandleFilter() {
+      candleFilterEnabled = !candleFilterEnabled;
+      try {
+        window.localStorage?.setItem('decentraderCandleFilterEnabled', candleFilterEnabled ? '1' : '0');
+      } catch (error) {
+        // Local storage can be unavailable in some embedded browser contexts.
+      }
+      syncCandleFilterState();
+      draw();
     }
 
     async function enableAlerts() {
@@ -3101,6 +3241,7 @@
       prevHourButton.addEventListener('click', () => stepFrame(-1));
       nextHourButton.addEventListener('click', () => stepFrame(1));
       enableAlertsButton.addEventListener('click', enableAlerts);
+      candleFilterButton.addEventListener('click', toggleCandleFilter);
       liveMonitorButton.addEventListener('click', () => {
         startLiveMonitor();
         refreshPayload().catch(showRefreshError);
@@ -3131,6 +3272,7 @@
       }
 
       syncNotificationState();
+      syncCandleFilterState();
       startLiveMonitor();
       refreshPayload()
         .then(() => {
