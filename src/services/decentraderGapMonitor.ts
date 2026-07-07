@@ -362,6 +362,7 @@ type SmtpSettings = {
 type AlertState = {
   lastAlertObservedSignature?: string | null;
   lastAlertSentSignature?: string;
+  lastFilteredAlertSentSignature?: string;
   lastAlertSentAt?: string;
   lastTpHitObservedSignature?: string | null;
   lastTpHitSentSignature?: string;
@@ -4096,6 +4097,23 @@ function alertBody(alert: GapAlert, symbol: string): string {
   return lines.join('\n');
 }
 
+function filteredAlertBody(alert: GapAlert, symbol: string, review: IntrusionCandleReview): string {
+  return [
+    `FILTERED Decentrader ${symbol.toUpperCase()} liquidity gap alert`,
+    '',
+    `Time: ${alert.timestampNl} (${alert.timestamp} UTC)`,
+    `Signal: ${sideCounts(alert)}`,
+    `Direction: ${review.direction ? review.direction.toUpperCase() : 'UNKNOWN'}`,
+    `Candle filter: ${review.status}`,
+    `Candle check: ${review.intrusionColor} / ${review.nextColor}`,
+    `Expected: ${review.expectedColor || '-'}/${review.expectedColor || '-'}`,
+    `Source: ${review.source}`,
+    `Reason: ${review.reason}`,
+    '',
+    alertBody(alert, symbol)
+  ].join('\n');
+}
+
 function tpHitSignature(hit: TpHit): string {
   return `${hit.timestamp}|${hit.label}|${hit.zone.price}|${hit.zone.score}`;
 }
@@ -4434,23 +4452,6 @@ export class DecentraderGapMonitor {
         result.alerts.push(alertSummary);
         console.log('Decentrader gap alert detected:', alertSummary);
 
-        if (candleReview.enabled && candleReview.status !== 'PASS') {
-          result.tradeSkipped = candleReview.reason;
-          result.tradeDecision = {
-            at: nowNlIso(),
-            outcome: candleReview.status === 'PENDING' ? 'PENDING' : 'SKIPPED',
-            reason: candleReview.reason,
-            signature,
-            timestamp: alert.timestamp,
-            timestampNl: alert.timestampNl,
-            price: alert.price,
-            sideCounts: sideCounts(alert),
-            intrusionCandleReview: candleReview
-          };
-          console.log('Decentrader intrusion candle filter blocked alert:', result.tradeDecision);
-          continue;
-        }
-
         const emailDuplicate = signature === state.lastAlertSentSignature;
         if (emailDuplicate) {
           result.duplicate = true;
@@ -4474,6 +4475,49 @@ export class DecentraderGapMonitor {
               timestampNl: alert.timestampNl,
               error: emailResult.error
             });
+          }
+        }
+
+        if (candleReview.enabled && candleReview.status !== 'PASS') {
+          result.tradeSkipped = candleReview.reason;
+          result.tradeDecision = {
+            at: nowNlIso(),
+            outcome: candleReview.status === 'PENDING' ? 'PENDING' : 'SKIPPED',
+            reason: candleReview.reason,
+            signature,
+            timestamp: alert.timestamp,
+            timestampNl: alert.timestampNl,
+            price: alert.price,
+            sideCounts: sideCounts(alert),
+            intrusionCandleReview: candleReview
+          };
+          console.log('Decentrader intrusion candle filter blocked entry:', result.tradeDecision);
+          continue;
+        }
+
+        if (candleReview.enabled && candleReview.status === 'PASS' && smtpSettings) {
+          const filteredSignature = `FILTERED|${signature}`;
+          if (filteredSignature !== state.lastFilteredAlertSentSignature) {
+            const filteredEmailResult = await sendEmailBestEffort(
+              smtpSettings,
+              `FILTERED ${sideCounts(alert)} | ${alert.timestampNl}`,
+              filteredAlertBody(alert, config.symbol, candleReview)
+            );
+
+            if (filteredEmailResult.sent) {
+              state.lastFilteredAlertSentSignature = filteredSignature;
+              state.lastAlertSentAt = nowNlIso();
+              result.emailSent = true;
+              result.emailSentCount += 1;
+            } else {
+              result.emailErrors.push({
+                type: 'filtered-gap-alert',
+                signature: filteredSignature,
+                timestamp: alert.timestamp,
+                timestampNl: alert.timestampNl,
+                error: filteredEmailResult.error
+              });
+            }
           }
         }
 
