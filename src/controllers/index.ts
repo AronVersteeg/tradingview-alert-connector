@@ -7,6 +7,7 @@ import { DexRegistry } from '../services/dexRegistry';
 import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
 import { getOpenLiquidityTimelapsePayload } from '../services/openLiquidityTimelapse';
 import { buildSnoekScout } from '../services/snoekScout';
+import { getSnoekStructures } from '../services/snoekStructures';
 import { getSnoekWeather } from '../services/snoekWeather';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
@@ -184,6 +185,19 @@ router.get('/snoek/api/weather', async (req, res) => {
     res.send(await getSnoekWeather(location));
   } catch (error) {
     console.error('Snoek weather lookup failed:', error);
+    res.status(502).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.get('/snoek/api/structures', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(await getSnoekStructures(req.query));
+  } catch (error) {
+    console.error('Snoek structures lookup failed:', error);
     res.status(502).send({
       ok: false,
       error: error instanceof Error ? error.message : String(error)

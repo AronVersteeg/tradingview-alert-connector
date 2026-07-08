@@ -211,6 +211,12 @@ const DATA_SOURCES: SnoekDataSource[] = [
     use: 'Echte dieptekaart voor Noordzeekanaal, zijkanalen en taluds.'
   },
   {
+    id: 'pdok-rws-kunstwerken',
+    label: 'PDOK IMWA + Rijkswaterstaat kunstwerken',
+    status: 'live',
+    use: 'Bruggen, duikers, gemalen, sluizen, stuwen, vispassages en waterregelobjecten als echte hotspotlaag op de satellietkaart.'
+  },
+  {
     id: 'ahn',
     label: 'AHN hoogte/oeverdata',
     status: 'planned',
