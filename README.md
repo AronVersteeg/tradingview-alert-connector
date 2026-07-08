@@ -16,11 +16,14 @@ This Render app can also host small non-trading tools under separate routes. The
 GET /snoek
 GET /snoek/api/scout
 POST /snoek/api/scout
+GET /snoek/api/weather
 ```
 
 `/snoek` serves a mobile-friendly fishing scout for Velsen/Spaarnwoude. It scores simple weather inputs such as wind, cloud cover, pressure trend, rain, temperature and time of day, then returns a practical fishing recommendation, an offline map seed layer, source catalog and community-review seed data.
 
-The first map version is intentionally offline-first: it includes hand-curated spots, structures, estimated depth classes and route markers. Exact Esri/Rijkswaterstaat bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route.
+`/snoek/api/weather?location=Velsen-Zuid` uses Open-Meteo geocoding and forecast data to fill live open weather inputs without an API key.
+
+The first map version is intentionally offline-first: it includes hand-curated spots, structures, estimated depth classes and route markers. Exact Esri/Rijkswaterstaat bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route. The chat-mentioned source stack is represented in the source catalog: Open-Meteo, Esri/Rijkswaterstaat bathymetry, AHN, OpenStreetMap, VISplanner, Fishbrain/FishAngler community data, Windy/Fishing Points-style timing and satellite/manual water-reading layers.
 
 Example API call:
 

@@ -44,7 +44,7 @@ export type SnoekMapFeature = {
 export type SnoekDataSource = {
   id: string;
   label: string;
-  status: 'seeded' | 'manual' | 'planned';
+  status: 'live' | 'seeded' | 'manual' | 'planned';
   use: string;
 };
 
@@ -199,6 +199,12 @@ const MAP_FEATURES: SnoekMapFeature[] = [
 
 const DATA_SOURCES: SnoekDataSource[] = [
   {
+    id: 'open-meteo',
+    label: 'Open-Meteo weer en geocoding',
+    status: 'live',
+    use: 'Automatisch locatie, temperatuur, wind, bewolking, regen en luchtdruktrend invullen zonder API-key.'
+  },
+  {
     id: 'esri-rws-bathymetry',
     label: 'Esri / Rijkswaterstaat bathymetrie',
     status: 'planned',
@@ -224,7 +230,7 @@ const DATA_SOURCES: SnoekDataSource[] = [
   },
   {
     id: 'fishbrain-community',
-    label: 'Fishbrain / community reviews',
+    label: 'Fishbrain / FishAngler community reviews',
     status: 'manual',
     use: 'Vangstmeldingen, aaskeuze en lokale hints als inspiratie, niet als absolute waarheid.'
   },
@@ -233,6 +239,12 @@ const DATA_SOURCES: SnoekDataSource[] = [
     label: 'Windy / Fishing Points stijl input',
     status: 'seeded',
     use: 'Wind, luchtdruk, bewolking, zon/maan en activiteitsscore.'
+  },
+  {
+    id: 'satellite-water-reading',
+    label: 'Satellietkaart / handmatig water lezen',
+    status: 'manual',
+    use: 'Riet, bruggen, schaduw, inhammen, duikers, donkere waterstukken en looproutes herkennen.'
   }
 ];
 

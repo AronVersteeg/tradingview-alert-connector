@@ -7,6 +7,7 @@ import { DexRegistry } from '../services/dexRegistry';
 import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
 import { getOpenLiquidityTimelapsePayload } from '../services/openLiquidityTimelapse';
 import { buildSnoekScout } from '../services/snoekScout';
+import { getSnoekWeather } from '../services/snoekWeather';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
 
@@ -158,6 +159,20 @@ router.get('/snoek/api/scout', async (req, res) => {
 
 router.post('/snoek/api/scout', async (req, res) => {
   res.send(buildSnoekScout(req.body || {}));
+});
+
+router.get('/snoek/api/weather', async (req, res) => {
+  try {
+    const location = String(req.query.location || 'Velsen-Zuid').trim();
+    res.setHeader('Cache-Control', 'public, max-age=600');
+    res.send(await getSnoekWeather(location));
+  } catch (error) {
+    console.error('Snoek weather lookup failed:', error);
+    res.status(502).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 });
 
 // ================= ACCOUNTS =================

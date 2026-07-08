@@ -113,6 +113,13 @@
       cursor: pointer;
     }
 
+    button.secondary {
+      color: var(--ink);
+      background: #162a46;
+      border: 1px solid var(--line);
+      font-weight: 700;
+    }
+
     .grid-2 {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -280,6 +287,8 @@
                 Locatie
                 <input name="location" value="Velsen-Zuid">
               </label>
+              <button class="secondary" id="load-weather" type="button">Laad open weerdata voor locatie</button>
+              <p class="muted" id="weather-status">Gebruikt Open-Meteo als live open databron; overige kaart/community lagen komen uit de chat-seed.</p>
               <div class="grid-2">
                 <label>Temperatuur C <input name="temperatureC" type="number" value="21"></label>
                 <label>Wind Bft <input name="windBft" type="number" min="0" max="12" value="3"></label>
@@ -378,6 +387,8 @@
     const mapFeatures = document.getElementById('map-features');
     const featureList = document.getElementById('feature-list');
     const reviews = document.getElementById('reviews');
+    const loadWeatherButton = document.getElementById('load-weather');
+    const weatherStatus = document.getElementById('weather-status');
 
     function esc(value) {
       return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -411,7 +422,7 @@
         </div>
         <div class="mini-grid" style="margin-top: 14px;">
           <div class="mini-card"><span class="muted">Weer</span><strong>${esc(input.temperatureC)} C</strong><span class="muted">${esc(input.cloudCoverPct)}% bewolkt</span></div>
-          <div class="mini-card"><span class="muted">Luchtdruk</span><strong>${esc(input.pressureTrend)}</strong><span class="muted">handmatige input</span></div>
+          <div class="mini-card"><span class="muted">Luchtdruk</span><strong>${esc(input.pressureTrend)}</strong><span class="muted">Open-Meteo of handmatig</span></div>
           <div class="mini-card"><span class="muted">Maan/zon</span><strong>${esc(data.activityWindows[0].times[1])}</strong><span class="muted">grote tijd</span></div>
         </div>
         <div class="cards" style="margin-top: 14px;">
@@ -473,6 +484,42 @@
       }).join('');
     }
 
+    function setField(name, value) {
+      const field = form.elements[name];
+      if (field && value !== undefined && value !== null) {
+        field.value = value;
+      }
+    }
+
+    async function loadWeather() {
+      const location = form.elements.location.value || 'Velsen-Zuid';
+      loadWeatherButton.disabled = true;
+      weatherStatus.textContent = `Weerdata laden voor ${location}...`;
+      try {
+        const response = await fetch(`/snoek/api/weather?location=${encodeURIComponent(location)}`);
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || 'Weerdata kon niet geladen worden.');
+        }
+
+        setField('location', data.location.name);
+        setField('temperatureC', data.weather.temperatureC);
+        setField('windBft', data.weather.windBft);
+        setField('cloudCoverPct', data.weather.cloudCoverPct);
+        setField('pressureTrend', data.weather.pressureTrend);
+        setField('rain', data.weather.rain);
+        setField('timeOfDay', data.weather.timeOfDay);
+
+        const pressure = data.weather.pressureHpa === null ? 'onbekend' : `${data.weather.pressureHpa} hPa`;
+        weatherStatus.textContent = `Live Open-Meteo: ${data.location.name}, ${data.weather.temperatureC} C, wind ${data.weather.windBft} Bft, ${data.weather.cloudCoverPct}% bewolking, druk ${pressure}.`;
+        form.dispatchEvent(new Event('submit'));
+      } catch (error) {
+        weatherStatus.textContent = `Weerdata niet geladen: ${error.message}`;
+      } finally {
+        loadWeatherButton.disabled = false;
+      }
+    }
+
     async function runScout(event) {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(form).entries());
@@ -490,7 +537,8 @@
     }
 
     form.addEventListener('submit', runScout);
-    form.dispatchEvent(new Event('submit'));
+    loadWeatherButton.addEventListener('click', loadWeather);
+    loadWeather();
   </script>
 </body>
 </html>
