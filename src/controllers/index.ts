@@ -157,6 +157,7 @@ router.get('/snoek', async (req, res) => {
 router.get('/snoek/assets/:file', async (req, res) => {
   const allowedFiles = new Set([
     'spaarnwoude-satellite.jpg',
+    'spaarnwoude-topo.png',
     'spaarnwoude-transport.png',
     'spaarnwoude-places.png'
   ]);

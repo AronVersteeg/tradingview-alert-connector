@@ -24,7 +24,7 @@ GET /snoek/api/structures
 
 `/snoek/api/weather?location=Velsen-Zuid` uses Open-Meteo geocoding and forecast data to fill live open weather inputs without an API key.
 
-`/snoek/api/structures` loads live GIS hotspots for the map bbox from PDOK Waterschappen Kunstwerken IMWA and Rijkswaterstaat ArcGIS beheerobjecten. It returns bridges, culverts, pumping stations, locks, weirs, fish passages and other water-control objects with projected map coordinates and a first-pass Snoek score.
+`/snoek/api/structures` loads live GIS objects for the map bbox from PDOK Waterschappen Kunstwerken IMWA and Rijkswaterstaat ArcGIS beheerobjecten. It filters and clusters those raw bridges, culverts, pumping stations, locks, weirs, fish passages and other water-control objects into a smaller set of argued Snoek scout spots using structure combinations, water-layout proximity and seed community/eigen-scout signals.
 
 The map is now GIS/vector-first: PDOK/RWS object coordinates are the source of truth and the Esri satellite image is a visual underlay. Exact bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route. The chat-mentioned source stack is represented in the source catalog: Open-Meteo, PDOK/RWS kunstwerken, Esri/Rijkswaterstaat bathymetry, AHN, OpenStreetMap, VISplanner, Fishbrain/FishAngler community data, Windy/Fishing Points-style timing and satellite/manual water-reading layers.
 
