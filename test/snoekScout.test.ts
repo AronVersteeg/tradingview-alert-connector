@@ -14,6 +14,9 @@ describe('buildSnoekScout', () => {
 
     expect(result.score).toBeGreaterThanOrEqual(75);
     expect(result.spots.length).toBeGreaterThan(0);
+    expect(result.mapFeatures.length).toBeGreaterThan(0);
+    expect(result.dataSources.some((source) => source.id === 'esri-rws-bathymetry')).toBe(true);
+    expect(result.communityReviews.length).toBeGreaterThan(0);
   });
 
   it('warns when warm weather makes snoek handling risky', () => {

@@ -20,8 +20,46 @@ export type SnoekSpot = {
   area: string;
   lat: number;
   lon: number;
+  x: number;
+  y: number;
   targets: SnoekTarget[];
   waterType: string;
+  depthClass: string;
+  structures: string[];
+  note: string;
+};
+
+export type SnoekMapFeature = {
+  id: string;
+  layer: string;
+  spotId?: string;
+  name: string;
+  type: 'depth' | 'bridge' | 'reed' | 'inlet' | 'parking' | 'review' | 'route';
+  x: number;
+  y: number;
+  scoreBoost: number;
+  description: string;
+};
+
+export type SnoekDataSource = {
+  id: string;
+  label: string;
+  status: 'seeded' | 'manual' | 'planned';
+  use: string;
+};
+
+export type SnoekCommunityReview = {
+  spotId: string;
+  rating: number;
+  source: string;
+  note: string;
+  baits: string[];
+  confidence: 'laag' | 'middel' | 'hoog';
+};
+
+export type SnoekActivityWindow = {
+  label: string;
+  times: string[];
   note: string;
 };
 
@@ -36,6 +74,10 @@ export type SnoekScoutResult = {
   warnings: string[];
   tactics: string[];
   spots: SnoekSpot[];
+  activityWindows: SnoekActivityWindow[];
+  mapFeatures: SnoekMapFeature[];
+  dataSources: SnoekDataSource[];
+  communityReviews: SnoekCommunityReview[];
   input: Required<Omit<SnoekScoutInput, 'location'>> & { location: string };
 };
 
@@ -46,8 +88,12 @@ const SPOTS: SnoekSpot[] = [
     area: 'Velsen',
     lat: 52.4635,
     lon: 4.6326,
+    x: 27,
+    y: 63,
     targets: ['snoek', 'witvis'],
     waterType: 'kanaal',
+    depthClass: '1-6 m, talud naar hoofdgeul',
+    structures: ['talud', 'kade', 'stromingsnaad'],
     note: 'Zoek windkant, stromingsnaden, steigers en harde overgangen.'
   },
   {
@@ -56,8 +102,12 @@ const SPOTS: SnoekSpot[] = [
     area: 'Spaarnwoude',
     lat: 52.4358,
     lon: 4.6831,
+    x: 67,
+    y: 51,
     targets: ['snoek', 'method_feeder', 'witvis'],
     waterType: 'plas',
+    depthClass: 'ondiep tot middel, randen interessanter dan open water',
+    structures: ['windkant', 'wier/rand', 'flauwe oever'],
     note: 'Interessant bij bewolking en wind op de kant; vis randen en wiergaten af.'
   },
   {
@@ -66,8 +116,12 @@ const SPOTS: SnoekSpot[] = [
     area: 'Spaarnwoude',
     lat: 52.4329,
     lon: 4.6684,
+    x: 55,
+    y: 70,
     targets: ['method_feeder', 'witvis', 'snoek'],
     waterType: 'parkplas',
+    depthClass: 'geschat 0,8-2 m',
+    structures: ['riet', 'parkbrug', 'kommetje'],
     note: 'Rustig water voor method feeder; bij roofvis vooral zoeken bij riet en obstakels.'
   },
   {
@@ -76,9 +130,136 @@ const SPOTS: SnoekSpot[] = [
     area: 'Velsen-Zuid',
     lat: 52.4598,
     lon: 4.6478,
+    x: 40,
+    y: 42,
     targets: ['witvis', 'method_feeder', 'snoek'],
     waterType: 'parkvijver',
+    depthClass: 'geschat ondiep tot 1,5 m',
+    structures: ['parkvijver', 'schaduw', 'kleine stek'],
     note: 'Kleinschalig water: stil benaderen en compact voeren werkt vaak beter.'
+  }
+];
+
+const MAP_FEATURES: SnoekMapFeature[] = [
+  {
+    id: 'zijkanaal-b-talud',
+    layer: 'Esri/RWS bathymetrie seed',
+    spotId: 'noordzeekanaal-velsen',
+    name: 'Zijkanaal B talud',
+    type: 'depth',
+    x: 31,
+    y: 60,
+    scoreBoost: 14,
+    description: 'Seedlaag uit de chat: oever 1-2 m, hoofdgeul mogelijk 3-6 m. Later vervangen door echte RWS/Esri bathymetrie.'
+  },
+  {
+    id: 'buitenhuizerplas-windkant',
+    layer: 'AI hotspot seed',
+    spotId: 'buitenhuizerplas',
+    name: 'Windkant Buitenhuizerplas',
+    type: 'reed',
+    x: 70,
+    y: 49,
+    scoreBoost: 10,
+    description: 'Wind op de kant kan aasvis verzamelen; interessant bij bewolking en 2-4 Bft.'
+  },
+  {
+    id: 'de-ven-riet',
+    layer: 'Structuur seed',
+    spotId: 'de-ven',
+    name: 'Rietrand De Ven',
+    type: 'reed',
+    x: 57,
+    y: 67,
+    scoreBoost: 8,
+    description: 'Riet, luwte en korte werpafstand; geschikt om method feeder en roofvis rustig te testen.'
+  },
+  {
+    id: 'schoonenberg-schaduw',
+    layer: 'Structuur seed',
+    spotId: 'park-schoonenberg',
+    name: 'Schaduwstek Schoonenberg',
+    type: 'bridge',
+    x: 42,
+    y: 39,
+    scoreBoost: 5,
+    description: 'Kleiner water: schaduw en obstakels zijn belangrijker dan grote afstanden afvissen.'
+  },
+  {
+    id: 'looproute-test',
+    layer: 'Looproute seed',
+    name: 'Korte scout-loop',
+    type: 'route',
+    x: 48,
+    y: 56,
+    scoreBoost: 0,
+    description: 'Eerste routeconcept: begin bij structuur, loop daarna windkant en eindig bij rustiger water.'
+  }
+];
+
+const DATA_SOURCES: SnoekDataSource[] = [
+  {
+    id: 'esri-rws-bathymetry',
+    label: 'Esri / Rijkswaterstaat bathymetrie',
+    status: 'planned',
+    use: 'Echte dieptekaart voor Noordzeekanaal, zijkanalen en taluds.'
+  },
+  {
+    id: 'ahn',
+    label: 'AHN hoogte/oeverdata',
+    status: 'planned',
+    use: 'Oevertaluds, steile randen, bruggen en duikers herkennen waar bathymetrie ontbreekt.'
+  },
+  {
+    id: 'osm',
+    label: 'OpenStreetMap',
+    status: 'seeded',
+    use: 'Waterlijnen, paden, bruggen, parkeerplekken en bereikbaarheid.'
+  },
+  {
+    id: 'visplanner',
+    label: 'VISplanner',
+    status: 'manual',
+    use: 'Controleren waar je met VISpas mag vissen en welke regels gelden.'
+  },
+  {
+    id: 'fishbrain-community',
+    label: 'Fishbrain / community reviews',
+    status: 'manual',
+    use: 'Vangstmeldingen, aaskeuze en lokale hints als inspiratie, niet als absolute waarheid.'
+  },
+  {
+    id: 'windy-fishingpoints',
+    label: 'Windy / Fishing Points stijl input',
+    status: 'seeded',
+    use: 'Wind, luchtdruk, bewolking, zon/maan en activiteitsscore.'
+  }
+];
+
+const COMMUNITY_REVIEWS: SnoekCommunityReview[] = [
+  {
+    spotId: 'noordzeekanaal-velsen',
+    rating: 4,
+    source: 'Community seed',
+    note: 'Goed leerwater voor roofvis, vooral bij kade, bruggen, stroming en talud.',
+    baits: ['shad 7-12 cm', 'jigkop', 'spinner'],
+    confidence: 'middel'
+  },
+  {
+    spotId: 'buitenhuizerplas',
+    rating: 3,
+    source: 'Community seed',
+    note: 'Interessant als wind op de kant staat; grote open stukken overslaan zonder structuur.',
+    baits: ['spinnerbait', 'shallow shad', 'jerkbait'],
+    confidence: 'middel'
+  },
+  {
+    spotId: 'de-ven',
+    rating: 3,
+    source: 'Eigen scout seed',
+    note: 'Fijne testplek voor korte sessies en method feeder; roofvis vooral langs riet/obstakels.',
+    baits: ['method feeder', 'kleine spinner', 'softbait'],
+    confidence: 'laag'
   }
 ];
 
@@ -179,6 +360,34 @@ function selectSpots(target: SnoekTarget, score: number): SnoekSpot[] {
     .slice(0, 3);
 }
 
+function buildActivityWindows(input: ReturnType<typeof normalizeInput>): SnoekActivityWindow[] {
+  const eveningNote = input.target === 'snoek'
+    ? 'Schemer met bewolking/wind is vaak het beste roofvisblok.'
+    : 'Rustiger licht en minder drukte aan de waterkant.';
+  return [
+    {
+      label: 'Grote tijden',
+      times: ['05:45 - 08:15', '18:10 - 20:40'],
+      note: eveningNote
+    },
+    {
+      label: 'Kleine tijden',
+      times: ['13:00 - 14:45', '23:40 - 01:20'],
+      note: 'Solunar-seed uit dashboard; later koppelen aan echte maan/zondata.'
+    }
+  ];
+}
+
+function relevantMapFeatures(spots: SnoekSpot[]): SnoekMapFeature[] {
+  const spotIds = spots.map((spot) => spot.id);
+  return MAP_FEATURES.filter((feature) => !feature.spotId || spotIds.includes(feature.spotId));
+}
+
+function relevantReviews(spots: SnoekSpot[]): SnoekCommunityReview[] {
+  const spotIds = spots.map((spot) => spot.id);
+  return COMMUNITY_REVIEWS.filter((review) => spotIds.includes(review.spotId));
+}
+
 export function buildSnoekScout(input: SnoekScoutInput = {}): SnoekScoutResult {
   const normalized = normalizeInput(input);
   const reasons: string[] = [];
@@ -197,6 +406,8 @@ export function buildSnoekScout(input: SnoekScoutInput = {}): SnoekScoutResult {
         ? 'Alleen gericht en kort'
         : 'Bewaar je beste stekken voor beter weer';
 
+  const spots = selectSpots(normalized.target, score);
+
   return {
     ok: true,
     target: normalized.target,
@@ -207,7 +418,11 @@ export function buildSnoekScout(input: SnoekScoutInput = {}): SnoekScoutResult {
     reasons,
     warnings,
     tactics: buildTactics(normalized.target, score),
-    spots: selectSpots(normalized.target, score),
+    spots,
+    activityWindows: buildActivityWindows(normalized),
+    mapFeatures: relevantMapFeatures(spots),
+    dataSources: DATA_SOURCES,
+    communityReviews: relevantReviews(spots),
     input: normalized
   };
 }

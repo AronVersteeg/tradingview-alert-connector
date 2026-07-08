@@ -18,7 +18,9 @@ GET /snoek/api/scout
 POST /snoek/api/scout
 ```
 
-`/snoek` serves a mobile-friendly fishing scout for Velsen/Spaarnwoude. It scores simple weather inputs such as wind, cloud cover, pressure trend, rain, temperature and time of day, then returns a practical fishing recommendation and starter spot list.
+`/snoek` serves a mobile-friendly fishing scout for Velsen/Spaarnwoude. It scores simple weather inputs such as wind, cloud cover, pressure trend, rain, temperature and time of day, then returns a practical fishing recommendation, an offline map seed layer, source catalog and community-review seed data.
+
+The first map version is intentionally offline-first: it includes hand-curated spots, structures, estimated depth classes and route markers. Exact Esri/Rijkswaterstaat bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route.
 
 Example API call:
 
