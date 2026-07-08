@@ -8,6 +8,34 @@ Currently supports [dYdX v3](https://dydx.exchange), [dYdX v4](https://dydx.trad
 
 https://tv-connector.gitbook.io/docs/
 
+# Snoek AI tools route
+
+This Render app can also host small non-trading tools under separate routes. The first one is Snoek AI Scout:
+
+```text
+GET /snoek
+GET /snoek/api/scout
+POST /snoek/api/scout
+```
+
+`/snoek` serves a mobile-friendly fishing scout for Velsen/Spaarnwoude. It scores simple weather inputs such as wind, cloud cover, pressure trend, rain, temperature and time of day, then returns a practical fishing recommendation and starter spot list.
+
+Example API call:
+
+```json
+{
+  "target": "snoek",
+  "temperatureC": 16,
+  "windBft": 3,
+  "cloudCoverPct": 85,
+  "pressureTrend": "falling",
+  "rain": "light",
+  "timeOfDay": "evening"
+}
+```
+
+The route is intentionally isolated from TradingView and Decentrader routes, so it can be hosted on the same Render service without touching the trading flow.
+
 # Decentrader BTC liquidity gap monitor
 
 This connector can also run a Decentrader BTC liquidity-gap monitor in the background. It checks the latest hourly Decentrader liquidity map and sends an SMTP email when new active histogram zones appear inside the previous clean gap around price.
