@@ -6,6 +6,7 @@ import { validateAlert } from '../services';
 import { DexRegistry } from '../services/dexRegistry';
 import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
 import { getOpenLiquidityTimelapsePayload } from '../services/openLiquidityTimelapse';
+import { buildSnoekScout } from '../services/snoekScout';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
 
@@ -125,6 +126,38 @@ const router: Router = express.Router();
 // Health check
 router.get('/', async (req, res) => {
   res.send('OK');
+});
+
+// ================= SNOEK AI TOOLS =================
+
+router.get('/snoek', async (req, res) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+      "script-src 'self' 'unsafe-inline'",
+      "script-src-attr 'none'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "connect-src 'self'",
+      "font-src 'self' https: data:",
+      "form-action 'self'",
+      "frame-ancestors 'self'",
+      'upgrade-insecure-requests'
+    ].join('; ')
+  );
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(process.cwd(), 'public', 'snoek', 'index.html'));
+});
+
+router.get('/snoek/api/scout', async (req, res) => {
+  res.send(buildSnoekScout(req.query as any));
+});
+
+router.post('/snoek/api/scout', async (req, res) => {
+  res.send(buildSnoekScout(req.body || {}));
 });
 
 // ================= ACCOUNTS =================
