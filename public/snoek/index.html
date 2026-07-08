@@ -193,6 +193,13 @@
       border: 1px solid var(--line);
       overflow: hidden;
       background: #08111d;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+
+    .map-wrap.is-panning {
+      cursor: grabbing;
     }
 
     .satellite-bg {
@@ -201,8 +208,8 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
-      opacity: 1;
-      filter: saturate(1.12) contrast(1.06) brightness(0.9);
+      opacity: 0.56;
+      filter: saturate(1.18) contrast(1.05) brightness(0.98);
     }
 
     .map-reference {
@@ -220,9 +227,9 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
-      opacity: 0.38;
-      mix-blend-mode: multiply;
-      filter: contrast(1.25) saturate(0.85);
+      opacity: 0.74;
+      mix-blend-mode: normal;
+      filter: contrast(1.18) saturate(0.92);
     }
 
     .map-content {
@@ -231,6 +238,10 @@
       transform: translate(var(--map-pan-x, 0%), var(--map-pan-y, 0%)) scale(var(--map-zoom, 1));
       transform-origin: 0 0;
       transition: transform 160ms ease;
+    }
+
+    .map-wrap.is-panning .map-content {
+      transition: none;
     }
 
     .map-shade {
@@ -252,12 +263,20 @@
       stroke: rgba(255, 255, 255, 0.82);
       stroke-width: 0.35;
       paint-order: stroke;
+      cursor: pointer;
     }
 
     .structure-hotspot {
       stroke: #ffffff;
       stroke-width: 0.55;
       filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.75));
+      cursor: pointer;
+    }
+
+    .structure-dot.is-selected,
+    .structure-hotspot.is-selected {
+      stroke: #06111f;
+      stroke-width: 0.8;
     }
 
     .map-legend {
@@ -270,6 +289,86 @@
       flex-wrap: wrap;
       gap: 6px;
       pointer-events: none;
+    }
+
+    .layer-panel {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 4;
+      display: grid;
+      gap: 5px;
+      max-width: min(260px, calc(100% - 24px));
+      padding: 8px;
+      border-radius: 8px;
+      color: #d8e8ff;
+      background: rgba(10, 21, 36, 0.84);
+      border: 1px solid rgba(42, 62, 94, 0.85);
+      font-size: 12px;
+      cursor: default;
+    }
+
+    .layer-panel strong {
+      font-size: 12px;
+    }
+
+    .layer-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 22px;
+      color: #d8e8ff;
+    }
+
+    .layer-toggle input {
+      width: 14px;
+      min-height: 14px;
+      accent-color: var(--accent-2);
+    }
+
+    .map-spot-detail {
+      position: absolute;
+      left: 12px;
+      top: 46px;
+      z-index: 4;
+      width: min(360px, calc(100% - 24px));
+      padding: 10px 12px;
+      border-radius: 8px;
+      color: var(--ink);
+      background: rgba(10, 21, 36, 0.9);
+      border: 1px solid rgba(42, 62, 94, 0.9);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+      cursor: default;
+    }
+
+    .map-spot-detail[hidden] {
+      display: none;
+    }
+
+    .map-spot-detail h3 {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: start;
+      margin-bottom: 5px;
+    }
+
+    .map-spot-detail button {
+      min-width: 28px;
+      min-height: 24px;
+      padding: 0 7px;
+      color: var(--ink);
+      background: #162a46;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-weight: 800;
+    }
+
+    .spot-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 7px 0;
     }
 
     .legend-item {
@@ -523,6 +622,17 @@
                 </svg>
               </div>
               <span class="map-label">Satelliet: Haarlem-Noord tot Westzaan</span>
+              <div class="layer-panel" aria-label="Kaartlagen">
+                <strong>Lagen</strong>
+                <label class="layer-toggle"><input id="layer-topo" type="checkbox" checked> Esri topo lijnen</label>
+                <label class="layer-toggle"><input id="layer-satellite" type="checkbox" checked> Satelliet onderlaag</label>
+                <label class="layer-toggle"><input data-layer-filter="pumping_station" type="checkbox" checked> Gemalen/pompen</label>
+                <label class="layer-toggle"><input data-layer-filter="weir" type="checkbox" checked> Stuwen</label>
+                <label class="layer-toggle"><input data-layer-filter="lock" type="checkbox" checked> Sluizen</label>
+                <label class="layer-toggle"><input data-layer-filter="culvert" type="checkbox" checked> Duikers</label>
+                <label class="layer-toggle"><input data-layer-filter="bridge" type="checkbox" checked> Bruggen</label>
+              </div>
+              <div class="map-spot-detail" id="spot-detail" hidden></div>
               <div class="map-legend" id="map-legend"></div>
               <div class="map-controls" aria-label="Kaart zoom">
                 <button id="zoom-out" type="button">-</button>
@@ -557,6 +667,13 @@
     const structureFeatures = document.getElementById('structure-features');
     const featureList = document.getElementById('feature-list');
     const mapLegend = document.getElementById('map-legend');
+    const spotDetail = document.getElementById('spot-detail');
+    const layerTopo = document.getElementById('layer-topo');
+    const layerSatellite = document.getElementById('layer-satellite');
+    const layerFilters = Array.from(document.querySelectorAll('[data-layer-filter]'));
+    const mapWrap = document.querySelector('.map-wrap');
+    const topoLayer = document.querySelector('.topo-reference');
+    const satelliteLayer = document.querySelector('.satellite-bg');
     const reviews = document.getElementById('reviews');
     const loadWeatherButton = document.getElementById('load-weather');
     const weatherStatus = document.getElementById('weather-status');
@@ -568,6 +685,9 @@
     let structuresData = null;
     let scoutData = null;
     let didAutoFocusVector = false;
+    let selectedStructureId = null;
+    let isPanning = false;
+    let panStart = null;
 
     function esc(value) {
       return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -603,7 +723,8 @@
 
     function focusVector() {
       if (!structuresData || !structuresData.structures.length) return;
-      const priority = structuresData.structures.slice(0, 160);
+      const priority = filteredStructures().slice(0, 160);
+      if (!priority.length) return;
       const xs = priority.map((item) => item.x);
       const ys = priority.map((item) => item.y);
       const minX = Math.min(...xs);
@@ -616,6 +737,61 @@
       const centerY = (minY + maxY) / 2;
       const zoom = Math.max(2.2, Math.min(6, Math.min(88 / width, 82 / height)));
       setMapView(zoom, 50 - (centerX * zoom), 50 - (centerY * zoom));
+    }
+
+    function filteredStructures() {
+      if (!structuresData) return [];
+      const enabled = new Set(layerFilters
+        .filter((input) => input.checked)
+        .map((input) => input.dataset.layerFilter));
+      return structuresData.structures.filter((item) => enabled.has(item.type) || !layerFilters.some((input) => input.dataset.layerFilter === item.type));
+    }
+
+    function focusStructure(item) {
+      setMapView(5.2, 50 - (item.x * 5.2), 50 - (item.y * 5.2));
+    }
+
+    function renderSpotDetail(item) {
+      selectedStructureId = item.id;
+      spotDetail.hidden = false;
+      spotDetail.innerHTML = `
+        <h3>
+          <span>${esc(item.name)}</span>
+          <button id="spot-detail-close" type="button">x</button>
+        </h3>
+        <p class="muted">${esc(structureName(item.type))} - ${esc(item.source)} - score ${esc(item.score)}/100</p>
+        <div class="spot-meta">
+          <span class="badge">lat ${esc(item.lat.toFixed(5))}</span>
+          <span class="badge">lon ${esc(item.lon.toFixed(5))}</span>
+          <span class="badge">${esc(item.sourceLayer)}</span>
+        </div>
+        ${list(item.reasons)}
+      `;
+      document.getElementById('spot-detail-close').addEventListener('click', (event) => {
+        event.stopPropagation();
+        selectedStructureId = null;
+        spotDetail.hidden = true;
+        renderStructures();
+      });
+    }
+
+    function selectStructure(item) {
+      renderSpotDetail(item);
+      focusStructure(item);
+      renderStructures();
+    }
+
+    function applyBaseLayerVisibility() {
+      topoLayer.style.display = layerTopo.checked ? '' : 'none';
+      satelliteLayer.style.display = layerSatellite.checked ? '' : 'none';
+    }
+
+    function clientToPanPercent(deltaPxX, deltaPxY) {
+      const rect = mapWrap.getBoundingClientRect();
+      return {
+        x: (deltaPxX / rect.width) * 100,
+        y: (deltaPxY / rect.height) * 100
+      };
     }
 
     function renderScore(data) {
@@ -708,14 +884,16 @@
         return;
       }
 
-      const topIds = new Set(structuresData.structures.slice(0, 80).map((item) => item.id));
-      structureFeatures.innerHTML = structuresData.structures.map((item) => {
+      const visible = filteredStructures();
+      const topIds = new Set(visible.slice(0, 80).map((item) => item.id));
+      structureFeatures.innerHTML = visible.map((item) => {
         const hot = topIds.has(item.id);
+        const selected = item.id === selectedStructureId;
         const radius = hot ? 1.45 : 0.72;
         const opacity = hot ? 0.96 : 0.68;
         return `
           <g>
-            <circle class="${hot ? 'structure-hotspot' : 'structure-dot'}" cx="${item.x.toFixed(3)}" cy="${item.y.toFixed(3)}" r="${radius}" fill="${structureColor(item.type)}" opacity="${opacity}">
+            <circle data-structure-id="${esc(item.id)}" class="${hot ? 'structure-hotspot' : 'structure-dot'}${selected ? ' is-selected' : ''}" cx="${item.x.toFixed(3)}" cy="${item.y.toFixed(3)}" r="${selected ? radius + 0.9 : radius}" fill="${structureColor(item.type)}" opacity="${opacity}">
               <title>${esc(item.name)} - score ${esc(item.score)} - ${esc(item.source)}</title>
             </circle>
           </g>
@@ -728,6 +906,14 @@
       mapLegend.innerHTML = legendTypes.map((type) => `
         <span class="legend-item"><span class="legend-dot" style="--dot:${structureColor(type)}"></span>${esc(structureName(type))} ${esc(structuresData.counts[type])}</span>
       `).join('');
+
+      structureFeatures.querySelectorAll('[data-structure-id]').forEach((node) => {
+        node.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const item = structuresData.structures.find((structure) => structure.id === node.dataset.structureId);
+          if (item) selectStructure(item);
+        });
+      });
     }
 
     function renderFeatureList() {
@@ -743,9 +929,9 @@
             <p class="muted">Gefilterd uit ${esc(structuresData.rawTotal || structuresData.total)} GIS-objecten. ${esc(countText)}</p>
           </div>
         `);
-        structuresData.structures.slice(0, 24).forEach((item) => {
+        filteredStructures().slice(0, 24).forEach((item) => {
           cards.push(`
-            <div class="card">
+            <div class="card" data-structure-card="${esc(item.id)}">
               <h3>${esc(item.name)} <span class="badge">${esc(item.score)}/100</span></h3>
               <p class="muted">${esc(item.source)} - ${esc(structureName(item.type))} - ${esc(item.reasons.join(' - '))}</p>
             </div>
@@ -767,6 +953,12 @@
       }
 
       featureList.innerHTML = cards.join('');
+      featureList.querySelectorAll('[data-structure-card]').forEach((node) => {
+        node.addEventListener('click', () => {
+          const item = structuresData?.structures.find((structure) => structure.id === node.dataset.structureCard);
+          if (item) selectStructure(item);
+        });
+      });
     }
 
     function renderMap(data) {
@@ -881,6 +1073,47 @@
     document.getElementById('zoom-out').addEventListener('click', () => setMapZoom(mapZoom - 0.5));
     document.getElementById('zoom-vector').addEventListener('click', focusVector);
     document.getElementById('zoom-reset').addEventListener('click', () => setMapView(1, 0, 0));
+    layerTopo.addEventListener('change', applyBaseLayerVisibility);
+    layerSatellite.addEventListener('change', applyBaseLayerVisibility);
+    layerFilters.forEach((input) => input.addEventListener('change', () => {
+      renderStructures();
+      renderFeatureList();
+      focusVector();
+    }));
+    mapWrap.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('.map-controls, .layer-panel, .map-spot-detail')) return;
+      isPanning = true;
+      panStart = {
+        x: event.clientX,
+        y: event.clientY,
+        panX: mapPanX,
+        panY: mapPanY
+      };
+      mapWrap.classList.add('is-panning');
+      mapWrap.setPointerCapture(event.pointerId);
+    });
+    mapWrap.addEventListener('pointermove', (event) => {
+      if (!isPanning || !panStart) return;
+      const delta = clientToPanPercent(event.clientX - panStart.x, event.clientY - panStart.y);
+      setMapView(mapZoom, panStart.panX + delta.x, panStart.panY + delta.y);
+    });
+    function stopPanning(event) {
+      if (!isPanning) return;
+      isPanning = false;
+      panStart = null;
+      mapWrap.classList.remove('is-panning');
+      if (event?.pointerId !== undefined) {
+        try { mapWrap.releasePointerCapture(event.pointerId); } catch {}
+      }
+    }
+    mapWrap.addEventListener('pointerup', stopPanning);
+    mapWrap.addEventListener('pointercancel', stopPanning);
+    mapWrap.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      const direction = event.deltaY > 0 ? -0.35 : 0.35;
+      setMapZoom(mapZoom + direction);
+    }, { passive: false });
+    applyBaseLayerVisibility();
     setMapView(1, 0, 0);
     loadStructures();
     loadWeather();

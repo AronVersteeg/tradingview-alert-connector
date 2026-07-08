@@ -208,15 +208,15 @@ function scoreStructure(type: SnoekStructureType, props: any): { score: number; 
     reasons.push(reason);
   };
 
-  if (type === 'pumping_station') add(34, 'stroming, zuurstof en aasvis rond gemaal/pomp');
-  if (type === 'culvert') add(28, 'versmalling en hinderlaag bij duiker');
-  if (type === 'weir') add(26, 'stroming en hoogteverschil bij stuw');
-  if (type === 'lock') add(23, 'stroming, harde randen en schaduw bij sluis');
+  if (type === 'pumping_station') add(46, 'actieve stroming, zuurstof en aasvis rond gemaal/pomp');
+  if (type === 'culvert') add(14, 'versmalling en hinderlaag bij duiker');
+  if (type === 'weir') add(34, 'stroming en hoogteverschil bij stuw');
+  if (type === 'lock') add(30, 'stroming, harde randen en schaduw bij sluis');
   if (type === 'bridge') add(18, 'schaduw en harde structuur bij brug');
-  if (type === 'fish_passage') add(18, 'vismigratie en stroming bij vispassage');
-  if (type === 'siphon') add(15, 'onderdoorgang/vernauwing bij sifon');
+  if (type === 'fish_passage') add(24, 'vismigratie en stroming bij vispassage');
+  if (type === 'siphon') add(10, 'onderdoorgang/vernauwing bij sifon');
   if (type === 'trash_rack') add(13, 'vuilvang verzamelt stroming en klein aas');
-  if (type === 'gate' || type === 'water_control') add(12, 'waterregeling geeft stromingskans');
+  if (type === 'gate' || type === 'water_control') add(22, 'waterregeling geeft stromingskans');
   if (type === 'drop') add(16, 'bodemval geeft diepte- en stroomovergang');
 
   const status = String(props?.statusobject || '').toLowerCase();
@@ -395,13 +395,19 @@ function buildScoutHotspots(structures: SnoekStructure[], limit: number): SnoekS
       type === 'fish_passage' ||
       type === 'water_control'
     ));
+    const hasCurrentMaker = types.some((type) => (
+      type === 'pumping_station' ||
+      type === 'weir' ||
+      type === 'lock' ||
+      type === 'water_control'
+    ));
     const hasAmbushCombo = types.includes('culvert') && (types.includes('bridge') || types.includes('gate') || types.includes('weir'));
     const x = items.reduce((sum, item) => sum + item.x, 0) / items.length;
     const y = items.reduce((sum, item) => sum + item.y, 0) / items.length;
     const waterDistance = distanceToWaterLayout(x, y);
     const nearMainWater = waterDistance <= 5.5;
     const community = nearestCommunitySignal(x, y);
-    const keep = hasPrimeStructure || hasAmbushCombo || nearMainWater || items.length >= 5 || types.length >= 3;
+    const keep = hasCurrentMaker || (hasAmbushCombo && nearMainWater) || (hasPrimeStructure && nearMainWater) || (items.length >= 6 && types.length >= 3 && nearMainWater);
 
     if (!keep) return;
 
@@ -409,7 +415,7 @@ function buildScoutHotspots(structures: SnoekStructure[], limit: number): SnoekS
     const densityBoost = Math.min(18, items.length * 2);
     const typeBoost = Math.min(20, types.length * 7);
     const waterBoost = waterDistance <= 2.5 ? 14 : waterDistance <= 5.5 ? 8 : 0;
-    const comboBoost = hasAmbushCombo ? 12 : hasPrimeStructure ? 10 : 0;
+    const comboBoost = hasCurrentMaker ? 18 : hasAmbushCombo ? 8 : hasPrimeStructure ? 10 : 0;
     const communityBoost = community ? community.boost : 0;
     const score = Math.round(clamp(best.score + densityBoost + typeBoost + waterBoost + comboBoost + communityBoost - 18, 0, 100));
 
@@ -426,8 +432,8 @@ function buildScoutHotspots(structures: SnoekStructure[], limit: number): SnoekS
     const reasons = [
       `GIS: ${items.length} objecten in een klein vak (${typeLabels.slice(0, 4).join(', ')})`,
       nearMainWater ? 'Waterlayout: nabij hoofdwater, kruising of overgang' : '',
-      hasAmbushCombo ? 'Snoeklogica: duiker + structuur geeft hinderlaag' : '',
-      hasPrimeStructure ? 'Snoeklogica: stroming/waterregeling kan aasvis concentreren' : '',
+      hasAmbushCombo ? 'Snoeklogica: duiker telt mee als hinderlaag, niet als hoofdreden' : '',
+      hasCurrentMaker ? 'Snoeklogica: stroming/waterregeling kan aasvis concentreren' : '',
       community ? `Community: ${community.note}` : 'Community: nog geen sterke lokale bevestiging'
     ].filter(Boolean);
 

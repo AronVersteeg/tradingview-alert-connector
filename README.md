@@ -28,6 +28,8 @@ GET /snoek/api/structures
 
 The map is now GIS/vector-first: PDOK/RWS object coordinates are the source of truth and the Esri satellite image is a visual underlay. Exact bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route. The chat-mentioned source stack is represented in the source catalog: Open-Meteo, PDOK/RWS kunstwerken, Esri/Rijkswaterstaat bathymetry, AHN, OpenStreetMap, VISplanner, Fishbrain/FishAngler community data, Windy/Fishing Points-style timing and satellite/manual water-reading layers.
 
+The Snoek map supports pan/zoom, clickable scout spots, a detail panel with coordinates and reasoning, and layer toggles for the Esri topo/satellite underlay plus major GIS spot classes such as pumping stations, weirs, locks, culverts and bridges.
+
 Example API call:
 
 ```json
