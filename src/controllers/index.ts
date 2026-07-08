@@ -141,7 +141,7 @@ router.get('/snoek', async (req, res) => {
       "script-src 'self' 'unsafe-inline'",
       "script-src-attr 'none'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
+      "img-src 'self' data: https://services.arcgisonline.com https://server.arcgisonline.com",
       "connect-src 'self'",
       "font-src 'self' https: data:",
       "form-action 'self'",
