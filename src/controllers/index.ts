@@ -153,6 +153,22 @@ router.get('/snoek', async (req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'snoek', 'index.html'));
 });
 
+router.get('/snoek/assets/:file', async (req, res) => {
+  const allowedFiles = new Set([
+    'spaarnwoude-satellite.jpg',
+    'spaarnwoude-transport.png',
+    'spaarnwoude-places.png'
+  ]);
+  const file = String(req.params.file || '');
+
+  if (!allowedFiles.has(file)) {
+    return res.status(404).send('Not found');
+  }
+
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(path.join(process.cwd(), 'public', 'snoek', 'assets', file));
+});
+
 router.get('/snoek/api/scout', async (req, res) => {
   res.send(buildSnoekScout(req.query as any));
 });

@@ -201,8 +201,8 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
-      opacity: 0.82;
-      filter: saturate(1.08) contrast(1.06) brightness(0.72);
+      opacity: 1;
+      filter: saturate(1.12) contrast(1.06) brightness(0.9);
     }
 
     .map-reference {
@@ -211,7 +211,7 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
-      opacity: 0.9;
+      opacity: 0.82;
     }
 
     .map-content {
@@ -225,7 +225,7 @@
     .map-shade {
       position: absolute;
       inset: 0;
-      background: linear-gradient(180deg, rgba(8, 17, 29, 0.02), rgba(8, 17, 29, 0.18));
+      background: linear-gradient(180deg, rgba(8, 17, 29, 0.00), rgba(8, 17, 29, 0.10));
       pointer-events: none;
     }
 
@@ -438,7 +438,7 @@
 
         <section class="panel">
           <div class="panel-header">
-            <h2>Offline viskaart</h2>
+            <h2>Satelliet viskaart</h2>
           </div>
           <div class="panel-body">
             <div class="map-wrap">
@@ -446,18 +446,18 @@
                 <img
                   class="satellite-bg"
                   alt="Satellietbeeld Haarlem-Noord, Spaarnwoude, Velsen, Ruigoord en Westzaan"
-                  src="https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?bbox=4.575,52.365,4.815,52.495&amp;bboxSR=4326&amp;imageSR=4326&amp;size=1400,900&amp;format=jpg&amp;f=image">
+                  src="/snoek/assets/spaarnwoude-satellite.jpg">
                 <div class="map-shade"></div>
                 <img
                   class="map-reference"
                   alt=""
                   aria-hidden="true"
-                  src="https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/export?bbox=4.575,52.365,4.815,52.495&amp;bboxSR=4326&amp;imageSR=4326&amp;size=1400,900&amp;transparent=true&amp;format=png32&amp;f=image">
+                  src="/snoek/assets/spaarnwoude-transport.png">
                 <img
                   class="map-reference"
                   alt=""
                   aria-hidden="true"
-                  src="https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/export?bbox=4.575,52.365,4.815,52.495&amp;bboxSR=4326&amp;imageSR=4326&amp;size=1400,900&amp;transparent=true&amp;format=png32&amp;f=image">
+                  src="/snoek/assets/spaarnwoude-places.png">
                 <svg viewBox="0 0 100 100" aria-label="Offline kaart met visstekken">
                   <path d="M5 65 C20 60, 28 54, 40 54 C54 54, 63 45, 80 43 C88 42, 93 39, 98 35" fill="none" stroke="#43a7ff" stroke-width="2.8" opacity="0.92"></path>
                   <path d="M14 78 C31 74, 44 75, 58 77 C72 80, 84 78, 96 72" fill="none" stroke="#37d59f" stroke-width="2.2" opacity="0.74"></path>
@@ -473,7 +473,7 @@
                 <button id="zoom-in" type="button">+</button>
                 <button id="zoom-reset" type="button">Reset</button>
               </div>
-              <span class="map-attribution">Imagery: Esri World Imagery</span>
+              <span class="map-attribution">Satellietbeeld: Esri World Imagery</span>
             </div>
             <div id="feature-list" class="cards" style="margin-top: 12px;"></div>
           </div>
