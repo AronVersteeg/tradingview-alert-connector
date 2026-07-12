@@ -315,6 +315,16 @@
       color: #ffffff;
     }
 
+    .liquidity-trend {
+      display: block;
+      width: 100%;
+      height: 74px;
+      margin-top: 8px;
+      border: 1px solid rgba(78, 92, 112, 0.42);
+      border-radius: 7px;
+      background: rgba(7, 10, 15, 0.3);
+    }
+
     .liquidity-counter-value {
       color: var(--text);
       font-size: 21px;
@@ -667,6 +677,7 @@
             <div class="liquidity-counter-meta" id="liqShortMeta">-</div>
           </div>
         </div>
+        <canvas class="liquidity-trend" id="liquidityTrend" width="560" height="74"></canvas>
       </div>
       <div class="gap-card rsi-study-card" id="rsiStudyCard">
         <div class="gap-label">4H/D RSI study</div>
@@ -775,6 +786,8 @@
     const liqShortCell = document.getElementById('liqShortCell');
     const liqShortValue = document.getElementById('liqShortValue');
     const liqShortMeta = document.getElementById('liqShortMeta');
+    const liquidityTrend = document.getElementById('liquidityTrend');
+    const liquidityTrendCtx = liquidityTrend?.getContext('2d');
     const rsiStudyCard = document.getElementById('rsiStudyCard');
     const rsiStudyValue = document.getElementById('rsiStudyValue');
     const rsiStudyStatus = document.getElementById('rsiStudyStatus');
@@ -1884,6 +1897,43 @@
       return price * count;
     }
 
+    function liquidityAdditionsForFrame(index, split) {
+      const includeContext = activeSource === 'open';
+      const previousBars = getGapBarsForSource(
+        getFrameEvents(index - 1, { mode: 'active', includeContext }).bars,
+        payload.frames[index - 1]
+      );
+      const currentBars = getGapBarsForSource(
+        getFrameEvents(index, { mode: 'active', includeContext }).bars,
+        payload.frames[index]
+      );
+      const previousCounts = new Map(previousBars.map((bar) => [bar.key, bar.count || 0]));
+      const additions = {
+        longUnits: 0,
+        shortUnits: 0,
+        longUsd: 0,
+        shortUsd: 0,
+        ignoredUnits: 0,
+      };
+
+      for (const bar of currentBars) {
+        const newCount = Math.max(0, (bar.count || 0) - (previousCounts.get(bar.key) || 0));
+        if (!newCount) continue;
+
+        if (bar.side === 'L' && bar.price <= split.longMax) {
+          additions.longUnits += newCount;
+          additions.longUsd += estimateHistoUsd(bar, newCount);
+        } else if (bar.side === 'S' && bar.price >= split.shortMin) {
+          additions.shortUnits += newCount;
+          additions.shortUsd += estimateHistoUsd(bar, newCount);
+        } else {
+          additions.ignoredUnits += newCount;
+        }
+      }
+
+      return additions;
+    }
+
     function getLiquidityBuildupStats(frameIndex, frame, gap) {
       const hours = Math.max(1, Number(liquidityWindow?.value) || 24);
       const split = getLiquiditySplit(frame, gap);
@@ -1909,37 +1959,191 @@
       };
 
       for (let index = startIndex; index <= frameIndex; index += 1) {
-        const previousBars = getGapBarsForSource(
-          getFrameEvents(index - 1, { mode: 'active', includeContext }).bars,
-          payload.frames[index - 1]
-        );
-        const currentBars = getGapBarsForSource(
-          getFrameEvents(index, { mode: 'active', includeContext }).bars,
-          payload.frames[index]
-        );
-        const previousCounts = new Map(previousBars.map((bar) => [bar.key, bar.count || 0]));
-
-        for (const bar of currentBars) {
-          const newCount = Math.max(0, (bar.count || 0) - (previousCounts.get(bar.key) || 0));
-          if (!newCount) continue;
-
-          if (bar.side === 'L' && bar.price <= split.longMax) {
-            stats.longUnits += newCount;
-            stats.longUsd += estimateHistoUsd(bar, newCount);
-          } else if (bar.side === 'S' && bar.price >= split.shortMin) {
-            stats.shortUnits += newCount;
-            stats.shortUsd += estimateHistoUsd(bar, newCount);
-          } else {
-            stats.ignoredUnits += newCount;
-          }
-        }
+        const additions = liquidityAdditionsForFrame(index, split);
+        stats.longUnits += additions.longUnits;
+        stats.shortUnits += additions.shortUnits;
+        stats.longUsd += additions.longUsd;
+        stats.shortUsd += additions.shortUsd;
+        stats.ignoredUnits += additions.ignoredUnits;
       }
 
       return stats;
     }
 
-    function updateLiquidityCounter(frameIndex, frame, gap) {
+    function getLiquidityBuildupSeries(frameIndex, frame, gap) {
       const stats = getLiquidityBuildupStats(frameIndex, frame, gap);
+      if (!payload || !stats.split || frameIndex <= 0) return { stats, points: [] };
+
+      const historyHours = 24 * 7;
+      const firstPointIndex = Math.max(1, frameIndex - historyHours + 1);
+      const firstNeededIndex = Math.max(1, firstPointIndex - stats.hours + 1);
+      const additionsByIndex = new Map();
+      const points = [];
+
+      for (let index = firstNeededIndex; index <= frameIndex; index += 1) {
+        additionsByIndex.set(index, liquidityAdditionsForFrame(index, stats.split));
+      }
+
+      for (let index = firstPointIndex; index <= frameIndex; index += 1) {
+        let longUsd = 0;
+        let shortUsd = 0;
+        const windowStart = Math.max(1, index - stats.hours + 1);
+        for (let windowIndex = windowStart; windowIndex <= index; windowIndex += 1) {
+          const additions = additionsByIndex.get(windowIndex);
+          longUsd += additions?.longUsd || 0;
+          shortUsd += additions?.shortUsd || 0;
+        }
+        points.push({
+          index,
+          timestamp: payload.frames[index]?.t,
+          longUsd,
+          shortUsd,
+        });
+      }
+
+      return { stats, points };
+    }
+
+    function drawLiquidityTrend(points, stats) {
+      if (!liquidityTrend || !liquidityTrendCtx) return;
+
+      const rect = liquidityTrend.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const width = Math.max(180, Math.floor(rect.width || liquidityTrend.width || 560));
+      const height = Math.max(58, Math.floor(rect.height || liquidityTrend.height || 74));
+      if (liquidityTrend.width !== Math.floor(width * scale) || liquidityTrend.height !== Math.floor(height * scale)) {
+        liquidityTrend.width = Math.floor(width * scale);
+        liquidityTrend.height = Math.floor(height * scale);
+      }
+      liquidityTrendCtx.setTransform(scale, 0, 0, scale, 0, 0);
+      liquidityTrendCtx.clearRect(0, 0, width, height);
+
+      const css = getComputedStyle(document.documentElement);
+      const longColor = css.getPropertyValue('--price').trim() || '#21d3a3';
+      const shortColor = css.getPropertyValue('--rsi-short').trim() || '#ef4444';
+      const muted = css.getPropertyValue('--muted').trim() || '#9aa8b8';
+      const grid = css.getPropertyValue('--grid').trim() || 'rgba(236, 242, 248, 0.12)';
+      const area = { left: 36, top: 10, right: width - 10, bottom: height - 18 };
+      area.width = area.right - area.left;
+      area.height = area.bottom - area.top;
+      const maxValue = Math.max(1, ...points.map((point) => Math.max(point.longUsd, point.shortUsd)));
+
+      liquidityTrendCtx.strokeStyle = grid;
+      liquidityTrendCtx.lineWidth = 1;
+      for (let i = 0; i < 3; i += 1) {
+        const y = area.top + (area.height * i) / 2;
+        liquidityTrendCtx.beginPath();
+        liquidityTrendCtx.moveTo(area.left, y);
+        liquidityTrendCtx.lineTo(area.right, y);
+        liquidityTrendCtx.stroke();
+      }
+
+      liquidityTrendCtx.fillStyle = muted;
+      liquidityTrendCtx.font = '10px Inter, system-ui, sans-serif';
+      liquidityTrendCtx.textBaseline = 'middle';
+      liquidityTrendCtx.fillText(compactUsd(maxValue), 4, area.top + 2);
+      liquidityTrendCtx.fillText('$0', 4, area.bottom);
+
+      function xFor(position) {
+        if (points.length <= 1) return area.right;
+        return area.left + (position / (points.length - 1)) * area.width;
+      }
+
+      function yFor(value) {
+        return area.bottom - (value / maxValue) * area.height;
+      }
+
+      function drawLine(key, color) {
+        if (!points.length) return;
+        liquidityTrendCtx.strokeStyle = color;
+        liquidityTrendCtx.lineWidth = 2.2;
+        liquidityTrendCtx.beginPath();
+        points.forEach((point, position) => {
+          const x = xFor(position);
+          const y = yFor(point[key]);
+          if (position === 0) liquidityTrendCtx.moveTo(x, y);
+          else liquidityTrendCtx.lineTo(x, y);
+        });
+        liquidityTrendCtx.stroke();
+      }
+
+      drawLine('longUsd', longColor);
+      drawLine('shortUsd', shortColor);
+
+      let latestCross = null;
+      for (let position = 1; position < points.length; position += 1) {
+        const previousDiff = points[position - 1].longUsd - points[position - 1].shortUsd;
+        const currentDiff = points[position].longUsd - points[position].shortUsd;
+        if (previousDiff === 0 || currentDiff === 0 || Math.sign(previousDiff) !== Math.sign(currentDiff)) {
+          latestCross = {
+            position,
+            direction: currentDiff > 0 ? 'long' : 'short',
+            timestamp: points[position].timestamp,
+          };
+        }
+      }
+
+      if (latestCross) {
+        const crossX = xFor(latestCross.position);
+        const crossColor = latestCross.direction === 'long' ? longColor : shortColor;
+        liquidityTrendCtx.save();
+        liquidityTrendCtx.strokeStyle = crossColor;
+        liquidityTrendCtx.globalAlpha = 0.72;
+        liquidityTrendCtx.setLineDash([3, 4]);
+        liquidityTrendCtx.lineWidth = 1.4;
+        liquidityTrendCtx.beginPath();
+        liquidityTrendCtx.moveTo(crossX, area.top);
+        liquidityTrendCtx.lineTo(crossX, area.bottom);
+        liquidityTrendCtx.stroke();
+        liquidityTrendCtx.setLineDash([]);
+        liquidityTrendCtx.globalAlpha = 1;
+        liquidityTrendCtx.fillStyle = 'rgba(7, 10, 15, 0.86)';
+        liquidityTrendCtx.strokeStyle = crossColor;
+        liquidityTrendCtx.lineWidth = 1;
+        const label = latestCross.direction === 'long' ? 'cross long' : 'cross short';
+        liquidityTrendCtx.font = '10px Inter, system-ui, sans-serif';
+        const labelWidth = Math.ceil(liquidityTrendCtx.measureText(label).width) + 10;
+        const labelX = Math.min(Math.max(area.left, crossX - labelWidth / 2), area.right - labelWidth);
+        const labelY = area.top + 2;
+        if (liquidityTrendCtx.roundRect) {
+          liquidityTrendCtx.beginPath();
+          liquidityTrendCtx.roundRect(labelX, labelY, labelWidth, 16, 4);
+          liquidityTrendCtx.fill();
+          liquidityTrendCtx.stroke();
+        } else {
+          liquidityTrendCtx.fillRect(labelX, labelY, labelWidth, 16);
+          liquidityTrendCtx.strokeRect(labelX, labelY, labelWidth, 16);
+        }
+        liquidityTrendCtx.fillStyle = crossColor;
+        liquidityTrendCtx.textBaseline = 'middle';
+        liquidityTrendCtx.fillText(label, labelX + 5, labelY + 8);
+        liquidityTrendCtx.restore();
+      }
+
+      const last = points[points.length - 1];
+      if (last) {
+        liquidityTrendCtx.fillStyle = longColor;
+        liquidityTrendCtx.beginPath();
+        liquidityTrendCtx.arc(area.right, yFor(last.longUsd), 3, 0, Math.PI * 2);
+        liquidityTrendCtx.fill();
+        liquidityTrendCtx.fillStyle = shortColor;
+        liquidityTrendCtx.beginPath();
+        liquidityTrendCtx.arc(area.right, yFor(last.shortUsd), 3, 0, Math.PI * 2);
+        liquidityTrendCtx.fill();
+      }
+
+      liquidityTrendCtx.fillStyle = muted;
+      liquidityTrendCtx.textBaseline = 'alphabetic';
+      const lookbackLabel = points.length >= 168 ? '7d' : `${points.length}h`;
+      liquidityTrendCtx.fillText(`${stats.hours}h rolling | ${lookbackLabel}`, area.left, height - 5);
+      liquidityTrendCtx.fillStyle = longColor;
+      liquidityTrendCtx.fillText('Long', Math.max(area.left + 88, width - 96), height - 5);
+      liquidityTrendCtx.fillStyle = shortColor;
+      liquidityTrendCtx.fillText('Short', Math.max(area.left + 128, width - 52), height - 5);
+    }
+
+    function updateLiquidityCounter(frameIndex, frame, gap) {
+      const { stats, points } = getLiquidityBuildupSeries(frameIndex, frame, gap);
       const totalUsd = stats.longUsd + stats.shortUsd;
       const netUsd = Math.abs(stats.longUsd - stats.shortUsd);
       const longDominant = stats.longUsd > stats.shortUsd * 1.08;
@@ -1953,6 +2157,7 @@
       liqLongMeta.textContent = sharePct(stats.longUsd, totalUsd);
       liqShortMeta.textContent = sharePct(stats.shortUsd, totalUsd);
       liqTotalMeta.textContent = `${compactUsd(totalUsd)} total`;
+      drawLiquidityTrend(points, stats);
 
       if (!frame || !stats.split) {
         liquidityCounterStatus.textContent = 'Waiting for data';
