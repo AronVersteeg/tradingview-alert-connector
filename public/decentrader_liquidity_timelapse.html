@@ -106,6 +106,7 @@
     }
 
     select,
+    input[type="datetime-local"],
     button {
       height: 34px;
       border: 1px solid var(--border);
@@ -160,6 +161,11 @@
     input[type="range"] {
       width: min(560px, 80vw);
       accent-color: var(--new);
+    }
+
+    input[type="datetime-local"] {
+      min-width: 178px;
+      color-scheme: dark;
     }
 
     .inline-buttons {
@@ -572,6 +578,13 @@
         <input id="frame" type="range" min="0" max="0" value="0">
       </div>
       <div class="control">
+        <label for="jumpTime">Jump to NL time</label>
+        <div class="inline-buttons">
+          <input id="jumpTime" type="datetime-local" step="3600" aria-label="Jump to timelapse date and time">
+          <button id="jumpTimeButton" type="button" aria-label="Jump to selected timelapse time" title="Jump to selected time">Go</button>
+        </div>
+      </div>
+      <div class="control">
         <label for="mode">Mode</label>
         <select id="mode">
           <option value="active">Active accumulation</option>
@@ -764,6 +777,8 @@
     const liveMonitorButton = document.getElementById('liveMonitor');
     const refreshDataButton = document.getElementById('refreshData');
     const playButton = document.getElementById('play');
+    const jumpTimeInput = document.getElementById('jumpTime');
+    const jumpTimeButton = document.getElementById('jumpTimeButton');
     const pageTitle = document.getElementById('pageTitle');
     const openStudySection = document.getElementById('openStudySection');
     const openStudyFrame = document.getElementById('openStudyFrame');
@@ -907,6 +922,86 @@
         minute: '2-digit',
         hour12: false,
       }).format(date);
+    }
+
+    function amsterdamDateTimeParts(timestamp) {
+      const date = parseDecentraderUtc(timestamp);
+      if (!date) return null;
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Amsterdam',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        hourCycle: 'h23',
+      }).formatToParts(date);
+      const value = {};
+      for (const part of parts) {
+        if (part.type !== 'literal') value[part.type] = part.value;
+      }
+      return value;
+    }
+
+    function dateTimeLocalValue(timestamp) {
+      const parts = amsterdamDateTimeParts(timestamp);
+      if (!parts) return '';
+      return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+    }
+
+    function frameTimestampMs(index) {
+      return parseDecentraderUtc(payload?.frames?.[index]?.t)?.getTime();
+    }
+
+    function nearestFrameIndexForTime(targetMs) {
+      if (!payload?.frames?.length || !Number.isFinite(targetMs)) return -1;
+      let low = 0;
+      let high = payload.frames.length - 1;
+
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        const middleMs = frameTimestampMs(middle);
+        if (!Number.isFinite(middleMs)) break;
+        if (middleMs < targetMs) low = middle + 1;
+        else high = middle - 1;
+      }
+
+      const candidates = [Math.max(0, high), Math.min(payload.frames.length - 1, low)];
+      let bestIndex = candidates[0];
+      let bestDistance = Infinity;
+      for (const index of candidates) {
+        const frameMs = frameTimestampMs(index);
+        if (!Number.isFinite(frameMs)) continue;
+        const distance = Math.abs(frameMs - targetMs);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = index;
+        }
+      }
+      return bestIndex;
+    }
+
+    function syncJumpTimeBounds() {
+      if (!jumpTimeInput || !payload?.frames?.length) return;
+      jumpTimeInput.min = dateTimeLocalValue(payload.frames[0]?.t);
+      jumpTimeInput.max = dateTimeLocalValue(payload.frames[payload.frames.length - 1]?.t);
+    }
+
+    function syncJumpTimeInput(frame) {
+      if (!jumpTimeInput || document.activeElement === jumpTimeInput) return;
+      jumpTimeInput.value = dateTimeLocalValue(frame?.t);
+    }
+
+    function jumpToSelectedTime() {
+      if (!jumpTimeInput?.value || !payload?.frames?.length) return;
+      const target = new Date(jumpTimeInput.value);
+      const targetMs = target.getTime();
+      const frameIndex = nearestFrameIndexForTime(targetMs);
+      if (frameIndex < 0) return;
+      setPlaying(false);
+      frameInput.value = String(frameIndex);
+      draw();
     }
 
     function resizeCanvas() {
@@ -3262,6 +3357,7 @@
       ctx.fillText(`${sourceName} | ${nlTime(frame.t)} NL | ${priceLevel(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
 
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
+      syncJumpTimeInput(frame);
       updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview);
       updateLiquidityCounter(frameIndex, frame, gap);
       updateRsiStudyMonitor(frameIndex, fertilityContext);
@@ -3399,6 +3495,7 @@
       frameInput.max = String(payload.frames.length - 1);
 
       const nextLast = payload.frames[payload.frames.length - 1]?.t;
+      syncJumpTimeBounds();
       if (wasAtLatest || previousLast !== nextLast) {
         frameInput.value = frameInput.max;
       }
@@ -3433,6 +3530,7 @@
     function initializeViewer() {
       frameInput.max = String(payload.frames.length - 1);
       frameInput.value = String(payload.frames.length - 1);
+      syncJumpTimeBounds();
       const sourceName = payload.source?.name || (activeSource === 'open' ? 'Public perp study' : 'Decentrader');
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       note.textContent = payload.source.note;
@@ -3445,6 +3543,14 @@
       }
       prevHourButton.addEventListener('click', () => stepFrame(-1));
       nextHourButton.addEventListener('click', () => stepFrame(1));
+      jumpTimeButton?.addEventListener('click', jumpToSelectedTime);
+      jumpTimeInput?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          jumpToSelectedTime();
+        }
+      });
+      jumpTimeInput?.addEventListener('change', jumpToSelectedTime);
       enableAlertsButton.addEventListener('click', enableAlerts);
       candleFilterButton.addEventListener('click', toggleCandleFilter);
       liveMonitorButton.addEventListener('click', () => {
