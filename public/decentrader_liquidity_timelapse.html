@@ -259,8 +259,16 @@
       background: linear-gradient(135deg, rgba(251, 191, 36, 0.14), rgba(24, 31, 41, 0.95));
     }
 
+    .liquidity-panel {
+      padding: 12px 22px;
+      background: #121923;
+      border-bottom: 1px solid var(--border);
+    }
+
     .liquidity-counter-card {
-      grid-column: span 3;
+      max-width: 1180px;
+      min-height: 0;
+      margin: 0 auto;
     }
 
     .liquidity-counter-head {
@@ -410,7 +418,8 @@
     body.is-embedded footer,
     body.is-embedded .toolbar,
     body.is-embedded .gap-monitor,
-    body.is-embedded .stage {
+    body.is-embedded .stage,
+    body.is-embedded .liquidity-panel {
       padding-left: 16px;
       padding-right: 16px;
     }
@@ -467,7 +476,8 @@
       header,
       footer,
       .stage,
-      .comparison {
+      .comparison,
+      .liquidity-panel {
         padding-left: 12px;
         padding-right: 12px;
       }
@@ -503,10 +513,6 @@
 
       .gap-monitor .gap-card:first-child,
       .gap-card--wide {
-        grid-column: 1 / -1;
-      }
-
-      .liquidity-counter-card {
         grid-column: 1 / -1;
       }
 
@@ -659,39 +665,6 @@
         <div class="gap-label">Gap alert</div>
         <div class="gap-alert" id="gapAlert">No intrusions</div>
       </div>
-      <div class="gap-card liquidity-counter-card">
-        <div class="liquidity-counter-head">
-          <div>
-            <div class="gap-label">New liquidation buildup</div>
-            <div class="gap-status" id="liquidityCounterStatus">Waiting for data</div>
-          </div>
-          <select class="liquidity-window-select" id="liquidityWindow" aria-label="Liquidation buildup timeframe">
-            <option value="24">24h</option>
-            <option value="12">12h</option>
-            <option value="4">4h</option>
-            <option value="2">2h</option>
-            <option value="1">1h</option>
-          </select>
-        </div>
-        <div class="liquidity-counter-grid">
-          <div class="liquidity-counter-cell liquidity-counter-cell--long" id="liqLongCell">
-            <div class="liquidity-counter-value" id="liqLongValue">-</div>
-            <div class="liquidity-counter-label">Long side</div>
-            <div class="liquidity-counter-meta" id="liqLongMeta">-</div>
-          </div>
-          <div class="liquidity-counter-cell">
-            <div class="liquidity-counter-value" id="liqWindowValue">24h</div>
-            <div class="liquidity-counter-label">Window</div>
-            <div class="liquidity-counter-meta" id="liqTotalMeta">-</div>
-          </div>
-          <div class="liquidity-counter-cell liquidity-counter-cell--short" id="liqShortCell">
-            <div class="liquidity-counter-value" id="liqShortValue">-</div>
-            <div class="liquidity-counter-label">Short side</div>
-            <div class="liquidity-counter-meta" id="liqShortMeta">-</div>
-          </div>
-        </div>
-        <canvas class="liquidity-trend" id="liquidityTrend" width="560" height="74"></canvas>
-      </div>
       <div class="gap-card rsi-study-card" id="rsiStudyCard">
         <div class="gap-label">4H/D RSI study</div>
         <div class="gap-value" id="rsiStudyValue">-</div>
@@ -724,6 +697,42 @@
         <span><i class="swatch" style="background: var(--tp-short)"></i>Short TP</span>
         <span><i class="swatch" style="background: var(--cg-whale-10)"></i>CG &gt;10M</span>
         <span><i class="swatch" style="background: var(--cg-whale-20)"></i>CG &gt;20M</span>
+      </div>
+    </section>
+
+    <section class="liquidity-panel" aria-live="polite">
+      <div class="gap-card liquidity-counter-card">
+        <div class="liquidity-counter-head">
+          <div>
+            <div class="gap-label">New liquidation buildup</div>
+            <div class="gap-status" id="liquidityCounterStatus">Waiting for data</div>
+          </div>
+          <select class="liquidity-window-select" id="liquidityWindow" aria-label="Liquidation buildup timeframe">
+            <option value="24">24h</option>
+            <option value="12">12h</option>
+            <option value="4">4h</option>
+            <option value="2">2h</option>
+            <option value="1">1h</option>
+          </select>
+        </div>
+        <div class="liquidity-counter-grid">
+          <div class="liquidity-counter-cell liquidity-counter-cell--long" id="liqLongCell">
+            <div class="liquidity-counter-value" id="liqLongValue">-</div>
+            <div class="liquidity-counter-label">Long side</div>
+            <div class="liquidity-counter-meta" id="liqLongMeta">-</div>
+          </div>
+          <div class="liquidity-counter-cell">
+            <div class="liquidity-counter-value" id="liqWindowValue">24h</div>
+            <div class="liquidity-counter-label">Window</div>
+            <div class="liquidity-counter-meta" id="liqTotalMeta">-</div>
+          </div>
+          <div class="liquidity-counter-cell liquidity-counter-cell--short" id="liqShortCell">
+            <div class="liquidity-counter-value" id="liqShortValue">-</div>
+            <div class="liquidity-counter-label">Short side</div>
+            <div class="liquidity-counter-meta" id="liqShortMeta">-</div>
+          </div>
+        </div>
+        <canvas class="liquidity-trend" id="liquidityTrend" width="560" height="74"></canvas>
       </div>
     </section>
 
