@@ -6,6 +6,13 @@ export type SnoekStructureType =
   | 'fish_passage'
   | 'culvert'
   | 'siphon'
+  | 'well'
+  | 'coupure'
+  | 'treatment_plant'
+  | 'ford'
+  | 'fixed_dam'
+  | 'sediment_trap'
+  | 'aqueduct'
   | 'trash_rack'
   | 'gate'
   | 'drop'
@@ -27,6 +34,7 @@ export type SnoekStructure = {
   label: string;
   lat: number;
   lon: number;
+  geometry: any;
   x: number;
   y: number;
   score: number;
@@ -40,6 +48,7 @@ export type SnoekStructuresResult = {
   total: number;
   rendered: number;
   structures: SnoekStructure[];
+  hotspots: SnoekStructure[];
   counts: Record<string, number>;
   rawCounts: Record<string, number>;
   sources: Array<{
@@ -57,17 +66,28 @@ const DEFAULT_BBOX: SnoekStructuresBbox = {
 };
 
 const PDOK_TYPES: Array<{ layer: string; type: SnoekStructureType; label: string }> = [
-  { layer: 'gemaal', type: 'pumping_station', label: 'Gemaal' },
   { layer: 'brug', type: 'bridge', label: 'Brug' },
-  { layer: 'stuw', type: 'weir', label: 'Stuw' },
+  { layer: 'coupure', type: 'coupure', label: 'Coupure' },
   { layer: 'sluis', type: 'lock', label: 'Sluis' },
-  { layer: 'vispassage', type: 'fish_passage', label: 'Vispassage' },
-  { layer: 'duiker', type: 'culvert', label: 'Duiker' },
-  { layer: 'sifon', type: 'siphon', label: 'Sifon' },
-  { layer: 'vuilvang', type: 'trash_rack', label: 'Vuilvang' },
+  { layer: 'verbeterinstallatie', type: 'treatment_plant', label: 'Verbeterinstallatie' },
+  { layer: 'hevel', type: 'siphon', label: 'Hevel' },
   { layer: 'afsluitmiddel', type: 'gate', label: 'Afsluitmiddel' },
-  { layer: 'bodemval', type: 'drop', label: 'Bodemval' }
+  { layer: 'stuw', type: 'weir', label: 'Stuw' },
+  { layer: 'voorde', type: 'ford', label: 'Voorde' },
+  { layer: 'sifon', type: 'siphon', label: 'Sifon' },
+  { layer: 'bodemval', type: 'drop', label: 'Bodemval' },
+  { layer: 'put', type: 'well', label: 'Put' },
+  { layer: 'duiker', type: 'culvert', label: 'Duiker' },
+  { layer: 'vispassage', type: 'fish_passage', label: 'Vispassage' },
+  { layer: 'vastedam', type: 'fixed_dam', label: 'VasteDam' },
+  { layer: 'zandvang', type: 'sediment_trap', label: 'Zandvang' },
+  { layer: 'aquaduct', type: 'aqueduct', label: 'Aquaduct' },
+  { layer: 'gemaal', type: 'pumping_station', label: 'Gemaal' },
+  { layer: 'vuilvang', type: 'trash_rack', label: 'Vuilvang' }
 ];
+
+const DEFAULT_PDOK_LAYERS = new Set(['brug', 'sluis', 'stuw', 'vispassage', 'gemaal']);
+const PDOK_PAGE_SIZE = 1000;
 
 const COMMUNITY_SIGNALS = [
   {
@@ -307,19 +327,30 @@ async function fetchJson(url: string): Promise<any> {
 }
 
 async function fetchPdokLayer(layer: typeof PDOK_TYPES[number], bbox: SnoekStructuresBbox): Promise<SnoekStructure[]> {
-  const query = new URLSearchParams({
-    service: 'WFS',
-    version: '2.0.0',
-    request: 'GetFeature',
-    typeNames: `waterschappen-kunstwerken-imwa:${layer.layer}`,
-    // WFS 2.0 EPSG:4326 expects axis order lat,lon here; output coordinates are CRS84 lon,lat.
-    bbox: `${bbox.south},${bbox.west},${bbox.north},${bbox.east},EPSG:4326`,
-    srsName: 'EPSG:4326',
-    count: '1200',
-    outputFormat: 'application/json'
-  });
-  const payload = await fetchJson(`https://service.pdok.nl/hwh/waterschappen-kunstwerken-imwa/wfs/v2_0?${query}`);
-  const features = Array.isArray(payload?.features) ? payload.features : [];
+  const features: any[] = [];
+  let startIndex = 0;
+
+  while (true) {
+    const query = new URLSearchParams({
+      service: 'WFS',
+      version: '2.0.0',
+      request: 'GetFeature',
+      typeNames: `waterschappen-kunstwerken-imwa:${layer.layer}`,
+      // WFS 2.0 EPSG:4326 expects axis order lat,lon here; output coordinates are CRS84 lon,lat.
+      bbox: `${bbox.south},${bbox.west},${bbox.north},${bbox.east},EPSG:4326`,
+      srsName: 'EPSG:4326',
+      count: String(PDOK_PAGE_SIZE),
+      startIndex: String(startIndex),
+      outputFormat: 'application/json'
+    });
+    const payload = await fetchJson(`https://service.pdok.nl/hwh/waterschappen-kunstwerken-imwa/wfs/v2_0?${query}`);
+    const page = Array.isArray(payload?.features) ? payload.features : [];
+    if (!page.length) break;
+    features.push(...page);
+    // PDOK can return fewer than `count` before the final page, so advance by
+    // the requested WFS offset until an actually empty page is reached.
+    startIndex += PDOK_PAGE_SIZE;
+  }
 
   return features.map((feature: any, index: number) => {
     const center = centroid(feature.geometry);
@@ -339,6 +370,7 @@ async function fetchPdokLayer(layer: typeof PDOK_TYPES[number], bbox: SnoekStruc
       label: layer.label,
       lat: center.lat,
       lon: center.lon,
+      geometry: feature.geometry,
       x: point.x,
       y: point.y,
       score: score.score,
@@ -350,7 +382,7 @@ async function fetchPdokLayer(layer: typeof PDOK_TYPES[number], bbox: SnoekStruc
 function dedupeStructures(structures: SnoekStructure[]): SnoekStructure[] {
   const seen = new Set<string>();
   return structures.filter((structure) => {
-    const key = `${structure.type}:${structure.lon.toFixed(4)}:${structure.lat.toFixed(4)}`;
+    const key = structure.id;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -374,6 +406,21 @@ function hotspotTypeLabel(type: SnoekStructureType): string {
   if (type === 'fish_passage') return 'vispassage';
   if (type === 'culvert') return 'duiker';
   return type;
+}
+
+function requestedPdokTypes(query: any): typeof PDOK_TYPES {
+  const requested = String(query?.layers || '').trim().toLowerCase();
+  if (requested === 'none') return [];
+  if (!requested) return PDOK_TYPES.filter((layer) => DEFAULT_PDOK_LAYERS.has(layer.layer));
+  const names = new Set(requested.split(',').map((name) => name.trim()).filter(Boolean));
+  return PDOK_TYPES.filter((layer) => names.has(layer.layer));
+}
+
+function countByLayer(structures: SnoekStructure[]): Record<string, number> {
+  return structures.reduce((counts, structure) => {
+    counts[structure.sourceLayer] = (counts[structure.sourceLayer] || 0) + 1;
+    return counts;
+  }, {} as Record<string, number>);
 }
 
 function selectBalancedHotspots(hotspots: SnoekStructure[], limit: number): SnoekStructure[] {
@@ -479,11 +526,12 @@ export function buildScoutHotspots(structures: SnoekStructure[], limit: number):
         id: `hotspot-${type}-${key}`,
         type,
         source: best.source,
-        sourceLayer: `scout-hotspot-${best.sourceLayer}`,
+        sourceLayer: best.sourceLayer,
         name: community ? `${community.name} - ${best.label}` : `Snoekspot ${best.name}`,
         label: best.label,
         lat: best.lat,
         lon: best.lon,
+        geometry: best.geometry,
         x: best.x,
         y: best.y,
         score,
@@ -523,8 +571,9 @@ function nearestCommunitySignal(
 export async function getSnoekStructures(query: any = {}): Promise<SnoekStructuresResult> {
   const bbox = normalizeBbox(query);
   const limit = Math.round(clamp(toNumber(query.limit, 120), 30, 300));
+  const requestedLayers = requestedPdokTypes(query);
   const results = await Promise.all([
-    ...PDOK_TYPES.map((layer) => fetchPdokLayer(layer, bbox).catch(() => []))
+    ...requestedLayers.map((layer) => fetchPdokLayer(layer, bbox))
   ]);
   const structures = dedupeStructures(results.reduce((all, layerResults) => all.concat(layerResults), [] as SnoekStructure[]))
     .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
@@ -536,9 +585,10 @@ export async function getSnoekStructures(query: any = {}): Promise<SnoekStructur
     rawTotal: structures.length,
     total: hotspots.length,
     rendered: hotspots.length,
-    structures: hotspots,
+    structures,
+    hotspots,
     counts: countByType(hotspots),
-    rawCounts: countByType(structures),
+    rawCounts: countByLayer(structures),
     sources: [
       {
         id: 'pdok-imwa',

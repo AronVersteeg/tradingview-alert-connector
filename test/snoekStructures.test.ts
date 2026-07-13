@@ -24,6 +24,10 @@ function structure(type: SnoekStructureType, cluster: number): SnoekStructure {
     label: type,
     lat: 52.36 + cluster * 0.001,
     lon: 4.55 + cluster * 0.001,
+    geometry: {
+      type: 'Point',
+      coordinates: [4.55 + cluster * 0.001, 52.36 + cluster * 0.001]
+    },
     x,
     y: 20,
     score,
@@ -32,7 +36,7 @@ function structure(type: SnoekStructureType, cluster: number): SnoekStructure {
 }
 
 describe('buildScoutHotspots', () => {
-  it('keeps the four visible structure filters balanced and independent', () => {
+  it('keeps the selected hotspot categories balanced and independent', () => {
     const structures: SnoekStructure[] = [];
     for (let cluster = 0; cluster < 50; cluster += 1) {
       structures.push(
@@ -74,5 +78,7 @@ describe('buildScoutHotspots', () => {
 
     expect([pumpHotspot?.lat, pumpHotspot?.lon]).toEqual([pump.lat, pump.lon]);
     expect([weirHotspot?.lat, weirHotspot?.lon]).toEqual([weir.lat, weir.lon]);
+    expect(pumpHotspot?.geometry).toEqual(pump.geometry);
+    expect(weirHotspot?.geometry).toEqual(weir.geometry);
   });
 });

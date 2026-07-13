@@ -259,6 +259,17 @@
       display: grid;
       gap: 5px;
       margin-top: 7px;
+      max-height: min(58vh, 440px);
+      padding-right: 4px;
+      overflow-y: auto;
+    }
+
+    .layer-section-title {
+      margin-top: 3px;
+      color: #8fb0d8;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
     }
 
     .layer-toggle {
@@ -544,12 +555,26 @@
                   <label class="layer-toggle"><input id="layer-topo" type="checkbox" checked> Kadaster BRT/TOP10NL</label>
                   <label class="layer-toggle"><input id="layer-satellite" type="checkbox" checked> PDOK luchtfoto</label>
                   <label class="layer-toggle"><input id="layer-practice" type="checkbox" checked> Lokale praktijkspots</label>
-                  <label class="layer-toggle"><input data-layer-filter="pumping_station" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ff4fa3"></span> Gemalen/pompen</label>
-                  <label class="layer-toggle"><input data-layer-filter="weir" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ff7a45"></span> Stuwen</label>
-                  <label class="layer-toggle"><input data-layer-filter="lock" type="checkbox" checked><span class="layer-swatch" style="--swatch:#b388ff"></span> Sluizen</label>
-                  <label class="layer-toggle"><input data-layer-filter="bridge" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ffd166"></span> Bruggen</label>
-                  <label class="layer-toggle"><input data-layer-filter="fish_passage" type="checkbox" checked><span class="layer-swatch" style="--swatch:#35d09f"></span> Vispassages</label>
-                  <label class="layer-toggle"><input data-layer-filter="culvert" type="checkbox"><span class="layer-swatch" style="--swatch:#4dd5ff"></span> Duikers</label>
+                  <label class="layer-toggle"><input id="layer-hotspots" type="checkbox" checked> Weloverwogen snoekspots</label>
+                  <span class="layer-section-title">PDOK IMWA - 18 exacte lagen</span>
+                  <label class="layer-toggle"><input data-layer-filter="brug" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ffd166"></span> Brug</label>
+                  <label class="layer-toggle"><input data-layer-filter="coupure" type="checkbox"><span class="layer-swatch" style="--swatch:#f4a261"></span> Coupure</label>
+                  <label class="layer-toggle"><input data-layer-filter="sluis" type="checkbox" checked><span class="layer-swatch" style="--swatch:#b388ff"></span> Sluis</label>
+                  <label class="layer-toggle"><input data-layer-filter="verbeterinstallatie" type="checkbox"><span class="layer-swatch" style="--swatch:#e76f51"></span> Verbeterinstallatie</label>
+                  <label class="layer-toggle"><input data-layer-filter="hevel" type="checkbox"><span class="layer-swatch" style="--swatch:#48cae4"></span> Hevel</label>
+                  <label class="layer-toggle"><input data-layer-filter="afsluitmiddel" type="checkbox"><span class="layer-swatch" style="--swatch:#dee2e6"></span> Afsluitmiddel</label>
+                  <label class="layer-toggle"><input data-layer-filter="stuw" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ff7a45"></span> Stuw</label>
+                  <label class="layer-toggle"><input data-layer-filter="voorde" type="checkbox"><span class="layer-swatch" style="--swatch:#90be6d"></span> Voorde</label>
+                  <label class="layer-toggle"><input data-layer-filter="sifon" type="checkbox"><span class="layer-swatch" style="--swatch:#4dd5ff"></span> Sifon</label>
+                  <label class="layer-toggle"><input data-layer-filter="bodemval" type="checkbox"><span class="layer-swatch" style="--swatch:#ffb703"></span> Bodemval</label>
+                  <label class="layer-toggle"><input data-layer-filter="put" type="checkbox"><span class="layer-swatch" style="--swatch:#8ecae6"></span> Put</label>
+                  <label class="layer-toggle"><input data-layer-filter="duiker" type="checkbox"><span class="layer-swatch" style="--swatch:#00b4d8"></span> Duiker</label>
+                  <label class="layer-toggle"><input data-layer-filter="vispassage" type="checkbox" checked><span class="layer-swatch" style="--swatch:#35d09f"></span> Vispassage</label>
+                  <label class="layer-toggle"><input data-layer-filter="vastedam" type="checkbox"><span class="layer-swatch" style="--swatch:#6c757d"></span> VasteDam</label>
+                  <label class="layer-toggle"><input data-layer-filter="zandvang" type="checkbox"><span class="layer-swatch" style="--swatch:#e9c46a"></span> Zandvang</label>
+                  <label class="layer-toggle"><input data-layer-filter="aquaduct" type="checkbox"><span class="layer-swatch" style="--swatch:#2a9d8f"></span> Aquaduct</label>
+                  <label class="layer-toggle"><input data-layer-filter="gemaal" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ff4fa3"></span> Gemaal</label>
+                  <label class="layer-toggle"><input data-layer-filter="vuilvang" type="checkbox"><span class="layer-swatch" style="--swatch:#e9f542"></span> Vuilvang</label>
                 </div>
               </details>
               <div class="map-spot-detail" id="spot-detail" hidden></div>
@@ -586,6 +611,7 @@
     const layerTopo = document.getElementById('layer-topo');
     const layerSatellite = document.getElementById('layer-satellite');
     const layerPractice = document.getElementById('layer-practice');
+    const layerHotspots = document.getElementById('layer-hotspots');
     const layerPanel = document.querySelector('.layer-panel');
     const layerFilters = Array.from(document.querySelectorAll('[data-layer-filter]'));
     const reviews = document.getElementById('reviews');
@@ -651,12 +677,15 @@
         opacity: 1
       }
     );
-    const structureMarkerLayer = L.layerGroup();
+    const sourceGeometryLayer = L.layerGroup();
+    const hotspotMarkerLayer = L.layerGroup();
     const practiceMarkerLayer = L.layerGroup();
+    const sourceCanvas = L.canvas({ padding: 0.5 });
     let structuresData = null;
     let scoutData = null;
     let selectedStructureId = null;
     let selectedPracticeId = null;
+    let structuresRequestId = 0;
 
     if (window.matchMedia('(max-width: 880px)').matches) {
       layerPanel.open = false;
@@ -681,8 +710,8 @@
     }
 
     function focusVector() {
-      if (!structuresData || !structuresData.structures.length) return;
-      const priority = filteredStructures().slice(0, 160);
+      if (!structuresData || !structuresData.hotspots.length) return;
+      const priority = filteredHotspots().slice(0, 160);
       if (!priority.length) return;
       fishingMap.fitBounds(
         L.latLngBounds(priority.map((item) => [item.lat, item.lon])),
@@ -695,7 +724,15 @@
       const enabled = new Set(layerFilters
         .filter((input) => input.checked)
         .map((input) => input.dataset.layerFilter));
-      return structuresData.structures.filter((item) => enabled.has(item.type) || !layerFilters.some((input) => input.dataset.layerFilter === item.type));
+      return structuresData.structures.filter((item) => enabled.has(item.sourceLayer));
+    }
+
+    function filteredHotspots() {
+      if (!structuresData) return [];
+      const enabled = new Set(layerFilters
+        .filter((input) => input.checked)
+        .map((input) => input.dataset.layerFilter));
+      return structuresData.hotspots.filter((item) => enabled.has(item.sourceLayer));
     }
 
     function focusStructure(item) {
@@ -710,7 +747,7 @@
           <span>${esc(item.name)}</span>
           <button id="spot-detail-close" type="button">x</button>
         </h3>
-        <p class="muted">${esc(structureName(item.type))} - ${esc(item.source)} - score ${esc(item.score)}/100</p>
+        <p class="muted">${esc(structureLayerName(item.sourceLayer))} - ${esc(item.source)}${item.id.startsWith('hotspot-') ? ` - snoekscore ${esc(item.score)}/100` : ' - exact PDOK-object'}</p>
         <div class="spot-meta">
           <span class="badge">lat ${esc(item.lat.toFixed(5))}</span>
           <span class="badge">lon ${esc(item.lon.toFixed(5))}</span>
@@ -743,7 +780,8 @@
       setVisible(kadasterBaseLayer, layerTopo.checked);
       setVisible(kadasterDetailLayer, layerTopo.checked);
       setVisible(kadasterLabelsLayer, layerTopo.checked);
-      setVisible(structureMarkerLayer, true);
+      setVisible(sourceGeometryLayer, true);
+      setVisible(hotspotMarkerLayer, layerHotspots.checked);
       setVisible(practiceMarkerLayer, layerPractice.checked);
     }
 
@@ -786,40 +824,55 @@
       `).join('');
     }
 
-    function structureColor(type) {
+    function structureLayerColor(layer) {
       return {
-        pumping_station: '#ff4fa3',
-        bridge: '#ffd166',
-        weir: '#ff7a45',
-        lock: '#b388ff',
-        fish_passage: '#35d09f',
-        culvert: '#4dd5ff',
-        siphon: '#4dd5ff',
-        trash_rack: '#e9f542',
-        gate: '#ffffff',
-        drop: '#ffb703',
-        water_control: '#c7f9cc'
-      }[type] || '#ffffff';
+        brug: '#ffd166',
+        coupure: '#f4a261',
+        sluis: '#b388ff',
+        verbeterinstallatie: '#e76f51',
+        hevel: '#48cae4',
+        afsluitmiddel: '#dee2e6',
+        stuw: '#ff7a45',
+        voorde: '#90be6d',
+        sifon: '#4dd5ff',
+        bodemval: '#ffb703',
+        put: '#8ecae6',
+        duiker: '#00b4d8',
+        vispassage: '#35d09f',
+        vastedam: '#6c757d',
+        zandvang: '#e9c46a',
+        aquaduct: '#2a9d8f',
+        gemaal: '#ff4fa3',
+        vuilvang: '#e9f542'
+      }[layer] || '#ffffff';
     }
 
-    function structureName(type) {
+    function structureLayerName(layer) {
       return {
-        pumping_station: 'Gemalen',
-        bridge: 'Bruggen',
-        weir: 'Stuwen',
-        lock: 'Sluizen',
-        fish_passage: 'Vispassages',
-        culvert: 'Duikers',
-        siphon: 'Sifons',
-        trash_rack: 'Vuilvangen',
-        gate: 'Afsluiters',
-        drop: 'Bodemvallen',
-        water_control: 'Waterregeling'
-      }[type] || type;
+        brug: 'Brug',
+        coupure: 'Coupure',
+        sluis: 'Sluis',
+        verbeterinstallatie: 'Verbeterinstallatie',
+        hevel: 'Hevel',
+        afsluitmiddel: 'Afsluitmiddel',
+        stuw: 'Stuw',
+        voorde: 'Voorde',
+        sifon: 'Sifon',
+        bodemval: 'Bodemval',
+        put: 'Put',
+        duiker: 'Duiker',
+        vispassage: 'Vispassage',
+        vastedam: 'VasteDam',
+        zandvang: 'Zandvang',
+        aquaduct: 'Aquaduct',
+        gemaal: 'Gemaal',
+        vuilvang: 'Vuilvang'
+      }[layer] || layer;
     }
 
     function renderStructures() {
-      structureMarkerLayer.clearLayers();
+      sourceGeometryLayer.clearLayers();
+      hotspotMarkerLayer.clearLayers();
       if (!structuresData) {
         mapLegend.innerHTML = '';
         return;
@@ -827,28 +880,52 @@
 
       const visible = filteredStructures();
       const visibleCounts = visible.reduce((counts, item) => {
-        counts[item.type] = (counts[item.type] || 0) + 1;
+        counts[item.sourceLayer] = (counts[item.sourceLayer] || 0) + 1;
         return counts;
       }, {});
       visible.forEach((item) => {
         const selected = item.id === selectedStructureId;
-        const marker = L.circleMarker([item.lat, item.lon], {
-          radius: selected ? 10 : item.score >= 90 ? 8 : 6,
-          color: selected ? '#06111f' : '#ffffff',
-          weight: selected ? 4 : 2,
-          fillColor: structureColor(item.type),
-          fillOpacity: 0.94
+        const color = structureLayerColor(item.sourceLayer);
+        const geometry = L.geoJSON({ type: 'Feature', geometry: item.geometry, properties: {} }, {
+          pointToLayer: (_feature, latlng) => L.circleMarker(latlng, {
+            renderer: sourceCanvas,
+            radius: selected ? 7 : 4,
+            color: selected ? '#06111f' : '#ffffff',
+            weight: selected ? 3 : 1,
+            fillColor: color,
+            fillOpacity: 0.68
+          }),
+          style: {
+            renderer: sourceCanvas,
+            color,
+            weight: selected ? 6 : 4,
+            opacity: selected ? 1 : 0.82
+          }
         });
-        marker.bindTooltip(`${item.name} - ${item.score}/100`, { direction: 'top' });
-        marker.on('click', () => selectStructure(item));
-        marker.addTo(structureMarkerLayer);
+        geometry.bindTooltip(`${structureLayerName(item.sourceLayer)} - ${item.name}`, { direction: 'top' });
+        geometry.on('click', () => selectStructure(item));
+        geometry.addTo(sourceGeometryLayer);
       });
 
-      const legendTypes = Object.keys(visibleCounts)
+      filteredHotspots().forEach((item) => {
+        const selected = item.id === selectedStructureId;
+        const marker = L.circleMarker([item.lat, item.lon], {
+          radius: selected ? 11 : 8,
+          color: selected ? '#06111f' : '#ffffff',
+          weight: selected ? 5 : 3,
+          fillColor: structureLayerColor(item.sourceLayer),
+          fillOpacity: 0.96
+        });
+        marker.bindTooltip(`${item.name} - snoekscore ${item.score}/100`, { direction: 'top' });
+        marker.on('click', () => selectStructure(item));
+        marker.addTo(hotspotMarkerLayer);
+      });
+
+      const legendLayers = Object.keys(visibleCounts)
         .sort((a, b) => visibleCounts[b] - visibleCounts[a])
-        .slice(0, 6);
-      mapLegend.innerHTML = legendTypes.map((type) => `
-        <span class="legend-item"><span class="legend-dot" style="--dot:${structureColor(type)}"></span>${esc(structureName(type))} ${esc(visibleCounts[type])}</span>
+        .slice(0, 8);
+      mapLegend.innerHTML = legendLayers.map((layer) => `
+        <span class="legend-item"><span class="legend-dot" style="--dot:${structureLayerColor(layer)}"></span>${esc(structureLayerName(layer))} ${esc(visibleCounts[layer])}</span>
       `).join('');
     }
 
@@ -908,24 +985,29 @@
       if (structuresData) {
         const visible = filteredStructures();
         const visibleCounts = visible.reduce((counts, item) => {
-          counts[item.type] = (counts[item.type] || 0) + 1;
+          counts[item.sourceLayer] = (counts[item.sourceLayer] || 0) + 1;
           return counts;
         }, {});
         const countText = Object.keys(visibleCounts)
           .sort((a, b) => visibleCounts[b] - visibleCounts[a])
-          .map((type) => `${structureName(type)}: ${visibleCounts[type]}`)
+          .map((layer) => `${structureLayerName(layer)}: ${visibleCounts[layer]}`)
           .join(' - ');
+        const visibleHotspots = filteredHotspots();
         cards.push(`
           <div class="card">
-            <h3>Weloverwogen snoekspots <span class="badge">${esc(structuresData.total)} spots</span></h3>
-            <p class="muted">Gefilterd uit ${esc(structuresData.rawTotal || structuresData.total)} GIS-objecten. ${esc(countText)}</p>
+            <h3>PDOK IMWA controlelagen <span class="badge">${esc(visible.length)} zichtbaar</span></h3>
+            <p class="muted">Exacte geometrie uit 18 officiële lagen. Totaal geladen: ${esc(structuresData.rawTotal)} objecten. ${esc(countText)}</p>
+          </div>
+          <div class="card">
+            <h3>Weloverwogen snoekspots <span class="badge">${esc(visibleHotspots.length)} zichtbaar</span></h3>
+            <p class="muted">Afzonderlijke selectie uit de aangevinkte PDOK-bronlagen; grotere omrande kaartpunten.</p>
           </div>
         `);
-        filteredStructures().slice(0, 24).forEach((item) => {
+        visibleHotspots.slice(0, 24).forEach((item) => {
           cards.push(`
             <div class="card" data-structure-card="${esc(item.id)}">
               <h3>${esc(item.name)} <span class="badge">${esc(item.score)}/100</span></h3>
-              <p class="muted">${esc(item.source)} - ${esc(structureName(item.type))} - ${esc(item.reasons.join(' - '))}</p>
+              <p class="muted">${esc(item.source)} - ${esc(structureLayerName(item.sourceLayer))} - ${esc(item.reasons.join(' - '))}</p>
             </div>
           `);
         });
@@ -947,7 +1029,7 @@
       featureList.innerHTML = cards.join('');
       featureList.querySelectorAll('[data-structure-card]').forEach((node) => {
         node.addEventListener('click', () => {
-          const item = structuresData?.structures.find((structure) => structure.id === node.dataset.structureCard);
+          const item = structuresData?.hotspots.find((structure) => structure.id === node.dataset.structureCard);
           if (item) selectStructure(item);
         });
       });
@@ -1017,9 +1099,16 @@
     }
 
     async function loadStructures() {
+      const requestId = ++structuresRequestId;
+      const selectedLayers = layerFilters
+        .filter((input) => input.checked)
+        .map((input) => input.dataset.layerFilter);
+      const layers = selectedLayers.length ? selectedLayers.join(',') : 'none';
+      featureList.innerHTML = '<div class="card"><h3>PDOK IMWA</h3><p class="muted">Aangevinkte bronlagen worden exact geladen...</p></div>';
       try {
-        const response = await fetch('/snoek/api/structures?limit=120');
+        const response = await fetch(`/snoek/api/structures?limit=120&layers=${encodeURIComponent(layers)}`);
         const data = await response.json();
+        if (requestId !== structuresRequestId) return;
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'Kunstwerken konden niet geladen worden.');
         }
@@ -1027,6 +1116,7 @@
         renderStructures();
         renderFeatureList();
       } catch (error) {
+        if (requestId !== structuresRequestId) return;
         featureList.innerHTML = `<div class="card"><h3>Live hotspots</h3><p class="muted">Kunstwerken niet geladen: ${esc(error.message)}</p></div>`;
       }
     }
@@ -1054,10 +1144,8 @@
     layerTopo.addEventListener('change', applyBaseLayerVisibility);
     layerSatellite.addEventListener('change', applyBaseLayerVisibility);
     layerPractice.addEventListener('change', applyBaseLayerVisibility);
-    layerFilters.forEach((input) => input.addEventListener('change', () => {
-      renderStructures();
-      renderFeatureList();
-    }));
+    layerHotspots.addEventListener('change', applyBaseLayerVisibility);
+    layerFilters.forEach((input) => input.addEventListener('change', loadStructures));
     L.control.scale({ imperial: false, position: 'bottomright' }).addTo(fishingMap);
     applyBaseLayerVisibility();
     fitInterestArea();

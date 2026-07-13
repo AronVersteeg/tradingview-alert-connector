@@ -258,7 +258,7 @@ const DATA_SOURCES: SnoekDataSource[] = [
     id: 'pdok-imwa-kunstwerken',
     label: 'PDOK Waterschappen Kunstwerken IMWA',
     status: 'live',
-    use: 'Exacte waterschapslagen voor gemalen, sluizen, stuwen, bruggen, vispassages en overige waterwerken als hotspotbron op de Kadasterkaart.'
+    use: 'Alle 18 officiële IMWA-lagen met hun exacte PDOK-titel en geometrie; de snoekselectie blijft als aparte afgeleide laag herkenbaar.'
   },
   {
     id: 'ahn',
