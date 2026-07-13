@@ -249,10 +249,10 @@ const DATA_SOURCES: SnoekDataSource[] = [
     use: 'Leidende kaartgeometrie voor water, wegen, gebouwen, spoor en plaatslabels in dezelfde projectie als de luchtfoto.'
   },
   {
-    id: 'esri-rws-bathymetry',
-    label: 'Esri / Rijkswaterstaat bathymetrie',
-    status: 'planned',
-    use: 'Echte dieptekaart voor Noordzeekanaal, zijkanalen en taluds.'
+    id: 'rws-bodemhoogte-wnn',
+    label: 'Rijkswaterstaat bodemhoogte 1 m WNN_n_NAP',
+    status: 'live',
+    use: 'Officiële bodemhoogteklassen in meters t.o.v. NAP voor IJmuiden, Noordzeekanaal en gedekte zijkanalen; bedoeld om geulen en taluds te lezen.'
   },
   {
     id: 'pdok-imwa-kunstwerken',

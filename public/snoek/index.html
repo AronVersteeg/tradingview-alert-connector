@@ -309,6 +309,36 @@
       box-shadow: 0 0 0 1px #ffffff;
     }
 
+    .bathymetry-swatch {
+      border-radius: 2px;
+      background: linear-gradient(90deg, #8061a1, #7f86ca, #78acf7, #75c8f7, #76f1e6);
+    }
+
+    .bathymetry-key {
+      display: grid;
+      min-width: 220px;
+      gap: 3px;
+    }
+
+    .bathymetry-key strong {
+      font-size: 10px;
+    }
+
+    .bathymetry-gradient {
+      width: 100%;
+      height: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.85);
+      border-radius: 2px;
+      background: linear-gradient(90deg, #8061a1 0%, #8174b5 16%, #7f86ca 32%, #78acf7 48%, #74bdfa 64%, #75cff3 80%, #76f1e6 100%);
+    }
+
+    .bathymetry-values {
+      display: flex;
+      justify-content: space-between;
+      color: #c9ddf5;
+      font-size: 9px;
+    }
+
     .practice-map-marker {
       display: block;
       width: 16px;
@@ -603,13 +633,14 @@
           </div>
           <div class="panel-body">
             <div class="map-wrap">
-              <div class="map-content" id="map-content" aria-label="Kadasterkaart met luchtfoto, GIS-objecten en visstekken"></div>
+              <div class="map-content" id="map-content" aria-label="Kadasterkaart met luchtfoto, RWS-bodemhoogte, GIS-objecten en visstekken"></div>
               <span class="map-label">GIS leidend: IJmuiden - Oud Velsen - Westzaan</span>
               <details class="layer-panel" aria-label="Kaartlagen" open>
                 <summary>Lagen</summary>
                 <div class="layer-options">
                   <label class="layer-toggle"><input id="layer-topo" type="checkbox" checked> Kadaster BRT/TOP10NL</label>
                   <label class="layer-toggle"><input id="layer-satellite" type="checkbox" checked> PDOK luchtfoto</label>
+                  <label class="layer-toggle"><input id="layer-bathymetry" type="checkbox"><span class="layer-swatch bathymetry-swatch"></span> RWS bodemhoogte 1 m (NAP)</label>
                   <label class="layer-toggle"><input id="layer-practice" type="checkbox" checked><span class="layer-swatch practice-swatch"></span> Lokale praktijkspots</label>
                   <label class="layer-toggle"><input id="layer-hotspots" type="checkbox" checked><span class="layer-swatch hotspot-swatch"></span> Weloverwogen snoekspots</label>
                   <span class="layer-section-title">PDOK IMWA - 18 exacte lagen</span>
@@ -666,6 +697,7 @@
     const spotDetail = document.getElementById('spot-detail');
     const layerTopo = document.getElementById('layer-topo');
     const layerSatellite = document.getElementById('layer-satellite');
+    const layerBathymetry = document.getElementById('layer-bathymetry');
     const layerPractice = document.getElementById('layer-practice');
     const layerHotspots = document.getElementById('layer-hotspots');
     const layerPanel = document.querySelector('.layer-panel');
@@ -684,6 +716,7 @@
       scrollWheelZoom: true
     });
     fishingMap.createPane('aerial').style.zIndex = 200;
+    fishingMap.createPane('bathymetry').style.zIndex = 230;
     fishingMap.createPane('kadaster-base').style.zIndex = 240;
     fishingMap.createPane('kadaster-detail').style.zIndex = 260;
     fishingMap.createPane('kadaster-labels').style.zIndex = 280;
@@ -697,6 +730,53 @@
         maxNativeZoom: 19,
         opacity: 0.92,
         attribution: 'Luchtfoto: Beeldmateriaal Nederland, PDOK'
+      }
+    );
+
+    function createArcGisExportLayer(serviceUrl, layerId, options) {
+      const grid = L.gridLayer(options);
+      grid.createTile = function createTile(coords, done) {
+        const tile = document.createElement('img');
+        const size = this.getTileSize();
+        const world = 20037508.342789244;
+        const tiles = 2 ** coords.z;
+        const span = world * 2 / tiles;
+        const minX = -world + coords.x * span;
+        const maxX = minX + span;
+        const maxY = world - coords.y * span;
+        const minY = maxY - span;
+        const params = new URLSearchParams({
+          f: 'image',
+          bbox: `${minX},${minY},${maxX},${maxY}`,
+          bboxSR: '3857',
+          imageSR: '3857',
+          size: `${size.x},${size.y}`,
+          dpi: '96',
+          format: 'png32',
+          transparent: 'true',
+          layers: `show:${layerId}`
+        });
+
+        tile.alt = '';
+        tile.setAttribute('role', 'presentation');
+        tile.onload = () => done(null, tile);
+        tile.onerror = () => done(new Error('RWS bodemhoogtetegel kon niet worden geladen'), tile);
+        tile.src = `${serviceUrl}/export?${params}`;
+        return tile;
+      };
+      return grid;
+    }
+
+    const bathymetryLayer = createArcGisExportLayer(
+      'https://geo.rijkswaterstaat.nl/arcgis/rest/services/GDR/bodemhoogte_1mtr/MapServer',
+      7,
+      {
+        pane: 'bathymetry',
+        minZoom: 10,
+        maxZoom: 19,
+        opacity: 0.82,
+        keepBuffer: 2,
+        attribution: 'Bodemhoogte 1 m WNN_n_NAP: Rijkswaterstaat, CC0'
       }
     );
     const kadasterBaseLayer = L.tileLayer(
@@ -833,6 +913,7 @@
         if (!visible && fishingMap.hasLayer(layer)) fishingMap.removeLayer(layer);
       };
       setVisible(aerialLayer, layerSatellite.checked);
+      setVisible(bathymetryLayer, layerBathymetry.checked);
       setVisible(kadasterBaseLayer, layerTopo.checked);
       setVisible(kadasterDetailLayer, layerTopo.checked);
       setVisible(kadasterLabelsLayer, layerTopo.checked);
@@ -983,6 +1064,7 @@
         .sort((a, b) => visibleCounts[b] - visibleCounts[a])
         .slice(0, 8);
       const derivedLegend = [
+        layerBathymetry.checked ? '<span class="legend-item bathymetry-key"><strong>RWS bodemhoogte (m t.o.v. NAP)</strong><span class="bathymetry-gradient"></span><span class="bathymetry-values"><span>&lt; -20</span><span>-15</span><span>-10</span><span>-5</span><span>0 m</span></span></span>' : '',
         layerPractice.checked ? '<span class="legend-item"><span class="legend-dot practice-legend-dot"></span>Lokale praktijk</span>' : '',
         layerHotspots.checked ? '<span class="legend-item"><span class="legend-dot hotspot-legend-dot"></span>Weloverwogen spot</span>' : ''
       ].join('');
@@ -1207,6 +1289,10 @@
     document.getElementById('zoom-reset').addEventListener('click', fitInterestArea);
     layerTopo.addEventListener('change', applyBaseLayerVisibility);
     layerSatellite.addEventListener('change', applyBaseLayerVisibility);
+    layerBathymetry.addEventListener('change', () => {
+      applyBaseLayerVisibility();
+      renderStructures();
+    });
     layerPractice.addEventListener('change', () => {
       applyBaseLayerVisibility();
       renderStructures();

@@ -148,7 +148,7 @@ router.get('/snoek', async (req, res) => {
       "script-src 'self' 'unsafe-inline' https://unpkg.com",
       "script-src-attr 'none'",
       "style-src 'self' 'unsafe-inline' https://unpkg.com",
-      "img-src 'self' data: blob: https://service.pdok.nl",
+      "img-src 'self' data: blob: https://service.pdok.nl https://geo.rijkswaterstaat.nl",
       "connect-src 'self'",
       "font-src 'self' https: data:",
       "form-action 'self'",
