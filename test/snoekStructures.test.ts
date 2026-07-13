@@ -9,7 +9,9 @@ function structure(type: SnoekStructureType, cluster: number): SnoekStructure {
     pumping_station: 91,
     weir: 79,
     lock: 75,
-    bridge: 63
+    bridge: 63,
+    fish_passage: 69,
+    culvert: 59
   }[type] || 60;
   const x = cluster * 1.5;
 
@@ -37,7 +39,9 @@ describe('buildScoutHotspots', () => {
         structure('pumping_station', cluster),
         structure('weir', cluster),
         structure('lock', cluster),
-        structure('bridge', cluster)
+        structure('bridge', cluster),
+        structure('fish_passage', cluster),
+        structure('culvert', cluster)
       );
     }
 
@@ -49,10 +53,12 @@ describe('buildScoutHotspots', () => {
 
     expect(hotspots).toHaveLength(40);
     expect(counts).toEqual({
-      pumping_station: 14,
-      weir: 12,
+      pumping_station: 12,
+      weir: 10,
       lock: 6,
-      bridge: 8
+      bridge: 6,
+      fish_passage: 4,
+      culvert: 2
     });
   });
 

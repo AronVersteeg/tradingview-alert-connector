@@ -470,7 +470,7 @@
                 <input name="location" value="Velsen-Zuid">
               </label>
               <button class="secondary" id="load-weather" type="button">Laad open weerdata voor locatie</button>
-              <p class="muted" id="weather-status">Gebruikt Open-Meteo als live open databron; kaart-hotspots komen uit PDOK/RWS.</p>
+              <p class="muted" id="weather-status">Gebruikt Open-Meteo als live open databron; kaart-hotspots komen uit PDOK Waterschappen Kunstwerken IMWA.</p>
               <div class="grid-2">
                 <label>Temperatuur C <input name="temperatureC" type="number" value="21"></label>
                 <label>Wind Bft <input name="windBft" type="number" min="0" max="12" value="3"></label>
@@ -548,6 +548,8 @@
                   <label class="layer-toggle"><input data-layer-filter="weir" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ff7a45"></span> Stuwen</label>
                   <label class="layer-toggle"><input data-layer-filter="lock" type="checkbox" checked><span class="layer-swatch" style="--swatch:#b388ff"></span> Sluizen</label>
                   <label class="layer-toggle"><input data-layer-filter="bridge" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ffd166"></span> Bruggen</label>
+                  <label class="layer-toggle"><input data-layer-filter="fish_passage" type="checkbox" checked><span class="layer-swatch" style="--swatch:#35d09f"></span> Vispassages</label>
+                  <label class="layer-toggle"><input data-layer-filter="culvert" type="checkbox"><span class="layer-swatch" style="--swatch:#4dd5ff"></span> Duikers</label>
                 </div>
               </details>
               <div class="map-spot-detail" id="spot-detail" hidden></div>
@@ -791,6 +793,7 @@
         weir: '#ff7a45',
         lock: '#b388ff',
         fish_passage: '#35d09f',
+        culvert: '#4dd5ff',
         siphon: '#4dd5ff',
         trash_rack: '#e9f542',
         gate: '#ffffff',
@@ -806,6 +809,7 @@
         weir: 'Stuwen',
         lock: 'Sluizen',
         fish_passage: 'Vispassages',
+        culvert: 'Duikers',
         siphon: 'Sifons',
         trash_rack: 'Vuilvangen',
         gate: 'Afsluiters',
@@ -926,7 +930,7 @@
           `);
         });
       } else {
-        cards.push('<div class="card"><h3>Live hotspots</h3><p class="muted">PDOK/RWS kunstwerken worden geladen...</p></div>');
+        cards.push('<div class="card"><h3>Live hotspots</h3><p class="muted">PDOK Waterschappen Kunstwerken IMWA wordt geladen...</p></div>');
       }
 
       if (scoutData) {

@@ -4,6 +4,7 @@ export type SnoekStructureType =
   | 'weir'
   | 'lock'
   | 'fish_passage'
+  | 'culvert'
   | 'siphon'
   | 'trash_rack'
   | 'gate'
@@ -20,7 +21,7 @@ export type SnoekStructuresBbox = {
 export type SnoekStructure = {
   id: string;
   type: SnoekStructureType;
-  source: 'pdok-imwa' | 'rws-arcgis';
+  source: 'pdok-imwa';
   sourceLayer: string;
   name: string;
   label: string;
@@ -61,22 +62,11 @@ const PDOK_TYPES: Array<{ layer: string; type: SnoekStructureType; label: string
   { layer: 'stuw', type: 'weir', label: 'Stuw' },
   { layer: 'sluis', type: 'lock', label: 'Sluis' },
   { layer: 'vispassage', type: 'fish_passage', label: 'Vispassage' },
+  { layer: 'duiker', type: 'culvert', label: 'Duiker' },
   { layer: 'sifon', type: 'siphon', label: 'Sifon' },
   { layer: 'vuilvang', type: 'trash_rack', label: 'Vuilvang' },
   { layer: 'afsluitmiddel', type: 'gate', label: 'Afsluitmiddel' },
   { layer: 'bodemval', type: 'drop', label: 'Bodemval' }
-];
-
-const RWS_LAYERS: Array<{ id: number; layer: string; type: SnoekStructureType; label: string }> = [
-  { id: 4, layer: 'brug_beweegbaar', type: 'bridge', label: 'Beweegbare brug' },
-  { id: 5, layer: 'brug_vast', type: 'bridge', label: 'Vaste brug' },
-  { id: 11, layer: 'gemaal', type: 'pumping_station', label: 'Gemaal' },
-  { id: 17, layer: 'keersluis', type: 'lock', label: 'Keersluis' },
-  { id: 23, layer: 'schutsluis', type: 'lock', label: 'Schutsluis' },
-  { id: 24, layer: 'sifon', type: 'siphon', label: 'Sifon' },
-  { id: 25, layer: 'spuisluis', type: 'lock', label: 'Spuisluis' },
-  { id: 27, layer: 'stuw', type: 'weir', label: 'Stuw' },
-  { id: 31, layer: 'waterreguleringswerk', type: 'water_control', label: 'Waterregulering' }
 ];
 
 const COMMUNITY_SIGNALS = [
@@ -281,6 +271,7 @@ function scoreStructure(type: SnoekStructureType, props: any): { score: number; 
   if (type === 'lock') add(30, 'stroming, harde randen en schaduw bij sluis');
   if (type === 'bridge') add(18, 'schaduw en harde structuur bij brug');
   if (type === 'fish_passage') add(24, 'vismigratie en stroming bij vispassage');
+  if (type === 'culvert') add(14, 'vernauwing en mogelijke lokale waterbeweging bij duiker');
   if (type === 'siphon') add(10, 'onderdoorgang/vernauwing bij sifon');
   if (type === 'trash_rack') add(13, 'vuilvang verzamelt stroming en klein aas');
   if (type === 'gate' || type === 'water_control') add(22, 'waterregeling geeft stromingskans');
@@ -356,48 +347,6 @@ async function fetchPdokLayer(layer: typeof PDOK_TYPES[number], bbox: SnoekStruc
   }).filter(Boolean) as SnoekStructure[];
 }
 
-async function fetchRwsLayer(layer: typeof RWS_LAYERS[number], bbox: SnoekStructuresBbox): Promise<SnoekStructure[]> {
-  const query = new URLSearchParams({
-    f: 'geojson',
-    where: '1=1',
-    outFields: 'naam,complex_naam,beheerobjectsoort,aard',
-    geometry: `${bbox.west},${bbox.south},${bbox.east},${bbox.north}`,
-    geometryType: 'esriGeometryEnvelope',
-    inSR: '4326',
-    outSR: '4326',
-    spatialRel: 'esriSpatialRelIntersects',
-    returnGeometry: 'true',
-    resultRecordCount: '2000'
-  });
-  const payload = await fetchJson(`https://geo.rijkswaterstaat.nl/arcgis/rest/services/GDR/disk_beheerobjecten/FeatureServer/${layer.id}/query?${query}`);
-  const features = Array.isArray(payload?.features) ? payload.features : [];
-
-  return features.map((feature: any, index: number) => {
-    const center = centroid(feature.geometry);
-    if (!center) return undefined;
-    const props = feature.properties || {};
-    const score = scoreStructure(layer.type, props);
-    const point = projectToMap(center.lon, center.lat, bbox);
-    const code = firstText(props.naam, props.complex_naam, props.beheerobjectsoort);
-    const name = code ? `${layer.label} ${code}` : layer.label;
-
-    return {
-      id: `rws-${layer.layer}-${index}-${center.lon.toFixed(5)}-${center.lat.toFixed(5)}`,
-      type: layer.type,
-      source: 'rws-arcgis',
-      sourceLayer: layer.layer,
-      name,
-      label: layer.label,
-      lat: center.lat,
-      lon: center.lon,
-      x: point.x,
-      y: point.y,
-      score: score.score,
-      reasons: score.reasons
-    };
-  }).filter(Boolean) as SnoekStructure[];
-}
-
 function dedupeStructures(structures: SnoekStructure[]): SnoekStructure[] {
   const seen = new Set<string>();
   return structures.filter((structure) => {
@@ -415,24 +364,28 @@ function countByType(structures: SnoekStructure[]): Record<string, number> {
   }, {} as Record<string, number>);
 }
 
-const HOTSPOT_TYPES: SnoekStructureType[] = ['pumping_station', 'weir', 'lock', 'bridge'];
+const HOTSPOT_TYPES: SnoekStructureType[] = ['pumping_station', 'weir', 'lock', 'bridge', 'fish_passage', 'culvert'];
 
 function hotspotTypeLabel(type: SnoekStructureType): string {
   if (type === 'pumping_station') return 'gemaal/pomp';
   if (type === 'weir') return 'stuw';
   if (type === 'lock') return 'sluis';
   if (type === 'bridge') return 'brug';
+  if (type === 'fish_passage') return 'vispassage';
+  if (type === 'culvert') return 'duiker';
   return type;
 }
 
 function selectBalancedHotspots(hotspots: SnoekStructure[], limit: number): SnoekStructure[] {
   const quotas: Record<string, number> = {
-    pumping_station: Math.floor(limit * 0.35),
-    weir: Math.floor(limit * 0.3),
+    pumping_station: Math.floor(limit * 0.3),
+    weir: Math.floor(limit * 0.25),
     lock: Math.floor(limit * 0.15),
-    bridge: limit
+    bridge: Math.floor(limit * 0.15),
+    fish_passage: Math.floor(limit * 0.1),
+    culvert: limit
   };
-  quotas.bridge -= quotas.pumping_station + quotas.weir + quotas.lock;
+  quotas.culvert -= quotas.pumping_station + quotas.weir + quotas.lock + quotas.bridge + quotas.fish_passage;
 
   const selected: SnoekStructure[] = [];
   HOTSPOT_TYPES.forEach((type) => {
@@ -472,7 +425,8 @@ export function buildScoutHotspots(structures: SnoekStructure[], limit: number):
     const hasCurrentMaker = types.some((type) => (
       type === 'pumping_station' ||
       type === 'weir' ||
-      type === 'lock'
+      type === 'lock' ||
+      type === 'fish_passage'
     ));
     const lat = items.reduce((sum, item) => sum + item.lat, 0) / items.length;
     const lon = items.reduce((sum, item) => sum + item.lon, 0) / items.length;
@@ -484,15 +438,25 @@ export function buildScoutHotspots(structures: SnoekStructure[], limit: number):
 
       // A bridge is useful context, but only becomes a hotspot near flow or strong local evidence.
       if (type === 'bridge' && !hasCurrentMaker && !community) return;
+      // Culverts stay a low-priority context layer unless another signal supports them.
+      if (type === 'culvert' && !hasCurrentMaker && !community) return;
 
       const best = typedItems.slice().sort((a, b) => b.score - a.score)[0];
       const densityBoost = Math.min(10, Math.max(0, typedItems.length - 1) * 2);
       const contextBoost = type === 'bridge'
         ? hasCurrentMaker ? 14 : 7
+        : type === 'culvert'
+          ? hasCurrentMaker ? 12 : 6
         : types.length > 1 ? 6 : 2;
       const communityBoost = community ? Math.min(10, community.boost) : 0;
       const score = Math.round(clamp(best.score + densityBoost + contextBoost + communityBoost - 10, 0, 100));
-      const minimumScore = type === 'bridge' ? 66 : type === 'lock' ? 70 : 72;
+      const minimumScore = type === 'bridge'
+        ? 66
+        : type === 'culvert'
+          ? 60
+          : type === 'fish_passage'
+            ? 62
+            : type === 'lock' ? 70 : 72;
       if (score < minimumScore) return;
 
       const otherTypes = types
@@ -505,6 +469,8 @@ export function buildScoutHotspots(structures: SnoekStructure[], limit: number):
         type === 'weir' ? 'Stromingslogica: verval en waterbeweging bij de stuw' : '',
         type === 'lock' ? 'Stromingslogica: harde randen, luwte en schut- of spuibeweging' : '',
         type === 'bridge' ? 'Structuurlogica: schaduw en harde randen, met stroming of lokale bevestiging dichtbij' : '',
+        type === 'fish_passage' ? 'Migratielogica: vispassage bundelt visbeweging en vaak ook lokale stroming' : '',
+        type === 'culvert' ? 'Contextlogica: duiker telt alleen mee met stroming of lokale praktijkindicatie dichtbij' : '',
         otherTypes.length ? `Nabije GIS-context: ${otherTypes.join(', ')}` : '',
         community ? `Lokale praktijk: ${community.note}` : 'Community: nog geen sterke lokale bevestiging'
       ].filter(Boolean);
@@ -558,8 +524,7 @@ export async function getSnoekStructures(query: any = {}): Promise<SnoekStructur
   const bbox = normalizeBbox(query);
   const limit = Math.round(clamp(toNumber(query.limit, 120), 30, 300));
   const results = await Promise.all([
-    ...PDOK_TYPES.map((layer) => fetchPdokLayer(layer, bbox).catch(() => [])),
-    ...RWS_LAYERS.map((layer) => fetchRwsLayer(layer, bbox).catch(() => []))
+    ...PDOK_TYPES.map((layer) => fetchPdokLayer(layer, bbox).catch(() => []))
   ]);
   const structures = dedupeStructures(results.reduce((all, layerResults) => all.concat(layerResults), [] as SnoekStructure[]))
     .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
@@ -579,11 +544,6 @@ export async function getSnoekStructures(query: any = {}): Promise<SnoekStructur
         id: 'pdok-imwa',
         label: 'PDOK Waterschappen Kunstwerken IMWA',
         attribution: 'Waterschappen Kunstwerken IMWA via PDOK, CC0.'
-      },
-      {
-        id: 'rws-arcgis',
-        label: 'Rijkswaterstaat ArcGIS beheerobjecten',
-        attribution: 'Rijkswaterstaat GDR beheerobjecten FeatureServer.'
       }
     ]
   };

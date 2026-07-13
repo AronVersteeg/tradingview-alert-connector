@@ -24,7 +24,7 @@ GET /snoek/api/structures
 
 `/snoek/api/weather?location=Velsen-Zuid` uses Open-Meteo geocoding and forecast data to fill live open weather inputs without an API key.
 
-`/snoek/api/structures` loads live GIS objects for the map bbox from PDOK Waterschappen Kunstwerken IMWA and Rijkswaterstaat ArcGIS beheerobjecten. It filters and clusters pumping stations, locks, weirs, bridges, fish passages and other water-control objects into argued Snoek scout spots using current-making structures and local practice signals.
+`/snoek/api/structures` loads live GIS objects for the map bbox from the exact PDOK Waterschappen Kunstwerken IMWA layers. It filters and clusters pumping stations, locks, weirs, bridges, fish passages and other water-control objects into argued Snoek scout spots using current-making structures and local practice signals. Culverts have a separate, low-priority layer and only qualify near a stronger flow or local-practice signal.
 
 The map is Kadaster-first: PDOK BRT and TOP10NL define the geometry and stay above the current PDOK aerial-photo tiles. Both use the same EPSG:3857 tile projection, so panning and zooming cannot pull the aerial photo away from the GIS layer. The default extent runs from the IJmuiden locks and Oud Velsen through Spaarnwoude to Westzaan and Haarlem-Noord. Exact bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route.
 
