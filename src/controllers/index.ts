@@ -7,6 +7,7 @@ import { DexRegistry } from '../services/dexRegistry';
 import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
 import { getOpenLiquidityTimelapsePayload } from '../services/openLiquidityTimelapse';
 import { buildSnoekScout } from '../services/snoekScout';
+import { getSnoekCurrent } from '../services/snoekCurrent';
 import { getSnoekStructures } from '../services/snoekStructures';
 import { getSnoekWeather } from '../services/snoekWeather';
 
@@ -188,6 +189,19 @@ router.get('/snoek/api/structures', async (req, res) => {
     res.send(await getSnoekStructures(req.query));
   } catch (error) {
     console.error('Snoek structures lookup failed:', error);
+    res.status(502).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.get('/snoek/api/current', async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(await getSnoekCurrent());
+  } catch (error) {
+    console.error('Snoek current lookup failed:', error);
     res.status(502).send({
       ok: false,
       error: error instanceof Error ? error.message : String(error)

@@ -18,6 +18,7 @@ GET /snoek/api/scout
 POST /snoek/api/scout
 GET /snoek/api/weather
 GET /snoek/api/structures
+GET /snoek/api/current
 ```
 
 `/snoek` serves a mobile-friendly fishing scout for Velsen/Spaarnwoude and nearby roofvis water. It scores simple weather inputs such as wind, cloud cover, pressure trend, rain, temperature and time of day, then returns a practical fishing recommendation, an offline map seed layer, source catalog and community-review seed data. It supports separate modes for snoek, snoekbaars/dropshot, method feeder and witvis.
@@ -27,6 +28,8 @@ GET /snoek/api/structures
 `/snoek/api/structures` loads the selected layers from all 18 official PDOK Waterschappen Kunstwerken IMWA layers, preserving their exact source names and geometries. Point features stay points and line features such as culverts, siphons and hevels stay lines. The API paginates complete layers and returns the argued Snoek scout spots separately from the raw PDOK control objects. Culverts remain a low-priority hotspot signal and only qualify near stronger flow or local-practice evidence.
 
 The map is Kadaster-first: PDOK BRT and TOP10NL define the geometry around the current PDOK aerial-photo tiles. The optional Rijkswaterstaat `WNN_n_NAP` raster adds official 1 m bottom-elevation classes for IJmuiden, the Noordzeekanaal and covered side channels. Water and background fills stay below that raster, while TOP10NL roads, railways, buildings and Kadaster labels stay above it. The raster is requested as EPSG:3857 ArcGIS export tiles, with high-DPI tiles where supported, so it stays aligned and sharp while panning and zooming. Values are bottom elevations in metres relative to NAP, not live water depths. The default extent runs from the IJmuiden locks and Oud Velsen through Spaarnwoude to Westzaan and Haarlem-Noord. AHN object extraction and live community imports can be embedded later without changing the Render route.
+
+`/snoek/api/current` combines fresh Rijkswaterstaat WaterWebservices speed and bearing observations into measured current vectors. Only accepted Waterinfo quality codes and observations no older than 90 minutes are returned. The map scales arrow length and width with current speed, rotates it to the measured bearing and never interpolates a field between sensors.
 
 Current manual roofvis advice is seeded as local practice input: Zijkanaal C, the A9 bridge, Sluis Spaarndam, Pontje Velsen-Zuid, the steiger toward Oud Velsen and Pontje Buitenhuizen. For snoekbaars the tactics favor dropshot or small shads around pontstroming, sluices, kades, talud and low-light windows.
 

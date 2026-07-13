@@ -249,10 +249,16 @@ const DATA_SOURCES: SnoekDataSource[] = [
     use: 'Leidende kaartgeometrie voor water, wegen, gebouwen, spoor en plaatslabels in dezelfde projectie als de luchtfoto.'
   },
   {
-    id: 'rws-bodemhoogte-wnn',
+    id: 'esri-rws-bathymetry',
     label: 'Rijkswaterstaat bodemhoogte 1 m WNN_n_NAP',
     status: 'live',
     use: 'Officiële bodemhoogteklassen in meters t.o.v. NAP voor IJmuiden, Noordzeekanaal en gedekte zijkanalen; bedoeld om geulen en taluds te lezen.'
+  },
+  {
+    id: 'rws-waterwebservices-current',
+    label: 'Rijkswaterstaat stroming en richting',
+    status: 'live',
+    use: 'Actuele ADCP-puntmetingen van stroomsnelheid en stroomrichting; oude of onbetrouwbare reeksen worden niet als live getoond.'
   },
   {
     id: 'pdok-imwa-kunstwerken',

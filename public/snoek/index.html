@@ -314,6 +314,24 @@
       background: linear-gradient(90deg, #8061a1, #7f86ca, #78acf7, #75c8f7, #76f1e6);
     }
 
+    .current-swatch {
+      position: relative;
+      border: 0;
+      border-radius: 0;
+      background: #ffd166;
+      transform: rotate(35deg) scaleX(1.35);
+    }
+
+    .current-swatch::after {
+      position: absolute;
+      right: -3px;
+      top: -2px;
+      border-top: 3px solid transparent;
+      border-bottom: 3px solid transparent;
+      border-left: 5px solid #ffd166;
+      content: '';
+    }
+
     .bathymetry-key {
       display: grid;
       min-width: 220px;
@@ -379,6 +397,80 @@
       height: 24px;
       margin: -2px;
       box-shadow: 0 0 0 4px #06111f, 0 4px 11px rgba(0, 0, 0, 0.7);
+    }
+
+    .current-map-marker {
+      position: relative;
+      display: block;
+      width: 84px;
+      height: 84px;
+      color: var(--current-color);
+      filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.8));
+    }
+
+    .current-vector {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 0;
+      height: 0;
+      transform: rotate(var(--bearing));
+    }
+
+    .current-arrow {
+      position: absolute;
+      left: calc(var(--current-width) / -2);
+      bottom: 0;
+      width: var(--current-width);
+      height: var(--current-length);
+      border-radius: 999px;
+      background: currentColor;
+      box-shadow: 0 0 0 1px rgba(3, 12, 22, 0.85);
+    }
+
+    .current-arrow::before {
+      position: absolute;
+      left: 50%;
+      top: -9px;
+      border-right: 8px solid transparent;
+      border-bottom: 12px solid currentColor;
+      border-left: 8px solid transparent;
+      content: '';
+      transform: translateX(-50%);
+    }
+
+    .current-origin {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #ffffff;
+      border-radius: 50%;
+      background: currentColor;
+      transform: translate(-50%, -50%);
+    }
+
+    .current-reading {
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      padding: 2px 5px;
+      border: 1px solid currentColor;
+      border-radius: 4px;
+      color: #ffffff;
+      background: rgba(5, 14, 26, 0.9);
+      font-size: 10px;
+      font-weight: 800;
+      white-space: nowrap;
+      transform: translateX(-50%);
+    }
+
+    .current-map-marker.is-selected .current-origin {
+      width: 18px;
+      height: 18px;
+      border-width: 4px;
+      box-shadow: 0 0 0 3px #06111f;
     }
 
     .map-spot-detail {
@@ -641,6 +733,7 @@
                   <label class="layer-toggle"><input id="layer-topo" type="checkbox" checked> Kadaster BRT/TOP10NL</label>
                   <label class="layer-toggle"><input id="layer-satellite" type="checkbox" checked> PDOK luchtfoto</label>
                   <label class="layer-toggle"><input id="layer-bathymetry" type="checkbox"><span class="layer-swatch bathymetry-swatch"></span> RWS bodemhoogte 1 m (NAP)</label>
+                  <label class="layer-toggle"><input id="layer-current" type="checkbox" checked><span class="layer-swatch current-swatch"></span> RWS stroming: kracht + richting</label>
                   <label class="layer-toggle"><input id="layer-practice" type="checkbox" checked><span class="layer-swatch practice-swatch"></span> Lokale praktijkspots</label>
                   <label class="layer-toggle"><input id="layer-hotspots" type="checkbox" checked><span class="layer-swatch hotspot-swatch"></span> Weloverwogen snoekspots</label>
                   <span class="layer-section-title">PDOK IMWA - 18 exacte lagen</span>
@@ -698,6 +791,7 @@
     const layerTopo = document.getElementById('layer-topo');
     const layerSatellite = document.getElementById('layer-satellite');
     const layerBathymetry = document.getElementById('layer-bathymetry');
+    const layerCurrent = document.getElementById('layer-current');
     const layerPractice = document.getElementById('layer-practice');
     const layerHotspots = document.getElementById('layer-hotspots');
     const layerPanel = document.querySelector('.layer-panel');
@@ -706,7 +800,7 @@
     const loadWeatherButton = document.getElementById('load-weather');
     const weatherStatus = document.getElementById('weather-status');
     const interestBounds = L.latLngBounds([
-      [52.355, 4.54],
+      [52.355, 4.47],
       [52.505, 4.82]
     ]);
     const fishingMap = L.map('map-content', {
@@ -721,6 +815,7 @@
     fishingMap.createPane('bathymetry').style.zIndex = 230;
     fishingMap.createPane('kadaster-detail').style.zIndex = 260;
     fishingMap.createPane('kadaster-labels').style.zIndex = 280;
+    fishingMap.createPane('current').style.zIndex = 590;
 
     const aerialLayer = L.tileLayer(
       'https://service.pdok.nl/hwh/luchtfotorgb/wmts/v1_0/Actueel_ortho25/EPSG:3857/{z}/{x}/{y}.jpeg',
@@ -833,11 +928,14 @@
     const sourceGeometryLayer = L.layerGroup();
     const hotspotMarkerLayer = L.layerGroup();
     const practiceMarkerLayer = L.layerGroup();
+    const currentMarkerLayer = L.layerGroup();
     const sourceCanvas = L.canvas({ padding: 0.5 });
     let structuresData = null;
     let scoutData = null;
+    let currentData = null;
     let selectedStructureId = null;
     let selectedPracticeId = null;
+    let selectedCurrentId = null;
     let structuresRequestId = 0;
 
     if (window.matchMedia('(max-width: 880px)').matches) {
@@ -918,10 +1016,95 @@
 
     function selectStructure(item) {
       selectedPracticeId = null;
+      selectedCurrentId = null;
       renderSpotDetail(item);
       focusStructure(item);
       renderStructures();
       renderPracticeSpots();
+      renderCurrent();
+    }
+
+    function currentColor(strength) {
+      return {
+        weak: '#67d6ff',
+        moderate: '#31d7a8',
+        powerful: '#ffd166',
+        strong: '#ff7a45'
+      }[strength] || '#ffffff';
+    }
+
+    function renderCurrentDetail(item) {
+      selectedCurrentId = item.id;
+      selectedStructureId = null;
+      selectedPracticeId = null;
+      const observedAt = new Date(item.observedAt).toLocaleString('nl-NL', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      spotDetail.hidden = false;
+      spotDetail.innerHTML = `
+        <h3>
+          <span>${esc(item.name)}</span>
+          <button id="spot-detail-close" type="button">x</button>
+        </h3>
+        <p class="muted">Echte RWS-puntmeting - niet geinterpoleerd</p>
+        <div class="spot-meta">
+          <span class="badge">${esc(item.speedMs.toFixed(3))} m/s</span>
+          <span class="badge">${esc(item.bearingDeg.toFixed(1))} graden ${esc(item.directionLabel)}</span>
+          <span class="badge">${esc(item.strengthLabel)}</span>
+          <span class="badge">${esc(item.ageMinutes)} min oud</span>
+        </div>
+        <p>${esc(item.fishingNote)}</p>
+        <p class="muted">Gemeten ${esc(observedAt)} - kwaliteit ${esc(item.qualityCode)} - ${esc(item.status)}.</p>
+      `;
+      document.getElementById('spot-detail-close').addEventListener('click', (event) => {
+        event.stopPropagation();
+        selectedCurrentId = null;
+        spotDetail.hidden = true;
+        renderCurrent();
+      });
+    }
+
+    function selectCurrent(item) {
+      renderCurrentDetail(item);
+      fishingMap.flyTo([item.lat, item.lon], Math.max(fishingMap.getZoom(), 15));
+      renderCurrent();
+      renderStructures();
+      renderPracticeSpots();
+    }
+
+    function renderCurrent() {
+      currentMarkerLayer.clearLayers();
+      if (!currentData?.currents) return;
+
+      currentData.currents.forEach((item) => {
+        const selected = item.id === selectedCurrentId;
+        const forcePct = Math.max(0, Math.min(100, Number(item.forcePct) || 0));
+        const length = 24 + forcePct * 0.32;
+        const width = 3 + forcePct * 0.045;
+        const color = currentColor(item.strength);
+        const marker = L.marker([item.lat, item.lon], {
+          pane: 'current',
+          icon: L.divIcon({
+            className: '',
+            html: `
+              <span class="current-map-marker${selected ? ' is-selected' : ''}" style="--bearing:${Number(item.bearingDeg)}deg;--current-color:${color};--current-length:${length}px;--current-width:${width}px">
+                <span class="current-vector"><span class="current-arrow"></span></span>
+                <span class="current-origin"></span>
+                <span class="current-reading">${esc(item.speedMs.toFixed(2))} m/s</span>
+              </span>
+            `,
+            iconSize: [84, 84],
+            iconAnchor: [42, 42]
+          }),
+          zIndexOffset: selected ? 1500 : 1000
+        });
+        marker.bindTooltip(`${item.name} - ${item.speedMs.toFixed(3)} m/s naar ${item.directionLabel} (${item.bearingDeg.toFixed(1)} graden)`, { direction: 'top' });
+        marker.on('click', () => selectCurrent(item));
+        marker.addTo(currentMarkerLayer);
+      });
     }
 
     function applyBaseLayerVisibility() {
@@ -938,6 +1121,7 @@
       setVisible(sourceGeometryLayer, true);
       setVisible(hotspotMarkerLayer, layerHotspots.checked);
       setVisible(practiceMarkerLayer, layerPractice.checked);
+      setVisible(currentMarkerLayer, layerCurrent.checked);
     }
 
     function renderScore(data) {
@@ -1025,11 +1209,16 @@
       }[layer] || layer;
     }
 
+    function currentLegendHtml() {
+      if (!layerCurrent.checked || !currentData?.currents?.length) return '';
+      return '<span class="legend-item"><span class="layer-swatch current-swatch"></span>RWS pijl: lengte/dikte = kracht</span>';
+    }
+
     function renderStructures() {
       sourceGeometryLayer.clearLayers();
       hotspotMarkerLayer.clearLayers();
       if (!structuresData) {
-        mapLegend.innerHTML = '';
+        mapLegend.innerHTML = currentLegendHtml();
         return;
       }
 
@@ -1083,6 +1272,7 @@
         .slice(0, 8);
       const derivedLegend = [
         layerBathymetry.checked ? '<span class="legend-item bathymetry-key"><strong>RWS bodemhoogte (m t.o.v. NAP)</strong><span class="bathymetry-gradient"></span><span class="bathymetry-values"><span>&lt; -20</span><span>-15</span><span>-10</span><span>-5</span><span>0 m</span></span></span>' : '',
+        currentLegendHtml(),
         layerPractice.checked ? '<span class="legend-item"><span class="legend-dot practice-legend-dot"></span>Lokale praktijk</span>' : '',
         layerHotspots.checked ? '<span class="legend-item"><span class="legend-dot hotspot-legend-dot"></span>Weloverwogen spot</span>' : ''
       ].join('');
@@ -1118,10 +1308,12 @@
     }
 
     function selectPracticeSpot(spot) {
+      selectedCurrentId = null;
       renderPracticeDetail(spot);
       fishingMap.flyTo([spot.lat, spot.lon], Math.max(fishingMap.getZoom(), 15));
       renderStructures();
       renderPracticeSpots();
+      renderCurrent();
     }
 
     function renderPracticeSpots() {
@@ -1146,6 +1338,34 @@
 
     function renderFeatureList() {
       const cards = [];
+      if (currentData) {
+        if (currentData.currents?.length) {
+          cards.push(`
+            <div class="card">
+              <h3>RWS gemeten stroming <span class="badge">${esc(currentData.currents.length)} actueel</span></h3>
+              <p class="muted">${esc(currentData.coverageNote)} Alleen metingen jonger dan ${esc(currentData.maxAgeMinutes)} minuten.</p>
+            </div>
+          `);
+          currentData.currents.forEach((item) => {
+            cards.push(`
+              <div class="card" data-current-card="${esc(item.id)}">
+                <h3>${esc(item.name)} <span class="badge">${esc(item.strengthLabel)}</span></h3>
+                <p class="muted">${esc(item.speedMs.toFixed(3))} m/s naar ${esc(item.directionLabel)} (${esc(item.bearingDeg.toFixed(1))} graden) - ${esc(item.ageMinutes)} min oud</p>
+              </div>
+            `);
+          });
+        } else {
+          cards.push(`
+            <div class="card">
+              <h3>RWS gemeten stroming <span class="badge">geen verse meting</span></h3>
+              <p class="muted">${esc(currentData.coverageNote || 'Er is nu geen gekoppelde snelheids- en richtingsmeting jonger dan 90 minuten.')}</p>
+            </div>
+          `);
+        }
+      } else {
+        cards.push('<div class="card"><h3>RWS gemeten stroming</h3><p class="muted">Actuele kracht en richting worden geladen...</p></div>');
+      }
+
       if (structuresData) {
         const visible = filteredStructures();
         const visibleCounts = visible.reduce((counts, item) => {
@@ -1201,6 +1421,12 @@
         node.addEventListener('click', () => {
           const spot = scoutData?.spots.find((item) => item.id === node.dataset.practiceCard);
           if (spot) selectPracticeSpot(spot);
+        });
+      });
+      featureList.querySelectorAll('[data-current-card]').forEach((node) => {
+        node.addEventListener('click', () => {
+          const item = currentData?.currents.find((current) => current.id === node.dataset.currentCard);
+          if (item) selectCurrent(item);
         });
       });
     }
@@ -1262,13 +1488,34 @@
       }
     }
 
+    async function loadCurrent() {
+      try {
+        const response = await fetch('/snoek/api/current');
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || 'Stromingsdata kon niet geladen worden.');
+        }
+        currentData = data;
+      } catch (error) {
+        currentData = {
+          currents: [],
+          maxAgeMinutes: 90,
+          coverageNote: `RWS stromingsdata niet geladen: ${error.message}`
+        };
+      }
+      renderCurrent();
+      renderStructures();
+      renderFeatureList();
+    }
+
     async function loadStructures() {
       const requestId = ++structuresRequestId;
       const selectedLayers = layerFilters
         .filter((input) => input.checked)
         .map((input) => input.dataset.layerFilter);
       const layers = selectedLayers.length ? selectedLayers.join(',') : 'none';
-      featureList.innerHTML = '<div class="card"><h3>PDOK IMWA</h3><p class="muted">Aangevinkte bronlagen worden exact geladen...</p></div>';
+      structuresData = null;
+      renderFeatureList();
       try {
         const response = await fetch(`/snoek/api/structures?limit=120&layers=${encodeURIComponent(layers)}`);
         const data = await response.json();
@@ -1281,7 +1528,7 @@
         renderFeatureList();
       } catch (error) {
         if (requestId !== structuresRequestId) return;
-        featureList.innerHTML = `<div class="card"><h3>Live hotspots</h3><p class="muted">Kunstwerken niet geladen: ${esc(error.message)}</p></div>`;
+        renderFeatureList();
       }
     }
 
@@ -1311,6 +1558,10 @@
       applyBaseLayerVisibility();
       renderStructures();
     });
+    layerCurrent.addEventListener('change', () => {
+      applyBaseLayerVisibility();
+      renderStructures();
+    });
     layerPractice.addEventListener('change', () => {
       applyBaseLayerVisibility();
       renderStructures();
@@ -1323,6 +1574,7 @@
     L.control.scale({ imperial: false, position: 'bottomright' }).addTo(fishingMap);
     applyBaseLayerVisibility();
     fitInterestArea();
+    loadCurrent();
     loadStructures();
     loadWeather();
   </script>
