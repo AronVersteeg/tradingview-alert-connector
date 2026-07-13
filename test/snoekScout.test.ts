@@ -49,4 +49,30 @@ describe('buildSnoekScout', () => {
     expect(result.tactics.join(' ')).toContain('dropshot');
     expect(result.communityReviews.some((review) => review.source === 'Engelhart Hengelsport advies')).toBe(true);
   });
+
+  it('places De Ven on the Velsen-Zuid model boat lake', () => {
+    const result = buildSnoekScout({ target: 'method_feeder' });
+    const deVen = result.spots.find((spot) => spot.id === 'de-ven');
+    const buitenhuizerplas = result.spots.find((spot) => spot.id === 'buitenhuizerplas');
+    const schoonenberg = result.spots.find((spot) => spot.id === 'park-schoonenberg');
+
+    expect(deVen).toMatchObject({
+      lat: 52.4549,
+      lon: 4.6642,
+      area: 'De Ven, Velsen-Zuid'
+    });
+    expect(buitenhuizerplas).toMatchObject({ lat: 52.42914, lon: 4.70786 });
+    expect(schoonenberg).toMatchObject({ lat: 52.4523246, lon: 4.6356894 });
+  });
+
+  it('uses surveyed coordinates for the local current and lock spots', () => {
+    const result = buildSnoekScout({ target: 'snoekbaars' });
+
+    expect(result.spots.find((spot) => spot.id === 'pontje-velsen-zuid'))
+      .toMatchObject({ lat: 52.4626581, lon: 4.6323097 });
+    expect(result.spots.find((spot) => spot.id === 'pontje-buitenhuizen'))
+      .toMatchObject({ lat: 52.433, lon: 4.7255 });
+    expect(result.spots.find((spot) => spot.id === 'sluis-spaarndam'))
+      .toMatchObject({ lat: 52.4129566, lon: 4.6814088 });
+  });
 });

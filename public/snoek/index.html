@@ -275,6 +275,15 @@
       accent-color: var(--accent-2);
     }
 
+    .layer-swatch {
+      width: 10px;
+      height: 10px;
+      flex: 0 0 10px;
+      border: 1px solid #ffffff;
+      border-radius: 50%;
+      background: var(--swatch);
+    }
+
     .map-spot-detail {
       position: absolute;
       left: 12px;
@@ -535,10 +544,10 @@
                   <label class="layer-toggle"><input id="layer-topo" type="checkbox" checked> Kadaster BRT/TOP10NL</label>
                   <label class="layer-toggle"><input id="layer-satellite" type="checkbox" checked> PDOK luchtfoto</label>
                   <label class="layer-toggle"><input id="layer-practice" type="checkbox" checked> Lokale praktijkspots</label>
-                  <label class="layer-toggle"><input data-layer-filter="pumping_station" type="checkbox" checked> Gemalen/pompen</label>
-                  <label class="layer-toggle"><input data-layer-filter="weir" type="checkbox" checked> Stuwen</label>
-                  <label class="layer-toggle"><input data-layer-filter="lock" type="checkbox" checked> Sluizen</label>
-                  <label class="layer-toggle"><input data-layer-filter="bridge" type="checkbox" checked> Bruggen</label>
+                  <label class="layer-toggle"><input data-layer-filter="pumping_station" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ff4fa3"></span> Gemalen/pompen</label>
+                  <label class="layer-toggle"><input data-layer-filter="weir" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ff7a45"></span> Stuwen</label>
+                  <label class="layer-toggle"><input data-layer-filter="lock" type="checkbox" checked><span class="layer-swatch" style="--swatch:#b388ff"></span> Sluizen</label>
+                  <label class="layer-toggle"><input data-layer-filter="bridge" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ffd166"></span> Bruggen</label>
                 </div>
               </details>
               <div class="map-spot-detail" id="spot-detail" hidden></div>
