@@ -33,8 +33,12 @@ function alertHash(body: any): string {
 }
 
 function isMonitorRequestAuthorized(req: express.Request): boolean {
-  const expected = String(process.env.TRADINGVIEW_PASSPHRASE || '').trim();
-  if (!expected) return true;
+  const expected = String(
+    process.env.DECENTRADER_API_TOKEN ||
+    process.env.TRADINGVIEW_PASSPHRASE ||
+    ''
+  ).trim();
+  if (!expected) return false;
 
   const headerToken = req.header('X-Webhook-Token');
   const received =
@@ -231,7 +235,14 @@ router.get('/accounts', async (req, res) => {
 // ================= ALERT HANDLER =================
 
 router.post('/', async (req, res) => {
-  console.log('Received TradingView strategy alert:', req.body);
+  console.log('Received TradingView strategy alert:', {
+    exchange: req.body?.exchange,
+    strategy: req.body?.strategy,
+    market: req.body?.market,
+    desiredPosition: req.body?.desired_position,
+    signal: req.body?.signal,
+    time: req.body?.time
+  });
 
   // ---------- VALIDATION FIRST ----------
   const validated = await validateAlert(req.body);

@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
+import { allocateStepSizes, selectDelayedNewest } from './decentraderExecutionPolicy';
 import tls from 'tls';
 import zlib from 'zlib';
 import { AlertObject } from '../types';
@@ -108,6 +109,7 @@ type CoinGlassWhaleLevel = {
 type CoinGlassWhaleHistoryLevel = CoinGlassWhaleLevel & {
   key: string;
   firstSeenAt: string;
+  firstObservedAt: string;
   lastSeenAt: string;
   maxVolumeUsd: number;
   active: boolean;
@@ -270,6 +272,9 @@ type TradeEvaluationOptions = {
   dryRun?: boolean;
   simulatedDirection?: TradePlanDirection;
   liveTestHoldSeconds?: number;
+  allowDelayedSignal?: boolean;
+  signalFirstObservedAt?: string;
+  intrusionCandleReview?: IntrusionCandleReview;
 };
 
 type FractalLevel = {
@@ -363,6 +368,8 @@ type AlertState = {
   lastAlertObservedSignature?: string | null;
   lastAlertSentSignature?: string;
   lastFilteredAlertSentSignature?: string;
+  pendingIntrusionCandleAlertSignatures?: string[];
+  pendingIntrusionCandleAlerts?: Record<string, { firstObservedAt: string }>;
   lastAlertSentAt?: string;
   lastTpHitObservedSignature?: string | null;
   lastTpHitSentSignature?: string;
@@ -805,6 +812,7 @@ function mergeCoinGlassWhaleHistory(levels: CoinGlassWhaleLevel[]): CoinGlassWha
     const previous = byKey.get(key);
     const firstSeenMs = normalizeCoinGlassTimestampMs(level.startedAt, previous?.firstSeenAt ? Date.parse(previous.firstSeenAt) : nowMs);
     const firstSeenAt = Number.isFinite(firstSeenMs) ? new Date(firstSeenMs).toISOString() : previous?.firstSeenAt || nowIso;
+    const firstObservedAt = previous?.firstObservedAt || nowIso;
     const volumeUsd = numberOrZero(level.volumeUsd);
     const maxVolumeUsd = Math.max(volumeUsd, numberOrZero(previous?.maxVolumeUsd), numberOrZero(previous?.volumeUsd));
 
@@ -813,6 +821,7 @@ function mergeCoinGlassWhaleHistory(levels: CoinGlassWhaleLevel[]): CoinGlassWha
       ...level,
       key,
       firstSeenAt,
+      firstObservedAt,
       lastSeenAt: nowIso,
       maxVolumeUsd,
       active: true
@@ -1461,6 +1470,38 @@ function gapIntrusionsSince(rows: DecentraderRow[], lastDataTimestamp?: string):
   return alerts;
 }
 
+function pendingIntrusionCandleAlerts(rows: DecentraderRow[], signatures: string[] | undefined): GapAlert[] {
+  const pending = new Set(signatures || []);
+  if (!pending.size) return [];
+
+  const alerts: GapAlert[] = [];
+  const pendingTimestamps = new Set(
+    Array.from(pending).map((signature) => signature.split('|')[0])
+  );
+  for (let frameIndex = 1; frameIndex < rows.length; frameIndex += 1) {
+    if (!pendingTimestamps.has(String(rows[frameIndex]?.timestamp || ''))) continue;
+    const alert = detectGapIntrusion(rows, frameIndex);
+    if (alert?.entrants.length && pending.has(gapAlertSignature(alert))) {
+      alerts.push(alert);
+    }
+  }
+  return alerts;
+}
+
+function uniqueGapAlerts(alerts: GapAlert[]): GapAlert[] {
+  const seen = new Set<string>();
+  const unique: GapAlert[] = [];
+
+  for (const alert of alerts) {
+    const signature = gapAlertSignature(alert);
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    unique.push(alert);
+  }
+
+  return unique;
+}
+
 function alertDirection(alert: GapAlert): TradePlanDirection | undefined {
   if (alert.left.length && !alert.right.length) return 'long';
   if (alert.right.length && !alert.left.length) return 'short';
@@ -1469,6 +1510,14 @@ function alertDirection(alert: GapAlert): TradePlanDirection | undefined {
 
 function decentraderIntrusionCandleFilterEnabled(): boolean {
   return parseBool(process.env.DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED, false);
+}
+
+function decentraderIntrusionMaxExecutionDelayHours(): number {
+  return envPositiveNumber('DECENTRADER_INTRUSION_MAX_EXECUTION_DELAY_HOURS', 8);
+}
+
+function decentraderIntrusionMaxPriceDriftPct(): number {
+  return envFraction('DECENTRADER_INTRUSION_MAX_PRICE_DRIFT_PCT', 0.04);
 }
 
 function dydxHourlyCandleForTimestamp(
@@ -1684,7 +1733,7 @@ function coinGlassLevelsForFrame(
 
   if (frameMs && Array.isArray(snapshot.history) && snapshot.history.length) {
     return snapshot.history.filter((level) => {
-      const firstSeenMs = Date.parse(level.firstSeenAt || level.updatedAt);
+      const firstSeenMs = Date.parse(level.firstObservedAt || level.updatedAt);
       const lastSeenMs = Date.parse(level.lastSeenAt || level.updatedAt);
       if (!Number.isFinite(firstSeenMs) || !Number.isFinite(lastSeenMs)) return false;
       return firstSeenMs <= frameMs && frameMs <= lastSeenMs + graceMs;
@@ -3133,7 +3182,7 @@ function decentraderDynamicSlEnabled(): boolean {
 }
 
 function decentraderDynamicSlCoverageSyncEnabled(): boolean {
-  return parseBool(process.env.DECENTRADER_DYNAMIC_SL_COVERAGE_SYNC_ENABLED, false);
+  return parseBool(process.env.DECENTRADER_DYNAMIC_SL_COVERAGE_SYNC_ENABLED, true);
 }
 
 function decentraderDynamicSlLiveUpdatesEnabled(): boolean {
@@ -3180,25 +3229,13 @@ function decentraderTpFractions(takeProfits: any[]): number[] {
   return rawFractions.map((value) => value / Math.max(sum, Number.EPSILON));
 }
 
-function allocateTakeProfitSizes(size: number, stepSize: number, fractions: number[]): number[] {
-  if (!fractions.length || size <= 0 || stepSize <= 0) return [];
-
-  const decimals = Math.max(0, (String(stepSize).split('.')[1] || '').length);
-  const totalSteps = Math.floor((size + stepSize * 0.000001) / stepSize);
-  const rawSteps = fractions.map((fraction) => totalSteps * fraction);
-  const allocatedSteps = rawSteps.map((steps) => Math.floor(steps));
-  let remainingSteps = totalSteps - allocatedSteps.reduce((total, steps) => total + steps, 0);
-  const remainderOrder = rawSteps
-    .map((steps, index) => ({ index, remainder: steps - Math.floor(steps) }))
-    .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
-
-  for (const item of remainderOrder) {
-    if (remainingSteps <= 0) break;
-    allocatedSteps[item.index] += 1;
-    remainingSteps -= 1;
-  }
-
-  return allocatedSteps.map((steps) => Number((steps * stepSize).toFixed(decimals)));
+function allocateTakeProfitSizes(
+  size: number,
+  stepSize: number,
+  fractions: number[],
+  reservedIndices: number[] = []
+): number[] {
+  return allocateStepSizes(size, stepSize, fractions, reservedIndices);
 }
 
 function envPositiveNumber(name: string, fallback: number): number {
@@ -3381,7 +3418,7 @@ function latestValidFractal(
       return undefined;
     }
 
-    return newerFractals[newerFractals.length - 1];
+    return selectDelayedNewest(newerFractals, delay);
   };
 
   const validRefFractal = selectLatest(
@@ -3762,7 +3799,15 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
     numberOrZero(activePlan?.trigger?.price);
   const size = numberOrZero(activePlan?.sizing?.size);
   const minimumOrderSize = numberOrZero(activePlan?.sizing?.minimumOrderSize);
-  const takeProfitSizes = allocateTakeProfitSizes(size, minimumOrderSize, fractions);
+  const edgeIndices = takeProfits
+    .map((tp: any, index: number) => tp?.edge ? index : -1)
+    .filter((index: number) => index >= 0);
+  const takeProfitSizes = allocateTakeProfitSizes(
+    size,
+    minimumOrderSize,
+    fractions,
+    takeProfits.length ? [0, ...edgeIndices] : []
+  );
   const stopPrice = numberOrZero(activePlan?.stop?.price);
 
   if (direction !== 'long' && direction !== 'short') {
@@ -3848,7 +3893,15 @@ function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): 
   const minimumOrderSize =
     numberOrZero(directionalPlan?.sizing?.minimumOrderSize) ||
     numberOrZero(plan?.marketInfo?.stepSize);
-  const takeProfitSizes = allocateTakeProfitSizes(size, minimumOrderSize, fractions);
+  const edgeIndices = takeProfits
+    .map((tp: any, index: number) => tp?.edge ? index : -1)
+    .filter((index: number) => index >= 0);
+  const takeProfitSizes = allocateTakeProfitSizes(
+    size,
+    minimumOrderSize,
+    fractions,
+    takeProfits.length ? [0, ...edgeIndices] : []
+  );
   const referencePrice =
     numberOrZero(directionalPlan?.entryReference?.price) ||
     numberOrZero(plan?.marketInfo?.oraclePrice) ||
@@ -4147,7 +4200,9 @@ function readState(stateFile: string): AlertState {
 
 function writeState(stateFile: string, state: AlertState): void {
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+  const temporaryFile = `${stateFile}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryFile, JSON.stringify(state, null, 2));
+  fs.renameSync(temporaryFile, stateFile);
 }
 
 async function fetchSnapshot(symbol: string): Promise<DecentraderRow[]> {
@@ -4181,6 +4236,7 @@ async function fetchSnapshot(symbol: string): Promise<DecentraderRow[]> {
 
 export class DecentraderGapMonitor {
   private interval: NodeJS.Timeout | undefined;
+  private checkPromise: Promise<any> | undefined;
   private latestRows: DecentraderRow[] | undefined;
   private latestTimelapsePayload: any | undefined;
   private tradeExecutor: DecentraderTradeExecutor | undefined;
@@ -4271,6 +4327,20 @@ export class DecentraderGapMonitor {
   }
 
   async checkOnce(): Promise<any> {
+    if (this.checkPromise) {
+      console.log('Decentrader gap check joined the already running single-flight check.');
+      return this.checkPromise;
+    }
+
+    this.checkPromise = this.runCheckOnce();
+    try {
+      return await this.checkPromise;
+    } finally {
+      this.checkPromise = undefined;
+    }
+  }
+
+  private async runCheckOnce(): Promise<any> {
     const config = this.config();
     this.status = {
       ...this.status,
@@ -4303,7 +4373,24 @@ export class DecentraderGapMonitor {
       this.latestTimelapsePayload.rsiStudy = rsiStudy;
       const state = readState(config.stateFile);
       const previousDataTimestamp = state.lastDataTimestamp;
-      const alerts = gapIntrusionsSince(rows, previousDataTimestamp);
+      const intrusionCandleFilterEnabled = decentraderIntrusionCandleFilterEnabled();
+      const pendingCandleSignatures = new Set(
+        intrusionCandleFilterEnabled ? state.pendingIntrusionCandleAlertSignatures || [] : []
+      );
+      const pendingCandleAlerts = intrusionCandleFilterEnabled
+        ? { ...(state.pendingIntrusionCandleAlerts || {}) }
+        : {};
+      for (const signature of pendingCandleSignatures) {
+        pendingCandleAlerts[signature] = pendingCandleAlerts[signature] || {
+          firstObservedAt: nowNlIso()
+        };
+      }
+      const alerts = uniqueGapAlerts([
+        ...gapIntrusionsSince(rows, previousDataTimestamp),
+        ...(intrusionCandleFilterEnabled
+          ? pendingIntrusionCandleAlerts(rows, state.pendingIntrusionCandleAlertSignatures)
+          : [])
+      ]);
       const tpHits = tpHitsSince(rows, previousDataTimestamp);
       state.lastCheckedAt = nowNlIso();
       state.lastDataTimestamp = rows[rows.length - 1]?.timestamp;
@@ -4334,7 +4421,7 @@ export class DecentraderGapMonitor {
         tradeAlert: null,
         tradePlan: null,
         tradeDecision: null,
-        intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+        intrusionCandleFilterEnabled,
         intrusionCandleReviews: [],
         dynamicSlSync: null,
         dynamicTpSync: null,
@@ -4417,6 +4504,17 @@ export class DecentraderGapMonitor {
       }
 
       if (!alerts.length && !tpHits.length) {
+        state.pendingIntrusionCandleAlertSignatures = intrusionCandleFilterEnabled
+          ? Array.from(pendingCandleSignatures).slice(-50)
+          : [];
+        state.pendingIntrusionCandleAlerts = intrusionCandleFilterEnabled
+          ? Object.fromEntries(
+              state.pendingIntrusionCandleAlertSignatures.map((signature) => [
+                signature,
+                pendingCandleAlerts[signature] || { firstObservedAt: nowNlIso() }
+              ])
+            )
+          : {};
         writeState(config.stateFile, state);
         this.status = {
           ...this.status,
@@ -4429,6 +4527,8 @@ export class DecentraderGapMonitor {
 
       for (const alert of alerts) {
         const signature = gapAlertSignature(alert);
+        const signalFirstObservedAt = pendingCandleAlerts[signature]?.firstObservedAt || nowNlIso();
+        pendingCandleAlerts[signature] = { firstObservedAt: signalFirstObservedAt };
         const alertSummary = {
           signature,
           timestamp: alert.timestamp,
@@ -4438,7 +4538,7 @@ export class DecentraderGapMonitor {
           gap: alert.previousGap,
           entrants: alert.entrants
         };
-        const candleReview = intrusionCandleReview(rows, alert, decentraderIntrusionCandleFilterEnabled(), intrusionCandleCandles);
+        const candleReview = intrusionCandleReview(rows, alert, intrusionCandleFilterEnabled, intrusionCandleCandles);
         (alertSummary as any).intrusionCandleReview = candleReview;
         result.intrusionCandleReviews.push({
           signature,
@@ -4452,8 +4552,11 @@ export class DecentraderGapMonitor {
         result.alerts.push(alertSummary);
         console.log('Decentrader gap alert detected:', alertSummary);
 
+        const pendingCandleReview = pendingCandleSignatures.has(signature);
         const emailDuplicate = signature === state.lastAlertSentSignature;
-        if (emailDuplicate) {
+        if (pendingCandleReview) {
+          result.duplicate = true;
+        } else if (emailDuplicate) {
           result.duplicate = true;
         } else if (smtpSettings) {
           const emailResult = await sendEmailBestEffort(
@@ -4479,6 +4582,12 @@ export class DecentraderGapMonitor {
         }
 
         if (candleReview.enabled && candleReview.status !== 'PASS') {
+          if (candleReview.status === 'PENDING') {
+            pendingCandleSignatures.add(signature);
+          } else {
+            pendingCandleSignatures.delete(signature);
+            delete pendingCandleAlerts[signature];
+          }
           result.tradeSkipped = candleReview.reason;
           result.tradeDecision = {
             at: nowNlIso(),
@@ -4493,6 +4602,10 @@ export class DecentraderGapMonitor {
           };
           console.log('Decentrader intrusion candle filter blocked entry:', result.tradeDecision);
           continue;
+        }
+
+        if (candleReview.enabled && candleReview.status === 'PASS') {
+          pendingCandleSignatures.delete(signature);
         }
 
         if (candleReview.enabled && candleReview.status === 'PASS' && smtpSettings) {
@@ -4521,7 +4634,12 @@ export class DecentraderGapMonitor {
           }
         }
 
-        await this.maybeExecuteTradeForAlert(alert, signature, state, result);
+        await this.maybeExecuteTradeForAlert(alert, signature, state, result, {
+          allowDelayedSignal: candleReview.enabled && candleReview.status === 'PASS',
+          signalFirstObservedAt,
+          intrusionCandleReview: candleReview
+        });
+        delete pendingCandleAlerts[signature];
       }
 
       const sentTpHitSignatures = new Set<string>([
@@ -4576,6 +4694,17 @@ export class DecentraderGapMonitor {
         }
       }
       state.lastTpHitSentSignatures = Array.from(sentTpHitSignatures).slice(-50);
+      state.pendingIntrusionCandleAlertSignatures = intrusionCandleFilterEnabled
+        ? Array.from(pendingCandleSignatures).slice(-50)
+        : [];
+      state.pendingIntrusionCandleAlerts = intrusionCandleFilterEnabled
+        ? Object.fromEntries(
+            state.pendingIntrusionCandleAlertSignatures.map((signature) => [
+              signature,
+              pendingCandleAlerts[signature] || { firstObservedAt: nowNlIso() }
+            ])
+          )
+        : {};
 
       writeState(config.stateFile, state);
       this.status = {
@@ -5411,7 +5540,7 @@ export class DecentraderGapMonitor {
     }
 
     const latestTimestamp = this.latestRows?.[this.latestRows.length - 1]?.timestamp;
-    if (alert.timestamp !== latestTimestamp) {
+    if (alert.timestamp !== latestTimestamp && !options.allowDelayedSignal) {
       result.tradeSkipped = `Stale Decentrader alert ${alert.timestamp}; latest frame is ${latestTimestamp || '-'}.`;
       this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
         latestTimestamp: latestTimestamp || null
@@ -5426,6 +5555,44 @@ export class DecentraderGapMonitor {
       return;
     }
 
+    const executionStartedAt = nowNlIso();
+    const intrusionTimeMs = coinGlassFrameTimeMs(alert.timestamp);
+    const firstObservedTimeMs = Date.parse(String(options.signalFirstObservedAt || ''));
+    const executionTimeMs = Date.parse(executionStartedAt);
+    const delayMinutes = intrusionTimeMs === undefined
+      ? undefined
+      : Math.max(0, (executionTimeMs - intrusionTimeMs) / 60000);
+    const sourceDelayMinutes = intrusionTimeMs === undefined || !Number.isFinite(firstObservedTimeMs)
+      ? undefined
+      : Math.max(0, (firstObservedTimeMs - intrusionTimeMs) / 60000);
+    const confirmationDelayMinutes = !Number.isFinite(firstObservedTimeMs)
+      ? undefined
+      : Math.max(0, (executionTimeMs - firstObservedTimeMs) / 60000);
+    const delayTelemetry = {
+      delayedSignal: Boolean(options.allowDelayedSignal),
+      intrusionTimestamp: alert.timestamp,
+      firstObservedAt: options.signalFirstObservedAt || null,
+      executionStartedAt,
+      delayMinutes,
+      delayBars: delayMinutes === undefined ? undefined : Math.floor(delayMinutes / 60),
+      sourceDelayMinutes,
+      confirmationDelayMinutes,
+      maxExecutionDelayHours: decentraderIntrusionMaxExecutionDelayHours()
+    };
+    result.theDelay = delayTelemetry;
+
+    if (
+      options.allowDelayedSignal &&
+      delayMinutes !== undefined &&
+      delayMinutes > decentraderIntrusionMaxExecutionDelayHours() * 60
+    ) {
+      result.tradeSkipped = `The Delay is ${Math.round(delayMinutes)} minutes, above the configured maximum.`;
+      this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+        theDelay: delayTelemetry
+      });
+      return;
+    }
+
     const market = decentraderTradeMarket();
     result.tradeAttempted = true;
     console.log('Decentrader auto-trade evaluation started:', {
@@ -5435,7 +5602,8 @@ export class DecentraderGapMonitor {
       timestampNl: alert.timestampNl,
       direction,
       market,
-      price: alert.price
+      price: alert.price,
+      theDelay: delayTelemetry
     });
 
     try {
@@ -5482,15 +5650,45 @@ export class DecentraderGapMonitor {
         return;
       }
 
-      const plan = await this.getTradePlan(account, market, options.simulatedDirection);
+      const planDirection = options.allowDelayedSignal ? direction : options.simulatedDirection;
+      const plan = await this.getTradePlan(account, market, planDirection);
 
-      if (plan.timestamp !== alert.timestamp) {
+      const expectedPlanTimestamp = options.allowDelayedSignal ? latestTimestamp : alert.timestamp;
+      if (plan.timestamp !== expectedPlanTimestamp) {
         result.tradeSkipped = `Trade plan timestamp ${plan.timestamp} does not match alert ${alert.timestamp}.`;
         result.tradeAttempted = false;
         this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
           planTimestamp: plan.timestamp
         });
         return;
+      }
+
+      if (options.allowDelayedSignal) {
+        const currentPrice = numberOrZero(plan?.marketInfo?.oraclePrice) || numberOrZero(plan?.price);
+        const intrusionPrice = numberOrZero(alert.price);
+        const priceDriftPct = intrusionPrice > 0
+          ? Math.abs(currentPrice - intrusionPrice) / intrusionPrice
+          : undefined;
+        const maxPriceDriftPct = decentraderIntrusionMaxPriceDriftPct();
+        Object.assign(delayTelemetry, {
+          currentPlanTimestamp: plan.timestamp,
+          intrusionPrice,
+          currentPrice,
+          priceDriftPct,
+          maxPriceDriftPct,
+          candleReview: options.intrusionCandleReview || null
+        });
+
+        if (priceDriftPct !== undefined && priceDriftPct > maxPriceDriftPct) {
+          result.tradeSkipped = `Price drift during The Delay is ${(priceDriftPct * 100).toFixed(2)}%, above the configured maximum.`;
+          result.tradeAttempted = false;
+          this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+            market,
+            planTimestamp: plan.timestamp,
+            theDelay: delayTelemetry
+          });
+          return;
+        }
       }
 
       if (plan.signal?.direction !== direction || !plan.activePlan) {

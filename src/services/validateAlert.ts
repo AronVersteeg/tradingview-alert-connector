@@ -12,16 +12,25 @@ export const validateAlert = async (
     return false;
   }
 
-  // ---------- PASSPHRASE ----------
-  if (process.env.TRADINGVIEW_PASSPHRASE) {
-    if (!alertMessage.passphrase) {
-      console.error('Passphrase is missing in alert message.');
-      return false;
-    }
-    if (alertMessage.passphrase !== process.env.TRADINGVIEW_PASSPHRASE) {
-      console.error('Tradingview passphrase does not match.');
-      return false;
-    }
+  // ---------- WEBHOOK AUTH ----------
+  const expectedToken = String(
+    process.env.WEBHOOK_TOKEN ||
+    process.env.TRADINGVIEW_PASSPHRASE ||
+    ''
+  ).trim();
+  const receivedToken = String(
+    alertMessage.passphrase ||
+    (alertMessage as any).token ||
+    ''
+  ).trim();
+
+  if (!expectedToken) {
+    console.error('Webhook rejected because WEBHOOK_TOKEN/TRADINGVIEW_PASSPHRASE is not configured.');
+    return false;
+  }
+  if (!receivedToken || receivedToken !== expectedToken) {
+    console.error('Webhook token is missing or does not match.');
+    return false;
   }
 
   // ---------- EXCHANGE ----------
