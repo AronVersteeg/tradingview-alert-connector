@@ -137,6 +137,8 @@ router.get('/', async (req, res) => {
 // ================= SNOEK AI TOOLS =================
 
 router.get('/snoek', async (req, res) => {
+  // PDOK tiles are cross-origin images and do not opt into Helmet's COEP policy.
+  res.removeHeader('Cross-Origin-Embedder-Policy');
   res.setHeader(
     'Content-Security-Policy',
     [
