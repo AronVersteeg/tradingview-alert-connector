@@ -716,8 +716,9 @@
       scrollWheelZoom: true
     });
     fishingMap.createPane('aerial').style.zIndex = 200;
+    fishingMap.createPane('kadaster-base').style.zIndex = 210;
+    fishingMap.createPane('kadaster-water').style.zIndex = 220;
     fishingMap.createPane('bathymetry').style.zIndex = 230;
-    fishingMap.createPane('kadaster-base').style.zIndex = 240;
     fishingMap.createPane('kadaster-detail').style.zIndex = 260;
     fishingMap.createPane('kadaster-labels').style.zIndex = 280;
 
@@ -738,6 +739,7 @@
       grid.createTile = function createTile(coords, done) {
         const tile = document.createElement('img');
         const size = this.getTileSize();
+        const pixelRatio = Math.min(2, Math.max(1, Math.ceil(window.devicePixelRatio || 1)));
         const world = 20037508.342789244;
         const tiles = 2 ** coords.z;
         const span = world * 2 / tiles;
@@ -750,8 +752,8 @@
           bbox: `${minX},${minY},${maxX},${maxY}`,
           bboxSR: '3857',
           imageSR: '3857',
-          size: `${size.x},${size.y}`,
-          dpi: '96',
+          size: `${size.x * pixelRatio},${size.y * pixelRatio}`,
+          dpi: String(96 * pixelRatio),
           format: 'png32',
           transparent: 'true',
           layers: `show:${layerId}`
@@ -759,6 +761,8 @@
 
         tile.alt = '';
         tile.setAttribute('role', 'presentation');
+        tile.width = size.x;
+        tile.height = size.y;
         tile.onload = () => done(null, tile);
         tile.onerror = () => done(new Error('RWS bodemhoogtetegel kon niet worden geladen'), tile);
         tile.src = `${serviceUrl}/export?${params}`;
@@ -790,11 +794,24 @@
         attribution: 'BRT Achtergrondkaart: Kadaster, PDOK'
       }
     );
+    const kadasterWaterLayer = L.tileLayer.wms(
+      'https://service.pdok.nl/kadaster/brt-top10nl/wms/v1_0',
+      {
+        pane: 'kadaster-water',
+        layers: 'waterdeel',
+        format: 'image/png',
+        transparent: true,
+        minZoom: 13,
+        maxZoom: 19,
+        opacity: 0.95,
+        attribution: 'TOP10NL: Kadaster, PDOK'
+      }
+    );
     const kadasterDetailLayer = L.tileLayer.wms(
       'https://service.pdok.nl/kadaster/brt-top10nl/wms/v1_0',
       {
         pane: 'kadaster-detail',
-        layers: 'waterdeel,wegdeelhartlijn,spoorbaandeel,gebouw',
+        layers: 'wegdeelhartlijn,spoorbaandeel,gebouw',
         format: 'image/png',
         transparent: true,
         minZoom: 13,
@@ -915,6 +932,7 @@
       setVisible(aerialLayer, layerSatellite.checked);
       setVisible(bathymetryLayer, layerBathymetry.checked);
       setVisible(kadasterBaseLayer, layerTopo.checked);
+      setVisible(kadasterWaterLayer, layerTopo.checked);
       setVisible(kadasterDetailLayer, layerTopo.checked);
       setVisible(kadasterLabelsLayer, layerTopo.checked);
       setVisible(sourceGeometryLayer, true);
