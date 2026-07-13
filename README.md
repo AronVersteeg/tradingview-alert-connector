@@ -20,13 +20,15 @@ GET /snoek/api/weather
 GET /snoek/api/structures
 ```
 
-`/snoek` serves a mobile-friendly fishing scout for Velsen/Spaarnwoude. It scores simple weather inputs such as wind, cloud cover, pressure trend, rain, temperature and time of day, then returns a practical fishing recommendation, an offline map seed layer, source catalog and community-review seed data.
+`/snoek` serves a mobile-friendly fishing scout for Velsen/Spaarnwoude and nearby roofvis water. It scores simple weather inputs such as wind, cloud cover, pressure trend, rain, temperature and time of day, then returns a practical fishing recommendation, an offline map seed layer, source catalog and community-review seed data. It supports separate modes for snoek, snoekbaars/dropshot, method feeder and witvis.
 
 `/snoek/api/weather?location=Velsen-Zuid` uses Open-Meteo geocoding and forecast data to fill live open weather inputs without an API key.
 
-`/snoek/api/structures` loads live GIS objects for the map bbox from PDOK Waterschappen Kunstwerken IMWA and Rijkswaterstaat ArcGIS beheerobjecten. It filters and clusters those raw bridges, culverts, pumping stations, locks, weirs, fish passages and other water-control objects into a smaller set of argued Snoek scout spots using structure combinations, water-layout proximity and seed community/eigen-scout signals.
+`/snoek/api/structures` loads live GIS objects for the map bbox from PDOK Waterschappen Kunstwerken IMWA and Rijkswaterstaat ArcGIS beheerobjecten. It filters and clusters those raw bridges, culverts, pumping stations, locks, weirs, fish passages and other water-control objects into a smaller set of argued Snoek scout spots using structure combinations, water-layout proximity and seed community/eigen-scout signals. Pumping stations, pumps, locks, weirs and water-control objects are weighted above culverts because active current is a stronger roofvis trigger; culverts mainly count as ambush/context unless they combine with better structure near main water.
 
-The map is now GIS/vector-first: PDOK/RWS object coordinates are the source of truth and the Esri satellite image is a visual underlay. Exact bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route. The chat-mentioned source stack is represented in the source catalog: Open-Meteo, PDOK/RWS kunstwerken, Esri/Rijkswaterstaat bathymetry, AHN, OpenStreetMap, VISplanner, Fishbrain/FishAngler community data, Windy/Fishing Points-style timing and satellite/manual water-reading layers.
+The map is now GIS/vector-first: PDOK/RWS object coordinates are the source of truth and the Esri satellite image is a visual underlay. Exact bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route. The source stack is represented in the source catalog: Open-Meteo, PDOK/RWS kunstwerken, Esri/Rijkswaterstaat bathymetry, AHN, OpenStreetMap, VISplanner, Fishbrain/FishAngler community data, Engelhart Hengelsport local advice, Windy/Fishing Points-style timing and satellite/manual water-reading layers.
+
+Current manual roofvis advice is seeded as local practice input: Zijkanaal C, the A9 bridge, Sluis Spaarndam, Pontje Velsen-Zuid, the steiger toward Oud Velsen and Pontje Buitenhuizen. For snoekbaars the tactics favor dropshot or small shads around pontstroming, sluices, kades, talud and low-light windows.
 
 The Snoek map supports pan/zoom, clickable scout spots, a detail panel with coordinates and reasoning, and layer toggles for the Esri topo/satellite underlay plus major GIS spot classes such as pumping stations, weirs, locks, culverts and bridges.
 

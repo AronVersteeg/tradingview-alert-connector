@@ -31,4 +31,21 @@ describe('buildSnoekScout', () => {
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(result.score).toBeLessThan(60);
   });
+
+  it('prioritizes local current spots for snoekbaars dropshot sessions', () => {
+    const result = buildSnoekScout({
+      target: 'snoekbaars',
+      temperatureC: 18,
+      windBft: 3,
+      cloudCoverPct: 70,
+      pressureTrend: 'falling',
+      rain: 'none',
+      timeOfDay: 'evening'
+    });
+
+    expect(result.score).toBeGreaterThanOrEqual(75);
+    expect(result.spots[0].id).toBe('pontje-velsen-zuid');
+    expect(result.tactics.join(' ')).toContain('dropshot');
+    expect(result.communityReviews.some((review) => review.source === 'Engelhart Hengelsport advies')).toBe(true);
+  });
 });

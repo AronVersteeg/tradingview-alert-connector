@@ -1,4 +1,4 @@
-export type SnoekTarget = 'snoek' | 'method_feeder' | 'witvis';
+export type SnoekTarget = 'snoek' | 'snoekbaars' | 'method_feeder' | 'witvis';
 export type PressureTrend = 'falling' | 'steady' | 'rising';
 export type RainState = 'none' | 'light' | 'heavy';
 export type TimeOfDay = 'morning' | 'midday' | 'evening' | 'night';
@@ -90,11 +90,67 @@ const SPOTS: SnoekSpot[] = [
     lon: 4.6326,
     x: 27,
     y: 63,
-    targets: ['snoek', 'witvis'],
+    targets: ['snoek', 'snoekbaars', 'witvis'],
     waterType: 'kanaal',
     depthClass: '1-6 m, talud naar hoofdgeul',
     structures: ['talud', 'kade', 'stromingsnaad'],
     note: 'Zoek windkant, stromingsnaden, steigers en harde overgangen.'
+  },
+  {
+    id: 'pontje-velsen-zuid',
+    name: 'Pontje Velsen-Zuid',
+    area: 'Velsen-Zuid',
+    lat: 52.466,
+    lon: 4.625,
+    x: 20.8,
+    y: 22.3,
+    targets: ['snoekbaars'],
+    waterType: 'kanaalstroming',
+    depthClass: 'kanaal/talud rond pontstroming',
+    structures: ['pontstroming', 'kade', 'talud', 'steiger richting Oud Velsen'],
+    note: 'Engelhart advies: veel snoekbaars rond stroming van het pontje; ook richting steiger Oud Velsen proberen.'
+  },
+  {
+    id: 'zijkanaal-c-a9',
+    name: 'Zijkanaal C / Brug A9',
+    area: 'Spaarndam',
+    lat: 52.421,
+    lon: 4.666,
+    x: 37.9,
+    y: 57,
+    targets: ['snoek', 'snoekbaars'],
+    waterType: 'zijkanaal',
+    depthClass: 'kanaalrand, brugschaduw en talud',
+    structures: ['brug', 'zijkanaal', 'harde rand', 'talud'],
+    note: 'Engelhart advies: Zijkanaal C en brug over de A9 genoemd als roofvisstek.'
+  },
+  {
+    id: 'sluis-spaarndam',
+    name: 'Sluis Spaarndam',
+    area: 'Spaarndam',
+    lat: 52.413,
+    lon: 4.681,
+    x: 44.2,
+    y: 63.1,
+    targets: ['snoek', 'snoekbaars'],
+    waterType: 'sluis/stroming',
+    depthClass: 'harde sluisranden, stroming en luwtes',
+    structures: ['sluis', 'stroming', 'harde kant', 'aasvis'],
+    note: 'Engelhart advies: sluis Spaarndam genoemd; dropshot en softbait langs stroming/luwte.'
+  },
+  {
+    id: 'pontje-buitenhuizen',
+    name: 'Pontje Buitenhuizen',
+    area: 'Buitenhuizen',
+    lat: 52.452,
+    lon: 4.682,
+    x: 44.6,
+    y: 33.1,
+    targets: ['snoekbaars', 'snoek'],
+    waterType: 'pontstroming',
+    depthClass: 'kanaalrand met stromingsnaad',
+    structures: ['pontstroming', 'kade', 'talud'],
+    note: 'Engelhart advies: pontje Buitenhuizen genoemd als roofvisplek; stroming is de hoofdreden.'
   },
   {
     id: 'buitenhuizerplas',
@@ -241,6 +297,12 @@ const DATA_SOURCES: SnoekDataSource[] = [
     use: 'Vangstmeldingen, aaskeuze en lokale hints als inspiratie, niet als absolute waarheid.'
   },
   {
+    id: 'engelhart-hengelsport-advies',
+    label: 'Engelhart Hengelsport advies',
+    status: 'manual',
+    use: 'Lokale praktijkinput voor Zijkanaal C, brug A9, Sluis Spaarndam, pontjes, snoekbaars, softbaits en dropshot.'
+  },
+  {
     id: 'windy-fishingpoints',
     label: 'Windy / Fishing Points stijl input',
     status: 'seeded',
@@ -261,6 +323,38 @@ const COMMUNITY_REVIEWS: SnoekCommunityReview[] = [
     source: 'Community seed',
     note: 'Goed leerwater voor roofvis, vooral bij kade, bruggen, stroming en talud.',
     baits: ['shad 7-12 cm', 'jigkop', 'spinner'],
+    confidence: 'middel'
+  },
+  {
+    spotId: 'pontje-velsen-zuid',
+    rating: 5,
+    source: 'Engelhart Hengelsport advies',
+    note: 'Veel snoekbaars rond pontstroming; ook richting steiger bij Oud Velsen proberen.',
+    baits: ['dropshot', 'kleine shad', 'jigkop'],
+    confidence: 'hoog'
+  },
+  {
+    spotId: 'zijkanaal-c-a9',
+    rating: 4,
+    source: 'Engelhart Hengelsport advies',
+    note: 'Zijkanaal C en brug over de A9 genoemd als relevante roofvisstek.',
+    baits: ['softbait', 'dropshot', 'shad'],
+    confidence: 'hoog'
+  },
+  {
+    spotId: 'sluis-spaarndam',
+    rating: 4,
+    source: 'Engelhart Hengelsport advies',
+    note: 'Sluis/stroming genoemd; interessant voor roofvis als aasvis door waterbeweging wordt geconcentreerd.',
+    baits: ['dropshot', 'shad', 'softbait'],
+    confidence: 'hoog'
+  },
+  {
+    spotId: 'pontje-buitenhuizen',
+    rating: 4,
+    source: 'Engelhart Hengelsport advies',
+    note: 'Pontstroming genoemd als reden om hier gericht te zoeken.',
+    baits: ['dropshot', 'shad', 'jigkop'],
     confidence: 'middel'
   },
   {
@@ -297,7 +391,7 @@ function normalizeEnum<T extends string>(value: unknown, allowed: readonly T[], 
 
 function normalizeInput(input: SnoekScoutInput) {
   return {
-    target: normalizeEnum(input.target, ['snoek', 'method_feeder', 'witvis'], 'snoek'),
+    target: normalizeEnum(input.target, ['snoek', 'snoekbaars', 'method_feeder', 'witvis'], 'snoek'),
     location: String(input.location || 'Velsen / Spaarnwoude').trim() || 'Velsen / Spaarnwoude',
     temperatureC: toNumber(input.temperatureC, 20),
     windBft: toNumber(input.windBft, 3),
@@ -341,6 +435,32 @@ function scoreSnoek(input: ReturnType<typeof normalizeInput>, reasons: string[],
   return score;
 }
 
+function scoreSnoekbaars(input: ReturnType<typeof normalizeInput>, reasons: string[]): number {
+  let score = 50;
+  if (input.windBft >= 1 && input.windBft <= 4) score += add(reasons, 'lichte tot matige wind helpt stromingsnaden en kades afvissen', 8);
+  if (input.windBft >= 6) score += add(reasons, 'harde wind maakt dropshot en bodemcontact lastig', -10);
+
+  if (input.cloudCoverPct >= 50) score += add(reasons, 'bewolking past bij snoekbaars op ondiepere randen', 8);
+  if (input.cloudCoverPct <= 20 && input.timeOfDay === 'midday') score += add(reasons, 'fel middaglicht drukt snoekbaars vaak dieper of strakker tegen structuur', -10);
+
+  if (input.pressureTrend === 'falling') score += add(reasons, 'dalende luchtdruk kan aasvis en snoekbaars activeren', 8);
+  if (input.pressureTrend === 'rising') score += add(reasons, 'stijgende druk is minder overtuigend voor actief zoeken', -4);
+
+  if (input.rain === 'light') score += add(reasons, 'lichte regen geeft dekking en minder drukte', 5);
+  if (input.rain === 'heavy') score += add(reasons, 'zware regen maakt langzaam bodemvissen onnauwkeurig', -8);
+
+  if (input.temperatureC >= 7 && input.temperatureC <= 22) score += add(reasons, 'temperatuur is bruikbaar voor snoekbaars met shad/dropshot', 10);
+  else if (input.temperatureC > 24) score += add(reasons, 'erg warm; vis kort en kies zuurstofrijke stroming', -8);
+
+  if (input.timeOfDay === 'evening' || input.timeOfDay === 'night') {
+    score += add(reasons, 'schemer/nacht is sterk voor snoekbaars rond kade, pont en sluis', 14);
+  } else if (input.timeOfDay === 'morning') {
+    score += add(reasons, 'ochtend kan goed zijn als er stroming of schaduw staat', 6);
+  }
+
+  return score;
+}
+
 function scoreMethod(input: ReturnType<typeof normalizeInput>, reasons: string[]): number {
   let score = 50;
   if (input.temperatureC >= 15 && input.temperatureC <= 25) score += add(reasons, 'temperatuur is goed voor witvis/karperachtigen', 14);
@@ -360,6 +480,12 @@ function buildTactics(target: SnoekTarget, score: number): string[] {
       : ['Zoek schaduw, bruggen, steigers en diepere randen.', 'Vis trager met shad of suspending jerkbait.', 'Maak korte sessies en wissel pas als je dekking hebt afgevist.'];
   }
 
+  if (target === 'snoekbaars') {
+    return score >= 70
+      ? ['Begin met dropshot rond pontstroming, steigers en harde kanaalranden.', 'Vis shads traag tegen de bodem op talud en stromingsnaad.', 'Pak schemer of avond; blijf compact op plekken met stroming/aasvis.']
+      : ['Zoek eerst stroming: pontje, sluis, gemaal of harde kade.', 'Dropshot of kleine shad werkt beter dan snel kunstaas.', 'Vermijd grote open stukken zonder talud, kade of stromingsnaad.'];
+  }
+
   return [
     'Begin compact: kleine method korf, weinig voer, scherp op beetmomenten.',
     'Vis ochtend of avond als het helder en warm is.',
@@ -371,8 +497,19 @@ function selectSpots(target: SnoekTarget, score: number): SnoekSpot[] {
   return SPOTS
     .filter((spot) => spot.targets.includes(target))
     .sort((a, b) => {
-      const aBoost = a.waterType === 'kanaal' && target === 'snoek' && score >= 65 ? 1 : 0;
-      const bBoost = b.waterType === 'kanaal' && target === 'snoek' && score >= 65 ? 1 : 0;
+      const boost = (spot: SnoekSpot) => {
+        if (target === 'snoekbaars') {
+          let value = 0;
+          if (spot.waterType.includes('pontstroming') || spot.waterType.includes('kanaalstroming')) value += 5;
+          if (spot.waterType.includes('sluis')) value += 4;
+          if (spot.waterType.includes('zijkanaal') || spot.waterType.includes('kanaal')) value += 2;
+          if (spot.structures.some((structure) => ['kade', 'talud', 'stroming', 'pontstroming'].includes(structure))) value += 2;
+          return value;
+        }
+        return spot.waterType === 'kanaal' && target === 'snoek' && score >= 65 ? 1 : 0;
+      };
+      const aBoost = boost(a);
+      const bBoost = boost(b);
       return bBoost - aBoost || a.name.localeCompare(b.name);
     })
     .slice(0, 3);
@@ -381,7 +518,9 @@ function selectSpots(target: SnoekTarget, score: number): SnoekSpot[] {
 function buildActivityWindows(input: ReturnType<typeof normalizeInput>): SnoekActivityWindow[] {
   const eveningNote = input.target === 'snoek'
     ? 'Schemer met bewolking/wind is vaak het beste roofvisblok.'
-    : 'Rustiger licht en minder drukte aan de waterkant.';
+    : input.target === 'snoekbaars'
+      ? 'Schemer/nacht plus stroming bij pont, sluis of kade is het sterkste blok.'
+      : 'Rustiger licht en minder drukte aan de waterkant.';
   return [
     {
       label: 'Grote tijden',
@@ -412,7 +551,9 @@ export function buildSnoekScout(input: SnoekScoutInput = {}): SnoekScoutResult {
   const warnings: string[] = [];
   const rawScore = normalized.target === 'snoek'
     ? scoreSnoek(normalized, reasons, warnings)
-    : scoreMethod(normalized, reasons);
+    : normalized.target === 'snoekbaars'
+      ? scoreSnoekbaars(normalized, reasons)
+      : scoreMethod(normalized, reasons);
   const score = Math.round(clamp(rawScore, 0, 100));
 
   const label = score >= 75 ? 'Sterke kans' : score >= 58 ? 'Prima proberen' : score >= 42 ? 'Selectief vissen' : 'Liever plannen';

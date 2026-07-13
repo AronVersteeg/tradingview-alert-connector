@@ -88,6 +88,8 @@ const COMMUNITY_SIGNALS = [
     x: 52,
     y: 63,
     boost: 9,
+    species: ['snoek'],
+    tactics: ['shad', 'spinnerbait', 'korte worpen langs riet'],
     note: 'community/eigen scout seed: riet, korte sessies en roofvis langs obstakels'
   },
   {
@@ -95,6 +97,8 @@ const COMMUNITY_SIGNALS = [
     x: 61,
     y: 50,
     boost: 8,
+    species: ['snoek'],
+    tactics: ['shallow shad', 'jerkbait', 'windkant afvissen'],
     note: 'community seed: windkant en randen interessanter dan open water'
   },
   {
@@ -102,6 +106,8 @@ const COMMUNITY_SIGNALS = [
     x: 38,
     y: 36,
     boost: 10,
+    species: ['snoek', 'snoekbaars'],
+    tactics: ['shad op talud', 'dropshot bij kade', 'stromingsnaad afvissen'],
     note: 'community seed: kanaal, talud, kade en stromingsnaden'
   },
   {
@@ -109,7 +115,72 @@ const COMMUNITY_SIGNALS = [
     x: 38,
     y: 72,
     boost: 7,
+    species: ['snoek'],
+    tactics: ['softbait langs riet', 'brugschaduw', 'overgangen afvissen'],
     note: 'community seed: bruggen, riet en overgangen bij kleiner water'
+  },
+  {
+    name: 'Zijkanaal C',
+    x: 37.9,
+    y: 57,
+    boost: 16,
+    species: ['snoek', 'snoekbaars'],
+    tactics: ['softbait', 'dropshot', 'talud en kade langzaam afvissen'],
+    note: 'Engelhart hengelsport advies: genoemd als relevante roofvisstek'
+  },
+  {
+    name: 'Brug over de A9 / Zijkanaal C',
+    x: 33.3,
+    y: 60,
+    boost: 14,
+    species: ['snoek', 'snoekbaars'],
+    tactics: ['dropshot onder brugschaduw', 'shad langs pijlers', 'langzaam tegen bodem'],
+    note: 'Engelhart hengelsport advies: brugstructuur bij A9 als roofvisstek'
+  },
+  {
+    name: 'Sluis Spaarndam',
+    x: 44.2,
+    y: 63.1,
+    boost: 18,
+    species: ['snoek', 'snoekbaars'],
+    tactics: ['dropshot bij stroming', 'shad langs harde rand', 'werpend langs sluisdeuren'],
+    note: 'Engelhart hengelsport advies: sluis/stroming genoemd als interessante roofvisplek'
+  },
+  {
+    name: 'Pontje Velsen-Zuid',
+    x: 20.8,
+    y: 22.3,
+    boost: 22,
+    species: ['snoekbaars'],
+    tactics: ['dropshot', 'shad op bodem', 'stromingsnaad van pontje afvissen'],
+    note: 'Engelhart hengelsport advies: positief voor roofvissen; veel snoekbaars rond pontstroming'
+  },
+  {
+    name: 'Steiger Oud Velsen',
+    x: 23.7,
+    y: 27.7,
+    boost: 18,
+    species: ['snoekbaars'],
+    tactics: ['dropshot langs steiger', 'kleine shad', 'schemer/avond'],
+    note: 'Engelhart hengelsport advies: vanaf pontje richting steiger bij Oud Velsen interessant'
+  },
+  {
+    name: 'Pontje Buitenhuizen',
+    x: 44.6,
+    y: 33.1,
+    boost: 18,
+    species: ['snoekbaars', 'snoek'],
+    tactics: ['dropshot bij stroming', 'shad langs talud', 'korte drift langs kade'],
+    note: 'Engelhart hengelsport advies: pontstroming genoemd als roofvisstek'
+  },
+  {
+    name: 'Sluizen IJmuiden richting zee',
+    x: 11.3,
+    y: 25.4,
+    boost: 15,
+    species: ['snoekbaars', 'zeebaars'],
+    tactics: ['shad bij stroming', 'dropshot luwte', 'zeebaars meer richting sluizen/zee'],
+    note: 'Engelhart hengelsport advies: meer richting sluizen wordt zeebaars interessanter'
   }
 ];
 
@@ -434,7 +505,8 @@ function buildScoutHotspots(structures: SnoekStructure[], limit: number): SnoekS
       nearMainWater ? 'Waterlayout: nabij hoofdwater, kruising of overgang' : '',
       hasAmbushCombo ? 'Snoeklogica: duiker telt mee als hinderlaag, niet als hoofdreden' : '',
       hasCurrentMaker ? 'Snoeklogica: stroming/waterregeling kan aasvis concentreren' : '',
-      community ? `Community: ${community.note}` : 'Community: nog geen sterke lokale bevestiging'
+      community ? `Lokale praktijk: ${community.note}` : 'Community: nog geen sterke lokale bevestiging',
+      community ? `Soort/techniek: ${community.species.join(', ')} - ${community.tactics.join(', ')}` : ''
     ].filter(Boolean);
 
     hotspots.push({
