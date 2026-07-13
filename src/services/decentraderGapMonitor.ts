@@ -126,6 +126,34 @@ type CoinGlassTpConfluence = {
   longDuration: boolean;
 };
 
+type DelayCoinGlassLevel = {
+  key: string;
+  side: CoinGlassWhaleSide;
+  price: number;
+  volumeUsd: number;
+  durationHours: number;
+};
+
+type DelayCoinGlassReview = {
+  enabled: boolean;
+  minUsd: number;
+  gap: { left: number; right: number } | null;
+  currentPrice: number;
+  initialLevelCount: number;
+  currentLevelCount: number;
+  addedLevels: DelayCoinGlassLevel[];
+  removedLevels: DelayCoinGlassLevel[];
+  persistentLevels: DelayCoinGlassLevel[];
+  supportLevels: DelayCoinGlassLevel[];
+  frictionLevels: DelayCoinGlassLevel[];
+  otherLevels: DelayCoinGlassLevel[];
+  supportUsd: number;
+  frictionUsd: number;
+  addedUsd: number;
+  removedUsd: number;
+  bias: 'SUPPORTIVE' | 'FRICTION' | 'BALANCED' | 'EMPTY';
+};
+
 type CoinGlassWhaleSnapshot = {
   enabled: boolean;
   source: 'coinglass';
@@ -275,6 +303,7 @@ type TradeEvaluationOptions = {
   allowDelayedSignal?: boolean;
   signalFirstObservedAt?: string;
   intrusionCandleReview?: IntrusionCandleReview;
+  initialCoinGlassGapLevels?: DelayCoinGlassLevel[];
 };
 
 type FractalLevel = {
@@ -369,7 +398,10 @@ type AlertState = {
   lastAlertSentSignature?: string;
   lastFilteredAlertSentSignature?: string;
   pendingIntrusionCandleAlertSignatures?: string[];
-  pendingIntrusionCandleAlerts?: Record<string, { firstObservedAt: string }>;
+  pendingIntrusionCandleAlerts?: Record<string, {
+    firstObservedAt: string;
+    coinGlassGapLevels?: DelayCoinGlassLevel[];
+  }>;
   lastAlertSentAt?: string;
   lastTpHitObservedSignature?: string | null;
   lastTpHitSentSignature?: string;
@@ -1722,6 +1754,109 @@ function coinGlassLevelStartMs(level: CoinGlassWhaleLevel | CoinGlassWhaleHistor
 
   const updatedAt = Date.parse(String(level.updatedAt || ''));
   return Number.isFinite(updatedAt) ? updatedAt : undefined;
+}
+
+function decentraderDelayCoinGlassReviewEnabled(): boolean {
+  return parseBool(process.env.DECENTRADER_DELAY_CG_REVIEW_ENABLED, true);
+}
+
+function decentraderDelayCoinGlassMinUsd(): number {
+  return envPositiveNumber('DECENTRADER_DELAY_CG_MIN_USD', 10_000_000);
+}
+
+function delayCoinGlassLevelsInsideGap(
+  levels: (CoinGlassWhaleLevel | CoinGlassWhaleHistoryLevel)[],
+  gap: Pick<Gap, 'left' | 'right'> | undefined,
+  observedAtMs = Date.now()
+): DelayCoinGlassLevel[] {
+  if (!decentraderDelayCoinGlassReviewEnabled() || !gap) return [];
+  const minUsd = decentraderDelayCoinGlassMinUsd();
+  const deduped = new Map<string, DelayCoinGlassLevel>();
+
+  for (const level of levels) {
+    const price = numberOrZero(level.price);
+    const volumeUsd = coinGlassLevelVolumeUsd(level);
+    if (price < gap.left || price > gap.right || volumeUsd < minUsd) continue;
+    const startedAtMs = coinGlassLevelStartMs(level);
+    const durationHours = startedAtMs === undefined
+      ? 0
+      : Math.max(0, (observedAtMs - startedAtMs) / 3_600_000);
+    const key = level.key || coinGlassWhaleLevelKey(level);
+    const candidate: DelayCoinGlassLevel = {
+      key,
+      side: level.side,
+      price,
+      volumeUsd,
+      durationHours
+    };
+    const previous = deduped.get(key);
+    if (!previous || candidate.volumeUsd > previous.volumeUsd) deduped.set(key, candidate);
+  }
+
+  return Array.from(deduped.values())
+    .sort((a, b) => b.volumeUsd - a.volumeUsd || a.price - b.price);
+}
+
+function buildDelayCoinGlassReview(
+  direction: TradePlanDirection,
+  gap: Pick<Gap, 'left' | 'right'> | undefined,
+  currentPrice: number,
+  initialLevels: DelayCoinGlassLevel[],
+  currentLevels: DelayCoinGlassLevel[]
+): DelayCoinGlassReview {
+  const initialByKey = new Map(initialLevels.map((level) => [level.key, level]));
+  const currentByKey = new Map(currentLevels.map((level) => [level.key, level]));
+  const addedLevels = currentLevels.filter((level) => !initialByKey.has(level.key));
+  const removedLevels = initialLevels.filter((level) => !currentByKey.has(level.key));
+  const persistentLevels = currentLevels.filter((level) => initialByKey.has(level.key));
+  const supportLevels: DelayCoinGlassLevel[] = [];
+  const frictionLevels: DelayCoinGlassLevel[] = [];
+  const otherLevels: DelayCoinGlassLevel[] = [];
+
+  for (const level of currentLevels) {
+    const supports = direction === 'long'
+      ? level.side === 'buy' && level.price <= currentPrice
+      : level.side === 'sell' && level.price >= currentPrice;
+    const createsFriction = direction === 'long'
+      ? level.side === 'sell' && level.price >= currentPrice
+      : level.side === 'buy' && level.price <= currentPrice;
+    if (supports) supportLevels.push(level);
+    else if (createsFriction) frictionLevels.push(level);
+    else otherLevels.push(level);
+  }
+
+  const totalUsd = (levels: DelayCoinGlassLevel[]) =>
+    levels.reduce((total, level) => total + level.volumeUsd, 0);
+  const supportUsd = totalUsd(supportLevels);
+  const frictionUsd = totalUsd(frictionLevels);
+  const bias: DelayCoinGlassReview['bias'] =
+    !currentLevels.length
+      ? 'EMPTY'
+      : supportUsd > frictionUsd * 1.25
+        ? 'SUPPORTIVE'
+        : frictionUsd > supportUsd * 1.25
+          ? 'FRICTION'
+          : 'BALANCED';
+
+  return {
+    enabled: decentraderDelayCoinGlassReviewEnabled(),
+    minUsd: decentraderDelayCoinGlassMinUsd(),
+    gap: gap ? { left: gap.left, right: gap.right } : null,
+    currentPrice,
+    initialLevelCount: initialLevels.length,
+    currentLevelCount: currentLevels.length,
+    addedLevels,
+    removedLevels,
+    persistentLevels,
+    supportLevels,
+    frictionLevels,
+    otherLevels,
+    supportUsd,
+    frictionUsd,
+    addedUsd: totalUsd(addedLevels),
+    removedUsd: totalUsd(removedLevels),
+    bias
+  };
 }
 
 function coinGlassLevelsForFrame(
@@ -4359,7 +4494,7 @@ export class DecentraderGapMonitor {
     try {
       const rows = await fetchSnapshot(config.symbol);
       this.latestRows = rows;
-      void refreshCoinGlassWhaleLevels('gap-check');
+      await refreshCoinGlassWhaleLevels('gap-check');
       const intrusionCandleCandles = await fetchDydxHourlyCandlesForIntrusionFilter().catch((error) => {
         console.warn('dYdX intrusion candle filter refresh failed; map will use Decentrader candle fallback and candle-filtered alerts will wait if enabled.', {
           market: decentraderIntrusionCandleMarket(),
@@ -4382,7 +4517,8 @@ export class DecentraderGapMonitor {
         : {};
       for (const signature of pendingCandleSignatures) {
         pendingCandleAlerts[signature] = pendingCandleAlerts[signature] || {
-          firstObservedAt: nowNlIso()
+          firstObservedAt: nowNlIso(),
+          coinGlassGapLevels: []
         };
       }
       const alerts = uniqueGapAlerts([
@@ -4511,7 +4647,7 @@ export class DecentraderGapMonitor {
           ? Object.fromEntries(
               state.pendingIntrusionCandleAlertSignatures.map((signature) => [
                 signature,
-                pendingCandleAlerts[signature] || { firstObservedAt: nowNlIso() }
+                pendingCandleAlerts[signature] || { firstObservedAt: nowNlIso(), coinGlassGapLevels: [] }
               ])
             )
           : {};
@@ -4527,8 +4663,14 @@ export class DecentraderGapMonitor {
 
       for (const alert of alerts) {
         const signature = gapAlertSignature(alert);
-        const signalFirstObservedAt = pendingCandleAlerts[signature]?.firstObservedAt || nowNlIso();
-        pendingCandleAlerts[signature] = { firstObservedAt: signalFirstObservedAt };
+        const existingPendingAlert = pendingCandleAlerts[signature];
+        const signalFirstObservedAt = existingPendingAlert?.firstObservedAt || nowNlIso();
+        const initialCoinGlassGapLevels = existingPendingAlert?.coinGlassGapLevels ||
+          delayCoinGlassLevelsInsideGap(coinglassWhaleSnapshot().levels, alert.previousGap);
+        pendingCandleAlerts[signature] = {
+          firstObservedAt: signalFirstObservedAt,
+          coinGlassGapLevels: initialCoinGlassGapLevels
+        };
         const alertSummary = {
           signature,
           timestamp: alert.timestamp,
@@ -4637,7 +4779,8 @@ export class DecentraderGapMonitor {
         await this.maybeExecuteTradeForAlert(alert, signature, state, result, {
           allowDelayedSignal: candleReview.enabled && candleReview.status === 'PASS',
           signalFirstObservedAt,
-          intrusionCandleReview: candleReview
+          intrusionCandleReview: candleReview,
+          initialCoinGlassGapLevels
         });
         delete pendingCandleAlerts[signature];
       }
@@ -4701,7 +4844,7 @@ export class DecentraderGapMonitor {
         ? Object.fromEntries(
             state.pendingIntrusionCandleAlertSignatures.map((signature) => [
               signature,
-              pendingCandleAlerts[signature] || { firstObservedAt: nowNlIso() }
+              pendingCandleAlerts[signature] || { firstObservedAt: nowNlIso(), coinGlassGapLevels: [] }
             ])
           )
         : {};
@@ -5504,6 +5647,8 @@ export class DecentraderGapMonitor {
       price: alert.price,
       sideCounts: sideCounts(alert),
       direction: mapDirectionFromAlert(alert) || 'none',
+      theDelay: result.theDelay || undefined,
+      coinGlassDelayReview: result.coinGlassDelayReview || undefined,
       ...details
     };
 
@@ -5670,13 +5815,31 @@ export class DecentraderGapMonitor {
           ? Math.abs(currentPrice - intrusionPrice) / intrusionPrice
           : undefined;
         const maxPriceDriftPct = decentraderIntrusionMaxPriceDriftPct();
+        const currentCoinGlassGapLevels = delayCoinGlassLevelsInsideGap(
+          coinglassWhaleSnapshot().levels,
+          plan?.gap
+        );
+        const coinGlassReview = buildDelayCoinGlassReview(
+          direction,
+          plan?.gap,
+          currentPrice,
+          options.initialCoinGlassGapLevels || [],
+          currentCoinGlassGapLevels
+        );
         Object.assign(delayTelemetry, {
           currentPlanTimestamp: plan.timestamp,
           intrusionPrice,
           currentPrice,
           priceDriftPct,
           maxPriceDriftPct,
-          candleReview: options.intrusionCandleReview || null
+          candleReview: options.intrusionCandleReview || null,
+          coinGlassReview
+        });
+        result.coinGlassDelayReview = coinGlassReview;
+        console.log('Decentrader The Delay CoinGlass gap review:', {
+          signature,
+          direction,
+          ...coinGlassReview
         });
 
         if (priceDriftPct !== undefined && priceDriftPct > maxPriceDriftPct) {
