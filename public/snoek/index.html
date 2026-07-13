@@ -295,6 +295,62 @@
       background: var(--swatch);
     }
 
+    .practice-swatch,
+    .legend-dot.practice-legend-dot {
+      border-radius: 2px;
+      background: #1f7aff;
+      transform: rotate(45deg);
+    }
+
+    .hotspot-swatch,
+    .legend-dot.hotspot-legend-dot {
+      border: 3px solid #ff4fa3;
+      background: #07111f;
+      box-shadow: 0 0 0 1px #ffffff;
+    }
+
+    .practice-map-marker {
+      display: block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #ffffff;
+      border-radius: 3px;
+      background: #1f7aff;
+      box-shadow: 0 2px 7px rgba(0, 0, 0, 0.55);
+      transform: rotate(45deg);
+    }
+
+    .practice-map-marker.is-selected {
+      border-width: 4px;
+      box-shadow: 0 0 0 3px #06111f, 0 3px 9px rgba(0, 0, 0, 0.65);
+    }
+
+    .hotspot-map-marker {
+      position: relative;
+      display: block;
+      width: 20px;
+      height: 20px;
+      border: 4px solid var(--spot-color);
+      border-radius: 50%;
+      background: #07111f;
+      box-shadow: 0 0 0 2px #ffffff, 0 3px 9px rgba(0, 0, 0, 0.65);
+    }
+
+    .hotspot-map-marker::after {
+      position: absolute;
+      inset: 4px;
+      border-radius: 50%;
+      background: #ffffff;
+      content: '';
+    }
+
+    .hotspot-map-marker.is-selected {
+      width: 24px;
+      height: 24px;
+      margin: -2px;
+      box-shadow: 0 0 0 4px #06111f, 0 4px 11px rgba(0, 0, 0, 0.7);
+    }
+
     .map-spot-detail {
       position: absolute;
       left: 12px;
@@ -554,8 +610,8 @@
                 <div class="layer-options">
                   <label class="layer-toggle"><input id="layer-topo" type="checkbox" checked> Kadaster BRT/TOP10NL</label>
                   <label class="layer-toggle"><input id="layer-satellite" type="checkbox" checked> PDOK luchtfoto</label>
-                  <label class="layer-toggle"><input id="layer-practice" type="checkbox" checked> Lokale praktijkspots</label>
-                  <label class="layer-toggle"><input id="layer-hotspots" type="checkbox" checked> Weloverwogen snoekspots</label>
+                  <label class="layer-toggle"><input id="layer-practice" type="checkbox" checked><span class="layer-swatch practice-swatch"></span> Lokale praktijkspots</label>
+                  <label class="layer-toggle"><input id="layer-hotspots" type="checkbox" checked><span class="layer-swatch hotspot-swatch"></span> Weloverwogen snoekspots</label>
                   <span class="layer-section-title">PDOK IMWA - 18 exacte lagen</span>
                   <label class="layer-toggle"><input data-layer-filter="brug" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ffd166"></span> Brug</label>
                   <label class="layer-toggle"><input data-layer-filter="coupure" type="checkbox"><span class="layer-swatch" style="--swatch:#f4a261"></span> Coupure</label>
@@ -909,12 +965,14 @@
 
       filteredHotspots().forEach((item) => {
         const selected = item.id === selectedStructureId;
-        const marker = L.circleMarker([item.lat, item.lon], {
-          radius: selected ? 11 : 8,
-          color: selected ? '#06111f' : '#ffffff',
-          weight: selected ? 5 : 3,
-          fillColor: structureLayerColor(item.sourceLayer),
-          fillOpacity: 0.96
+        const marker = L.marker([item.lat, item.lon], {
+          icon: L.divIcon({
+            className: '',
+            html: `<span class="hotspot-map-marker${selected ? ' is-selected' : ''}" style="--spot-color:${structureLayerColor(item.sourceLayer)}"></span>`,
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+          }),
+          zIndexOffset: selected ? 1200 : 800
         });
         marker.bindTooltip(`${item.name} - snoekscore ${item.score}/100`, { direction: 'top' });
         marker.on('click', () => selectStructure(item));
@@ -924,7 +982,11 @@
       const legendLayers = Object.keys(visibleCounts)
         .sort((a, b) => visibleCounts[b] - visibleCounts[a])
         .slice(0, 8);
-      mapLegend.innerHTML = legendLayers.map((layer) => `
+      const derivedLegend = [
+        layerPractice.checked ? '<span class="legend-item"><span class="legend-dot practice-legend-dot"></span>Lokale praktijk</span>' : '',
+        layerHotspots.checked ? '<span class="legend-item"><span class="legend-dot hotspot-legend-dot"></span>Weloverwogen spot</span>' : ''
+      ].join('');
+      mapLegend.innerHTML = derivedLegend + legendLayers.map((layer) => `
         <span class="legend-item"><span class="legend-dot" style="--dot:${structureLayerColor(layer)}"></span>${esc(structureLayerName(layer))} ${esc(visibleCounts[layer])}</span>
       `).join('');
     }
@@ -967,12 +1029,14 @@
       if (!scoutData) return;
       scoutData.spots.forEach((spot) => {
         const selected = spot.id === selectedPracticeId;
-        const marker = L.circleMarker([spot.lat, spot.lon], {
-          radius: selected ? 11 : 8,
-          color: selected ? '#06111f' : '#ffffff',
-          weight: selected ? 4 : 2,
-          fillColor: '#35d09f',
-          fillOpacity: 0.96
+        const marker = L.marker([spot.lat, spot.lon], {
+          icon: L.divIcon({
+            className: '',
+            html: `<span class="practice-map-marker${selected ? ' is-selected' : ''}"></span>`,
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+          }),
+          zIndexOffset: selected ? 1100 : 700
         });
         marker.bindTooltip(`${spot.name} - lokale praktijk`, { direction: 'top' });
         marker.on('click', () => selectPracticeSpot(spot));
@@ -1143,8 +1207,14 @@
     document.getElementById('zoom-reset').addEventListener('click', fitInterestArea);
     layerTopo.addEventListener('change', applyBaseLayerVisibility);
     layerSatellite.addEventListener('change', applyBaseLayerVisibility);
-    layerPractice.addEventListener('change', applyBaseLayerVisibility);
-    layerHotspots.addEventListener('change', applyBaseLayerVisibility);
+    layerPractice.addEventListener('change', () => {
+      applyBaseLayerVisibility();
+      renderStructures();
+    });
+    layerHotspots.addEventListener('change', () => {
+      applyBaseLayerVisibility();
+      renderStructures();
+    });
     layerFilters.forEach((input) => input.addEventListener('change', loadStructures));
     L.control.scale({ imperial: false, position: 'bottomright' }).addTo(fishingMap);
     applyBaseLayerVisibility();
