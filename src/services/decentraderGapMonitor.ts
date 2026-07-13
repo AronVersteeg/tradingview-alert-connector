@@ -115,6 +115,22 @@ type CoinGlassWhaleHistoryLevel = CoinGlassWhaleLevel & {
   active: boolean;
 };
 
+type CoinGlassWhaleObservationLevel = {
+  key: string;
+  side: CoinGlassWhaleSide;
+  price: number;
+  volumeUsd: number;
+  startedAt?: number;
+};
+
+type CoinGlassWhaleObservation = {
+  observedAt: string;
+  frameTimestamp: string;
+  currentPrice: number;
+  gap?: { left: number; right: number; width: number };
+  levels: CoinGlassWhaleObservationLevel[];
+};
+
 type CoinGlassTpConfluence = {
   price: number;
   distance: number;
@@ -167,6 +183,7 @@ type CoinGlassWhaleSnapshot = {
   error?: string;
   levels: CoinGlassWhaleLevel[];
   history: CoinGlassWhaleHistoryLevel[];
+  observations: CoinGlassWhaleObservation[];
   historyUpdatedAt?: string;
   historyRetentionHours: number;
 };
@@ -371,6 +388,7 @@ type MonitorStatus = {
   coinGlassWhaleLevelsEnabled?: boolean;
   coinGlassWhaleLevels?: number;
   coinGlassWhaleHistoryLevels?: number;
+  coinGlassWhaleObservations?: number;
   coinGlassWhaleError?: string;
   intrusionCandleFilterEnabled?: boolean;
   lastStartedAt?: string;
@@ -579,9 +597,16 @@ function coinglassWhaleHistoryMaxRecords(): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(clamp(parsed, 100, 5000)) : 1500;
 }
 
+function coinglassWhaleObservationMaxRecords(): number {
+  const parsed = Number(process.env.COINGLASS_WHALE_OBSERVATION_MAX_RECORDS || 1000);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(clamp(parsed, 100, 2500)) : 1000;
+}
+
 function coinglassWhaleHistoryFile(): string {
+  const monitorStateFile = String(process.env.DECENTRADER_GAP_ALERT_STATE_FILE || '').trim();
   return (
     String(process.env.COINGLASS_WHALE_HISTORY_FILE || '').trim() ||
+    (monitorStateFile ? path.join(path.dirname(monitorStateFile), 'coinglass-whale-history.json') : '') ||
     path.join(process.cwd(), 'data', 'coinglass-whale-history.json')
   );
 }
@@ -596,10 +621,15 @@ function coinGlassWhaleLevelKey(level: Pick<CoinGlassWhaleLevel, 'id' | 'instrum
   return `${level.instrument || 'unknown'}|${level.side}|${priceKey(Number(level.price) || 0)}`;
 }
 
-function readCoinGlassWhaleHistory(): { updatedAt?: string; levels: CoinGlassWhaleHistoryLevel[] } {
+function readCoinGlassWhaleHistory(): {
+  updatedAt?: string;
+  levels: CoinGlassWhaleHistoryLevel[];
+  observations: CoinGlassWhaleObservation[];
+} {
   try {
     const parsed = JSON.parse(fs.readFileSync(coinglassWhaleHistoryFile(), 'utf8'));
     const levels = Array.isArray(parsed?.levels) ? parsed.levels : [];
+    const observations = Array.isArray(parsed?.observations) ? parsed.observations : [];
     return {
       updatedAt: typeof parsed?.updatedAt === 'string' ? parsed.updatedAt : undefined,
       levels: levels.filter(
@@ -608,22 +638,38 @@ function readCoinGlassWhaleHistory(): { updatedAt?: string; levels: CoinGlassWha
           typeof level.key === 'string' &&
           Number.isFinite(Number(level.price)) &&
           Number.isFinite(Number(level.volumeUsd))
+      ),
+      observations: observations.filter(
+        (observation: any) =>
+          observation &&
+          typeof observation.observedAt === 'string' &&
+          typeof observation.frameTimestamp === 'string' &&
+          Number.isFinite(Number(observation.currentPrice)) &&
+          Array.isArray(observation.levels)
       )
     };
   } catch {
-    return { levels: [] };
+    return { levels: [], observations: [] };
   }
 }
 
-function writeCoinGlassWhaleHistory(levels: CoinGlassWhaleHistoryLevel[], updatedAt: string): void {
+function writeCoinGlassWhaleHistory(
+  levels: CoinGlassWhaleHistoryLevel[],
+  observations: CoinGlassWhaleObservation[],
+  updatedAt: string
+): void {
   const file = coinglassWhaleHistoryFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ updatedAt, levels }, null, 2));
+  const temporaryFile = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryFile, JSON.stringify({ updatedAt, levels, observations }));
+  fs.renameSync(temporaryFile, file);
 }
 
 function coinglassWhaleSnapshot(): CoinGlassWhaleSnapshot {
   const enabled = coinglassWhaleLevelsEnabled();
-  const history = enabled ? readCoinGlassWhaleHistory() : { levels: [] as CoinGlassWhaleHistoryLevel[] };
+  const history = enabled
+    ? readCoinGlassWhaleHistory()
+    : { levels: [] as CoinGlassWhaleHistoryLevel[], observations: [] as CoinGlassWhaleObservation[] };
   return {
     enabled,
     source: 'coinglass',
@@ -641,6 +687,7 @@ function coinglassWhaleSnapshot(): CoinGlassWhaleSnapshot {
     error: coinGlassWhaleCache.error,
     levels: enabled ? coinGlassWhaleCache.levels : [],
     history: history.levels,
+    observations: history.observations,
     historyUpdatedAt: history.updatedAt,
     historyRetentionHours: coinglassWhaleHistoryRetentionHours()
   };
@@ -869,8 +916,94 @@ function mergeCoinGlassWhaleHistory(levels: CoinGlassWhaleLevel[]): CoinGlassWha
     .sort((a, b) => Date.parse(b.lastSeenAt) - Date.parse(a.lastSeenAt) || b.maxVolumeUsd - a.maxVolumeUsd)
     .slice(0, coinglassWhaleHistoryMaxRecords());
 
-  writeCoinGlassWhaleHistory(merged, nowIso);
+  writeCoinGlassWhaleHistory(merged, existing.observations, nowIso);
   return merged;
+}
+
+function coinGlassObservationLevelsMateriallyChanged(
+  previous: CoinGlassWhaleObservation | undefined,
+  levels: CoinGlassWhaleObservationLevel[]
+): boolean {
+  if (!previous || previous.levels.length !== levels.length) return true;
+  const previousByKey = new Map(previous.levels.map((level) => [level.key, level]));
+
+  return levels.some((level) => {
+    const earlier = previousByKey.get(level.key);
+    if (!earlier) return true;
+    const threshold = Math.max(1_000_000, Math.abs(earlier.volumeUsd) * 0.02);
+    return (
+      earlier.side !== level.side ||
+      Math.abs(earlier.price - level.price) >= 0.01 ||
+      Math.abs(earlier.volumeUsd - level.volumeUsd) >= threshold
+    );
+  });
+}
+
+function recordCoinGlassWhaleObservation(rows: DecentraderRow[]): CoinGlassWhaleObservation | undefined {
+  if (!coinglassWhaleLevelsEnabled() || !coinGlassWhaleCache.fetchedAt || !rows.length) return undefined;
+  const frameIndex = rows.length - 1;
+  const frame = rows[frameIndex];
+  const frameTimestamp = String(frame?.timestamp || '').trim();
+  const currentPrice = parseNumber(frame?.ohlc4);
+  if (!frameTimestamp || currentPrice === undefined) return undefined;
+
+  const gap = cleanGapForBars(frame, activeBarsForFrame(rows, frameIndex));
+  const observedAt = new Date().toISOString();
+  const levels = coinGlassWhaleCache.levels
+    .map((level): CoinGlassWhaleObservationLevel | undefined => {
+      const price = parseNumber(level.price);
+      const volumeUsd = parseNumber(level.volumeUsd);
+      if (price === undefined || volumeUsd === undefined) return undefined;
+      return {
+        key: level.key || coinGlassWhaleLevelKey(level),
+        side: level.side,
+        price,
+        volumeUsd,
+        startedAt: parseNumber(level.startedAt)
+      };
+    })
+    .filter((level): level is CoinGlassWhaleObservationLevel => level !== undefined)
+    .sort((a, b) => a.price - b.price || b.volumeUsd - a.volumeUsd);
+  const observation: CoinGlassWhaleObservation = {
+    observedAt,
+    frameTimestamp,
+    currentPrice,
+    gap: gap ? { left: gap.left, right: gap.right, width: gap.width } : undefined,
+    levels
+  };
+
+  const store = readCoinGlassWhaleHistory();
+  const previous = store.observations[store.observations.length - 1];
+  if (
+    previous?.frameTimestamp === frameTimestamp &&
+    !coinGlassObservationLevelsMateriallyChanged(previous, levels)
+  ) {
+    return previous;
+  }
+
+  const retentionCutoff = Date.now() - coinglassWhaleHistoryRetentionHours() * 60 * 60 * 1000;
+  const observations = [...store.observations, observation]
+    .filter((item) => {
+      const observedMs = Date.parse(item.observedAt);
+      return Number.isFinite(observedMs) && observedMs >= retentionCutoff;
+    })
+    .sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt))
+    .slice(-coinglassWhaleObservationMaxRecords());
+  writeCoinGlassWhaleHistory(store.levels, observations, observedAt);
+  const insideGap = gap
+    ? levels.filter((level) => level.price >= gap.left && level.price <= gap.right)
+    : [];
+  console.log('CoinGlass whale timelapse observation stored:', {
+    observedAt,
+    frameTimestamp,
+    currentPrice,
+    gap: observation.gap || null,
+    levels: levels.length,
+    insideGapLevels: insideGap.length,
+    insideGapUsd: insideGap.reduce((sum, level) => sum + level.volumeUsd, 0),
+    observations: observations.length
+  });
+  return observation;
 }
 
 function fetchCoinGlassWhaleLevelsViaWebSocket(
@@ -4456,6 +4589,7 @@ export class DecentraderGapMonitor {
       coinGlassWhaleLevelsEnabled: coinglassWhaleLevelsEnabled(),
       coinGlassWhaleLevels: coinGlassSnapshot.levels.length,
       coinGlassWhaleHistoryLevels: coinGlassSnapshot.history.length,
+      coinGlassWhaleObservations: coinGlassSnapshot.observations.length,
       coinGlassWhaleError: coinGlassSnapshot.error,
       lastTradeDecision: state.lastTradeDecision
     };
@@ -4503,6 +4637,8 @@ export class DecentraderGapMonitor {
         return undefined;
       });
       this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
+      recordCoinGlassWhaleObservation(rows);
+      this.latestTimelapsePayload.coinGlassWhaleLevels = coinglassWhaleSnapshot();
       applyDydxHourlyCandleColorsToPayload(this.latestTimelapsePayload, intrusionCandleCandles);
       const rsiStudy = await rsiStudyForRows(rows);
       this.latestTimelapsePayload.rsiStudy = rsiStudy;
@@ -6160,6 +6296,7 @@ export class DecentraderGapMonitor {
     const config = this.config();
     await refreshCoinGlassWhaleLevels('timelapse');
     if (this.latestTimelapsePayload) {
+      recordCoinGlassWhaleObservation(this.latestRows);
       this.latestTimelapsePayload.coinGlassWhaleLevels = coinglassWhaleSnapshot();
       this.latestTimelapsePayload.rsiStudy = await rsiStudyForRows(this.latestRows);
       return this.latestTimelapsePayload;
@@ -6167,6 +6304,7 @@ export class DecentraderGapMonitor {
 
     const rows = await fetchSnapshot(config.symbol);
     this.latestRows = rows;
+    recordCoinGlassWhaleObservation(rows);
     this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
     this.latestTimelapsePayload.rsiStudy = await rsiStudyForRows(rows);
     return this.latestTimelapsePayload;

@@ -265,6 +265,97 @@
       border-bottom: 1px solid var(--border);
     }
 
+    .whale-study-panel {
+      padding: 12px 22px;
+      background: #121923;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .whale-study-inner {
+      max-width: 1420px;
+      margin: 0 auto;
+    }
+
+    .whale-study-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: baseline;
+      margin-bottom: 9px;
+    }
+
+    .whale-study-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .whale-study-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      overflow: hidden;
+      background: rgba(7, 10, 15, 0.34);
+    }
+
+    .whale-study-metric {
+      min-width: 0;
+      padding: 9px 11px;
+      border-left: 1px solid var(--border);
+    }
+
+    .whale-study-metric:first-child {
+      border-left: 0;
+    }
+
+    .whale-study-metric strong {
+      display: block;
+      margin-top: 3px;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+
+    .whale-study-table-wrap {
+      margin-top: 9px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+    }
+
+    .whale-study-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .whale-study-table th,
+    .whale-study-table td {
+      padding: 7px 10px;
+      border-bottom: 1px solid rgba(236, 242, 248, 0.08);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .whale-study-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .whale-study-table th {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .whale-side-buy {
+      color: var(--price);
+    }
+
+    .whale-side-sell {
+      color: var(--short-10);
+    }
+
     .liquidity-counter-card {
       max-width: 1180px;
       min-height: 0;
@@ -477,7 +568,8 @@
       footer,
       .stage,
       .comparison,
-      .liquidity-panel {
+      .liquidity-panel,
+      .whale-study-panel {
         padding-left: 12px;
         padding-right: 12px;
       }
@@ -518,6 +610,18 @@
 
       .liquidity-counter-grid {
         grid-template-columns: 1fr;
+      }
+
+      .whale-study-head {
+        display: block;
+      }
+
+      .whale-study-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .whale-study-metric:nth-child(3) {
+        border-left: 0;
       }
 
       .liquidity-counter-cell {
@@ -700,6 +804,54 @@
       </div>
     </section>
 
+    <section class="whale-study-panel" id="whaleStudyPanel" aria-live="polite">
+      <div class="whale-study-inner">
+        <div class="whale-study-head">
+          <h2 class="whale-study-title">CoinGlass whale influence</h2>
+          <div class="gap-status" id="whaleStudyStatus">Waiting for a monitored snapshot</div>
+        </div>
+        <div class="whale-study-summary">
+          <div class="whale-study-metric">
+            <div class="gap-label">Inside gap</div>
+            <strong id="whaleInsideValue">-</strong>
+            <div class="gap-status" id="whaleInsideMeta">-</div>
+          </div>
+          <div class="whale-study-metric">
+            <div class="gap-label">Below gap</div>
+            <strong id="whaleBelowValue">-</strong>
+            <div class="gap-status" id="whaleBelowMeta">-</div>
+          </div>
+          <div class="whale-study-metric">
+            <div class="gap-label">Above gap</div>
+            <strong id="whaleAboveValue">-</strong>
+            <div class="gap-status" id="whaleAboveMeta">-</div>
+          </div>
+          <div class="whale-study-metric">
+            <div class="gap-label">Snapshot change</div>
+            <strong id="whaleChangeValue">-</strong>
+            <div class="gap-status" id="whaleChangeMeta">-</div>
+          </div>
+        </div>
+        <div class="whale-study-table-wrap">
+          <table class="whale-study-table">
+            <thead>
+              <tr>
+                <th>Level</th>
+                <th>Side</th>
+                <th>Volume</th>
+                <th>Location</th>
+                <th>Order age</th>
+                <th>Price response</th>
+              </tr>
+            </thead>
+            <tbody id="whaleStudyRows">
+              <tr><td colspan="6" class="gap-status">No snapshot selected</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section class="liquidity-panel" aria-live="polite">
       <div class="gap-card liquidity-counter-card">
         <div class="liquidity-counter-head">
@@ -800,6 +952,17 @@
     const gapRight = document.getElementById('gapRight');
     const liveStatus = document.getElementById('liveStatus');
     const gapAlert = document.getElementById('gapAlert');
+    const whaleStudyPanel = document.getElementById('whaleStudyPanel');
+    const whaleStudyStatus = document.getElementById('whaleStudyStatus');
+    const whaleInsideValue = document.getElementById('whaleInsideValue');
+    const whaleInsideMeta = document.getElementById('whaleInsideMeta');
+    const whaleBelowValue = document.getElementById('whaleBelowValue');
+    const whaleBelowMeta = document.getElementById('whaleBelowMeta');
+    const whaleAboveValue = document.getElementById('whaleAboveValue');
+    const whaleAboveMeta = document.getElementById('whaleAboveMeta');
+    const whaleChangeValue = document.getElementById('whaleChangeValue');
+    const whaleChangeMeta = document.getElementById('whaleChangeMeta');
+    const whaleStudyRows = document.getElementById('whaleStudyRows');
     const liquidityWindow = document.getElementById('liquidityWindow');
     const liquidityCounterStatus = document.getElementById('liquidityCounterStatus');
     const liqLongCell = document.getElementById('liqLongCell');
@@ -2866,16 +3029,54 @@
       return snapshot;
     }
 
+    function getCoinGlassWhaleObservations() {
+      const observations = getCoinGlassWhaleSnapshot()?.observations;
+      if (!Array.isArray(observations)) return [];
+      return [...observations].sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt));
+    }
+
+    function getCoinGlassWhaleObservation(frame) {
+      const frameDate = parseDecentraderUtc(frame?.t);
+      const frameMs = frameDate?.getTime();
+      if (!Number.isFinite(frameMs)) return null;
+      let selected = null;
+      let selectedFrameMs = -Infinity;
+      let selectedObservedMs = -Infinity;
+
+      for (const observation of getCoinGlassWhaleObservations()) {
+        const observationFrame = parseDecentraderUtc(observation?.frameTimestamp);
+        const observationFrameMs = observationFrame?.getTime();
+        const observedMs = Date.parse(observation?.observedAt);
+        if (!Number.isFinite(observationFrameMs) || observationFrameMs > frameMs) continue;
+        if (
+          observationFrameMs > selectedFrameMs ||
+          (observationFrameMs === selectedFrameMs && observedMs > selectedObservedMs)
+        ) {
+          selected = observation;
+          selectedFrameMs = observationFrameMs;
+          selectedObservedMs = observedMs;
+        }
+      }
+
+      if (!selected || frameMs - selectedFrameMs > 90 * 60 * 1000) return null;
+      return selected;
+    }
+
     function getCoinGlassWhaleLevels(frame) {
       const snapshot = getCoinGlassWhaleSnapshot();
       if (!snapshot) return [];
+      const observations = Array.isArray(snapshot.observations) ? snapshot.observations : [];
+      if (observations.length) {
+        const observation = getCoinGlassWhaleObservation(frame);
+        return Array.isArray(observation?.levels) ? observation.levels : [];
+      }
       const frameDate = parseDecentraderUtc(frame?.t);
       const frameMs = frameDate ? frameDate.getTime() : null;
       const graceMs = 70 * 60 * 1000;
 
       if (frameMs && Array.isArray(snapshot.history) && snapshot.history.length) {
         return snapshot.history.filter((level) => {
-          const firstSeenMs = Date.parse(level.firstSeenAt || level.startedAt || level.updatedAt);
+          const firstSeenMs = Date.parse(level.firstObservedAt || level.updatedAt);
           const lastSeenMs = Date.parse(level.lastSeenAt || level.updatedAt);
           if (!Number.isFinite(firstSeenMs) || !Number.isFinite(lastSeenMs)) return false;
           return firstSeenMs <= frameMs && frameMs <= lastSeenMs + graceMs;
@@ -2974,6 +3175,173 @@
 
       ctx.restore();
       ctx.globalAlpha = 1;
+    }
+
+    function whaleUsd(value) {
+      const amount = Number(value) || 0;
+      if (amount >= 1_000_000_000) return `$${(amount / 1_000_000_000).toFixed(1)}B`;
+      if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(amount >= 100_000_000 ? 0 : 1)}M`;
+      if (amount >= 1_000) return `$${Math.round(amount / 1_000)}K`;
+      return `$${Math.round(amount)}`;
+    }
+
+    function whaleLevelLocation(level, gap, currentPrice) {
+      const price = Number(level?.price);
+      if (gap && price >= Number(gap.left) && price <= Number(gap.right)) return 'inside';
+      if (gap && price < Number(gap.left)) return 'below';
+      if (gap && price > Number(gap.right)) return 'above';
+      return price < Number(currentPrice) ? 'below' : 'above';
+    }
+
+    function whaleSideSummary(levels) {
+      const buy = levels.filter((level) => level.side === 'buy');
+      const sell = levels.filter((level) => level.side === 'sell');
+      const total = (items) => items.reduce((sum, level) => sum + (Number(level.volumeUsd) || 0), 0);
+      return { buyCount: buy.length, sellCount: sell.length, buyUsd: total(buy), sellUsd: total(sell) };
+    }
+
+    function whaleOrderAge(level, observation) {
+      const startedAt = Number(level?.startedAt);
+      const endMs = Date.parse(observation?.observedAt);
+      if (!Number.isFinite(startedAt) || !Number.isFinite(endMs)) return '-';
+      const startedMs = startedAt < 1_000_000_000_000 ? startedAt * 1000 : startedAt;
+      const hours = Math.max(0, (endMs - startedMs) / 3_600_000);
+      if (hours >= 24) return `${Math.floor(hours / 24)}d ${Math.floor(hours % 24)}h`;
+      return `${Math.floor(hours)}h ${Math.floor((hours % 1) * 60)}m`;
+    }
+
+    function whaleObservationIndex(observation) {
+      return getCoinGlassWhaleObservations().findIndex(
+        (item) => item.observedAt === observation?.observedAt && item.frameTimestamp === observation?.frameTimestamp
+      );
+    }
+
+    function whaleLevelReaction(level, selectedFrameIndex, observation) {
+      const observations = getCoinGlassWhaleObservations();
+      const selectedObservationIndex = whaleObservationIndex(observation);
+      if (selectedObservationIndex < 0) return 'watching';
+      const firstObservation = observations
+        .slice(0, selectedObservationIndex + 1)
+        .find((item) => item.levels?.some((candidate) => candidate.key === level.key));
+      if (!firstObservation) return 'watching';
+      const firstFrameIndex = payload.frames.findIndex((frame) => frame.t === firstObservation.frameTimestamp);
+      if (firstFrameIndex < 0 || firstFrameIndex >= selectedFrameIndex) return 'watching';
+
+      const price = Number(level.price);
+      let touchedAt = -1;
+      let favorablePrice = price;
+      let broken = false;
+      for (let index = firstFrameIndex + 1; index <= selectedFrameIndex; index += 1) {
+        const frame = payload.frames[index];
+        const high = Number(frame.high ?? frame.price);
+        const low = Number(frame.low ?? frame.price);
+        const close = Number(frame.close ?? frame.price);
+        if (!Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) continue;
+        if (touchedAt < 0 && low <= price && high >= price) touchedAt = index;
+        if (touchedAt < 0) continue;
+        if (level.side === 'buy') {
+          favorablePrice = Math.max(favorablePrice, high);
+          if (close < price) broken = true;
+        } else if (level.side === 'sell') {
+          favorablePrice = Math.min(favorablePrice, low);
+          if (close > price) broken = true;
+        }
+      }
+      if (touchedAt < 0) return 'not tested';
+      if (broken) return 'crossed';
+      const reactionPct = level.side === 'buy'
+        ? ((favorablePrice - price) / price) * 100
+        : ((price - favorablePrice) / price) * 100;
+      return `held +${Math.max(0, reactionPct).toFixed(1)}%`;
+    }
+
+    function updateWhaleStudy(frameIndex, frame, visualGap) {
+      if (!whaleStudyPanel) return;
+      whaleStudyPanel.hidden = activeSource !== 'decentrader';
+      if (activeSource !== 'decentrader') return;
+      const observation = getCoinGlassWhaleObservation(frame);
+      if (!observation) {
+        whaleStudyStatus.textContent = 'No monitored CoinGlass snapshot for this replay frame';
+        whaleInsideValue.textContent = '-';
+        whaleInsideMeta.textContent = '-';
+        whaleBelowValue.textContent = '-';
+        whaleBelowMeta.textContent = '-';
+        whaleAboveValue.textContent = '-';
+        whaleAboveMeta.textContent = '-';
+        whaleChangeValue.textContent = '-';
+        whaleChangeMeta.textContent = '-';
+        whaleStudyRows.innerHTML = '<tr><td colspan="6" class="gap-status">Monitoring begins with the first deployed snapshot</td></tr>';
+        return;
+      }
+
+      const gap = observation.gap || visualGap;
+      const rawLevels = Array.isArray(observation.levels) ? observation.levels : [];
+      const rangeMin = Number(payload?.range?.minPrice);
+      const rangeMax = Number(payload?.range?.maxPrice);
+      const levels = rawLevels.filter((level) => {
+        const price = Number(level.price);
+        return (
+          !Number.isFinite(rangeMin) ||
+          !Number.isFinite(rangeMax) ||
+          (price >= rangeMin && price <= rangeMax)
+        );
+      });
+      const grouped = { inside: [], below: [], above: [] };
+      for (const level of levels) {
+        grouped[whaleLevelLocation(level, gap, observation.currentPrice)].push(level);
+      }
+      const inside = whaleSideSummary(grouped.inside);
+      const below = whaleSideSummary(grouped.below);
+      const above = whaleSideSummary(grouped.above);
+      const totalUsd = (summary) => summary.buyUsd + summary.sellUsd;
+      whaleInsideValue.textContent = whaleUsd(totalUsd(inside));
+      whaleInsideMeta.textContent = `${inside.buyCount} buy / ${inside.sellCount} sell | ${whaleUsd(inside.buyUsd)} / ${whaleUsd(inside.sellUsd)}`;
+      whaleBelowValue.textContent = whaleUsd(totalUsd(below));
+      whaleBelowMeta.textContent = `${below.buyCount} buy / ${below.sellCount} sell`;
+      whaleAboveValue.textContent = whaleUsd(totalUsd(above));
+      whaleAboveMeta.textContent = `${above.buyCount} buy / ${above.sellCount} sell`;
+
+      const observations = getCoinGlassWhaleObservations();
+      const observationIndex = whaleObservationIndex(observation);
+      const previous = observationIndex > 0 ? observations[observationIndex - 1] : null;
+      const previousLevels = (previous?.levels || []).filter((level) => {
+        const price = Number(level.price);
+        return (
+          !Number.isFinite(rangeMin) ||
+          !Number.isFinite(rangeMax) ||
+          (price >= rangeMin && price <= rangeMax)
+        );
+      });
+      const previousByKey = new Map(previousLevels.map((level) => [level.key, level]));
+      const currentByKey = new Map(levels.map((level) => [level.key, level]));
+      const added = levels.filter((level) => !previousByKey.has(level.key));
+      const removed = previousLevels.filter((level) => !currentByKey.has(level.key));
+      whaleChangeValue.textContent = `+${added.length} / -${removed.length}`;
+      whaleChangeMeta.textContent = `${whaleUsd(added.reduce((sum, level) => sum + Number(level.volumeUsd || 0), 0))} added | ${whaleUsd(removed.reduce((sum, level) => sum + Number(level.volumeUsd || 0), 0))} removed`;
+
+      const observed = new Date(observation.observedAt);
+      whaleStudyStatus.textContent = `${nlTime(observation.frameTimestamp)} NL frame | observed ${observed.toLocaleString('nl-NL', { hour12: false })} | ${levels.length}/${rawLevels.length} map-range levels`;
+
+      const insidePriority = [...grouped.inside].sort((a, b) => Number(b.volumeUsd) - Number(a.volumeUsd)).slice(0, 4);
+      const nearbyOutside = [...grouped.below, ...grouped.above]
+        .sort((a, b) => Math.abs(Number(a.price) - Number(observation.currentPrice)) - Math.abs(Number(b.price) - Number(observation.currentPrice)))
+        .slice(0, 6);
+      const selectedByKey = new Map([...insidePriority, ...nearbyOutside].map((level) => [level.key, level]));
+      const selected = [...selectedByKey.values()].slice(0, 8);
+      whaleStudyRows.innerHTML = selected.length
+        ? selected.map((level) => {
+            const location = whaleLevelLocation(level, gap, observation.currentPrice);
+            const sideClass = level.side === 'buy' ? 'whale-side-buy' : 'whale-side-sell';
+            return `<tr>
+              <td>${priceLevel(level.price)}</td>
+              <td class="${sideClass}">${String(level.side || 'unknown').toUpperCase()}</td>
+              <td>${whaleUsd(level.volumeUsd)}</td>
+              <td>${location === 'inside' ? 'inside gap' : `${location} gap`}</td>
+              <td>${whaleOrderAge(level, observation)}</td>
+              <td>${whaleLevelReaction(level, frameIndex, observation)}</td>
+            </tr>`;
+          }).join('')
+        : '<tr><td colspan="6" class="gap-status">No whale levels above the configured threshold</td></tr>';
     }
 
     function updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview) {
@@ -3368,6 +3736,7 @@
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       syncJumpTimeInput(frame);
       updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview);
+      updateWhaleStudy(frameIndex, frame, gap);
       updateLiquidityCounter(frameIndex, frame, gap);
       updateRsiStudyMonitor(frameIndex, fertilityContext);
       updateTradeZoneMonitor(frame, gap, tradeZones, tpHits);

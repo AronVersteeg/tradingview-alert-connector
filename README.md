@@ -110,7 +110,7 @@ Set `DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED=true` to gate Decentrader auto-
 
 With `DECENTRADER_DELAY_CG_REVIEW_ENABLED=true`, The Delay also snapshots CoinGlass whale/orderbook levels of at least `DECENTRADER_DELAY_CG_MIN_USD` inside the gap. The execution log compares first-observed and pre-entry levels, then classifies persistent/new/removed levels as directional support, forward friction or other. This is logged as entry context and does not hard-block a trade by itself because visible whale orders can move or disappear.
 
-The map can also show a CoinGlass large-orderbook/whale overlay. The monitor reads the public CoinGlass page feed, keeps levels above the configured dollar threshold, and draws them as vertical `CG` lines on the Decentrader map. Successful snapshots are also stored as a forward-looking timelapse history so replay can show which CG levels were active during each map frame. Entries and stops remain Decentrader/fractal based; TP2+ selection can use CoinGlass as a bounded confluence boost when a nearby same-side whale level has enough volume and especially when its duration is above the configured long-duration threshold.
+The map can also show a CoinGlass large-orderbook/whale overlay. The monitor reads the public CoinGlass page feed, keeps levels above the configured dollar threshold, and draws them as vertical `CG` lines on the Decentrader map. Materially changed snapshots are stored with their actual observation time, map-frame timestamp, current price and gap edges. Replay therefore shows only levels known at that point, plus an influence table for inside/below/above-gap volume, additions/removals and later price tests. Entries and stops remain Decentrader/fractal based; TP2+ selection can use CoinGlass as a bounded confluence boost when a nearby same-side whale level has enough volume and especially when its duration is above the configured long-duration threshold. Set `COINGLASS_WHALE_HISTORY_FILE` to a Render persistent-disk path, or place `DECENTRADER_GAP_ALERT_STATE_FILE` on that disk so the CoinGlass history follows it across deploys.
 
 ```text
 COINGLASS_WHALE_LEVELS_ENABLED=true
@@ -121,6 +121,8 @@ COINGLASS_WHALE_LEVEL_STRONG_USD=20000000
 COINGLASS_WHALE_POLL_MINUTES=10
 COINGLASS_WHALE_HISTORY_RETENTION_HOURS=720
 COINGLASS_WHALE_HISTORY_MAX_RECORDS=1500
+COINGLASS_WHALE_OBSERVATION_MAX_RECORDS=1000
+COINGLASS_WHALE_HISTORY_FILE=/var/data/coinglass-whale-history.json
 COINGLASS_TP_CONFLUENCE_ENABLED=true
 COINGLASS_TP_CONFLUENCE_MIN_USD=10000000
 COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD=200
