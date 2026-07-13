@@ -143,10 +143,10 @@ router.get('/snoek', async (req, res) => {
       "default-src 'self'",
       "base-uri 'self'",
       "object-src 'none'",
-      "script-src 'self' 'unsafe-inline'",
+      "script-src 'self' 'unsafe-inline' https://unpkg.com",
       "script-src-attr 'none'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: https://services.arcgisonline.com https://server.arcgisonline.com",
+      "style-src 'self' 'unsafe-inline' https://unpkg.com",
+      "img-src 'self' data: blob: https://service.pdok.nl",
       "connect-src 'self'",
       "font-src 'self' https: data:",
       "form-action 'self'",
@@ -156,23 +156,6 @@ router.get('/snoek', async (req, res) => {
   );
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(process.cwd(), 'public', 'snoek', 'index.html'));
-});
-
-router.get('/snoek/assets/:file', async (req, res) => {
-  const allowedFiles = new Set([
-    'spaarnwoude-satellite.jpg',
-    'spaarnwoude-topo.png',
-    'spaarnwoude-transport.png',
-    'spaarnwoude-places.png'
-  ]);
-  const file = String(req.params.file || '');
-
-  if (!allowedFiles.has(file)) {
-    return res.status(404).send('Not found');
-  }
-
-  res.setHeader('Cache-Control', 'public, max-age=86400');
-  res.sendFile(path.join(process.cwd(), 'public', 'snoek', 'assets', file));
 });
 
 router.get('/snoek/api/scout', async (req, res) => {

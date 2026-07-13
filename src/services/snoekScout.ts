@@ -20,8 +20,6 @@ export type SnoekSpot = {
   area: string;
   lat: number;
   lon: number;
-  x: number;
-  y: number;
   targets: SnoekTarget[];
   waterType: string;
   depthClass: string;
@@ -88,8 +86,6 @@ const SPOTS: SnoekSpot[] = [
     area: 'Velsen',
     lat: 52.4635,
     lon: 4.6326,
-    x: 27,
-    y: 63,
     targets: ['snoek', 'snoekbaars', 'witvis'],
     waterType: 'kanaal',
     depthClass: '1-6 m, talud naar hoofdgeul',
@@ -102,8 +98,6 @@ const SPOTS: SnoekSpot[] = [
     area: 'Velsen-Zuid',
     lat: 52.466,
     lon: 4.625,
-    x: 20.8,
-    y: 22.3,
     targets: ['snoekbaars'],
     waterType: 'kanaalstroming',
     depthClass: 'kanaal/talud rond pontstroming',
@@ -116,8 +110,6 @@ const SPOTS: SnoekSpot[] = [
     area: 'Spaarndam',
     lat: 52.421,
     lon: 4.666,
-    x: 37.9,
-    y: 57,
     targets: ['snoek', 'snoekbaars'],
     waterType: 'zijkanaal',
     depthClass: 'kanaalrand, brugschaduw en talud',
@@ -130,8 +122,6 @@ const SPOTS: SnoekSpot[] = [
     area: 'Spaarndam',
     lat: 52.413,
     lon: 4.681,
-    x: 44.2,
-    y: 63.1,
     targets: ['snoek', 'snoekbaars'],
     waterType: 'sluis/stroming',
     depthClass: 'harde sluisranden, stroming en luwtes',
@@ -144,8 +134,6 @@ const SPOTS: SnoekSpot[] = [
     area: 'Buitenhuizen',
     lat: 52.452,
     lon: 4.682,
-    x: 44.6,
-    y: 33.1,
     targets: ['snoekbaars', 'snoek'],
     waterType: 'pontstroming',
     depthClass: 'kanaalrand met stromingsnaad',
@@ -158,8 +146,6 @@ const SPOTS: SnoekSpot[] = [
     area: 'Spaarnwoude',
     lat: 52.4358,
     lon: 4.6831,
-    x: 67,
-    y: 51,
     targets: ['snoek', 'method_feeder', 'witvis'],
     waterType: 'plas',
     depthClass: 'ondiep tot middel, randen interessanter dan open water',
@@ -172,8 +158,6 @@ const SPOTS: SnoekSpot[] = [
     area: 'Spaarnwoude',
     lat: 52.4329,
     lon: 4.6684,
-    x: 55,
-    y: 70,
     targets: ['method_feeder', 'witvis', 'snoek'],
     waterType: 'parkplas',
     depthClass: 'geschat 0,8-2 m',
@@ -186,8 +170,6 @@ const SPOTS: SnoekSpot[] = [
     area: 'Velsen-Zuid',
     lat: 52.4598,
     lon: 4.6478,
-    x: 40,
-    y: 42,
     targets: ['witvis', 'method_feeder', 'snoek'],
     waterType: 'parkvijver',
     depthClass: 'geschat ondiep tot 1,5 m',
@@ -261,6 +243,12 @@ const DATA_SOURCES: SnoekDataSource[] = [
     use: 'Automatisch locatie, temperatuur, wind, bewolking, regen en luchtdruktrend invullen zonder API-key.'
   },
   {
+    id: 'kadaster-brt-top10nl',
+    label: 'Kadaster BRT + TOP10NL via PDOK',
+    status: 'live',
+    use: 'Leidende kaartgeometrie voor water, wegen, gebouwen, spoor en plaatslabels in dezelfde projectie als de luchtfoto.'
+  },
+  {
     id: 'esri-rws-bathymetry',
     label: 'Esri / Rijkswaterstaat bathymetrie',
     status: 'planned',
@@ -270,13 +258,13 @@ const DATA_SOURCES: SnoekDataSource[] = [
     id: 'pdok-rws-kunstwerken',
     label: 'PDOK IMWA + Rijkswaterstaat kunstwerken',
     status: 'live',
-    use: 'Bruggen, duikers, gemalen, sluizen, stuwen, vispassages en waterregelobjecten als echte hotspotlaag op de satellietkaart.'
+    use: 'Gemalen, pompen, sluizen, stuwen, bruggen, vispassages en waterregelobjecten als echte hotspotlaag op de Kadasterkaart.'
   },
   {
     id: 'ahn',
     label: 'AHN hoogte/oeverdata',
     status: 'planned',
-    use: 'Oevertaluds, steile randen, bruggen en duikers herkennen waar bathymetrie ontbreekt.'
+    use: 'Oevertaluds, steile randen en brugstructuren herkennen waar bathymetrie ontbreekt.'
   },
   {
     id: 'osm',
@@ -309,10 +297,10 @@ const DATA_SOURCES: SnoekDataSource[] = [
     use: 'Wind, luchtdruk, bewolking, zon/maan en activiteitsscore.'
   },
   {
-    id: 'satellite-water-reading',
-    label: 'Satellietkaart / handmatig water lezen',
-    status: 'manual',
-    use: 'Riet, bruggen, schaduw, inhammen, duikers, donkere waterstukken en looproutes herkennen.'
+    id: 'pdok-aerial-context',
+    label: 'PDOK actuele luchtfoto',
+    status: 'live',
+    use: 'Alleen als visuele inkleuring onder de leidende Kadaster BRT/TOP10NL-geometrie.'
   }
 ];
 

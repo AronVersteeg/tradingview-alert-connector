@@ -1,5 +1,4 @@
 export type SnoekStructureType =
-  | 'culvert'
   | 'pumping_station'
   | 'bridge'
   | 'weir'
@@ -50,14 +49,13 @@ export type SnoekStructuresResult = {
 };
 
 const DEFAULT_BBOX: SnoekStructuresBbox = {
-  west: 4.575,
-  south: 52.365,
-  east: 4.815,
-  north: 52.495
+  west: 4.54,
+  south: 52.355,
+  east: 4.82,
+  north: 52.505
 };
 
 const PDOK_TYPES: Array<{ layer: string; type: SnoekStructureType; label: string }> = [
-  { layer: 'duiker', type: 'culvert', label: 'Duiker' },
   { layer: 'gemaal', type: 'pumping_station', label: 'Gemaal' },
   { layer: 'brug', type: 'bridge', label: 'Brug' },
   { layer: 'stuw', type: 'weir', label: 'Stuw' },
@@ -72,7 +70,6 @@ const PDOK_TYPES: Array<{ layer: string; type: SnoekStructureType; label: string
 const RWS_LAYERS: Array<{ id: number; layer: string; type: SnoekStructureType; label: string }> = [
   { id: 4, layer: 'brug_beweegbaar', type: 'bridge', label: 'Beweegbare brug' },
   { id: 5, layer: 'brug_vast', type: 'bridge', label: 'Vaste brug' },
-  { id: 8, layer: 'duiker', type: 'culvert', label: 'Duiker' },
   { id: 11, layer: 'gemaal', type: 'pumping_station', label: 'Gemaal' },
   { id: 17, layer: 'keersluis', type: 'lock', label: 'Keersluis' },
   { id: 23, layer: 'schutsluis', type: 'lock', label: 'Schutsluis' },
@@ -85,8 +82,8 @@ const RWS_LAYERS: Array<{ id: number; layer: string; type: SnoekStructureType; l
 const COMMUNITY_SIGNALS = [
   {
     name: 'De Ven / Spaarnwoude',
-    x: 52,
-    y: 63,
+    lat: 52.4329,
+    lon: 4.6684,
     boost: 9,
     species: ['snoek'],
     tactics: ['shad', 'spinnerbait', 'korte worpen langs riet'],
@@ -94,8 +91,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Buitenhuizerplas windkant',
-    x: 61,
-    y: 50,
+    lat: 52.4358,
+    lon: 4.6831,
     boost: 8,
     species: ['snoek'],
     tactics: ['shallow shad', 'jerkbait', 'windkant afvissen'],
@@ -103,8 +100,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Noordzeekanaal / Zijkanaal B',
-    x: 38,
-    y: 36,
+    lat: 52.456,
+    lon: 4.635,
     boost: 10,
     species: ['snoek', 'snoekbaars'],
     tactics: ['shad op talud', 'dropshot bij kade', 'stromingsnaad afvissen'],
@@ -112,8 +109,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Spaarndam / Mooie Nel',
-    x: 38,
-    y: 72,
+    lat: 52.413,
+    lon: 4.681,
     boost: 7,
     species: ['snoek'],
     tactics: ['softbait langs riet', 'brugschaduw', 'overgangen afvissen'],
@@ -121,8 +118,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Zijkanaal C',
-    x: 37.9,
-    y: 57,
+    lat: 52.421,
+    lon: 4.666,
     boost: 16,
     species: ['snoek', 'snoekbaars'],
     tactics: ['softbait', 'dropshot', 'talud en kade langzaam afvissen'],
@@ -130,8 +127,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Brug over de A9 / Zijkanaal C',
-    x: 33.3,
-    y: 60,
+    lat: 52.4185,
+    lon: 4.661,
     boost: 14,
     species: ['snoek', 'snoekbaars'],
     tactics: ['dropshot onder brugschaduw', 'shad langs pijlers', 'langzaam tegen bodem'],
@@ -139,8 +136,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Sluis Spaarndam',
-    x: 44.2,
-    y: 63.1,
+    lat: 52.413,
+    lon: 4.681,
     boost: 18,
     species: ['snoek', 'snoekbaars'],
     tactics: ['dropshot bij stroming', 'shad langs harde rand', 'werpend langs sluisdeuren'],
@@ -148,8 +145,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Pontje Velsen-Zuid',
-    x: 20.8,
-    y: 22.3,
+    lat: 52.4634,
+    lon: 4.626,
     boost: 22,
     species: ['snoekbaars'],
     tactics: ['dropshot', 'shad op bodem', 'stromingsnaad van pontje afvissen'],
@@ -157,8 +154,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Steiger Oud Velsen',
-    x: 23.7,
-    y: 27.7,
+    lat: 52.4605,
+    lon: 4.631,
     boost: 18,
     species: ['snoekbaars'],
     tactics: ['dropshot langs steiger', 'kleine shad', 'schemer/avond'],
@@ -166,8 +163,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Pontje Buitenhuizen',
-    x: 44.6,
-    y: 33.1,
+    lat: 52.452,
+    lon: 4.682,
     boost: 18,
     species: ['snoekbaars', 'snoek'],
     tactics: ['dropshot bij stroming', 'shad langs talud', 'korte drift langs kade'],
@@ -175,8 +172,8 @@ const COMMUNITY_SIGNALS = [
   },
   {
     name: 'Sluizen IJmuiden richting zee',
-    x: 11.3,
-    y: 25.4,
+    lat: 52.464,
+    lon: 4.601,
     boost: 15,
     species: ['snoekbaars', 'zeebaars'],
     tactics: ['shad bij stroming', 'dropshot luwte', 'zeebaars meer richting sluizen/zee'],
@@ -280,7 +277,6 @@ function scoreStructure(type: SnoekStructureType, props: any): { score: number; 
   };
 
   if (type === 'pumping_station') add(46, 'actieve stroming, zuurstof en aasvis rond gemaal/pomp');
-  if (type === 'culvert') add(14, 'versmalling en hinderlaag bij duiker');
   if (type === 'weir') add(34, 'stroming en hoogteverschil bij stuw');
   if (type === 'lock') add(30, 'stroming, harde randen en schaduw bij sluis');
   if (type === 'bridge') add(18, 'schaduw en harde structuur bij brug');
@@ -419,36 +415,12 @@ function countByType(structures: SnoekStructure[]): Record<string, number> {
   }, {} as Record<string, number>);
 }
 
-function distanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-  const dx = bx - ax;
-  const dy = by - ay;
-  if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
-  const t = clamp(((px - ax) * dx + (py - ay) * dy) / ((dx * dx) + (dy * dy)), 0, 1);
-  return Math.hypot(px - (ax + (t * dx)), py - (ay + (t * dy)));
-}
-
-function distanceToWaterLayout(x: number, y: number): number {
-  const waterLines = [
-    [[0, 24], [25, 26], [45, 35], [66, 46], [100, 51]],
-    [[44, 42], [42, 56], [39, 72], [35, 100]],
-    [[66, 46], [74, 52], [80, 60], [92, 72]],
-    [[20, 76], [34, 70], [47, 66], [58, 66]]
-  ];
-  let best = Infinity;
-  waterLines.forEach((line) => {
-    for (let i = 1; i < line.length; i += 1) {
-      best = Math.min(best, distanceToSegment(x, y, line[i - 1][0], line[i - 1][1], line[i][0], line[i][1]));
-    }
-  });
-  return best;
-}
-
 function buildScoutHotspots(structures: SnoekStructure[], limit: number): SnoekStructure[] {
   const gridSize = 2.8;
   const clusters = new Map<string, SnoekStructure[]>();
 
   structures
-    .filter((structure) => structure.score >= 58 || structure.type === 'culvert' || structure.type === 'bridge')
+    .filter((structure) => structure.score >= 58 || structure.type === 'bridge')
     .forEach((structure) => {
       const key = `${Math.floor(structure.x / gridSize)}:${Math.floor(structure.y / gridSize)}`;
       const bucket = clusters.get(key) || [];
@@ -472,29 +444,29 @@ function buildScoutHotspots(structures: SnoekStructure[], limit: number): SnoekS
       type === 'lock' ||
       type === 'water_control'
     ));
-    const hasAmbushCombo = types.includes('culvert') && (types.includes('bridge') || types.includes('gate') || types.includes('weir'));
     const x = items.reduce((sum, item) => sum + item.x, 0) / items.length;
     const y = items.reduce((sum, item) => sum + item.y, 0) / items.length;
-    const waterDistance = distanceToWaterLayout(x, y);
-    const nearMainWater = waterDistance <= 5.5;
-    const community = nearestCommunitySignal(x, y);
-    const keep = hasCurrentMaker || (hasAmbushCombo && nearMainWater) || (hasPrimeStructure && nearMainWater) || (items.length >= 6 && types.length >= 3 && nearMainWater);
+    const lat = items.reduce((sum, item) => sum + item.lat, 0) / items.length;
+    const lon = items.reduce((sum, item) => sum + item.lon, 0) / items.length;
+    const community = nearestCommunitySignal(lat, lon);
+    const hasSupportingStructure = types.some((type) => (
+      type === 'bridge' || type === 'gate' || type === 'trash_rack' || type === 'drop'
+    ));
+    const keep = hasCurrentMaker || hasPrimeStructure || Boolean(community && hasSupportingStructure);
 
     if (!keep) return;
 
     const best = items.slice().sort((a, b) => b.score - a.score)[0];
     const densityBoost = Math.min(18, items.length * 2);
     const typeBoost = Math.min(20, types.length * 7);
-    const waterBoost = waterDistance <= 2.5 ? 14 : waterDistance <= 5.5 ? 8 : 0;
-    const comboBoost = hasCurrentMaker ? 18 : hasAmbushCombo ? 8 : hasPrimeStructure ? 10 : 0;
+    const comboBoost = hasCurrentMaker ? 18 : hasPrimeStructure ? 10 : hasSupportingStructure ? 5 : 0;
     const communityBoost = community ? community.boost : 0;
-    const score = Math.round(clamp(best.score + densityBoost + typeBoost + waterBoost + comboBoost + communityBoost - 18, 0, 100));
+    const score = Math.round(clamp(best.score + densityBoost + typeBoost + comboBoost + communityBoost - 18, 0, 100));
 
     if (score < 68) return;
 
     const typeLabels = types.map((type) => {
       if (type === 'pumping_station') return 'gemaal';
-      if (type === 'culvert') return 'duiker';
       if (type === 'bridge') return 'brug';
       if (type === 'weir') return 'stuw';
       if (type === 'lock') return 'sluis';
@@ -502,9 +474,8 @@ function buildScoutHotspots(structures: SnoekStructure[], limit: number): SnoekS
     });
     const reasons = [
       `GIS: ${items.length} objecten in een klein vak (${typeLabels.slice(0, 4).join(', ')})`,
-      nearMainWater ? 'Waterlayout: nabij hoofdwater, kruising of overgang' : '',
-      hasAmbushCombo ? 'Snoeklogica: duiker telt mee als hinderlaag, niet als hoofdreden' : '',
       hasCurrentMaker ? 'Snoeklogica: stroming/waterregeling kan aasvis concentreren' : '',
+      !hasCurrentMaker && hasSupportingStructure ? 'Structuurlogica: harde rand, schaduw of overgang aan het water' : '',
       community ? `Lokale praktijk: ${community.note}` : 'Community: nog geen sterke lokale bevestiging',
       community ? `Soort/techniek: ${community.species.join(', ')} - ${community.tactics.join(', ')}` : ''
     ].filter(Boolean);
@@ -516,8 +487,8 @@ function buildScoutHotspots(structures: SnoekStructure[], limit: number): SnoekS
       sourceLayer: 'scout-hotspot',
       name: community ? `Snoekspot ${community.name} - ${best.label}` : `Snoekspot ${best.label}`,
       label: 'Scout hotspot',
-      lat: items.reduce((sum, item) => sum + item.lat, 0) / items.length,
-      lon: items.reduce((sum, item) => sum + item.lon, 0) / items.length,
+      lat,
+      lon,
       x,
       y,
       score,
@@ -530,11 +501,21 @@ function buildScoutHotspots(structures: SnoekStructure[], limit: number): SnoekS
     .slice(0, limit);
 }
 
-function nearestCommunitySignal(x: number, y: number): typeof COMMUNITY_SIGNALS[number] | undefined {
+function distanceKm(latA: number, lonA: number, latB: number, lonB: number): number {
+  const toRadians = (value: number) => value * Math.PI / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(latB - latA);
+  const dLon = toRadians(lonB - lonA);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(latA)) * Math.cos(toRadians(latB)) * Math.sin(dLon / 2) ** 2;
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function nearestCommunitySignal(lat: number, lon: number): typeof COMMUNITY_SIGNALS[number] | undefined {
   let best: { signal: typeof COMMUNITY_SIGNALS[number]; distance: number } | undefined;
   COMMUNITY_SIGNALS.forEach((signal) => {
-    const distance = Math.hypot(x - signal.x, y - signal.y);
-    if (distance <= 12 && (!best || distance < best.distance)) {
+    const distance = distanceKm(lat, lon, signal.lat, signal.lon);
+    if (distance <= 3.2 && (!best || distance < best.distance)) {
       best = { signal, distance };
     }
   });

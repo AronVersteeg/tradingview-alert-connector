@@ -16,6 +16,7 @@ describe('buildSnoekScout', () => {
     expect(result.spots.length).toBeGreaterThan(0);
     expect(result.mapFeatures.length).toBeGreaterThan(0);
     expect(result.dataSources.some((source) => source.id === 'esri-rws-bathymetry')).toBe(true);
+    expect(result.dataSources.some((source) => source.id === 'kadaster-brt-top10nl')).toBe(true);
     expect(result.communityReviews.length).toBeGreaterThan(0);
   });
 

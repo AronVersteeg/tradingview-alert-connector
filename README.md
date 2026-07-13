@@ -24,13 +24,13 @@ GET /snoek/api/structures
 
 `/snoek/api/weather?location=Velsen-Zuid` uses Open-Meteo geocoding and forecast data to fill live open weather inputs without an API key.
 
-`/snoek/api/structures` loads live GIS objects for the map bbox from PDOK Waterschappen Kunstwerken IMWA and Rijkswaterstaat ArcGIS beheerobjecten. It filters and clusters those raw bridges, culverts, pumping stations, locks, weirs, fish passages and other water-control objects into a smaller set of argued Snoek scout spots using structure combinations, water-layout proximity and seed community/eigen-scout signals. Pumping stations, pumps, locks, weirs and water-control objects are weighted above culverts because active current is a stronger roofvis trigger; culverts mainly count as ambush/context unless they combine with better structure near main water.
+`/snoek/api/structures` loads live GIS objects for the map bbox from PDOK Waterschappen Kunstwerken IMWA and Rijkswaterstaat ArcGIS beheerobjecten. It filters and clusters pumping stations, locks, weirs, bridges, fish passages and other water-control objects into argued Snoek scout spots using current-making structures and local practice signals.
 
-The map is now GIS/vector-first: PDOK/RWS object coordinates are the source of truth and the Esri satellite image is a visual underlay. Exact bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route. The source stack is represented in the source catalog: Open-Meteo, PDOK/RWS kunstwerken, Esri/Rijkswaterstaat bathymetry, AHN, OpenStreetMap, VISplanner, Fishbrain/FishAngler community data, Engelhart Hengelsport local advice, Windy/Fishing Points-style timing and satellite/manual water-reading layers.
+The map is Kadaster-first: PDOK BRT and TOP10NL define the geometry and stay above the current PDOK aerial-photo tiles. Both use the same EPSG:3857 tile projection, so panning and zooming cannot pull the aerial photo away from the GIS layer. The default extent runs from the IJmuiden locks and Oud Velsen through Spaarnwoude to Westzaan and Haarlem-Noord. Exact bathymetry, AHN object extraction and live community imports can be embedded later without changing the Render route.
 
 Current manual roofvis advice is seeded as local practice input: Zijkanaal C, the A9 bridge, Sluis Spaarndam, Pontje Velsen-Zuid, the steiger toward Oud Velsen and Pontje Buitenhuizen. For snoekbaars the tactics favor dropshot or small shads around pontstroming, sluices, kades, talud and low-light windows.
 
-The Snoek map supports pan/zoom, clickable scout spots, a detail panel with coordinates and reasoning, and layer toggles for the Esri topo/satellite underlay plus major GIS spot classes such as pumping stations, weirs, locks, culverts and bridges.
+The Snoek map supports native pan/zoom, clickable scout and local-practice spots, a detail panel with coordinates and reasoning, and layer toggles for Kadaster BRT/TOP10NL, the PDOK aerial-photo coloring and major GIS spot classes such as pumping stations, weirs, locks and bridges.
 
 Example API call:
 
