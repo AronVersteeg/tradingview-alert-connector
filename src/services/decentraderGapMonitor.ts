@@ -5461,7 +5461,7 @@ export class DecentraderGapMonitor {
     if (!executor || !syncTrailingStop) {
       result.dynamicSlSync = {
         outcome: 'SKIPPED',
-        reason: 'The dYdX executor does not expose add-only SL synchronization.'
+        reason: 'The dYdX executor does not expose idempotent SL synchronization.'
       };
       return;
     }
@@ -5541,7 +5541,7 @@ export class DecentraderGapMonitor {
       if (!managedPosition.currentStop || managedPosition.currentStop <= 0) {
         result.dynamicSlSync = {
           outcome: 'SKIPPED',
-          reason: 'Managed position has no known current stop yet; add-only trailing SL skipped.',
+          reason: 'Managed position has no known current stop yet; trailing SL synchronization skipped.',
           market,
           position,
           managedPosition

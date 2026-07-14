@@ -249,11 +249,6 @@ export class DydxV4Client extends AbstractDexClient {
     process.env.DYDX_V4_MANAGED_ORDERS_STATE_FILE ||
     path.join(process.cwd(), 'data', 'dydx-v4-managed-orders.json');
 
-  private readonly ORDER_VISIBILITY_GRACE_MS = parseEnvPositiveNumber(
-    process.env.DYDX_V4_ORDER_VISIBILITY_GRACE_SECONDS,
-    120
-  ) * 1000;
-
   private readonly TOLERANCE = parseEnvPositiveNumber(
     process.env.DYDX_V4_SIZE_TOLERANCE,
     0.00000001
@@ -625,51 +620,72 @@ export class DydxV4Client extends AbstractDexClient {
       .reduce((sum, value) => sum + value, 0);
 
     if (managedStopMatchesLatest) {
-      const managedStopVisible = protectiveStopOrders.some((order: any) =>
+      const managedStopOrder = protectiveStopOrders.find((order: any) =>
         this.orderClientIdMatches(order, managedStop!.clientId)
       );
+      const managedStopVisible = Boolean(managedStopOrder);
+      const visibleStopToKeep = managedStopOrder ?? visibleCoveredStop;
+      const visibleClientId = visibleStopToKeep
+        ? this.getOrderClientId(visibleStopToKeep)
+        : undefined;
+      const matchingStopVisible = Boolean(
+        visibleStopToKeep && Number.isFinite(visibleClientId)
+      );
+      let remainingOldStops: any[] = [];
 
-      const memoryAgeMs = Math.max(0, Date.now() - managedStop!.updatedAt);
-      if (!managedStopVisible && memoryAgeMs > this.ORDER_VISIBILITY_GRACE_MS) {
-        console.warn('Render-managed stop is stale and not visible; repairing exact position coverage.', {
-          market,
-          positionSize: position.size,
-          managedStop,
-          memoryAgeMs,
-          visibilityGraceMs: this.ORDER_VISIBILITY_GRACE_MS
-        });
-        const staleStopCancelSubmitted = await this.cancelManagedStopBestEffort(
-          market,
-          managedStop!,
-          'Stale Render-managed stop was not visible; repairing exact position coverage.'
+      if (matchingStopVisible) {
+        if (!managedStopVisible) {
+          this.setManagedStop(market, {
+            ...managedStop!,
+            clientId: visibleClientId!,
+            size: this.getOrderSize(visibleStopToKeep) ?? positionAbsSize,
+            goodTilBlockTime: this.getOrderGoodTilBlockTime(visibleStopToKeep),
+            updatedAt: Date.now()
+          });
+        }
+
+        const hasOtherVisibleStops = protectiveStopOrders.some((order: any) =>
+          !this.orderClientIdMatches(order, visibleClientId!)
         );
-        if (!staleStopCancelSubmitted) {
-          return {
-            outcome: 'PENDING_VERIFICATION',
-            reason: 'Render-managed stop is not visible and its cancellation could not be submitted; no replacement was added to avoid duplicate stops.',
-            positionSize: position.size,
-            trailStop,
-            stopSize: managedStop!.size,
-            visibility: 'STALE_RENDER_MEMORY',
-            memoryAgeMs,
-            managedStop
-          };
+        if (hasOtherVisibleStops) {
+          remainingOldStops = await this.cancelOtherProtectiveStopsBestEffort(
+            market,
+            side,
+            visibleClientId!,
+            'Matching protective stop already covers the position; cleaning up every other stop.'
+          );
         }
       } else {
-        return {
-        outcome: 'UNCHANGED',
-        reason: managedStopVisible
-          ? 'Render-managed protective stop already matches the latest trigger and covers the position; no additional stop was placed.'
-          : 'Render-managed stop memory already matches the latest trigger and covers the position; no additional stop was placed while dYdX visibility catches up.',
+        console.warn('Render-managed stop matches the exact trigger and position size but is not visible in the indexer; preserving it without replacement.', {
+          market,
+          positionSize: position.size,
+          trailStop,
+          managedStop
+        });
+      }
+
+      return {
+        outcome: remainingOldStops.length ? 'UNCHANGED_WITH_DUPLICATES' : 'UNCHANGED',
+        reason: matchingStopVisible
+          ? remainingOldStops.length
+            ? 'The matching managed stop was preserved, but older duplicate stops remain visible after cleanup retries.'
+            : 'The matching managed stop was preserved and every other visible protective stop was cleaned up.'
+          : 'Render-managed stop memory already matches the exact trigger and position size; no replacement was placed because indexer invisibility is not proof that the stop is gone.',
         positionSize: position.size,
         trailStop,
         stopSize: managedStop!.size,
-        visibility: managedStopVisible ? 'DYDX_OPEN_ORDER_AND_MEMORY' : 'RENDER_MEMORY',
-        managedStop,
+        visibility: managedStopVisible
+          ? 'DYDX_OPEN_ORDER_AND_MEMORY'
+          : matchingStopVisible
+            ? 'DYDX_OPEN_ORDER_ADOPTED'
+            : 'RENDER_MEMORY_UNCONFIRMED',
+        managedStop: !managedStopVisible && visibleStopToKeep
+          ? this.managedStops.get(market)
+          : managedStop,
         matchingStopCount: matchingTriggerStops.length,
-        aggregateStopSize: matchingTriggerKnownSize
-        };
-      }
+        aggregateStopSize: matchingTriggerKnownSize,
+        remainingOldStopCount: remainingOldStops.length
+      };
     }
 
     if (
@@ -759,7 +775,7 @@ export class DydxV4Client extends AbstractDexClient {
         );
       });
 
-    console.log('Submitting add-only Decentrader fractal trailing stop:', {
+    console.log('Submitting idempotent Decentrader fractal trailing stop replacement:', {
       market,
       direction: isLong ? 'LONG' : 'SHORT',
       positionSize: position.size,
@@ -844,7 +860,7 @@ export class DydxV4Client extends AbstractDexClient {
       outcome: 'UPDATED',
       reason: shouldCancelOldStops
         ? 'Submitted fractal trailing stop and cancelled older visible/managed stops best-effort.'
-        : 'Submitted add-only fractal trailing stop. Older stops were preserved as fallback.',
+        : 'Submitted fractal trailing stop. Older stops were preserved because replacement visibility was not confirmed.',
       positionSize: position.size,
       trailStop,
       executionPrice,
