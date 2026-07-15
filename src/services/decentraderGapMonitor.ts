@@ -1705,7 +1705,7 @@ function dydxOpenClose(candle: DydxRsiCandle | undefined): CandleOpenClose | und
   return { open, close, source: 'dydx' };
 }
 
-function intrusionCandleReview(
+export function intrusionCandleReview(
   rows: DecentraderRow[],
   alert: GapAlert,
   enabled = decentraderIntrusionCandleFilterEnabled(),
@@ -1716,12 +1716,15 @@ function intrusionCandleReview(
     Number.isFinite(alert.frameIndex)
       ? alert.frameIndex
       : rows.findIndex((row) => String(row.timestamp || '') === alert.timestamp);
-  const dydxIntrusionOpenClose = dydxOpenClose(dydxHourlyCandleForTimestamp(dydxCandles, alert.timestamp, 0));
-  const dydxNextOpenClose = dydxOpenClose(dydxHourlyCandleForTimestamp(dydxCandles, alert.timestamp, 1));
+  const dydxIntrusionCandle = dydxHourlyCandleForTimestamp(dydxCandles, alert.timestamp, 0);
+  const dydxNextCandle = dydxHourlyCandleForTimestamp(dydxCandles, alert.timestamp, 1);
+  const dydxIntrusionOpenClose = dydxOpenClose(dydxIntrusionCandle);
+  const dydxNextOpenClose = dydxOpenClose(dydxNextCandle);
   const intrusionOpenClose = dydxIntrusionOpenClose || rowOpenClose(rows[frameIndex], rows[frameIndex - 1]);
   const nextOpenClose = dydxNextOpenClose || rowOpenClose(rows[frameIndex + 1], rows[frameIndex]);
   const intrusionColor = candleColor(intrusionOpenClose);
   const nextColor = candleColor(nextOpenClose);
+  const nextTimestamp = dydxNextCandle?.startedAt || rows[frameIndex + 1]?.timestamp;
   const source =
     intrusionOpenClose?.source || nextOpenClose?.source || 'unknown';
 
@@ -1733,7 +1736,7 @@ function intrusionCandleReview(
       intrusionColor,
       nextColor,
       intrusionTimestamp: alert.timestamp,
-      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      nextTimestamp,
       source,
       reason: 'Intrusion candle filter is disabled.'
     };
@@ -1747,7 +1750,7 @@ function intrusionCandleReview(
       intrusionColor,
       nextColor,
       intrusionTimestamp: alert.timestamp,
-      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      nextTimestamp,
       source,
       reason: 'Mixed left/right intrusion; candle confirmation needs a one-sided direction.'
     };
@@ -1763,7 +1766,7 @@ function intrusionCandleReview(
       intrusionColor,
       nextColor,
       intrusionTimestamp: alert.timestamp,
-      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      nextTimestamp,
       source,
       reason: 'Waiting for dYdX 1H candle data to confirm the intrusion.'
     };
@@ -1778,7 +1781,7 @@ function intrusionCandleReview(
       intrusionColor,
       nextColor,
       intrusionTimestamp: alert.timestamp,
-      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      nextTimestamp,
       source,
       reason: 'dYdX 1H intrusion candle or following candle is not available yet.'
     };
@@ -1793,13 +1796,14 @@ function intrusionCandleReview(
       intrusionColor,
       nextColor,
       intrusionTimestamp: alert.timestamp,
-      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      nextTimestamp,
       source,
       reason: 'Intrusion frame is not available yet.'
     };
   }
 
-  if (!rows[frameIndex + 1]) {
+  const nextCandleStartMs = dydxNextCandle ? Date.parse(dydxNextCandle.startedAt) : NaN;
+  if (!Number.isFinite(nextCandleStartMs) || Date.now() < nextCandleStartMs + 60 * 60 * 1000) {
     return {
       enabled,
       status: 'PENDING',
@@ -1808,8 +1812,9 @@ function intrusionCandleReview(
       intrusionColor,
       nextColor,
       intrusionTimestamp: alert.timestamp,
+      nextTimestamp,
       source,
-      reason: 'Waiting for the next candle to confirm the intrusion.'
+      reason: 'Waiting for the dYdX following 1H candle to close before confirming the intrusion.'
     };
   }
 
@@ -1822,7 +1827,7 @@ function intrusionCandleReview(
       intrusionColor,
       nextColor,
       intrusionTimestamp: alert.timestamp,
-      nextTimestamp: rows[frameIndex + 1]?.timestamp,
+      nextTimestamp,
       source,
       reason: `Intrusion candle and next candle are both ${expectedColor}.`
     };
@@ -1836,7 +1841,7 @@ function intrusionCandleReview(
     intrusionColor,
     nextColor,
     intrusionTimestamp: alert.timestamp,
-    nextTimestamp: rows[frameIndex + 1]?.timestamp,
+    nextTimestamp,
     source,
     reason: `Expected ${expectedColor}/${expectedColor}, got ${intrusionColor}/${nextColor}.`
   };
