@@ -3682,8 +3682,39 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   private async getOpenOrdersForMarket(market: string): Promise<any[]> {
-    const orders = await this.getAllOrdersForMarket(market);
-    return orders.filter((order: any) => this.isVisibleOpenOrder(order));
+    const activeStatuses = ['UNTRIGGERED', 'OPEN', 'BEST_EFFORT_OPENED'];
+    const responses = await Promise.all(
+      activeStatuses.map((status) =>
+        this.indexer.account.getSubaccountOrders(
+          this.wallet.address,
+          0,
+          market,
+          undefined,
+          null,
+          status as any,
+          null,
+          100
+        )
+      )
+    );
+    const ordersById = new Map<string, any>();
+
+    for (const response of responses) {
+      for (const order of response.orders || []) {
+        if (!this.orderMarketMatches(order, market) || !this.isVisibleOpenOrder(order)) {
+          continue;
+        }
+
+        const clientId = this.getOrderClientId(order);
+        const key = String(
+          order.id ??
+          `${clientId}|${order.status}|${order.type}|${order.side}|${order.triggerPrice ?? order.price}`
+        );
+        ordersById.set(key, order);
+      }
+    }
+
+    return Array.from(ordersById.values());
   }
 
   private getProtectiveStopOrdersFromOrders(orders: any[]): any[] {
@@ -4781,8 +4812,13 @@ export class DydxV4Client extends AbstractDexClient {
 
     const parsed = Number(raw);
 
-    return Number.isFinite(parsed) && parsed > 0
-      ? parsed
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+
+    const parsedDateMs = Date.parse(String(raw ?? ''));
+    return Number.isFinite(parsedDateMs) && parsedDateMs > 0
+      ? Math.floor(parsedDateMs / 1000)
       : undefined;
   }
 

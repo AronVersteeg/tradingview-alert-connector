@@ -33,6 +33,66 @@ const visibleStop = (clientId: number) => ({
 });
 
 describe('dYdX v4 trailing stop synchronization', () => {
+  test('loads active conditional orders independently from paginated order history', async () => {
+    const client = new DydxV4Client() as any;
+    const getSubaccountOrders = jest.fn().mockImplementation(
+      (_address, _subaccount, _ticker, _tickerType, _side, status) => {
+        if (status === 'UNTRIGGERED') {
+          return Promise.resolve({
+            orders: [
+              { ...visibleStop(101), ticker: 'BTC-USD', market: undefined },
+              { ...visibleStop(102), ticker: 'BTC-USD', market: undefined }
+            ]
+          });
+        }
+        return Promise.resolve({ orders: [] });
+      }
+    );
+    client.wallet = { address: 'dydx1test' };
+    client.indexer = { account: { getSubaccountOrders } };
+
+    const orders = await client.getOpenOrdersForMarket('BTC-USD');
+
+    expect(orders.map((order: any) => order.clientId)).toEqual([101, 102]);
+    expect(getSubaccountOrders).toHaveBeenCalledTimes(3);
+    expect(getSubaccountOrders.mock.calls.map((call: any[]) => call[5])).toEqual([
+      'UNTRIGGERED',
+      'OPEN',
+      'BEST_EFFORT_OPENED'
+    ]);
+  });
+
+  test('parses indexer ISO good-til time for conditional order cancellation', () => {
+    const client = new DydxV4Client() as any;
+    const iso = '2026-08-05T23:18:35.000Z';
+
+    expect(client.getOrderGoodTilBlockTime({ goodTilBlockTime: iso })).toBe(
+      Math.floor(Date.parse(iso) / 1000)
+    );
+  });
+
+  test('cancels an indexer conditional order with its parsed ISO expiry', async () => {
+    const client = new DydxV4Client() as any;
+    const iso = '2026-08-05T23:18:35.000Z';
+    client.cancelOrderByFlags = jest.fn().mockResolvedValue(undefined);
+
+    await client.cancelSpecificOrders('BTC-USD', [{
+      ...visibleStop(1128172821),
+      ticker: 'BTC-USD',
+      market: undefined,
+      orderFlags: '32',
+      goodTilBlockTime: iso
+    }]);
+
+    expect(client.cancelOrderByFlags).toHaveBeenCalledWith(
+      'BTC-USD',
+      1128172821,
+      32,
+      undefined,
+      Math.floor(Date.parse(iso) / 1000)
+    );
+  });
+
   test('does not replace an exact managed stop when the indexer cannot see it', async () => {
     const client = new DydxV4Client() as any;
     client.getCurrentPosition = jest.fn().mockResolvedValue({ size: 0.001 });
