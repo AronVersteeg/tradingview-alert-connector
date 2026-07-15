@@ -8,6 +8,12 @@ import {
   selectDelayedNewest,
   selectEntryNotional
 } from './decentraderExecutionPolicy';
+import {
+  appendDecentraderDelayRecord,
+  buildDecentraderDelayRecord,
+  decentraderDelaySnapshot,
+  DecentraderDelayEmailType
+} from './decentraderDelayHistory';
 import tls from 'tls';
 import zlib from 'zlib';
 import { AlertObject } from '../types';
@@ -394,6 +400,7 @@ type MonitorStatus = {
   coinGlassWhaleHistoryLevels?: number;
   coinGlassWhaleObservations?: number;
   coinGlassWhaleError?: string;
+  delayHistoryRecords?: number;
   intrusionCandleFilterEnabled?: boolean;
   lastStartedAt?: string;
   lastFinishedAt?: string;
@@ -1452,6 +1459,49 @@ async function sendEmailBestEffort(
       sent: false,
       error: message
     };
+  }
+}
+
+function recordDelayHistoryBestEffort(
+  alert: GapAlert,
+  signature: string,
+  emailType: DecentraderDelayEmailType,
+  smtpSentAt: string
+): void {
+  try {
+    const record = buildDecentraderDelayRecord({
+      signature,
+      emailType,
+      sideCounts: sideCounts(alert),
+      intrusionTimestamp: alert.timestamp,
+      intrusionTimestampNl: alert.timestampNl,
+      smtpSentAt
+    });
+    if (!record) {
+      console.warn('Decentrader SMTP delay history skipped an invalid timestamp pair.', {
+        signature,
+        emailType,
+        intrusionTimestamp: alert.timestamp,
+        smtpSentAt
+      });
+      return;
+    }
+
+    appendDecentraderDelayRecord(record);
+    console.log('Decentrader SMTP delay recorded:', {
+      signature,
+      emailType,
+      intrusionTimestamp: alert.timestamp,
+      smtpSentAt,
+      delayMinutes: Number(record.delayMinutes.toFixed(1)),
+      completedCandles1h: record.completedCandles1h
+    });
+  } catch (error) {
+    console.error('Decentrader SMTP delay history write failed; monitoring/trading will continue:', {
+      signature,
+      emailType,
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 }
 
@@ -3364,6 +3414,7 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
       enabled: decentraderIntrusionCandleFilterEnabled(),
       note: 'When enabled, one-sided gap intrusions require the intrusion candle and following candle to match the trade direction.'
     },
+    delayHistory: decentraderDelaySnapshot(),
     coinGlassWhaleLevels: coinglassWhaleSnapshot(),
     coinGlassTpConfluence: {
       enabled: coinGlassTpConfluenceEnabled(),
@@ -4613,6 +4664,7 @@ export class DecentraderGapMonitor {
       coinGlassWhaleHistoryLevels: coinGlassSnapshot.history.length,
       coinGlassWhaleObservations: coinGlassSnapshot.observations.length,
       coinGlassWhaleError: coinGlassSnapshot.error,
+      delayHistoryRecords: decentraderDelaySnapshot().totalRecords,
       lastTradeDecision: state.lastTradeDecision
     };
   }
@@ -4866,8 +4918,10 @@ export class DecentraderGapMonitor {
           );
 
           if (emailResult.sent) {
+            const smtpSentAt = nowNlIso();
             state.lastAlertSentSignature = signature;
-            state.lastAlertSentAt = nowNlIso();
+            state.lastAlertSentAt = smtpSentAt;
+            recordDelayHistoryBestEffort(alert, signature, 'normal', smtpSentAt);
             result.emailSent = true;
             result.emailSentCount += 1;
           } else {
@@ -4918,8 +4972,10 @@ export class DecentraderGapMonitor {
             );
 
             if (filteredEmailResult.sent) {
+              const smtpSentAt = nowNlIso();
               state.lastFilteredAlertSentSignature = filteredSignature;
-              state.lastAlertSentAt = nowNlIso();
+              state.lastAlertSentAt = smtpSentAt;
+              recordDelayHistoryBestEffort(alert, filteredSignature, 'filtered', smtpSentAt);
               result.emailSent = true;
               result.emailSentCount += 1;
             } else {
@@ -6320,6 +6376,7 @@ export class DecentraderGapMonitor {
     if (this.latestTimelapsePayload) {
       recordCoinGlassWhaleObservation(this.latestRows);
       this.latestTimelapsePayload.coinGlassWhaleLevels = coinglassWhaleSnapshot();
+      this.latestTimelapsePayload.delayHistory = decentraderDelaySnapshot();
       this.latestTimelapsePayload.rsiStudy = await rsiStudyForRows(this.latestRows);
       return this.latestTimelapsePayload;
     }
@@ -6328,6 +6385,7 @@ export class DecentraderGapMonitor {
     this.latestRows = rows;
     recordCoinGlassWhaleObservation(rows);
     this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
+    this.latestTimelapsePayload.delayHistory = decentraderDelaySnapshot();
     this.latestTimelapsePayload.rsiStudy = await rsiStudyForRows(rows);
     return this.latestTimelapsePayload;
   }

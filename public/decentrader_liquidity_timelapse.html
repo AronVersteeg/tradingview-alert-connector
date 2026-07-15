@@ -259,6 +259,62 @@
       background: linear-gradient(135deg, rgba(251, 191, 36, 0.14), rgba(24, 31, 41, 0.95));
     }
 
+    .delay-history-card {
+      grid-column: span 4;
+      min-width: 0;
+    }
+
+    .delay-history-layout {
+      display: grid;
+      grid-template-columns: minmax(220px, 0.65fr) minmax(420px, 1.35fr);
+      gap: 10px;
+      margin-top: 4px;
+    }
+
+    .delay-history-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 11px;
+    }
+
+    .delay-history-table th,
+    .delay-history-table td {
+      padding: 3px 6px;
+      border-top: 1px solid rgba(129, 148, 170, 0.2);
+      text-align: right;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .delay-history-table th:first-child,
+    .delay-history-table td:first-child {
+      text-align: left;
+    }
+
+    .delay-history-table th {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 500;
+      text-transform: uppercase;
+    }
+
+    .delay-history-latest td:last-child {
+      color: var(--price);
+      font-weight: 650;
+    }
+
+    @media (max-width: 900px) {
+      .delay-history-card {
+        grid-column: 1 / -1;
+      }
+
+      .delay-history-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
     .liquidity-panel {
       padding: 12px 22px;
       background: #121923;
@@ -784,6 +840,28 @@
         <div class="gap-value" id="tradePlanValue">-</div>
         <div class="gap-status" id="tradePlanStatus">Waiting for dYdX sizing</div>
       </div>
+      <div class="gap-card delay-history-card" id="delayHistoryCard">
+        <div class="gap-label">The Delay - SMTP intrusion history</div>
+        <div class="gap-status" id="delayHistoryStatus">History starts after deployment</div>
+        <div class="delay-history-layout">
+          <table class="delay-history-table" aria-label="SMTP delay statistics in completed one-hour candles">
+            <thead>
+              <tr><th>Mail type</th><th>Alerts</th><th>Min</th><th>Average</th><th>Max</th></tr>
+            </thead>
+            <tbody id="delayHistoryStatsRows">
+              <tr><td>All</td><td>0</td><td>-</td><td>-</td><td>-</td></tr>
+            </tbody>
+          </table>
+          <table class="delay-history-table delay-history-latest" aria-label="Latest three SMTP delay observations">
+            <thead>
+              <tr><th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th></tr>
+            </thead>
+            <tbody id="delayHistoryLatestRows">
+              <tr><td colspan="4">No SMTP intrusion alerts recorded yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <section class="stage">
@@ -978,6 +1056,10 @@
     const rsiStudyCard = document.getElementById('rsiStudyCard');
     const rsiStudyValue = document.getElementById('rsiStudyValue');
     const rsiStudyStatus = document.getElementById('rsiStudyStatus');
+    const delayHistoryCard = document.getElementById('delayHistoryCard');
+    const delayHistoryStatus = document.getElementById('delayHistoryStatus');
+    const delayHistoryStatsRows = document.getElementById('delayHistoryStatsRows');
+    const delayHistoryLatestRows = document.getElementById('delayHistoryLatestRows');
     const tradeZoneValue = document.getElementById('tradeZoneValue');
     const tradeZoneStatus = document.getElementById('tradeZoneStatus');
     const tradePlanValue = document.getElementById('tradePlanValue');
@@ -2135,6 +2217,57 @@
         : '4H coverage unavailable';
       const zone = `${study.zoneLow}-${study.zoneHigh}`;
       rsiStudyStatus.textContent = `${study.market} RSI${study.period} zone ${zone} | Daily master zone ${masterZone} off | ${coverage}`;
+    }
+
+    function delayNlTime(timestamp, decentraderTimestamp = false) {
+      const date = decentraderTimestamp ? parseDecentraderUtc(timestamp) : new Date(timestamp);
+      if (!date || Number.isNaN(date.getTime())) return '-';
+      return new Intl.DateTimeFormat('nl-NL', {
+        timeZone: 'Europe/Amsterdam',
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(date).replace(',', '') + ' NL';
+    }
+
+    function updateDelayHistory() {
+      if (!delayHistoryCard) return;
+      delayHistoryCard.hidden = activeSource !== 'decentrader';
+      if (activeSource !== 'decentrader') return;
+
+      const history = payload?.delayHistory;
+      const totalRecords = Number(history?.totalRecords) || 0;
+      const stats = history?.stats || {};
+      const statRows = [
+        ['All', stats.all],
+      ];
+      const candleValue = (value, average = false) => Number.isFinite(Number(value))
+        ? `${average ? Number(value).toFixed(1) : Math.round(Number(value))} candles`
+        : '-';
+
+      delayHistoryStatsRows.innerHTML = statRows.map(([label, row]) => `<tr>
+        <td>${label}</td>
+        <td>${Number(row?.count) || 0}</td>
+        <td>${candleValue(row?.minCompletedCandles1h)}</td>
+        <td>${candleValue(row?.averageCompletedCandles1h, true)}</td>
+        <td>${candleValue(row?.maxCompletedCandles1h)}</td>
+      </tr>`).join('');
+
+      const latest = Array.isArray(history?.recent) ? history.recent.slice(0, 3) : [];
+      delayHistoryLatestRows.innerHTML = latest.length
+        ? latest.map((record) => `<tr>
+            <td>${record.emailType === 'filtered' ? 'FILTERED ' : ''}${record.sideCounts || 'intrusion'}</td>
+            <td>${delayNlTime(record.intrusionTimestamp, true)}</td>
+            <td>${delayNlTime(record.smtpSentAt)}</td>
+            <td>${Number(record.completedCandles1h) || 0} candles (${Math.round(Number(record.delayMinutes) || 0)}m)</td>
+          </tr>`).join('')
+        : '<tr><td colspan="4">No SMTP intrusion alerts recorded yet</td></tr>';
+
+      delayHistoryStatus.textContent = totalRecords
+        ? `${totalRecords} sent intrusion mail${totalRecords === 1 ? '' : 's'} | completed 1H candles between alert time and SMTP acceptance`
+        : 'History starts with the first successfully sent intrusion mail after deployment';
     }
 
     function getLiquiditySplit(frame, gap) {
@@ -3736,6 +3869,7 @@
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       syncJumpTimeInput(frame);
       updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview);
+      updateDelayHistory();
       updateWhaleStudy(frameIndex, frame, gap);
       updateLiquidityCounter(frameIndex, frame, gap);
       updateRsiStudyMonitor(frameIndex, fertilityContext);
