@@ -3,7 +3,11 @@ import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
-import { allocateStepSizes, selectDelayedNewest } from './decentraderExecutionPolicy';
+import {
+  allocateStepSizes,
+  selectDelayedNewest,
+  selectEntryNotional
+} from './decentraderExecutionPolicy';
 import tls from 'tls';
 import zlib from 'zlib';
 import { AlertObject } from '../types';
@@ -3950,12 +3954,20 @@ function buildDirectionalPlan(
     stop.valid && stopDistance > 0
       ? (riskBudgetUsd / stopDistance) * marketPrice
       : 0;
-  const notional = Math.max(
-    0,
-    Math.min(desiredNotional, collateralCappedNotional, equityCappedNotional, riskCappedNotional)
-  );
+  const hardCollateralBudget = Math.max(0, freeCollateral) * modeConfig.collateralUse;
+  const hardCollateralCappedNotional = hardCollateralBudget / marginFraction;
+  const fixedUsdRiskSizing = riskBudget.source === 'fixed-usd';
+  const notional = selectEntryNotional({
+    fixedUsdRisk: fixedUsdRiskSizing,
+    desiredNotional,
+    collateralCappedNotional,
+    equityCappedNotional,
+    riskCappedNotional,
+    hardCollateralCappedNotional
+  });
   const rawSize = notional / Math.max(1, marketPrice);
   const size = floorToStep(rawSize, stepSize);
+  const plannedStopRiskUsd = size * stopDistance;
   const minimumOrderRiskUsd = stop.valid ? stopDistance * stepSize : 0;
   const minimumOrderRiskPctOfEquity =
     equity > 0
@@ -4043,6 +4055,9 @@ function buildDirectionalPlan(
       configuredRiskUsd: riskBudget.configuredRiskUsd,
       riskBudgetSource: riskBudget.source,
       riskBudgetCappedByPct: riskBudget.cappedByPct,
+      sizingPolicy: fixedUsdRiskSizing ? 'fixed-usd-risk' : 'legacy-capped',
+      plannedStopRiskUsd,
+      riskBudgetUtilization: riskBudgetUsd > 0 ? plannedStopRiskUsd / riskBudgetUsd : 0,
       confidenceScore: mapScore,
       confidenceMultiplier: confidence,
       stopBrake,
@@ -4051,6 +4066,8 @@ function buildDirectionalPlan(
         collateralCappedNotional,
         equityCappedNotional,
         riskCappedNotional,
+        hardCollateralBudget,
+        hardCollateralCappedNotional,
         marginFraction,
         stepSize
       }

@@ -1,6 +1,7 @@
 import {
   allocateStepSizes,
-  selectDelayedNewest
+  selectDelayedNewest,
+  selectEntryNotional
 } from '../src/services/decentraderExecutionPolicy';
 
 describe('Decentrader execution policy', () => {
@@ -23,5 +24,44 @@ describe('Decentrader execution policy', () => {
 
     expect(sizes[0]).toBe(0.0001);
     expect(sizes.reduce((total, size) => total + size, 0)).toBeCloseTo(0.0002, 8);
+  });
+
+  test('fixed USD risk sizing is led by stop risk instead of soft map and equity caps', () => {
+    const notional = selectEntryNotional({
+      fixedUsdRisk: true,
+      desiredNotional: 500,
+      collateralCappedNotional: 350,
+      equityCappedNotional: 66,
+      riskCappedNotional: 110,
+      hardCollateralCappedNotional: 5800
+    });
+
+    expect(notional).toBe(110);
+  });
+
+  test('fixed USD risk sizing still respects hard available collateral', () => {
+    const notional = selectEntryNotional({
+      fixedUsdRisk: true,
+      desiredNotional: 500,
+      collateralCappedNotional: 350,
+      equityCappedNotional: 66,
+      riskCappedNotional: 110,
+      hardCollateralCappedNotional: 80
+    });
+
+    expect(notional).toBe(80);
+  });
+
+  test('percentage risk sizing preserves the existing soft caps', () => {
+    const notional = selectEntryNotional({
+      fixedUsdRisk: false,
+      desiredNotional: 500,
+      collateralCappedNotional: 350,
+      equityCappedNotional: 66,
+      riskCappedNotional: 110,
+      hardCollateralCappedNotional: 5800
+    });
+
+    expect(notional).toBe(66);
   });
 });

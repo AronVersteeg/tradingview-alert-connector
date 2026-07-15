@@ -4,6 +4,31 @@ export function selectDelayedNewest<T>(items: T[], delay: number): T | undefined
   return index >= 0 ? items[index] : undefined;
 }
 
+export function selectEntryNotional(options: {
+  fixedUsdRisk: boolean;
+  desiredNotional: number;
+  collateralCappedNotional: number;
+  equityCappedNotional: number;
+  riskCappedNotional: number;
+  hardCollateralCappedNotional: number;
+}): number {
+  const candidates = options.fixedUsdRisk
+    ? [options.riskCappedNotional, options.hardCollateralCappedNotional]
+    : [
+        options.desiredNotional,
+        options.collateralCappedNotional,
+        options.equityCappedNotional,
+        options.riskCappedNotional
+      ];
+
+  return Math.max(
+    0,
+    Math.min(...candidates.map((value) =>
+      Number.isFinite(value) && value > 0 ? value : 0
+    ))
+  );
+}
+
 export function allocateStepSizes(
   size: number,
   stepSize: number,
