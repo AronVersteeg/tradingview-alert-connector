@@ -4,6 +4,7 @@ import path from 'path';
 import express, { Router } from 'express';
 import { validateAlert } from '../services';
 import { DexRegistry } from '../services/dexRegistry';
+import { decentralizedDomCollector } from '../services/decentralizedDomCollector';
 import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
 import { getOpenLiquidityTimelapsePayload } from '../services/openLiquidityTimelapse';
 import { buildSnoekScout } from '../services/snoekScout';
@@ -120,6 +121,7 @@ async function initializeExchanges() {
 initializeExchanges()
   .then(() => {
     decentraderGapMonitor.start();
+    decentralizedDomCollector.start();
   })
   .catch((err) => {
     console.error("Exchange initialization failed:", err);
@@ -312,6 +314,30 @@ router.get('/decentrader/liquidity-timelapse', async (req, res) => {
     res.send(await decentraderGapMonitor.getTimelapsePayload());
   } catch (error) {
     console.error('Decentrader timelapse payload request failed:', error);
+    res.status(500).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.get('/research/dom-collector/status', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.send(decentralizedDomCollector.getStatus());
+});
+
+router.get('/research/dom-collector/history', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(decentralizedDomCollector.getHistory({
+      from: typeof req.query.from === 'string' ? req.query.from : undefined,
+      to: typeof req.query.to === 'string' ? req.query.to : undefined,
+      maxPoints: Number(req.query.maxPoints || 720)
+    }));
+  } catch (error) {
+    console.error('Decentralized DOM collector history request failed:', error);
     res.status(500).send({
       ok: false,
       error: error instanceof Error ? error.message : String(error)

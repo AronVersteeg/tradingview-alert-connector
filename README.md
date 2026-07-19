@@ -117,6 +117,18 @@ With `DECENTRADER_DELAY_CG_REVIEW_ENABLED=true`, The Delay also snapshots CoinGl
 
 The map can also show a CoinGlass large-orderbook/whale overlay. The monitor reads the public CoinGlass page feed, keeps levels above the configured dollar threshold, and draws them as vertical `CG` lines on the Decentrader map. Materially changed snapshots are stored with their actual observation time, map-frame timestamp, current price and gap edges. Replay therefore shows only levels known at that point, plus an influence table for inside/below/above-gap volume, additions/removals and later price tests. Entries and stops remain Decentrader/fractal based; TP2+ selection can use CoinGlass as a bounded confluence boost when a nearby same-side whale level has enough volume and especially when its duration is above the configured long-duration threshold. Set `COINGLASS_WHALE_HISTORY_FILE` to a Render persistent-disk path, or place `DECENTRADER_GAP_ALERT_STATE_FILE` on that disk so the CoinGlass history follows it across deploys.
 
+The read-only decentralized DOM research collector records public BTC-USD L2 and trade-flow observations from dYdX and Hyperliquid. It requires no API key, account or trading permission and is not imported by the entry, sizing, SL or TP execution path. Public trade WebSockets capture aggressive flow while periodic L2 snapshots are aggregated into append-only one-minute NDJSON records. Stored fields include depth at fixed basis-point bands, visible adds/removals inside a comparable 25-bps band, book imbalance ranges, microprice, taker volume and cross-venue consensus. The map panel follows live time or the selected replay frame. Put `DECENTRALIZED_DOM_HISTORY_DIR` on the Render persistent disk; `/app/data/decentralized-dom` matches a disk mounted at `/app/data`. Public HTTP and WebSocket gateway URLs are environment-overridable, so a community or self-hosted endpoint can replace a blocked gateway without changing the storage schema.
+
+```text
+DECENTRALIZED_DOM_COLLECTOR_ENABLED=true
+DECENTRALIZED_DOM_POLL_SECONDS=15
+DECENTRALIZED_DOM_BUCKET_SECONDS=60
+DECENTRALIZED_DOM_RETENTION_DAYS=120
+DECENTRALIZED_DOM_HISTORY_DIR=/app/data/decentralized-dom
+```
+
+Raw status and replay-window data are available from `GET /research/dom-collector/status` and `GET /research/dom-collector/history?from=<ISO>&to=<ISO>`.
+
 ```text
 COINGLASS_WHALE_LEVELS_ENABLED=true
 COINGLASS_WHALE_SYMBOL=Binance_BTCUSDT

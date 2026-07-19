@@ -53,6 +53,7 @@
     main {
       min-height: 100vh;
       display: grid;
+      grid-template-columns: minmax(0, 1fr);
       grid-template-rows: auto 1fr auto;
     }
 
@@ -325,6 +326,131 @@
       padding: 12px 22px;
       background: #121923;
       border-bottom: 1px solid var(--border);
+    }
+
+    .dom-observer-panel {
+      padding: 12px 22px;
+      background: #0f161f;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .dom-observer-inner {
+      max-width: 1420px;
+      margin: 0 auto;
+    }
+
+    .dom-observer-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 9px;
+    }
+
+    .dom-observer-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .dom-observer-controls {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .dom-window-select {
+      width: 74px;
+      height: 30px;
+      padding: 0 8px;
+      font-size: 12px;
+    }
+
+    .dom-observer-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: rgba(7, 10, 15, 0.36);
+    }
+
+    .dom-observer-metric {
+      min-width: 0;
+      padding: 8px 10px;
+      border-left: 1px solid var(--border);
+    }
+
+    .dom-observer-metric:first-child {
+      border-left: 0;
+    }
+
+    .dom-observer-metric strong {
+      display: block;
+      margin: 3px 0 1px;
+      font-size: 17px;
+      line-height: 1.15;
+    }
+
+    .dom-positive {
+      color: #21d3a3;
+    }
+
+    .dom-negative {
+      color: #ff5d68;
+    }
+
+    .dom-observer-chart {
+      display: block;
+      width: 100%;
+      height: 132px;
+      min-height: 132px;
+      margin-top: 9px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #0d1118;
+      cursor: default;
+    }
+
+    .dom-observer-table-wrap {
+      margin-top: 9px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+    }
+
+    .dom-observer-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 11px;
+    }
+
+    .dom-observer-table th,
+    .dom-observer-table td {
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(236, 242, 248, 0.08);
+      text-align: right;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .dom-observer-table th:first-child,
+    .dom-observer-table td:first-child {
+      text-align: left;
+    }
+
+    .dom-observer-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .dom-observer-table th {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
     }
 
     .whale-study-inner {
@@ -620,12 +746,21 @@
     }
 
     @media (max-width: 760px) {
+      html,
+      body,
+      main {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+      }
+
       header,
       footer,
       .stage,
       .comparison,
       .liquidity-panel,
-      .whale-study-panel {
+      .whale-study-panel,
+      .dom-observer-panel {
         padding-left: 12px;
         padding-right: 12px;
       }
@@ -674,6 +809,18 @@
 
       .whale-study-summary {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .dom-observer-head {
+        align-items: flex-start;
+      }
+
+      .dom-observer-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .dom-observer-metric:nth-child(3) {
+        border-left: 0;
       }
 
       .whale-study-metric:nth-child(3) {
@@ -882,6 +1029,70 @@
       </div>
     </section>
 
+    <section class="dom-observer-panel" id="domObserverPanel" aria-live="polite">
+      <div class="dom-observer-inner">
+        <div class="dom-observer-head">
+          <div>
+            <h2 class="dom-observer-title">Decentralized DOM research store</h2>
+            <div class="gap-status" id="domObserverStatus">Starting public dYdX + Hyperliquid observation</div>
+          </div>
+          <div class="dom-observer-controls">
+            <span class="gap-status">Research only</span>
+            <select class="dom-window-select" id="domWindow" aria-label="DOM history timeframe">
+              <option value="1">1h</option>
+              <option value="4">4h</option>
+              <option value="12">12h</option>
+              <option value="24" selected>24h</option>
+              <option value="168">7d</option>
+            </select>
+          </div>
+        </div>
+        <div class="dom-observer-summary">
+          <div class="dom-observer-metric">
+            <div class="gap-label">25 bps book bias</div>
+            <strong id="domBiasValue">-</strong>
+            <div class="gap-status" id="domBiasMeta">Waiting for both venues</div>
+          </div>
+          <div class="dom-observer-metric">
+            <div class="gap-label">Aggressive flow</div>
+            <strong id="domFlowValue">-</strong>
+            <div class="gap-status" id="domFlowMeta">Buy minus sell taker USD</div>
+          </div>
+          <div class="dom-observer-metric">
+            <div class="gap-label">Visible book change</div>
+            <strong id="domBookChangeValue">-</strong>
+            <div class="gap-status" id="domBookChangeMeta">Adds versus removals</div>
+          </div>
+          <div class="dom-observer-metric">
+            <div class="gap-label">Stored coverage</div>
+            <strong id="domCoverageValue">-</strong>
+            <div class="gap-status" id="domCoverageMeta">Minute records in selected window</div>
+          </div>
+        </div>
+        <canvas class="dom-observer-chart" id="domObserverChart" width="1200" height="132"></canvas>
+        <div class="dom-observer-table-wrap">
+          <table class="dom-observer-table" aria-label="Latest decentralized DOM observations">
+            <thead>
+              <tr>
+                <th>Venue</th>
+                <th>Mid</th>
+                <th>Spread</th>
+                <th>Bid depth 25bp</th>
+                <th>Ask depth 25bp</th>
+                <th>Book bias</th>
+                <th>Taker delta</th>
+                <th>Visible net adds</th>
+                <th>Samples</th>
+              </tr>
+            </thead>
+            <tbody id="domObserverRows">
+              <tr><td colspan="9" class="gap-status">Collector is gathering its first minute</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section class="whale-study-panel" id="whaleStudyPanel" aria-live="polite">
       <div class="whale-study-inner">
         <div class="whale-study-head">
@@ -998,6 +1209,12 @@
     const CLOUD_TRADE_PLAN_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/trade-plan'
       : '/decentrader/trade-plan';
+    const CLOUD_DOM_COLLECTOR_STATUS_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+      ? 'https://arons-tradingview-alert-connector.onrender.com/research/dom-collector/status'
+      : '/research/dom-collector/status';
+    const CLOUD_DOM_COLLECTOR_HISTORY_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+      ? 'https://arons-tradingview-alert-connector.onrender.com/research/dom-collector/history'
+      : '/research/dom-collector/history';
     let payload = activeSource === 'decentrader' ? window.DECENTRADER_LIQUIDITY_TIMELAPSE : null;
     const canvas = document.getElementById('chart');
     const ctx = canvas.getContext('2d');
@@ -1064,6 +1281,20 @@
     const tradeZoneStatus = document.getElementById('tradeZoneStatus');
     const tradePlanValue = document.getElementById('tradePlanValue');
     const tradePlanStatus = document.getElementById('tradePlanStatus');
+    const domObserverPanel = document.getElementById('domObserverPanel');
+    const domObserverStatus = document.getElementById('domObserverStatus');
+    const domWindow = document.getElementById('domWindow');
+    const domBiasValue = document.getElementById('domBiasValue');
+    const domBiasMeta = document.getElementById('domBiasMeta');
+    const domFlowValue = document.getElementById('domFlowValue');
+    const domFlowMeta = document.getElementById('domFlowMeta');
+    const domBookChangeValue = document.getElementById('domBookChangeValue');
+    const domBookChangeMeta = document.getElementById('domBookChangeMeta');
+    const domCoverageValue = document.getElementById('domCoverageValue');
+    const domCoverageMeta = document.getElementById('domCoverageMeta');
+    const domObserverChart = document.getElementById('domObserverChart');
+    const domObserverChartCtx = domObserverChart?.getContext('2d');
+    const domObserverRows = document.getElementById('domObserverRows');
 
     function storedCandleFilterEnabled() {
       try {
@@ -1094,6 +1325,10 @@
     const activePointers = new Map();
     let pinchStart = null;
     let activeDrawCache = null;
+    let domObserverRefreshTimer = null;
+    let domObserverRequestSerial = 0;
+    let domObserverRequestKey = '';
+    let domObserverRecords = [];
     const BAR_WIDTH = 4;
     const GAP_EDGE_PADDING = 3;
 
@@ -1104,6 +1339,7 @@
 
     if (activeSource === 'open') {
       pageTitle.textContent = 'BTC/USD Public Perp Liquidity Study';
+      if (domObserverPanel) domObserverPanel.hidden = true;
     } else {
       pageTitle.textContent = 'BTC/USD Decentrader Liquidity Timelapse';
     }
@@ -2268,6 +2504,256 @@
       delayHistoryStatus.textContent = totalRecords
         ? `${totalRecords} sent intrusion mail${totalRecords === 1 ? '' : 's'} | completed 1H candles between alert time and SMTP acceptance`
         : 'History starts with the first successfully sent intrusion mail after deployment';
+    }
+
+    function domSignedUsd(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return '-';
+      const prefix = parsed > 0 ? '+' : parsed < 0 ? '-' : '';
+      return `${prefix}${compactUsd(Math.abs(parsed))}`;
+    }
+
+    function domSignedPercent(value) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return '-';
+      const prefix = parsed > 0 ? '+' : '';
+      return `${prefix}${(parsed * 100).toFixed(1)}%`;
+    }
+
+    function setDomDirectionClass(element, value) {
+      if (!element) return;
+      element.classList.toggle('dom-positive', Number(value) > 0);
+      element.classList.toggle('dom-negative', Number(value) < 0);
+    }
+
+    function domVenueEntries(record) {
+      return Object.entries(record?.venues || {}).filter(([, venue]) => venue);
+    }
+
+    function drawDomObserverChart(records) {
+      if (!domObserverChart || !domObserverChartCtx) return;
+      const ratio = Math.max(1, window.devicePixelRatio || 1);
+      const cssWidth = Math.max(320, Math.floor(domObserverChart.clientWidth || 1200));
+      const cssHeight = 132;
+      domObserverChart.width = Math.floor(cssWidth * ratio);
+      domObserverChart.height = Math.floor(cssHeight * ratio);
+      domObserverChartCtx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      domObserverChartCtx.clearRect(0, 0, cssWidth, cssHeight);
+      domObserverChartCtx.fillStyle = '#0d1118';
+      domObserverChartCtx.fillRect(0, 0, cssWidth, cssHeight);
+
+      const left = 48;
+      const right = cssWidth - 12;
+      const topCenter = 36;
+      const bottomCenter = 94;
+      const width = Math.max(1, right - left);
+      domObserverChartCtx.strokeStyle = 'rgba(236,242,248,0.14)';
+      domObserverChartCtx.lineWidth = 1;
+      for (const y of [topCenter, bottomCenter]) {
+        domObserverChartCtx.beginPath();
+        domObserverChartCtx.moveTo(left, y);
+        domObserverChartCtx.lineTo(right, y);
+        domObserverChartCtx.stroke();
+      }
+      domObserverChartCtx.fillStyle = '#9aa8b8';
+      domObserverChartCtx.font = '10px Inter, system-ui, sans-serif';
+      domObserverChartCtx.fillText('BOOK', 9, topCenter + 3);
+      domObserverChartCtx.fillText('FLOW', 9, bottomCenter + 3);
+
+      if (!records.length) {
+        domObserverChartCtx.fillText('No stored observations for this replay window', left + 10, 68);
+        return;
+      }
+
+      const xFor = (index) => records.length === 1
+        ? right
+        : left + (index / (records.length - 1)) * width;
+      const imbalances = records.map((record) => Number(record?.crossVenue?.consensusImbalance25Bps) || 0);
+      const flows = records.map((record) => Number(record?.crossVenue?.consensusTakerDeltaUsd) || 0);
+      const maxFlow = Math.max(1, ...flows.map(Math.abs));
+
+      domObserverChartCtx.lineWidth = 1.5;
+      for (let index = 1; index < records.length; index += 1) {
+        const previous = imbalances[index - 1];
+        const current = imbalances[index];
+        domObserverChartCtx.strokeStyle = current >= 0 ? '#21d3a3' : '#ff5d68';
+        domObserverChartCtx.beginPath();
+        domObserverChartCtx.moveTo(xFor(index - 1), topCenter - previous * 25);
+        domObserverChartCtx.lineTo(xFor(index), topCenter - current * 25);
+        domObserverChartCtx.stroke();
+      }
+
+      const barWidth = Math.max(1, Math.min(5, width / Math.max(1, records.length)));
+      flows.forEach((flow, index) => {
+        const height = (Math.abs(flow) / maxFlow) * 24;
+        domObserverChartCtx.fillStyle = flow >= 0
+          ? 'rgba(33, 211, 163, 0.72)'
+          : 'rgba(255, 93, 104, 0.72)';
+        domObserverChartCtx.fillRect(
+          xFor(index) - barWidth / 2,
+          flow >= 0 ? bottomCenter - height : bottomCenter,
+          barWidth,
+          height
+        );
+      });
+
+      const firstTime = delayNlTime(records[0]?.bucketStart);
+      const lastTime = delayNlTime(records[records.length - 1]?.bucketStart);
+      domObserverChartCtx.fillStyle = '#718096';
+      domObserverChartCtx.fillText(firstTime.replace(' NL', ''), left, 126);
+      const lastWidth = domObserverChartCtx.measureText(lastTime.replace(' NL', '')).width;
+      domObserverChartCtx.fillText(lastTime.replace(' NL', ''), right - lastWidth, 126);
+    }
+
+    function renderDomObserver(records, status, context) {
+      domObserverRecords = records;
+      const latest = records[records.length - 1];
+      const venueEntries = domVenueEntries(latest);
+      if (!latest) {
+        domObserverStatus.textContent = status?.enabled === false
+          ? 'Collector disabled | observation only'
+          : `No stored DOM data for ${context.label}`;
+        domBiasValue.textContent = '-';
+        domFlowValue.textContent = '-';
+        domBookChangeValue.textContent = '-';
+        domCoverageValue.textContent = '0 min';
+        domCoverageMeta.textContent = 'Collection starts after deployment';
+        domObserverRows.innerHTML = '<tr><td colspan="9" class="gap-status">No observations in the selected replay window</td></tr>';
+        drawDomObserverChart([]);
+        return;
+      }
+
+      const bias = Number(latest?.crossVenue?.consensusImbalance25Bps) || 0;
+      const flow = records.reduce(
+        (sum, record) => sum + (Number(record?.crossVenue?.consensusTakerDeltaUsd) || 0),
+        0
+      );
+      const directionalBookChange = records.reduce((total, record) => (
+        total + domVenueEntries(record).reduce((sum, [, venue]) => (
+          sum +
+          (Number(venue.bidAddedUsd) || 0) -
+          (Number(venue.bidRemovedUsd) || 0) -
+          (Number(venue.askAddedUsd) || 0) +
+          (Number(venue.askRemovedUsd) || 0)
+        ), 0)
+      ), 0);
+      const expectedMinutes = Math.max(1, Number(domWindow?.value || 24) * 60);
+      const coveragePct = Math.min(100, (records.length / expectedMinutes) * 100);
+      const sourceHealth = Array.isArray(status?.sources)
+        ? status.sources.filter((source) => source.lastSuccessAt && source.tradeStreamConnected && !source.lastError).length
+        : 0;
+
+      domBiasValue.textContent = domSignedPercent(bias);
+      domBiasMeta.textContent = bias > 0
+        ? 'Bid depth dominant'
+        : bias < 0
+          ? 'Ask depth dominant'
+          : 'Balanced visible depth';
+      setDomDirectionClass(domBiasValue, bias);
+      domFlowValue.textContent = domSignedUsd(flow);
+      domFlowMeta.textContent = flow > 0 ? 'Net aggressive buying' : flow < 0 ? 'Net aggressive selling' : 'Balanced taker flow';
+      setDomDirectionClass(domFlowValue, flow);
+      domBookChangeValue.textContent = domSignedUsd(directionalBookChange);
+      domBookChangeMeta.textContent = directionalBookChange > 0
+        ? 'Bid support / ask pulling'
+        : directionalBookChange < 0
+          ? 'Ask pressure / bid pulling'
+          : 'No directional visible change';
+      setDomDirectionClass(domBookChangeValue, directionalBookChange);
+      domCoverageValue.textContent = `${records.length} min`;
+      domCoverageMeta.textContent = `${coveragePct.toFixed(0)}% window coverage | ${sourceHealth}/2 sources healthy`;
+      domObserverStatus.textContent = `${context.label} | ${delayNlTime(latest.bucketStart)} | public dYdX + Hyperliquid | no execution link`;
+
+      domObserverRows.innerHTML = venueEntries.length
+        ? venueEntries.map(([name, venue]) => {
+            const takerDelta = (Number(venue.buyTakerUsd) || 0) - (Number(venue.sellTakerUsd) || 0);
+            const visibleNet = (
+              (Number(venue.bidAddedUsd) || 0) +
+              (Number(venue.askAddedUsd) || 0) -
+              (Number(venue.bidRemovedUsd) || 0) -
+              (Number(venue.askRemovedUsd) || 0)
+            );
+            return `<tr>
+              <td>${name === 'dydx' ? 'dYdX' : 'Hyperliquid'}</td>
+              <td>${priceLevel(venue.mid)}</td>
+              <td>${Number(venue.spreadBps || 0).toFixed(2)} bp</td>
+              <td>${compactUsd(venue.bidDepthUsd?.['25'])}</td>
+              <td>${compactUsd(venue.askDepthUsd?.['25'])}</td>
+              <td class="${Number(venue.imbalance?.['25']) >= 0 ? 'dom-positive' : 'dom-negative'}">${domSignedPercent(venue.imbalance?.['25'])}</td>
+              <td class="${takerDelta >= 0 ? 'dom-positive' : 'dom-negative'}">${domSignedUsd(takerDelta)}</td>
+              <td>${domSignedUsd(visibleNet)}</td>
+              <td title="Delivered samples / visible bid-ask depth coverage">${Number(venue.samples) || 0} | ${Math.round(Math.min(Number(venue.depthCoverageBps?.bid) || 0, Number(venue.depthCoverageBps?.ask) || 0))}bp${Number(venue.failedPolls) ? ` | ${Number(venue.failedPolls)} failed` : ''}</td>
+            </tr>`;
+          }).join('')
+        : '<tr><td colspan="9" class="gap-status">No complete venue snapshot in this minute</td></tr>';
+      drawDomObserverChart(records);
+    }
+
+    function domTargetForFrame(frame) {
+      const atLatest = Number(frameInput.value) === Number(frameInput.max);
+      if (atLatest) {
+        return { timestamp: Date.now(), label: 'Live collector window' };
+      }
+      const frameDate = parseDecentraderUtc(frame?.t);
+      const timestamp = frameDate && !Number.isNaN(frameDate.getTime())
+        ? frameDate.getTime() + 60 * 60 * 1000
+        : Date.now();
+      return { timestamp, label: `Replay through ${nlTime(frame?.t)} NL` };
+    }
+
+    async function refreshDomObserver(frame, requestKey) {
+      const requestSerial = ++domObserverRequestSerial;
+      const hours = Math.max(1, Number(domWindow?.value || 24));
+      const context = domTargetForFrame(frame);
+      const from = new Date(context.timestamp - hours * 60 * 60 * 1000).toISOString();
+      const to = new Date(context.timestamp).toISOString();
+      const historyUrl = new URL(CLOUD_DOM_COLLECTOR_HISTORY_URL, window.location.href);
+      historyUrl.searchParams.set('from', from);
+      historyUrl.searchParams.set('to', to);
+      historyUrl.searchParams.set('maxPoints', '720');
+      historyUrl.searchParams.set('ts', String(Date.now()));
+      try {
+        const [historyResponse, statusResponse] = await Promise.all([
+          fetch(historyUrl.toString(), { cache: 'no-store' }),
+          fetch(`${CLOUD_DOM_COLLECTOR_STATUS_URL}?ts=${Date.now()}`, { cache: 'no-store' })
+        ]);
+        if (!historyResponse.ok) throw new Error(`DOM history ${historyResponse.status}`);
+        if (!statusResponse.ok) throw new Error(`DOM status ${statusResponse.status}`);
+        const [history, status] = await Promise.all([historyResponse.json(), statusResponse.json()]);
+        if (requestSerial !== domObserverRequestSerial) return;
+        const records = Array.isArray(history?.records) ? [...history.records] : [];
+        const current = status?.current;
+        const currentTime = Date.parse(current?.bucketStart || '');
+        if (
+          current?.crossVenue?.availableVenues > 0 &&
+          Number.isFinite(currentTime) &&
+          currentTime >= Date.parse(from) &&
+          currentTime <= Date.parse(to) + 60_000 &&
+          !records.some((record) => record.bucketStart === current.bucketStart)
+        ) {
+          records.push(current);
+        }
+        records.sort((a, b) => Date.parse(a.bucketStart) - Date.parse(b.bucketStart));
+        domObserverRequestKey = requestKey;
+        renderDomObserver(records, status, context);
+      } catch (error) {
+        if (requestSerial !== domObserverRequestSerial) return;
+        domObserverStatus.textContent = `Collector view unavailable: ${String(error?.message || error)}`;
+        drawDomObserverChart(domObserverRecords);
+      }
+    }
+
+    function scheduleDomObserverRefresh(frame, force = false) {
+      if (activeSource !== 'decentrader' || !domObserverPanel) return;
+      const context = domTargetForFrame(frame);
+      const minute = Math.floor(context.timestamp / 60_000);
+      const requestKey = `${minute}|${domWindow?.value || 24}|${Number(frameInput.value) === Number(frameInput.max) ? 'live' : 'replay'}`;
+      if (!force && requestKey === domObserverRequestKey) return;
+      if (domObserverRefreshTimer) clearTimeout(domObserverRefreshTimer);
+      domObserverRequestKey = requestKey;
+      domObserverRefreshTimer = setTimeout(() => {
+        refreshDomObserver(frame, requestKey);
+      }, force ? 0 : 220);
     }
 
     function getLiquiditySplit(frame, gap) {
@@ -3875,6 +4361,7 @@
       updateRsiStudyMonitor(frameIndex, fertilityContext);
       updateTradeZoneMonitor(frame, gap, tradeZones, tpHits);
       updateTradePlanMonitor(frame);
+      scheduleDomObserverRefresh(frame);
       maybeSendGapAlert(frameIndex, frame, intrusion);
       maybeSendTpHitAlert(frameIndex, frame, tpHits);
       note.textContent = payload.source.note;
@@ -4053,6 +4540,10 @@
       for (const input of [frameInput, modeInput, sideInput, levInput, liquidityWindow]) {
         input.addEventListener('input', draw);
       }
+      domWindow?.addEventListener('change', () => {
+        const frame = payload?.frames?.[Number(frameInput.value)];
+        scheduleDomObserverRefresh(frame, true);
+      });
       prevHourButton.addEventListener('click', () => stepFrame(-1));
       nextHourButton.addEventListener('click', () => stepFrame(1));
       jumpTimeButton?.addEventListener('click', jumpToSelectedTime);
