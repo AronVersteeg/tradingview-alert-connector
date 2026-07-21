@@ -107,13 +107,22 @@ export type IntrusionDomStudyRecord = {
     nextColor: CandleColor;
   };
   dom: {
+    pre1h?: IntrusionDomWindow;
     pre2h?: IntrusionDomWindow;
+    pre4h?: IntrusionDomWindow;
+    pre12h?: IntrusionDomWindow;
+    pre24h?: IntrusionDomWindow;
     intrusion1h?: IntrusionDomWindow;
     confirmation1h?: IntrusionDomWindow;
     signal2h?: IntrusionDomWindow;
     delay?: IntrusionDomWindow;
   };
   coinGlass: {
+    pre1h?: CoinGlassStudySnapshot;
+    pre2h?: CoinGlassStudySnapshot;
+    pre4h?: CoinGlassStudySnapshot;
+    pre12h?: CoinGlassStudySnapshot;
+    pre24h?: CoinGlassStudySnapshot;
     event?: CoinGlassStudySnapshot;
     review?: CoinGlassStudySnapshot;
     frictionRemovedUsd?: number;
@@ -140,6 +149,7 @@ export type IntrusionDomStudyRecord = {
 
 type StudyFile = {
   updatedAt?: string;
+  historyStartTimestamp?: string;
   records: IntrusionDomStudyRecord[];
 };
 
@@ -206,6 +216,9 @@ function readStudy(): StudyFile {
     const parsed = JSON.parse(fs.readFileSync(studyFile(), 'utf8'));
     return {
       updatedAt: typeof parsed?.updatedAt === 'string' ? parsed.updatedAt : undefined,
+      historyStartTimestamp: typeof parsed?.historyStartTimestamp === 'string'
+        ? parsed.historyStartTimestamp
+        : undefined,
       records: Array.isArray(parsed?.records) ? parsed.records : []
     };
   } catch {
@@ -509,6 +522,7 @@ export function refreshIntrusionDomStudy(input: {
   delayRecords?: DecentraderDelayRecord[];
   frames?: StudyFrame[];
   coinGlassObservations?: CoinGlassObservation[];
+  historyStartTimestamp?: string;
   now?: string;
 }): void {
   const now = input.now || new Date().toISOString();
@@ -580,15 +594,22 @@ export function refreshIntrusionDomStudy(input: {
   for (const record of records) {
     const at = timestampMs(record.timestamp);
     if (at === undefined) continue;
-    const shouldRefresh = at >= refreshCutoff || refreshSignatures.has(record.signature);
+    const shouldRefresh = at >= refreshCutoff
+      || refreshSignatures.has(record.signature)
+      || !record.dom.pre24h;
     if (!shouldRefresh) continue;
     const historyTo = Math.min(nowMs, at + 24 * HOUR_MS);
     const domHistory = decentralizedDomCollector.getHistory({
-      from: iso(at - 2 * HOUR_MS),
+      from: iso(at - 24 * HOUR_MS),
       to: iso(historyTo),
       maxPoints: 5_000
     }).records;
     const reviewAt = Date.parse(record.filteredEmailSentAt || record.normalEmailSentAt || now);
+    const pre1hObservation = nearestObservation(observations, at - HOUR_MS);
+    const pre2hObservation = nearestObservation(observations, at - 2 * HOUR_MS);
+    const pre4hObservation = nearestObservation(observations, at - 4 * HOUR_MS);
+    const pre12hObservation = nearestObservation(observations, at - 12 * HOUR_MS);
+    const pre24hObservation = nearestObservation(observations, at - 24 * HOUR_MS);
     const eventObservation = nearestObservation(observations, at);
     const reviewObservation = nearestObservation(observations, reviewAt);
     record.gap = record.gap || eventObservation?.gap || reviewObservation?.gap;
@@ -599,18 +620,32 @@ export function refreshIntrusionDomStudy(input: {
       nextColor: expectedColor(record.direction)
     } : undefined);
     record.dom = {
+      pre1h: aggregateIntrusionDomWindow(domHistory, at - HOUR_MS, at, record.direction),
       pre2h: aggregateIntrusionDomWindow(domHistory, at - 2 * HOUR_MS, at, record.direction),
+      pre4h: aggregateIntrusionDomWindow(domHistory, at - 4 * HOUR_MS, at, record.direction),
+      pre12h: aggregateIntrusionDomWindow(domHistory, at - 12 * HOUR_MS, at, record.direction),
+      pre24h: aggregateIntrusionDomWindow(domHistory, at - 24 * HOUR_MS, at, record.direction),
       intrusion1h: aggregateIntrusionDomWindow(domHistory, at, at + HOUR_MS, record.direction),
       confirmation1h: aggregateIntrusionDomWindow(domHistory, at + HOUR_MS, at + 2 * HOUR_MS, record.direction),
       signal2h: aggregateIntrusionDomWindow(domHistory, at, at + 2 * HOUR_MS, record.direction),
       delay: aggregateIntrusionDomWindow(domHistory, at, Math.max(at + 60_000, reviewAt), record.direction)
     };
+    const pre1hCg = summarizeCoinGlass(pre1hObservation, at - HOUR_MS, record.direction, record.gap);
+    const pre2hCg = summarizeCoinGlass(pre2hObservation, at - 2 * HOUR_MS, record.direction, record.gap);
+    const pre4hCg = summarizeCoinGlass(pre4hObservation, at - 4 * HOUR_MS, record.direction, record.gap);
+    const pre12hCg = summarizeCoinGlass(pre12hObservation, at - 12 * HOUR_MS, record.direction, record.gap);
+    const pre24hCg = summarizeCoinGlass(pre24hObservation, at - 24 * HOUR_MS, record.direction, record.gap);
     const eventCg = summarizeCoinGlass(eventObservation, at, record.direction, record.gap);
     const reviewCg = summarizeCoinGlass(reviewObservation, reviewAt, record.direction, record.gap);
     const frictionRemovedUsd = eventCg && reviewCg
       ? Math.max(0, eventCg.frictionUsd - reviewCg.frictionUsd)
       : undefined;
     record.coinGlass = {
+      pre1h: pre1hCg,
+      pre2h: pre2hCg,
+      pre4h: pre4hCg,
+      pre12h: pre12hCg,
+      pre24h: pre24hCg,
       event: eventCg,
       review: reviewCg,
       frictionRemovedUsd,
@@ -629,7 +664,13 @@ export function refreshIntrusionDomStudy(input: {
     record.lastUpdatedAt = now;
   }
 
-  writeStudy({ updatedAt: now, records: records.slice(-MAX_RECORDS) });
+  writeStudy({
+    updatedAt: now,
+    historyStartTimestamp: [input.historyStartTimestamp, study.historyStartTimestamp]
+      .filter((value): value is string => Boolean(value))
+      .sort()[0],
+    records: records.slice(-MAX_RECORDS)
+  });
 }
 
 function average(records: IntrusionDomStudyRecord[], getter: (record: IntrusionDomStudyRecord) => number | undefined): number | undefined {
@@ -650,6 +691,7 @@ export function intrusionDomStudySnapshot(): any {
     ruleVersion: 'benchmark-v1',
     file: studyFile(),
     updatedAt: study.updatedAt,
+    historyStartTimestamp: study.historyStartTimestamp,
     totalRecords: study.records.length,
     classifiedRecords: classified.length,
     comparison: {
@@ -670,11 +712,34 @@ export function intrusionDomStudySnapshot(): any {
     history: study.records.slice().reverse().map((record) => ({
       signature: record.signature,
       timestamp: record.timestamp,
+      timestampNl: record.timestampNl,
+      sideCounts: record.sideCounts,
+      direction: record.direction,
+      alertPrice: record.alertPrice,
+      gap: record.gap,
       filtered: record.filtered,
+      normalEmailSentAt: record.normalEmailSentAt,
+      filteredEmailSentAt: record.filteredEmailSentAt,
       candleReview: record.candleReview,
+      pre1h: record.dom.pre1h,
+      pre2h: record.dom.pre2h,
+      pre4h: record.dom.pre4h,
+      pre12h: record.dom.pre12h,
+      pre24h: record.dom.pre24h,
       event: record.dom.intrusion1h,
       confirmation: record.dom.confirmation1h,
+      signal2h: record.dom.signal2h,
+      delayWindow: record.dom.delay,
       coinGlass: {
+        pre1h: record.coinGlass.pre1h,
+        pre2h: record.coinGlass.pre2h,
+        pre4h: record.coinGlass.pre4h,
+        pre12h: record.coinGlass.pre12h,
+        pre24h: record.coinGlass.pre24h,
+        eventObservedAt: record.coinGlass.event?.observedAt,
+        reviewObservedAt: record.coinGlass.review?.observedAt,
+        eventLevelCount: record.coinGlass.event?.levelCount,
+        reviewLevelCount: record.coinGlass.review?.levelCount,
         eventFrictionUsd: record.coinGlass.event?.frictionUsd,
         reviewFrictionUsd: record.coinGlass.review?.frictionUsd,
         frictionRemovalPct: record.coinGlass.frictionRemovalPct,
@@ -682,6 +747,7 @@ export function intrusionDomStudySnapshot(): any {
         reviewSupportUsd: record.coinGlass.review?.supportUsd,
         supportRetentionPct: record.coinGlass.supportRetentionPct
       },
+      outcome: record.outcome,
       evidence: record.evidence,
       hypothesisEntryValid: record.hypothesisEntryValid
     }))
@@ -693,4 +759,8 @@ export function intrusionDomStudyResumeTimestamp(): string | undefined {
   const latest = records[records.length - 1];
   const latestMs = latest ? timestampMs(latest.timestamp) : undefined;
   return latestMs === undefined ? undefined : iso(Math.max(0, latestMs - HOUR_MS));
+}
+
+export function intrusionDomStudyHistoryStartTimestamp(): string | undefined {
+  return readStudy().historyStartTimestamp;
 }

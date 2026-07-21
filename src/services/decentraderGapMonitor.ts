@@ -16,6 +16,7 @@ import {
   readDecentraderDelayHistory
 } from './decentraderDelayHistory';
 import {
+  intrusionDomStudyHistoryStartTimestamp,
   intrusionDomStudySnapshot,
   intrusionDomStudyResumeTimestamp,
   refreshIntrusionDomStudy
@@ -1702,11 +1703,57 @@ function gapIntrusionsFromTimestamp(rows: DecentraderRow[], fromIso: string | un
   if (!Number.isFinite(fromMs)) return [];
 
   const alerts: GapAlert[] = [];
+  const bars = new Map<string, LiquidityBar>();
+  const applyRow = (row: DecentraderRow, rowIndex: number): LiquidityBar[] => {
+    const changed: LiquidityBar[] = [];
+    for (const side of ['long', 'short'] as const) {
+      for (const leverage of LEVERAGES) {
+        const event = eventForRow(row, rowIndex, side, leverage);
+        if (!event.active || event.roundedPrice === undefined) continue;
+        const compactSide = side === 'long' ? 'L' : 'S';
+        const key = `${compactSide}|${leverage}|${priceKey(event.roundedPrice)}`;
+        const existing = bars.get(key) || {
+          key,
+          side: compactSide,
+          leverage,
+          price: event.roundedPrice,
+          count: 0
+        } as LiquidityBar;
+        existing.count += 1;
+        bars.set(key, existing);
+        changed.push({ ...existing, newCount: 1 });
+      }
+    }
+    return changed;
+  };
+
+  applyRow(rows[0], 0);
   for (let frameIndex = 1; frameIndex < rows.length; frameIndex += 1) {
+    const previousFrame = rows[frameIndex - 1];
+    const currentFrame = rows[frameIndex];
+    const currentPrice = parseNumber(currentFrame.ohlc4);
+    const previousGap = cleanGapForBars(previousFrame, Array.from(bars.values()));
+    const changed = applyRow(currentFrame, frameIndex);
     const frameMs = Date.parse(String(rows[frameIndex]?.timestamp || '').replace(' ', 'T') + 'Z');
-    if (!Number.isFinite(frameMs) || frameMs < fromMs) continue;
-    const alert = detectGapIntrusion(rows, frameIndex);
-    if (alert?.entrants.length) alerts.push(alert);
+    if (!Number.isFinite(frameMs) || frameMs < fromMs || currentPrice === undefined || !previousGap) continue;
+    const entrants = changed
+      .filter((bar) => bar.price > previousGap.left && bar.price < previousGap.right)
+      .map((bar) => ({
+        ...bar,
+        gapSide: bar.price - previousGap.left <= previousGap.right - bar.price ? 'left' : 'right',
+        sideOfPrice: bar.price < currentPrice ? 'left' : bar.price > currentPrice ? 'right' : 'price'
+      })) as LiquidityBar[];
+    if (!entrants.length) continue;
+    alerts.push({
+      frameIndex,
+      timestamp: String(currentFrame.timestamp || ''),
+      timestampNl: nlTime(currentFrame.timestamp),
+      price: currentPrice,
+      previousGap,
+      entrants,
+      left: entrants.filter((bar) => bar.gapSide === 'left'),
+      right: entrants.filter((bar) => bar.gapSide === 'right')
+    });
   }
   return alerts;
 }
@@ -4761,7 +4808,14 @@ export class DecentraderGapMonitor {
           : [])
       ]);
       const domCoverageFrom = decentralizedDomCollector.getCoverage().from;
-      const domStudyFrom = intrusionDomStudyResumeTimestamp() || domCoverageFrom;
+      const historyStartTimestamp = rows[1]?.timestamp || rows[0]?.timestamp;
+      const storedHistoryStart = intrusionDomStudyHistoryStartTimestamp();
+      const needsHistoricalBackfill = Boolean(
+        historyStartTimestamp && (!storedHistoryStart || storedHistoryStart > historyStartTimestamp)
+      );
+      const domStudyFrom = needsHistoricalBackfill && historyStartTimestamp
+        ? `${historyStartTimestamp.replace(' ', 'T')}Z`
+        : intrusionDomStudyResumeTimestamp() || domCoverageFrom;
       const domStudyAlerts = uniqueGapAlerts([
         ...gapIntrusionsFromTimestamp(rows, domStudyFrom),
         ...alerts
@@ -4902,6 +4956,7 @@ export class DecentraderGapMonitor {
           delayRecords: readDecentraderDelayHistory().records,
           frames: this.latestTimelapsePayload?.frames || [],
           coinGlassObservations: coinglassWhaleSnapshot().observations,
+          historyStartTimestamp,
           now: nowNlIso()
         });
         result.intrusionDomStudy = intrusionDomStudySnapshot();
@@ -5113,6 +5168,7 @@ export class DecentraderGapMonitor {
         delayRecords: readDecentraderDelayHistory().records,
         frames: this.latestTimelapsePayload?.frames || [],
         coinGlassObservations: coinglassWhaleSnapshot().observations,
+        historyStartTimestamp,
         now: nowNlIso()
       });
       result.intrusionDomStudy = intrusionDomStudySnapshot();
