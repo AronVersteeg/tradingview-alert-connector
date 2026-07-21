@@ -453,6 +453,41 @@
       text-transform: uppercase;
     }
 
+    .dom-study-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .dom-study-title {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .dom-study-badge {
+      display: inline-block;
+      min-width: 72px;
+      padding: 2px 6px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      text-align: center;
+      font-size: 9px;
+      font-weight: 700;
+    }
+
+    .dom-study-badge.is-valid {
+      color: #21d3a3;
+      border-color: rgba(33, 211, 163, 0.5);
+    }
+
+    .dom-study-badge.is-rejected {
+      color: #ff5d68;
+      border-color: rgba(255, 93, 104, 0.5);
+    }
+
     .whale-study-inner {
       max-width: 1420px;
       margin: 0 auto;
@@ -1001,10 +1036,10 @@
           </table>
           <table class="delay-history-table delay-history-latest" aria-label="Latest three SMTP delay observations">
             <thead>
-              <tr><th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th></tr>
+              <tr><th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th><th>DOM</th><th>Ultimate</th></tr>
             </thead>
             <tbody id="delayHistoryLatestRows">
-              <tr><td colspan="4">No SMTP intrusion alerts recorded yet</td></tr>
+              <tr><td colspan="6">No SMTP intrusion alerts recorded yet</td></tr>
             </tbody>
           </table>
         </div>
@@ -1087,6 +1122,30 @@
             </thead>
             <tbody id="domObserverRows">
               <tr><td colspan="9" class="gap-status">Collector is gathering its first minute</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="dom-study-head">
+          <h3 class="dom-study-title">Intrusion DOM benchmark</h3>
+          <div class="gap-status" id="intrusionDomStudyStatus">Observe only | candle PASS + DOM confirmation</div>
+        </div>
+        <div class="dom-observer-table-wrap">
+          <table class="dom-observer-table" aria-label="Intrusion DOM benchmark observations">
+            <thead>
+              <tr>
+                <th>Intrusion</th>
+                <th>Mail</th>
+                <th>Candles</th>
+                <th>Event price</th>
+                <th>Taker flow</th>
+                <th>Book pressure</th>
+                <th>CG friction</th>
+                <th>DOM class</th>
+                <th>Ultimate hypothesis</th>
+              </tr>
+            </thead>
+            <tbody id="intrusionDomStudyRows">
+              <tr><td colspan="9" class="gap-status">Waiting for tracked intrusion records</td></tr>
             </tbody>
           </table>
         </div>
@@ -1295,6 +1354,8 @@
     const domObserverChart = document.getElementById('domObserverChart');
     const domObserverChartCtx = domObserverChart?.getContext('2d');
     const domObserverRows = document.getElementById('domObserverRows');
+    const intrusionDomStudyStatus = document.getElementById('intrusionDomStudyStatus');
+    const intrusionDomStudyRows = document.getElementById('intrusionDomStudyRows');
 
     function storedCandleFilterEnabled() {
       try {
@@ -2492,18 +2553,68 @@
       </tr>`).join('');
 
       const latest = Array.isArray(history?.recent) ? history.recent.slice(0, 3) : [];
+      const studyRecords = Array.isArray(payload?.intrusionDomStudy?.recent)
+        ? payload.intrusionDomStudy.recent
+        : [];
       delayHistoryLatestRows.innerHTML = latest.length
-        ? latest.map((record) => `<tr>
-            <td>${record.emailType === 'filtered' ? 'FILTERED ' : ''}${record.sideCounts || 'intrusion'}</td>
-            <td>${delayNlTime(record.intrusionTimestamp, true)}</td>
-            <td>${delayNlTime(record.smtpSentAt)}</td>
-            <td>${Number(record.completedCandles1h) || 0} candles (${Math.round(Number(record.delayMinutes) || 0)}m)</td>
-          </tr>`).join('')
-        : '<tr><td colspan="4">No SMTP intrusion alerts recorded yet</td></tr>';
+        ? latest.map((record) => {
+            const study = studyRecords.find((candidate) => candidate.timestamp === record.intrusionTimestamp);
+            const domLabel = study
+              ? `${study.evidence?.classification || 'INSUFFICIENT'} ${Number(study.evidence?.score) || 0}/${Number(study.evidence?.available) || 0}`
+              : '-';
+            return `<tr>
+              <td>${record.emailType === 'filtered' ? 'FILTERED ' : ''}${record.sideCounts || 'intrusion'}</td>
+              <td>${delayNlTime(record.intrusionTimestamp, true)}</td>
+              <td>${delayNlTime(record.smtpSentAt)}</td>
+              <td>${Number(record.completedCandles1h) || 0} candles (${Math.round(Number(record.delayMinutes) || 0)}m)</td>
+              <td>${domLabel}</td>
+              <td class="${study?.hypothesisEntryValid ? 'dom-positive' : 'dom-negative'}">${study ? (study.hypothesisEntryValid ? 'VALID' : 'NO') : '-'}</td>
+            </tr>`;
+          }).join('')
+        : '<tr><td colspan="6">No SMTP intrusion alerts recorded yet</td></tr>';
 
       delayHistoryStatus.textContent = totalRecords
         ? `${totalRecords} sent intrusion mail${totalRecords === 1 ? '' : 's'} | completed 1H candles between alert time and SMTP acceptance`
         : 'History starts with the first successfully sent intrusion mail after deployment';
+    }
+
+    function updateIntrusionDomStudy() {
+      if (!intrusionDomStudyRows || !intrusionDomStudyStatus) return;
+      const study = payload?.intrusionDomStudy;
+      const records = Array.isArray(study?.recent) ? study.recent.slice(0, 8) : [];
+      const metric = (value, suffix = '') => Number.isFinite(Number(value))
+        ? `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(2)}${suffix}`
+        : '-';
+      const friction = (record) => {
+        const event = Number(record?.coinGlass?.event?.frictionUsd);
+        const review = Number(record?.coinGlass?.review?.frictionUsd);
+        return Number.isFinite(event) && Number.isFinite(review)
+          ? `${compactUsd(event)} -> ${compactUsd(review)}`
+          : '-';
+      };
+      intrusionDomStudyRows.innerHTML = records.length
+        ? records.map((record) => {
+            const event = record?.dom?.intrusion1h || {};
+            const className = record?.evidence?.validDomPattern ? 'is-valid' : 'is-rejected';
+            const candlePass = record?.candleReview?.status === 'PASS';
+            const hypothesis = record?.hypothesisEntryValid ? 'VALID' : 'NO';
+            return `<tr>
+              <td>${delayNlTime(record.timestamp, true)} | ${record.sideCounts || record.direction}</td>
+              <td>${record.filtered ? 'FILTERED' : 'normal'}</td>
+              <td class="${candlePass ? 'dom-positive' : 'dom-negative'}">${record.candleReview?.intrusionColor || '-'} / ${record.candleReview?.nextColor || '-'}</td>
+              <td class="${Number(event.directionalPriceReturnPct) > 0 ? 'dom-positive' : 'dom-negative'}">${metric(event.directionalPriceReturnPct, '%')}</td>
+              <td class="${Number(event.directionalTakerDeltaUsd) > 0 ? 'dom-positive' : 'dom-negative'}">${domSignedUsd(event.directionalTakerDeltaUsd)}</td>
+              <td class="${Number(event.directionalBookPressureUsd) > 0 ? 'dom-positive' : 'dom-negative'}">${domSignedUsd(event.directionalBookPressureUsd)}</td>
+              <td>${friction(record)}</td>
+              <td><span class="dom-study-badge ${className}">${record.evidence?.classification || 'INSUFFICIENT'} ${Number(record.evidence?.score) || 0}/${Number(record.evidence?.available) || 0}</span></td>
+              <td><span class="dom-study-badge ${record.hypothesisEntryValid ? 'is-valid' : 'is-rejected'}">${hypothesis}</span></td>
+            </tr>`;
+          }).join('')
+        : '<tr><td colspan="9" class="gap-status">History starts with the first intrusion after collector deployment</td></tr>';
+
+      const filtered = study?.comparison?.filtered || {};
+      const normal = study?.comparison?.normalOnly || {};
+      intrusionDomStudyStatus.textContent = `${Number(study?.totalRecords) || 0} events | observe only | filtered DOM-valid ${Number(filtered.validDomPatterns) || 0}/${Number(filtered.count) || 0} | normal DOM-valid ${Number(normal.validDomPatterns) || 0}/${Number(normal.count) || 0}`;
     }
 
     function domSignedUsd(value) {
@@ -4356,6 +4467,7 @@
       syncJumpTimeInput(frame);
       updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview);
       updateDelayHistory();
+      updateIntrusionDomStudy();
       updateWhaleStudy(frameIndex, frame, gap);
       updateLiquidityCounter(frameIndex, frame, gap);
       updateRsiStudyMonitor(frameIndex, fertilityContext);

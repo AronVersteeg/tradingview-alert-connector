@@ -118,6 +118,11 @@ type CollectorStatus = {
   currentBucketStart?: string;
   lastStoredAt?: string;
   storedRecordsThisRun: number;
+  coverage?: {
+    from?: string;
+    to?: string;
+    sourceFiles: number;
+  };
   latest?: DomMinuteRecord;
   current?: DomMinuteRecord;
 };
@@ -760,8 +765,26 @@ export class DecentralizedDomCollector {
         : new Date(this.bucketStartMs).toISOString(),
       lastStoredAt: this.latestRecord?.bucketEnd,
       storedRecordsThisRun: this.storedRecords,
+      coverage: this.getCoverage(),
       latest: this.latestRecord,
       current: this.currentRecord()
+    };
+  }
+
+  getCoverage(): { from?: string; to?: string; sourceFiles: number } {
+    const directory = this.historyDirectory();
+    if (!fs.existsSync(directory)) return { sourceFiles: 0 };
+    const files = fs.readdirSync(directory)
+      .filter((name) => /^dom-\d{4}-\d{2}-\d{2}\.ndjson$/.test(name))
+      .sort();
+    if (!files.length) return { sourceFiles: 0 };
+
+    const firstRecord = this.readBoundaryRecord(path.join(directory, files[0]), false);
+    const lastRecord = this.readBoundaryRecord(path.join(directory, files[files.length - 1]), true);
+    return {
+      from: firstRecord?.bucketStart,
+      to: lastRecord?.bucketEnd,
+      sourceFiles: files.length
     };
   }
 
@@ -827,6 +850,16 @@ export class DecentralizedDomCollector {
     return [...dates]
       .map((date) => path.join(directory, `dom-${date}.ndjson`))
       .filter((file) => fs.existsSync(file));
+  }
+
+  private readBoundaryRecord(file: string, fromEnd: boolean): DomMinuteRecord | undefined {
+    try {
+      const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
+      const line = fromEnd ? lines[lines.length - 1] : lines[0];
+      return line ? JSON.parse(line) as DomMinuteRecord : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private pruneHistory(): void {

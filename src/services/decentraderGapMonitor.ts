@@ -12,8 +12,15 @@ import {
   appendDecentraderDelayRecord,
   buildDecentraderDelayRecord,
   decentraderDelaySnapshot,
-  DecentraderDelayEmailType
+  DecentraderDelayEmailType,
+  readDecentraderDelayHistory
 } from './decentraderDelayHistory';
+import {
+  intrusionDomStudySnapshot,
+  intrusionDomStudyResumeTimestamp,
+  refreshIntrusionDomStudy
+} from './decentraderIntrusionDomStudy';
+import { decentralizedDomCollector } from './decentralizedDomCollector';
 import tls from 'tls';
 import zlib from 'zlib';
 import { AlertObject } from '../types';
@@ -1072,7 +1079,7 @@ function fetchCoinGlassWhaleLevelsViaWebSocket(
 
     function handleFrames(): void {
       const parsed = parseWebSocketFrames(frameBuffer);
-      frameBuffer = parsed.remaining;
+      frameBuffer = Buffer.from(parsed.remaining);
 
       for (const frame of parsed.frames) {
         if (frame.opcode === 0x8) {
@@ -1686,6 +1693,21 @@ function gapIntrusionsSince(rows: DecentraderRow[], lastDataTimestamp?: string):
     if (alert?.entrants.length) alerts.push(alert);
   }
 
+  return alerts;
+}
+
+function gapIntrusionsFromTimestamp(rows: DecentraderRow[], fromIso: string | undefined): GapAlert[] {
+  if (!fromIso || rows.length < 2) return [];
+  const fromMs = Date.parse(fromIso);
+  if (!Number.isFinite(fromMs)) return [];
+
+  const alerts: GapAlert[] = [];
+  for (let frameIndex = 1; frameIndex < rows.length; frameIndex += 1) {
+    const frameMs = Date.parse(String(rows[frameIndex]?.timestamp || '').replace(' ', 'T') + 'Z');
+    if (!Number.isFinite(frameMs) || frameMs < fromMs) continue;
+    const alert = detectGapIntrusion(rows, frameIndex);
+    if (alert?.entrants.length) alerts.push(alert);
+  }
   return alerts;
 }
 
@@ -3415,6 +3437,7 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
       note: 'When enabled, one-sided gap intrusions require the intrusion candle and following candle to match the trade direction.'
     },
     delayHistory: decentraderDelaySnapshot(),
+    intrusionDomStudy: intrusionDomStudySnapshot(),
     coinGlassWhaleLevels: coinglassWhaleSnapshot(),
     coinGlassTpConfluence: {
       enabled: coinGlassTpConfluenceEnabled(),
@@ -4737,6 +4760,19 @@ export class DecentraderGapMonitor {
           ? pendingIntrusionCandleAlerts(rows, state.pendingIntrusionCandleAlertSignatures)
           : [])
       ]);
+      const domCoverageFrom = decentralizedDomCollector.getCoverage().from;
+      const domStudyFrom = intrusionDomStudyResumeTimestamp() || domCoverageFrom;
+      const domStudyAlerts = uniqueGapAlerts([
+        ...gapIntrusionsFromTimestamp(rows, domStudyFrom),
+        ...alerts
+      ]).map((alert) => ({
+        signature: gapAlertSignature(alert),
+        timestamp: alert.timestamp,
+        timestampNl: alert.timestampNl,
+        price: alert.price,
+        sideCounts: sideCounts(alert),
+        gap: alert.previousGap
+      }));
       const tpHits = tpHitsSince(rows, previousDataTimestamp);
       state.lastCheckedAt = nowNlIso();
       state.lastDataTimestamp = rows[rows.length - 1]?.timestamp;
@@ -4861,6 +4897,15 @@ export class DecentraderGapMonitor {
               ])
             )
           : {};
+        refreshIntrusionDomStudy({
+          alerts: domStudyAlerts,
+          delayRecords: readDecentraderDelayHistory().records,
+          frames: this.latestTimelapsePayload?.frames || [],
+          coinGlassObservations: coinglassWhaleSnapshot().observations,
+          now: nowNlIso()
+        });
+        result.intrusionDomStudy = intrusionDomStudySnapshot();
+        this.latestTimelapsePayload.intrusionDomStudy = result.intrusionDomStudy;
         writeState(config.stateFile, state);
         this.status = {
           ...this.status,
@@ -5062,6 +5107,16 @@ export class DecentraderGapMonitor {
             ])
           )
         : {};
+
+      refreshIntrusionDomStudy({
+        alerts: domStudyAlerts,
+        delayRecords: readDecentraderDelayHistory().records,
+        frames: this.latestTimelapsePayload?.frames || [],
+        coinGlassObservations: coinglassWhaleSnapshot().observations,
+        now: nowNlIso()
+      });
+      result.intrusionDomStudy = intrusionDomStudySnapshot();
+      this.latestTimelapsePayload.intrusionDomStudy = result.intrusionDomStudy;
 
       writeState(config.stateFile, state);
       this.status = {
@@ -6377,6 +6432,7 @@ export class DecentraderGapMonitor {
       recordCoinGlassWhaleObservation(this.latestRows);
       this.latestTimelapsePayload.coinGlassWhaleLevels = coinglassWhaleSnapshot();
       this.latestTimelapsePayload.delayHistory = decentraderDelaySnapshot();
+      this.latestTimelapsePayload.intrusionDomStudy = intrusionDomStudySnapshot();
       this.latestTimelapsePayload.rsiStudy = await rsiStudyForRows(this.latestRows);
       return this.latestTimelapsePayload;
     }
@@ -6386,6 +6442,7 @@ export class DecentraderGapMonitor {
     recordCoinGlassWhaleObservation(rows);
     this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
     this.latestTimelapsePayload.delayHistory = decentraderDelaySnapshot();
+    this.latestTimelapsePayload.intrusionDomStudy = intrusionDomStudySnapshot();
     this.latestTimelapsePayload.rsiStudy = await rsiStudyForRows(rows);
     return this.latestTimelapsePayload;
   }
