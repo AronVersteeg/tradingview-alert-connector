@@ -3690,9 +3690,9 @@ export class DydxV4Client extends AbstractDexClient {
           0,
           market,
           undefined,
-          null,
+          undefined,
           status as any,
-          null,
+          undefined,
           100
         )
       )

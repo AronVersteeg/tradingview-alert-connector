@@ -60,6 +60,8 @@ describe('dYdX v4 trailing stop synchronization', () => {
       'OPEN',
       'BEST_EFFORT_OPENED'
     ]);
+    expect(getSubaccountOrders.mock.calls.every((call: any[]) => call[4] === undefined)).toBe(true);
+    expect(getSubaccountOrders.mock.calls.every((call: any[]) => call[6] === undefined)).toBe(true);
   });
 
   test('parses indexer ISO good-til time for conditional order cancellation', () => {
