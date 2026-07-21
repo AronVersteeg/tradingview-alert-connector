@@ -261,13 +261,13 @@
     }
 
     .delay-history-card {
-      grid-column: span 4;
+      grid-column: 1 / -1;
       min-width: 0;
     }
 
     .delay-history-layout {
       display: grid;
-      grid-template-columns: minmax(220px, 0.65fr) minmax(420px, 1.35fr);
+      grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
       gap: 10px;
       margin-top: 4px;
     }
@@ -316,18 +316,18 @@
 
     .delay-history-scroll .delay-history-latest {
       width: max-content;
-      min-width: 1480px;
+      min-width: 1220px;
       table-layout: auto;
     }
 
     .delay-history-scroll .delay-history-latest th,
     .delay-history-scroll .delay-history-latest td {
-      min-width: 100px;
+      min-width: 82px;
     }
 
     .delay-history-scroll .delay-history-latest th:first-child,
     .delay-history-scroll .delay-history-latest td:first-child {
-      min-width: 150px;
+      min-width: 132px;
     }
 
     .delay-history-scroll .delay-history-table th {
