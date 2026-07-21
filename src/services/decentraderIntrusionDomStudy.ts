@@ -666,7 +666,25 @@ export function intrusionDomStudySnapshot(): any {
         validDomPatterns: normalOnly.filter((record) => record.evidence.validDomPattern).length
       }
     },
-    recent: study.records.slice(-RECENT_RECORDS).reverse()
+    recent: study.records.slice(-RECENT_RECORDS).reverse(),
+    history: study.records.slice().reverse().map((record) => ({
+      signature: record.signature,
+      timestamp: record.timestamp,
+      filtered: record.filtered,
+      candleReview: record.candleReview,
+      event: record.dom.intrusion1h,
+      confirmation: record.dom.confirmation1h,
+      coinGlass: {
+        eventFrictionUsd: record.coinGlass.event?.frictionUsd,
+        reviewFrictionUsd: record.coinGlass.review?.frictionUsd,
+        frictionRemovalPct: record.coinGlass.frictionRemovalPct,
+        eventSupportUsd: record.coinGlass.event?.supportUsd,
+        reviewSupportUsd: record.coinGlass.review?.supportUsd,
+        supportRetentionPct: record.coinGlass.supportRetentionPct
+      },
+      evidence: record.evidence,
+      hypothesisEntryValid: record.hypothesisEntryValid
+    }))
   };
 }
 

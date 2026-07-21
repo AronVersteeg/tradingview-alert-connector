@@ -306,6 +306,37 @@
       font-weight: 650;
     }
 
+    .delay-history-scroll {
+      height: 82px;
+      min-height: 82px;
+      overflow: auto;
+      scrollbar-gutter: stable;
+      border-top: 1px solid rgba(129, 148, 170, 0.2);
+    }
+
+    .delay-history-scroll .delay-history-latest {
+      width: max-content;
+      min-width: 1480px;
+      table-layout: auto;
+    }
+
+    .delay-history-scroll .delay-history-latest th,
+    .delay-history-scroll .delay-history-latest td {
+      min-width: 100px;
+    }
+
+    .delay-history-scroll .delay-history-latest th:first-child,
+    .delay-history-scroll .delay-history-latest td:first-child {
+      min-width: 150px;
+    }
+
+    .delay-history-scroll .delay-history-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--panel);
+    }
+
     @media (max-width: 900px) {
       .delay-history-card {
         grid-column: 1 / -1;
@@ -1034,14 +1065,19 @@
               <tr><td>All</td><td>0</td><td>-</td><td>-</td><td>-</td></tr>
             </tbody>
           </table>
-          <table class="delay-history-table delay-history-latest" aria-label="Latest three SMTP delay observations">
-            <thead>
-              <tr><th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th><th>DOM</th><th>Ultimate</th></tr>
-            </thead>
-            <tbody id="delayHistoryLatestRows">
-              <tr><td colspan="6">No SMTP intrusion alerts recorded yet</td></tr>
-            </tbody>
-          </table>
+          <div class="delay-history-scroll">
+            <table class="delay-history-table delay-history-latest" aria-label="All SMTP intrusion delay observations">
+              <thead>
+                <tr>
+                  <th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th><th>DOM</th><th>Ultimate</th>
+                  <th>Candle filter</th><th>Event price</th><th>Confirm price</th><th>Taker flow</th><th>Book pressure</th><th>CG friction</th><th>CG support</th>
+                </tr>
+              </thead>
+              <tbody id="delayHistoryLatestRows">
+                <tr><td colspan="13">No SMTP intrusion alerts recorded yet</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
@@ -2552,15 +2588,38 @@
         <td>${candleValue(row?.maxCompletedCandles1h)}</td>
       </tr>`).join('');
 
-      const latest = Array.isArray(history?.recent) ? history.recent.slice(0, 3) : [];
-      const studyRecords = Array.isArray(payload?.intrusionDomStudy?.recent)
-        ? payload.intrusionDomStudy.recent
+      const latest = Array.isArray(history?.records)
+        ? history.records
+        : Array.isArray(history?.recent)
+          ? history.recent
+          : [];
+      const studyRecords = Array.isArray(payload?.intrusionDomStudy?.history)
+        ? payload.intrusionDomStudy.history
+        : Array.isArray(payload?.intrusionDomStudy?.recent)
+          ? payload.intrusionDomStudy.recent
         : [];
       delayHistoryLatestRows.innerHTML = latest.length
         ? latest.map((record) => {
-            const study = studyRecords.find((candidate) => candidate.timestamp === record.intrusionTimestamp);
+            const signature = String(record.signature || '').replace(/^FILTERED\|/, '');
+            const study = studyRecords.find((candidate) => candidate.signature === signature)
+              || studyRecords.find((candidate) => candidate.timestamp === record.intrusionTimestamp);
             const domLabel = study
               ? `${study.evidence?.classification || 'INSUFFICIENT'} ${Number(study.evidence?.score) || 0}/${Number(study.evidence?.available) || 0}`
+              : '-';
+            const metric = (value, suffix = '') => Number.isFinite(Number(value))
+              ? `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(2)}${suffix}`
+              : '-';
+            const event = study?.event || {};
+            const confirmation = study?.confirmation || {};
+            const cg = study?.coinGlass || {};
+            const cgFriction = Number.isFinite(Number(cg.eventFrictionUsd)) && Number.isFinite(Number(cg.reviewFrictionUsd))
+              ? `${compactUsd(cg.eventFrictionUsd)} -> ${compactUsd(cg.reviewFrictionUsd)}`
+              : '-';
+            const cgSupport = Number.isFinite(Number(cg.supportRetentionPct))
+              ? `${Math.round(Number(cg.supportRetentionPct) * 100)}% retained`
+              : '-';
+            const candleStatus = study
+              ? `${study.candleReview?.intrusionColor || '-'} / ${study.candleReview?.nextColor || '-'} ${study.candleReview?.status || ''}`
               : '-';
             return `<tr>
               <td>${record.emailType === 'filtered' ? 'FILTERED ' : ''}${record.sideCounts || 'intrusion'}</td>
@@ -2569,9 +2628,16 @@
               <td>${Number(record.completedCandles1h) || 0} candles (${Math.round(Number(record.delayMinutes) || 0)}m)</td>
               <td>${domLabel}</td>
               <td class="${study?.hypothesisEntryValid ? 'dom-positive' : 'dom-negative'}">${study ? (study.hypothesisEntryValid ? 'VALID' : 'NO') : '-'}</td>
+              <td class="${study?.candleReview?.status === 'PASS' ? 'dom-positive' : 'dom-negative'}">${candleStatus}</td>
+              <td class="${Number(event.directionalPriceReturnPct) > 0 ? 'dom-positive' : 'dom-negative'}">${metric(event.directionalPriceReturnPct, '%')}</td>
+              <td class="${Number(confirmation.directionalPriceReturnPct) > 0 ? 'dom-positive' : 'dom-negative'}">${metric(confirmation.directionalPriceReturnPct, '%')}</td>
+              <td class="${Number(event.directionalTakerDeltaUsd) > 0 ? 'dom-positive' : 'dom-negative'}">${domSignedUsd(event.directionalTakerDeltaUsd)}</td>
+              <td class="${Number(event.directionalBookPressureUsd) > 0 ? 'dom-positive' : 'dom-negative'}">${domSignedUsd(event.directionalBookPressureUsd)}</td>
+              <td>${cgFriction}</td>
+              <td>${cgSupport}</td>
             </tr>`;
           }).join('')
-        : '<tr><td colspan="6">No SMTP intrusion alerts recorded yet</td></tr>';
+        : '<tr><td colspan="13">No SMTP intrusion alerts recorded yet</td></tr>';
 
       delayHistoryStatus.textContent = totalRecords
         ? `${totalRecords} sent intrusion mail${totalRecords === 1 ? '' : 's'} | completed 1H candles between alert time and SMTP acceptance`

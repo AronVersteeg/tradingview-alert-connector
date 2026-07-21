@@ -37,6 +37,7 @@ export type DecentraderDelaySnapshot = {
     filtered: DecentraderDelayStats;
   };
   recent: DecentraderDelayRecord[];
+  records: DecentraderDelayRecord[];
 };
 
 type DelayHistoryFile = {
@@ -196,6 +197,7 @@ export function decentraderDelaySnapshot(): DecentraderDelaySnapshot {
       normal: summarizeDecentraderDelayRecords(normal),
       filtered: summarizeDecentraderDelayRecords(filtered)
     },
-    recent: history.records.slice(-RECENT_RECORDS).reverse()
+    recent: history.records.slice(-RECENT_RECORDS).reverse(),
+    records: history.records.slice().reverse()
   };
 }
