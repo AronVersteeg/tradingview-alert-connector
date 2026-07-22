@@ -4630,8 +4630,13 @@
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
       syncJumpTimeInput(frame);
       updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview);
-      updateDelayHistory();
-      updateIntrusionDomStudy();
+      try {
+        updateDelayHistory();
+        updateIntrusionDomStudy();
+      } catch (error) {
+        console.error('Research panel update failed:', error);
+        if (delayHistoryStatus) delayHistoryStatus.textContent = `Panel error: ${String(error?.message || error)}`;
+      }
       updateWhaleStudy(frameIndex, frame, gap);
       updateLiquidityCounter(frameIndex, frame, gap);
       updateRsiStudyMonitor(frameIndex, fertilityContext);
