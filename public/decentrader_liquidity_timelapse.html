@@ -2633,8 +2633,11 @@
             const record = matchingDelays.find((candidate) => candidate.emailType === 'filtered')
               || matchingDelays.find((candidate) => candidate.emailType === 'normal')
               || tableRecord;
+            const flowFlipLabel = study?.flowFlip && !['NONE', 'INSUFFICIENT'].includes(study.flowFlip.classification)
+              ? ` | ${study.flowFlip.classification} ${Number(study.flowFlip.score) || 0}/${Number(study.flowFlip.available) || 0}${study.flowFlip.observedAdverseDominance ? ' | ADVERSE MOVE' : ''}`
+              : '';
             const domLabel = study
-              ? `${study.evidence?.classification || 'INSUFFICIENT'} ${Number(study.evidence?.score) || 0}/${Number(study.evidence?.available) || 0}`
+              ? `${study.evidence?.classification || 'INSUFFICIENT'} ${Number(study.evidence?.score) || 0}/${Number(study.evidence?.available) || 0}${flowFlipLabel}`
               : '-';
             const metric = (value, suffix = '') => Number.isFinite(Number(value))
               ? `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(2)}${suffix}`
@@ -2762,6 +2765,9 @@
             const className = record?.evidence?.validDomPattern ? 'is-valid' : 'is-rejected';
             const candlePass = record?.candleReview?.status === 'PASS';
             const hypothesis = record?.hypothesisEntryValid ? 'VALID' : 'NO';
+            const flowFlipLabel = record?.flowFlip && !['NONE', 'INSUFFICIENT'].includes(record.flowFlip.classification)
+              ? ` | ${record.flowFlip.classification} ${Number(record.flowFlip.score) || 0}/${Number(record.flowFlip.available) || 0}${record.flowFlip.observedAdverseDominance ? ' | ADVERSE MOVE' : ''}`
+              : '';
             return `<tr>
               <td>${delayNlTime(record.timestamp, true)} | ${record.sideCounts || record.direction}</td>
               <td>${record.filtered ? 'FILTERED' : 'normal'}</td>
@@ -2770,7 +2776,7 @@
               <td class="${Number(event.directionalTakerDeltaUsd) > 0 ? 'dom-positive' : 'dom-negative'}">${domSignedUsd(event.directionalTakerDeltaUsd)}</td>
               <td class="${Number(event.directionalBookPressureUsd) > 0 ? 'dom-positive' : 'dom-negative'}">${domSignedUsd(event.directionalBookPressureUsd)}</td>
               <td>${friction(record)}</td>
-              <td><span class="dom-study-badge ${className}">${record.evidence?.classification || 'INSUFFICIENT'} ${Number(record.evidence?.score) || 0}/${Number(record.evidence?.available) || 0}</span></td>
+              <td><span class="dom-study-badge ${className}">${record.evidence?.classification || 'INSUFFICIENT'} ${Number(record.evidence?.score) || 0}/${Number(record.evidence?.available) || 0}${flowFlipLabel}</span></td>
               <td><span class="dom-study-badge ${record.hypothesisEntryValid ? 'is-valid' : 'is-rejected'}">${hypothesis}</span></td>
             </tr>`;
           }).join('')

@@ -1,6 +1,7 @@
 import {
   aggregateIntrusionDomWindow,
   buildIntrusionDomEvidence,
+  buildIntrusionFlowFlipEvidence,
   IntrusionDomWindow
 } from '../src/services/decentraderIntrusionDomStudy';
 import { DomMinuteRecord } from '../src/services/decentralizedDomCollector';
@@ -167,5 +168,44 @@ describe('Decentrader intrusion DOM study', () => {
       expect.objectContaining({ available: true, passed: true })
     );
     expect(evidence.validDomPattern).toBe(true);
+  });
+
+  test('marks a strong flow flip without claiming that price has officially reversed', () => {
+    const flowFlip = buildIntrusionFlowFlipEvidence({
+      pre1h: window({
+        directionalPriceReturnPct: 0.38,
+        directionalTakerDeltaUsd: 60_000_000,
+        directionalBookPressureUsd: 117_000_000
+      }),
+      intrusion1h: window({
+        directionalPriceReturnPct: 0.12,
+        directionalTakerDeltaUsd: -39_000_000,
+        directionalBookPressureUsd: -20_000_000
+      }),
+      confirmation1h: window({ directionalPriceReturnPct: -0.14 })
+    });
+
+    expect(flowFlip).toEqual(expect.objectContaining({
+      score: 6,
+      available: 6,
+      candidate: true,
+      strong: true,
+      classification: 'FLOW_FLIP_STRONG'
+    }));
+  });
+
+  test('does not flag partial buildup when aggressive flow and confirmation stay positive', () => {
+    const flowFlip = buildIntrusionFlowFlipEvidence({
+      pre1h: window(),
+      intrusion1h: window({
+        directionalPriceReturnPct: -0.02,
+        directionalTakerDeltaUsd: 19_000_000,
+        directionalBookPressureUsd: -21_000_000
+      }),
+      confirmation1h: window({ directionalPriceReturnPct: 0.37 })
+    });
+
+    expect(flowFlip.candidate).toBe(false);
+    expect(flowFlip.classification).toBe('NONE');
   });
 });

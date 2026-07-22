@@ -145,6 +145,16 @@ export type IntrusionDomStudyRecord = {
     classification: 'INSUFFICIENT' | 'REJECTION' | 'BUILDUP' | 'IMPULSE_CANDIDATE';
     components: EvidenceComponent[];
   };
+  flowFlip: {
+    ruleVersion: 'flow-flip-v1';
+    score: number;
+    available: number;
+    candidate: boolean;
+    strong: boolean;
+    observedAdverseDominance?: boolean;
+    classification: 'INSUFFICIENT' | 'NONE' | 'FLOW_FLIP_WATCH' | 'FLOW_FLIP_STRONG';
+    components: EvidenceComponent[];
+  };
   hypothesisEntryValid: boolean;
 };
 
@@ -156,7 +166,7 @@ type StudyFile = {
 
 const MAX_RECORDS = 10_000;
 const RECENT_RECORDS = 8;
-const RESEARCH_VERSION = 2;
+const RESEARCH_VERSION = 3;
 const HOUR_MS = 60 * 60 * 1000;
 
 function finiteNumber(value: unknown): number | undefined {
@@ -448,6 +458,80 @@ export function buildIntrusionDomEvidence(
   };
 }
 
+export function buildIntrusionFlowFlipEvidence(
+  dom: IntrusionDomStudyRecord['dom']
+): IntrusionDomStudyRecord['flowFlip'] {
+  const prior = dom.pre1h;
+  const event = dom.intrusion1h;
+  const confirmation = dom.confirmation1h;
+  const priorAvailable = Boolean(prior && prior.coverageMinutes >= 30);
+  const eventAvailable = Boolean(event && event.coverageMinutes >= 30);
+  const confirmationAvailable = Boolean(confirmation && confirmation.coverageMinutes >= 30);
+  const components: EvidenceComponent[] = [
+    {
+      key: 'prior-price-momentum',
+      label: 'Prior hour price progressed in intrusion direction',
+      available: priorAvailable && prior?.directionalPriceReturnPct !== undefined,
+      passed: (prior?.directionalPriceReturnPct || 0) > 0,
+      value: prior?.directionalPriceReturnPct
+    },
+    {
+      key: 'prior-taker-momentum',
+      label: 'Prior hour aggressive flow supported the intrusion direction',
+      available: priorAvailable,
+      passed: (prior?.directionalTakerDeltaUsd || 0) > 0,
+      value: prior?.directionalTakerDeltaUsd
+    },
+    {
+      key: 'prior-book-momentum',
+      label: 'Prior hour book pressure supported the intrusion direction',
+      available: priorAvailable,
+      passed: (prior?.directionalBookPressureUsd || 0) > 0,
+      value: prior?.directionalBookPressureUsd
+    },
+    {
+      key: 'event-taker-flip',
+      label: 'Intrusion-hour aggressive flow flipped against the intrusion direction',
+      available: eventAvailable,
+      passed: (event?.directionalTakerDeltaUsd || 0) < 0,
+      value: event?.directionalTakerDeltaUsd
+    },
+    {
+      key: 'event-book-flip',
+      label: 'Intrusion-hour book pressure flipped against the intrusion direction',
+      available: eventAvailable,
+      passed: (event?.directionalBookPressureUsd || 0) < 0,
+      value: event?.directionalBookPressureUsd
+    },
+    {
+      key: 'confirmation-price-flip',
+      label: 'Following hour confirmed movement against the intrusion direction',
+      available: confirmationAvailable && confirmation?.directionalPriceReturnPct !== undefined,
+      passed: (confirmation?.directionalPriceReturnPct || 0) < 0,
+      value: confirmation?.directionalPriceReturnPct
+    }
+  ];
+  const available = components.filter((component) => component.available).length;
+  const score = components.filter((component) => component.available && component.passed).length;
+  const strong = available === components.length && score === components.length;
+  const candidate = strong || (available >= 5 && score / available >= 5 / 6);
+  return {
+    ruleVersion: 'flow-flip-v1',
+    score,
+    available,
+    candidate,
+    strong,
+    classification: available < 5
+      ? 'INSUFFICIENT'
+      : strong
+        ? 'FLOW_FLIP_STRONG'
+        : candidate
+          ? 'FLOW_FLIP_WATCH'
+          : 'NONE',
+    components
+  };
+}
+
 function outcomeFor(
   records: DomMinuteRecord[],
   timestamp: number,
@@ -513,6 +597,15 @@ function initialRecord(input: {
       score: 0,
       available: 0,
       validDomPattern: false,
+      classification: 'INSUFFICIENT',
+      components: []
+    },
+    flowFlip: {
+      ruleVersion: 'flow-flip-v1',
+      score: 0,
+      available: 0,
+      candidate: false,
+      strong: false,
       classification: 'INSUFFICIENT',
       components: []
     },
@@ -663,6 +756,15 @@ export function refreshIntrusionDomStudy(input: {
     };
     record.outcome = outcomeFor(domHistory, at, record.direction, record.alertPrice, record.gap, nowMs);
     record.evidence = buildIntrusionDomEvidence(record.dom, record.coinGlass, record.direction);
+    const flowFlip = buildIntrusionFlowFlipEvidence(record.dom);
+    const favorable = record.outcome.maxFavorablePct;
+    const adverse = record.outcome.maxAdversePct;
+    record.flowFlip = {
+      ...flowFlip,
+      observedAdverseDominance: favorable !== undefined && adverse !== undefined && record.outcome.observedHours >= 2
+        ? Math.abs(adverse) >= 0.5 && Math.abs(adverse) > Math.max(0, favorable)
+        : undefined
+    };
     record.hypothesisEntryValid = record.candleReview.status === 'PASS' && record.evidence.validDomPattern;
     record.researchVersion = RESEARCH_VERSION;
     record.lastUpdatedAt = now;
@@ -753,6 +855,7 @@ export function intrusionDomStudySnapshot(): any {
       },
       outcome: record.outcome,
       evidence: record.evidence,
+      flowFlip: record.flowFlip,
       hypothesisEntryValid: record.hypothesisEntryValid
     }))
   };
