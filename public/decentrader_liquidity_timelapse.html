@@ -2681,7 +2681,7 @@
                 ? 'dom-negative'
                 : '';
             const gapLabel = Number.isFinite(Number(study?.gap?.left)) && Number.isFinite(Number(study?.gap?.right))
-              ? `${formatPrice(study.gap.left)}-${formatPrice(study.gap.right)}`
+              ? `${priceLevel(study.gap.left)}-${priceLevel(study.gap.right)}`
               : '-';
             const alertTimestamp = study?.timestamp || record.intrusionTimestamp;
             const hasDelay = Number.isFinite(Number(record.delayMinutes));
@@ -2699,7 +2699,7 @@
               <td class="${directionClass(event.directionalBookPressureUsd)}">${domSignedUsd(event.directionalBookPressureUsd)}</td>
               <td>${cgFriction}</td>
               <td>${cgSupport}</td>
-              <td>${Number.isFinite(Number(study?.alertPrice)) ? formatPrice(study.alertPrice) : '-'}</td>
+              <td>${Number.isFinite(Number(study?.alertPrice)) ? priceLevel(study.alertPrice) : '-'}</td>
               <td>${gapLabel}</td>
               <td class="${directionClass(pre1h.directionalPriceReturnPct)}">${metric(pre1h.directionalPriceReturnPct, '%')}</td>
               <td class="${directionClass(pre1h.directionalTakerDeltaUsd)}">${domSignedUsd(pre1h.directionalTakerDeltaUsd)}</td>
