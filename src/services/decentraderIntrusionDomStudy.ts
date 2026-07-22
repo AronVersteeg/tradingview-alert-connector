@@ -88,6 +88,7 @@ type EvidenceComponent = {
 
 export type IntrusionDomStudyRecord = {
   version: 1;
+  researchVersion?: number;
   signature: string;
   timestamp: string;
   timestampNl: string;
@@ -154,7 +155,8 @@ type StudyFile = {
 };
 
 const MAX_RECORDS = 10_000;
-const RECENT_RECORDS = 100;
+const RECENT_RECORDS = 8;
+const RESEARCH_VERSION = 2;
 const HOUR_MS = 60 * 60 * 1000;
 
 function finiteNumber(value: unknown): number | undefined {
@@ -488,6 +490,7 @@ function initialRecord(input: {
 }): IntrusionDomStudyRecord {
   return {
     version: 1,
+    researchVersion: RESEARCH_VERSION,
     signature: input.signature,
     timestamp: input.timestamp,
     timestampNl: input.timestampNl || input.timestamp,
@@ -596,7 +599,7 @@ export function refreshIntrusionDomStudy(input: {
     if (at === undefined) continue;
     const shouldRefresh = at >= refreshCutoff
       || refreshSignatures.has(record.signature)
-      || !record.dom.pre24h;
+      || record.researchVersion !== RESEARCH_VERSION;
     if (!shouldRefresh) continue;
     const historyTo = Math.min(nowMs, at + 24 * HOUR_MS);
     const domHistory = decentralizedDomCollector.getHistory({
@@ -661,6 +664,7 @@ export function refreshIntrusionDomStudy(input: {
     record.outcome = outcomeFor(domHistory, at, record.direction, record.alertPrice, record.gap, nowMs);
     record.evidence = buildIntrusionDomEvidence(record.dom, record.coinGlass, record.direction);
     record.hypothesisEntryValid = record.candleReview.status === 'PASS' && record.evidence.validDomPattern;
+    record.researchVersion = RESEARCH_VERSION;
     record.lastUpdatedAt = now;
   }
 

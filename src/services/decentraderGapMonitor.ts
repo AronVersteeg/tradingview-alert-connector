@@ -225,11 +225,13 @@ type RsiPoint = {
   slope?: number;
 };
 
+type RsiFramePoint = Pick<RsiPoint, 'rsi'>;
+
 type RsiFrameContext = {
   i: number;
   t: string;
-  h4?: RsiPoint;
-  d1?: RsiPoint;
+  h4?: RsiFramePoint;
+  d1?: RsiFramePoint;
   bothNearOrCross: boolean;
   anyNearOrCross: boolean;
   h4FreshCross?: 'up' | 'down';
@@ -3079,18 +3081,10 @@ function rsiPointAtOrBefore(points: RsiPoint[], timestampMs: number): RsiPoint |
   return best?.rsi !== undefined ? best : undefined;
 }
 
-function compactRsiPoint(point: RsiPoint | undefined): RsiPoint | undefined {
+function compactRsiPoint(point: RsiPoint | undefined): RsiFramePoint | undefined {
   if (!point) return undefined;
   return {
-    startedAt: point.startedAt,
-    startedAtMs: point.startedAtMs,
-    close: point.close,
-    rsi: point.rsi,
-    previousRsi: point.previousRsi,
-    near50: point.near50,
-    cross50: point.cross50,
-    crossDirection: point.crossDirection,
-    slope: point.slope
+    rsi: point.rsi
   };
 }
 
@@ -4707,9 +4701,35 @@ export class DecentraderGapMonitor {
     const config = this.config();
     const state = readState(config.stateFile);
     const coinGlassSnapshot = coinglassWhaleSnapshot();
+    const rawLastResult = this.status.lastResult;
+    const lastResult = rawLastResult
+      ? {
+          ...rawLastResult,
+          coinGlassWhaleLevels: rawLastResult.coinGlassWhaleLevels
+            ? {
+                enabled: rawLastResult.coinGlassWhaleLevels.enabled,
+                levels: rawLastResult.coinGlassWhaleLevels.levels?.length || 0,
+                history: rawLastResult.coinGlassWhaleLevels.history?.length || 0,
+                observations: rawLastResult.coinGlassWhaleLevels.observations?.length || 0,
+                fetchedAt: rawLastResult.coinGlassWhaleLevels.fetchedAt,
+                error: rawLastResult.coinGlassWhaleLevels.error
+              }
+            : undefined,
+          intrusionDomStudy: rawLastResult.intrusionDomStudy
+            ? {
+                enabled: rawLastResult.intrusionDomStudy.enabled,
+                updatedAt: rawLastResult.intrusionDomStudy.updatedAt,
+                totalRecords: rawLastResult.intrusionDomStudy.totalRecords,
+                classifiedRecords: rawLastResult.intrusionDomStudy.classifiedRecords,
+                comparison: rawLastResult.intrusionDomStudy.comparison
+              }
+            : undefined
+        }
+      : undefined;
 
     return {
       ...this.status,
+      lastResult,
       enabled: config.enabled,
       symbol: config.symbol,
       pollMinutes: config.pollMinutes,
@@ -6483,7 +6503,7 @@ export class DecentraderGapMonitor {
 
   async getTimelapsePayload(): Promise<any> {
     const config = this.config();
-    await refreshCoinGlassWhaleLevels('timelapse');
+    void refreshCoinGlassWhaleLevels('timelapse');
     if (this.latestTimelapsePayload) {
       recordCoinGlassWhaleObservation(this.latestRows);
       this.latestTimelapsePayload.coinGlassWhaleLevels = coinglassWhaleSnapshot();

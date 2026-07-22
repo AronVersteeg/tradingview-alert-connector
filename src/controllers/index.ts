@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 
 import express, { Router } from 'express';
 import { validateAlert } from '../services';
@@ -311,7 +312,19 @@ router.get('/decentrader/map', async (req, res) => {
 router.get('/decentrader/liquidity-timelapse', async (req, res) => {
   try {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(await decentraderGapMonitor.getTimelapsePayload());
+    res.setHeader('Cache-Control', 'no-store');
+    const json = JSON.stringify(await decentraderGapMonitor.getTimelapsePayload());
+    if (String(req.headers['accept-encoding'] || '').includes('gzip')) {
+      const compressed = await new Promise<Buffer>((resolve, reject) => {
+        zlib.gzip(json, { level: 6 }, (error, result) => error ? reject(error) : resolve(result));
+      });
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Encoding', 'gzip');
+      res.setHeader('Vary', 'Accept-Encoding');
+      res.send(compressed);
+      return;
+    }
+    res.type('json').send(json);
   } catch (error) {
     console.error('Decentrader timelapse payload request failed:', error);
     res.status(500).send({
