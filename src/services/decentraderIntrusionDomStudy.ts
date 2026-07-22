@@ -11,15 +11,44 @@ type Direction = 'long' | 'short';
 type CandleColor = 'green' | 'red' | 'flat' | 'unknown';
 
 type StudyFrame = {
+  i?: number;
   t: string;
   price?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
   candleColor?: CandleColor;
+};
+
+type StudyEvent = {
+  i: number;
+  s: 'L' | 'S';
+  l: number;
+  p: number;
+  a: number;
+  n?: number;
+};
+
+type StudyRsiFrame = {
+  i: number;
+  t?: string;
+  h4?: { rsi?: number };
+  d1?: { rsi?: number };
+  h4FreshCross?: 'up' | 'down';
+  d1FreshCross?: 'up' | 'down';
+  h4Regime?: 'bullish' | 'bearish' | 'neutral';
+  d1Regime?: 'bullish' | 'bearish' | 'neutral';
+  bias?: 'long' | 'short' | 'neutral';
+  score?: number;
 };
 
 type StudyGap = {
   left: number;
   right: number;
   width?: number;
+  leftEdge?: { side?: 'L' | 'S'; leverage?: number; price?: number; count?: number };
+  rightEdge?: { side?: 'L' | 'S'; leverage?: number; price?: number; count?: number };
 };
 
 type StudyAlert = {
@@ -30,6 +59,16 @@ type StudyAlert = {
   sideCounts?: string;
   gap?: StudyGap;
   previousGap?: StudyGap;
+  entrants?: Array<{
+    key?: string;
+    side?: 'L' | 'S';
+    leverage?: number;
+    price?: number;
+    count?: number;
+    newCount?: number;
+    gapSide?: 'left' | 'right';
+    sideOfPrice?: 'left' | 'right' | 'price';
+  }>;
   intrusionCandleReview?: any;
 };
 
@@ -76,6 +115,35 @@ type CoinGlassStudySnapshot = {
   frictionCount: number;
   supportUsd: number;
   frictionUsd: number;
+  observedLevelCount?: number;
+  relevantLevels?: Array<{
+    key?: string;
+    side: 'buy' | 'sell' | 'unknown';
+    price: number;
+    volumeUsd: number;
+    durationHours?: number;
+    insideGap: boolean;
+    distanceToPrice: number;
+    distanceToNearestEdge: number;
+  }>;
+};
+
+type MapZoneSnapshot = {
+  side: 'L' | 'S';
+  leverage: number;
+  price: number;
+  count: number;
+  insideGap: boolean;
+};
+
+type LiquidityBuildupWindow = {
+  hours: number;
+  longUnits: number;
+  shortUnits: number;
+  longUsd: number;
+  shortUsd: number;
+  ignoredUnits: number;
+  direction: 'long' | 'short' | 'balanced';
 };
 
 type EvidenceComponent = {
@@ -96,6 +164,28 @@ export type IntrusionDomStudyRecord = {
   direction: Direction;
   alertPrice?: number;
   gap?: StudyGap;
+  mapContext?: {
+    frameIndex: number;
+    frame: StudyFrame;
+    entrants: NonNullable<StudyAlert['entrants']>;
+    activeZoneCount: number;
+    activeZoneUnits: number;
+    insideGapZoneCount: number;
+    insideGapZoneUnits: number;
+    strongestZones: MapZoneSnapshot[];
+    buildup: {
+      h1: LiquidityBuildupWindow;
+      h2: LiquidityBuildupWindow;
+      h4: LiquidityBuildupWindow;
+      h12: LiquidityBuildupWindow;
+      h24: LiquidityBuildupWindow;
+    };
+    rsi?: StudyRsiFrame;
+  };
+  delayContext?: {
+    normal?: DecentraderDelayRecord;
+    filtered?: DecentraderDelayRecord;
+  };
   firstObservedAt: string;
   lastUpdatedAt: string;
   normalEmailSentAt?: string;
@@ -155,6 +245,27 @@ export type IntrusionDomStudyRecord = {
     classification: 'INSUFFICIENT' | 'NONE' | 'FLOW_FLIP_WATCH' | 'FLOW_FLIP_STRONG';
     components: EvidenceComponent[];
   };
+  sourceAudit?: {
+    mapFrame: boolean;
+    decentraderEventsConsulted: number;
+    activeDecentraderZones: number;
+    delayRecordsConsulted: number;
+    domMinutesConsulted: number;
+    coinGlassObservationsConsulted: number;
+    coinGlassLevelsConsulted: number;
+    rsiFrame: boolean;
+    complete: boolean;
+    missing: string[];
+  };
+  responseHypothesis?: {
+    ruleVersion: 'response-v1';
+    classification: 'IMPULSE_CONTINUATION' | 'REJECTION_BOUNCE_WATCH' | 'CONFLICT' | 'INCONCLUSIVE';
+    impulseScore: number;
+    impulseAvailable: number;
+    rejectionScore: number;
+    rejectionAvailable: number;
+    explanation: string[];
+  };
   hypothesisEntryValid: boolean;
 };
 
@@ -166,7 +277,7 @@ type StudyFile = {
 
 const MAX_RECORDS = 10_000;
 const RECENT_RECORDS = 8;
-const RESEARCH_VERSION = 3;
+const RESEARCH_VERSION = 4;
 const HOUR_MS = 60 * 60 * 1000;
 
 function finiteNumber(value: unknown): number | undefined {
@@ -341,6 +452,34 @@ function summarizeCoinGlass(
   const frictionSide = direction === 'long' ? 'sell' : 'buy';
   const support = levels.filter((level) => level.side === supportSide);
   const friction = levels.filter((level) => level.side === frictionSide);
+  const observedAtMs = Date.parse(observation.observedAt);
+  const enrichedLevels = (observation.levels || []).map((level) => {
+    const startedAtRaw = finiteNumber(level.startedAt);
+    const startedAtMs = startedAtRaw === undefined
+      ? undefined
+      : startedAtRaw < 1_000_000_000_000
+        ? startedAtRaw * 1000
+        : startedAtRaw;
+    return {
+      key: level.key,
+      side: level.side,
+      price: finiteNumber(level.price) || 0,
+      volumeUsd: finiteNumber(level.volumeUsd) || 0,
+      durationHours: startedAtMs !== undefined && Number.isFinite(observedAtMs)
+        ? Math.max(0, (observedAtMs - startedAtMs) / HOUR_MS)
+        : undefined,
+      insideGap: level.price >= gap.left && level.price <= gap.right,
+      distanceToPrice: Math.abs(level.price - observation.currentPrice),
+      distanceToNearestEdge: Math.min(Math.abs(level.price - gap.left), Math.abs(level.price - gap.right))
+    };
+  });
+  const relevantKeys = new Set<string>();
+  const levelKey = (level: typeof enrichedLevels[number]) => level.key || `${level.side}|${level.price}`;
+  const include = (candidates: typeof enrichedLevels) => candidates.forEach((level) => relevantKeys.add(levelKey(level)));
+  include(enrichedLevels.filter((level) => level.insideGap));
+  include(enrichedLevels.slice().sort((a, b) => b.volumeUsd - a.volumeUsd).slice(0, 10));
+  include(enrichedLevels.slice().sort((a, b) => a.distanceToPrice - b.distanceToPrice).slice(0, 10));
+  include(enrichedLevels.slice().sort((a, b) => a.distanceToNearestEdge - b.distanceToNearestEdge).slice(0, 10));
   return {
     observedAt: observation.observedAt,
     ageMinutes: Math.abs(Date.parse(observation.observedAt) - targetMs) / 60_000,
@@ -350,7 +489,110 @@ function summarizeCoinGlass(
     supportCount: support.length,
     frictionCount: friction.length,
     supportUsd: support.reduce((sum, level) => sum + (finiteNumber(level.volumeUsd) || 0), 0),
-    frictionUsd: friction.reduce((sum, level) => sum + (finiteNumber(level.volumeUsd) || 0), 0)
+    frictionUsd: friction.reduce((sum, level) => sum + (finiteNumber(level.volumeUsd) || 0), 0),
+    observedLevelCount: enrichedLevels.length,
+    relevantLevels: enrichedLevels
+      .filter((level) => relevantKeys.has(levelKey(level)))
+      .sort((a, b) => a.price - b.price)
+  };
+}
+
+function mapZoneKey(event: StudyEvent): string {
+  return `${event.s}|${event.l}|${event.p}`;
+}
+
+function mapZonesAt(events: StudyEvent[], frameIndex: number, gap?: StudyGap): MapZoneSnapshot[] {
+  const counts = new Map<string, MapZoneSnapshot>();
+  for (const event of events) {
+    if (!event.a || event.i > frameIndex) continue;
+    const key = mapZoneKey(event);
+    const existing = counts.get(key) || {
+      side: event.s,
+      leverage: event.l,
+      price: event.p,
+      count: 0,
+      insideGap: Boolean(gap && event.p >= gap.left && event.p <= gap.right)
+    };
+    existing.count += 1;
+    counts.set(key, existing);
+  }
+  return [...counts.values()];
+}
+
+function liquidityBuildupAt(
+  events: StudyEvent[],
+  frameIndex: number,
+  hours: number,
+  gap: StudyGap | undefined,
+  price: number | undefined
+): LiquidityBuildupWindow {
+  const longMax = gap?.left ?? price ?? Number.NEGATIVE_INFINITY;
+  const shortMin = gap?.right ?? price ?? Number.POSITIVE_INFINITY;
+  const startIndex = Math.max(0, frameIndex - hours + 1);
+  let longUnits = 0;
+  let shortUnits = 0;
+  let longUsd = 0;
+  let shortUsd = 0;
+  let ignoredUnits = 0;
+  for (const event of events) {
+    if (!event.a || event.i < startIndex || event.i > frameIndex) continue;
+    if (event.s === 'L' && event.p <= longMax) {
+      longUnits += 1;
+      longUsd += event.p;
+    } else if (event.s === 'S' && event.p >= shortMin) {
+      shortUnits += 1;
+      shortUsd += event.p;
+    } else {
+      ignoredUnits += 1;
+    }
+  }
+  const direction = longUsd > shortUsd * 1.08
+    ? 'long'
+    : shortUsd > longUsd * 1.08
+      ? 'short'
+      : 'balanced';
+  return { hours, longUnits, shortUnits, longUsd, shortUsd, ignoredUnits, direction };
+}
+
+function buildMapContext(input: {
+  record: IntrusionDomStudyRecord;
+  frames: StudyFrame[];
+  events: StudyEvent[];
+  rsiFrames: StudyRsiFrame[];
+  entrants?: StudyAlert['entrants'];
+}): IntrusionDomStudyRecord['mapContext'] | undefined {
+  const frameIndex = input.frames.findIndex((frame) => frame.t === input.record.timestamp);
+  if (frameIndex < 0) return undefined;
+  const frame = input.frames[frameIndex];
+  const zones = mapZonesAt(input.events, frameIndex, input.record.gap);
+  const insideGap = zones.filter((zone) => zone.insideGap);
+  const buildupFor = (hours: number) => liquidityBuildupAt(
+    input.events,
+    frameIndex,
+    hours,
+    input.record.gap,
+    frame.price
+  );
+  return {
+    frameIndex,
+    frame,
+    entrants: input.entrants || input.record.mapContext?.entrants || [],
+    activeZoneCount: zones.length,
+    activeZoneUnits: zones.reduce((sum, zone) => sum + zone.count, 0),
+    insideGapZoneCount: insideGap.length,
+    insideGapZoneUnits: insideGap.reduce((sum, zone) => sum + zone.count, 0),
+    strongestZones: zones
+      .slice()
+      .sort((a, b) => b.count - a.count || Math.abs(a.price - (frame.price || 0)) - Math.abs(b.price - (frame.price || 0)))
+      .slice(0, 20),
+    buildup: {
+      h1: buildupFor(1),
+      h2: buildupFor(2),
+      h4: buildupFor(4),
+      h12: buildupFor(12),
+      h24: buildupFor(24)
+    },
+    rsi: input.rsiFrames.find((candidate) => candidate.i === frameIndex || candidate.t === frame.t)
   };
 }
 
@@ -532,6 +774,74 @@ export function buildIntrusionFlowFlipEvidence(
   };
 }
 
+export function buildResponseHypothesis(
+  evidence: IntrusionDomStudyRecord['evidence'],
+  flowFlip: IntrusionDomStudyRecord['flowFlip'],
+  context?: Pick<IntrusionDomStudyRecord, 'direction' | 'alertPrice' | 'gap' | 'mapContext' | 'coinGlass'>
+): NonNullable<IntrusionDomStudyRecord['responseHypothesis']> {
+  const impulsePassed = evidence.components
+    .filter((component) => component.available && component.passed)
+    .map((component) => component.label);
+  const rejectionPassed = flowFlip.components
+    .filter((component) => component.available && component.passed)
+    .map((component) => component.label);
+  const impulse = evidence.validDomPattern;
+  const rejection = flowFlip.candidate;
+  const classification = impulse && rejection
+    ? 'CONFLICT'
+    : impulse
+      ? 'IMPULSE_CONTINUATION'
+      : rejection
+        ? 'REJECTION_BOUNCE_WATCH'
+        : 'INCONCLUSIVE';
+  const explanation = classification === 'IMPULSE_CONTINUATION'
+    ? impulsePassed
+    : classification === 'REJECTION_BOUNCE_WATCH'
+      ? rejectionPassed
+      : classification === 'CONFLICT'
+        ? ['Impulse and rejection evidence are both present; no directional conclusion is justified.']
+        : ['Stored evidence is incomplete or internally mixed; no directional conclusion is justified.'];
+  const h4Buildup = context?.mapContext?.buildup?.h4;
+  if (h4Buildup) {
+    explanation.push(
+      `Decentrader 4h buildup ${h4Buildup.direction}: long ${Math.round(h4Buildup.longUsd)} USD versus short ${Math.round(h4Buildup.shortUsd)} USD.`
+    );
+  }
+  const rsi = context?.mapContext?.rsi;
+  if (rsi) {
+    explanation.push(
+      `Stored RSI context: 4H ${finiteNumber(rsi.h4?.rsi)?.toFixed(2) || 'n/a'}, D ${finiteNumber(rsi.d1?.rsi)?.toFixed(2) || 'n/a'}, bias ${rsi.bias || 'neutral'}.`
+    );
+  }
+  const frictionSide = context?.direction === 'long' ? 'sell' : 'buy';
+  const alertPrice = context?.alertPrice;
+  const nearbyDistance = alertPrice ? Math.max(250, alertPrice * 0.005) : 250;
+  const nearbyFriction = (context?.coinGlass?.event?.relevantLevels || [])
+    .filter((level) => level.side === frictionSide)
+    .filter((level) => alertPrice === undefined || Math.abs(level.price - alertPrice) <= nearbyDistance)
+    .sort((a, b) => b.volumeUsd - a.volumeUsd);
+  if (nearbyFriction.length) {
+    explanation.push(
+      `CoinGlass opposing liquidity near alert: ${nearbyFriction.map((level) => `${Math.round(level.price)} @ ${Math.round(level.volumeUsd)} USD`).join(', ')}.`
+    );
+  }
+  const opposingEdge = context?.direction === 'long' ? context?.gap?.rightEdge : context?.gap?.leftEdge;
+  if (opposingEdge?.price) {
+    explanation.push(
+      `Decentrader opposing gap edge: ${Math.round(opposingEdge.price)} (${opposingEdge.leverage || '?'}x, count ${opposingEdge.count || 0}).`
+    );
+  }
+  return {
+    ruleVersion: 'response-v1',
+    classification,
+    impulseScore: evidence.score,
+    impulseAvailable: evidence.available,
+    rejectionScore: flowFlip.score,
+    rejectionAvailable: flowFlip.available,
+    explanation
+  };
+}
+
 function outcomeFor(
   records: DomMinuteRecord[],
   timestamp: number,
@@ -617,6 +927,8 @@ export function refreshIntrusionDomStudy(input: {
   alerts?: StudyAlert[];
   delayRecords?: DecentraderDelayRecord[];
   frames?: StudyFrame[];
+  events?: StudyEvent[];
+  rsiFrames?: StudyRsiFrame[];
   coinGlassObservations?: CoinGlassObservation[];
   historyStartTimestamp?: string;
   now?: string;
@@ -624,10 +936,13 @@ export function refreshIntrusionDomStudy(input: {
   const now = input.now || new Date().toISOString();
   const nowMs = Date.parse(now);
   const frames = input.frames || [];
+  const events = input.events || [];
+  const rsiFrames = input.rsiFrames || [];
   const observations = input.coinGlassObservations || [];
   const study = readStudy();
   const bySignature = new Map(study.records.map((record) => [record.signature, record]));
   const refreshSignatures = new Set<string>();
+  const alertEntrants = new Map<string, StudyAlert['entrants']>();
 
   for (const alert of input.alerts || []) {
     const signature = baseSignature(alert.signature);
@@ -646,6 +961,7 @@ export function refreshIntrusionDomStudy(input: {
     record.sideCounts = alert.sideCounts || record.sideCounts;
     record.alertPrice = finiteNumber(alert.price) || record.alertPrice;
     record.gap = alert.gap || alert.previousGap || record.gap;
+    if (alert.entrants) alertEntrants.set(signature, alert.entrants);
     record.candleReview = candleReviewFor(direction, record.timestamp, frames, alert.intrusionCandleReview);
     bySignature.set(signature, record);
     if (!existing) refreshSignatures.add(signature);
@@ -700,6 +1016,16 @@ export function refreshIntrusionDomStudy(input: {
       to: iso(historyTo),
       maxPoints: 5_000
     }).records;
+    const matchingDelayRecords = (input.delayRecords || []).filter(
+      (delay) => baseSignature(delay.signature) === record.signature
+    );
+    const firstDelay = (emailType: DecentraderDelayRecord['emailType']) => matchingDelayRecords
+      .filter((delay) => delay.emailType === emailType)
+      .sort((a, b) => Date.parse(a.smtpSentAt) - Date.parse(b.smtpSentAt))[0];
+    record.delayContext = {
+      normal: firstDelay('normal'),
+      filtered: firstDelay('filtered')
+    };
     const reviewAt = Date.parse(record.filteredEmailSentAt || record.normalEmailSentAt || now);
     const pre1hObservation = nearestObservation(observations, at - HOUR_MS);
     const pre2hObservation = nearestObservation(observations, at - 2 * HOUR_MS);
@@ -715,6 +1041,13 @@ export function refreshIntrusionDomStudy(input: {
       intrusionColor: expectedColor(record.direction),
       nextColor: expectedColor(record.direction)
     } : undefined);
+    record.mapContext = buildMapContext({
+      record,
+      frames,
+      events,
+      rsiFrames,
+      entrants: alertEntrants.get(record.signature)
+    });
     record.dom = {
       pre1h: aggregateIntrusionDomWindow(domHistory, at - HOUR_MS, at, record.direction),
       pre2h: aggregateIntrusionDomWindow(domHistory, at - 2 * HOUR_MS, at, record.direction),
@@ -764,6 +1097,38 @@ export function refreshIntrusionDomStudy(input: {
       observedAdverseDominance: favorable !== undefined && adverse !== undefined && record.outcome.observedHours >= 2
         ? Math.abs(adverse) >= 0.5 && Math.abs(adverse) > Math.max(0, favorable)
         : undefined
+    };
+    record.responseHypothesis = buildResponseHypothesis(record.evidence, record.flowFlip, record);
+    const consultedObservations = [
+      pre1hObservation,
+      pre2hObservation,
+      pre4hObservation,
+      pre12hObservation,
+      pre24hObservation,
+      eventObservation,
+      reviewObservation
+    ].filter((value, index, values): value is CoinGlassObservation => Boolean(value) && values.indexOf(value) === index);
+    const missing: string[] = [];
+    if (!record.mapContext) missing.push('decentrader-map-frame');
+    if (!events.length) missing.push('decentrader-map-events');
+    if (!matchingDelayRecords.length) missing.push('smtp-delay');
+    if (!domHistory.length) missing.push('decentralized-dom');
+    if (!consultedObservations.length) missing.push('coinglass-history');
+    if (!record.mapContext?.rsi) missing.push('rsi-frame');
+    record.sourceAudit = {
+      mapFrame: Boolean(record.mapContext),
+      decentraderEventsConsulted: events.length,
+      activeDecentraderZones: record.mapContext?.activeZoneCount || 0,
+      delayRecordsConsulted: matchingDelayRecords.length,
+      domMinutesConsulted: domHistory.length,
+      coinGlassObservationsConsulted: consultedObservations.length,
+      coinGlassLevelsConsulted: consultedObservations.reduce(
+        (sum, observation) => sum + (observation.levels || []).length,
+        0
+      ),
+      rsiFrame: Boolean(record.mapContext?.rsi),
+      complete: missing.length === 0,
+      missing
     };
     record.hypothesisEntryValid = record.candleReview.status === 'PASS' && record.evidence.validDomPattern;
     record.researchVersion = RESEARCH_VERSION;
@@ -823,6 +1188,8 @@ export function intrusionDomStudySnapshot(): any {
       direction: record.direction,
       alertPrice: record.alertPrice,
       gap: record.gap,
+      mapContext: record.mapContext,
+      delayContext: record.delayContext,
       filtered: record.filtered,
       normalEmailSentAt: record.normalEmailSentAt,
       filteredEmailSentAt: record.filteredEmailSentAt,
@@ -851,11 +1218,17 @@ export function intrusionDomStudySnapshot(): any {
         frictionRemovalPct: record.coinGlass.frictionRemovalPct,
         eventSupportUsd: record.coinGlass.event?.supportUsd,
         reviewSupportUsd: record.coinGlass.review?.supportUsd,
-        supportRetentionPct: record.coinGlass.supportRetentionPct
+        supportRetentionPct: record.coinGlass.supportRetentionPct,
+        eventObservedLevelCount: record.coinGlass.event?.observedLevelCount,
+        reviewObservedLevelCount: record.coinGlass.review?.observedLevelCount,
+        eventRelevantLevels: record.coinGlass.event?.relevantLevels,
+        reviewRelevantLevels: record.coinGlass.review?.relevantLevels
       },
       outcome: record.outcome,
       evidence: record.evidence,
       flowFlip: record.flowFlip,
+      responseHypothesis: record.responseHypothesis,
+      sourceAudit: record.sourceAudit,
       hypothesisEntryValid: record.hypothesisEntryValid
     }))
   };

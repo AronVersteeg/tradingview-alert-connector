@@ -4975,6 +4975,8 @@ export class DecentraderGapMonitor {
           alerts: domStudyAlerts,
           delayRecords: readDecentraderDelayHistory().records,
           frames: this.latestTimelapsePayload?.frames || [],
+          events: this.latestTimelapsePayload?.events || [],
+          rsiFrames: this.latestTimelapsePayload?.rsiStudy?.frames || [],
           coinGlassObservations: coinglassWhaleSnapshot().observations,
           historyStartTimestamp,
           now: nowNlIso()
@@ -5187,6 +5189,8 @@ export class DecentraderGapMonitor {
         alerts: domStudyAlerts,
         delayRecords: readDecentraderDelayHistory().records,
         frames: this.latestTimelapsePayload?.frames || [],
+        events: this.latestTimelapsePayload?.events || [],
+        rsiFrames: this.latestTimelapsePayload?.rsiStudy?.frames || [],
         coinGlassObservations: coinglassWhaleSnapshot().observations,
         historyStartTimestamp,
         now: nowNlIso()

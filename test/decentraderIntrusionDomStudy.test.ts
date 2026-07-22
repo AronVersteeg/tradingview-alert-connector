@@ -2,6 +2,7 @@ import {
   aggregateIntrusionDomWindow,
   buildIntrusionDomEvidence,
   buildIntrusionFlowFlipEvidence,
+  buildResponseHypothesis,
   IntrusionDomWindow
 } from '../src/services/decentraderIntrusionDomStudy';
 import { DomMinuteRecord } from '../src/services/decentralizedDomCollector';
@@ -207,5 +208,50 @@ describe('Decentrader intrusion DOM study', () => {
 
     expect(flowFlip.candidate).toBe(false);
     expect(flowFlip.classification).toBe('NONE');
+  });
+
+  test('keeps impulse and rejection hypotheses separate and allows an inconclusive result', () => {
+    const impulse = buildIntrusionDomEvidence({
+      intrusion1h: window(),
+      confirmation1h: window({ directionalPriceReturnPct: 0.3 })
+    }, {
+      event: {
+        observedAt: '2026-07-21T05:00:00.000Z',
+        ageMinutes: 0,
+        price: 65_000,
+        levelCount: 2,
+        supportCount: 1,
+        frictionCount: 1,
+        supportUsd: 100_000_000,
+        frictionUsd: 50_000_000,
+        observedLevelCount: 2,
+        relevantLevels: []
+      },
+      review: {
+        observedAt: '2026-07-21T07:00:00.000Z',
+        ageMinutes: 0,
+        price: 66_000,
+        levelCount: 1,
+        supportCount: 1,
+        frictionCount: 0,
+        supportUsd: 95_000_000,
+        frictionUsd: 0,
+        observedLevelCount: 1,
+        relevantLevels: []
+      },
+      frictionRemovedUsd: 50_000_000,
+      frictionRemovalPct: 1,
+      supportRetentionPct: 0.95
+    });
+    const noFlip = buildIntrusionFlowFlipEvidence({
+      pre1h: window(),
+      intrusion1h: window(),
+      confirmation1h: window()
+    });
+    expect(buildResponseHypothesis(impulse, noFlip).classification).toBe('IMPULSE_CONTINUATION');
+
+    const mixed = buildIntrusionDomEvidence({}, {});
+    const insufficientFlip = buildIntrusionFlowFlipEvidence({});
+    expect(buildResponseHypothesis(mixed, insufficientFlip).classification).toBe('INCONCLUSIVE');
   });
 });

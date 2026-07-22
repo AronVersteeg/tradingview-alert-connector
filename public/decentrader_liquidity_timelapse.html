@@ -1081,7 +1081,7 @@
             <table class="delay-history-table delay-history-latest" aria-label="All SMTP intrusion delay observations">
               <thead>
                 <tr>
-                  <th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th><th>DOM</th><th>Ultimate</th>
+                  <th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th><th>DOM</th><th>Response</th><th>Sources</th><th>Ultimate</th>
                   <th>Candle filter</th><th>Event price</th><th>Confirm price</th><th>Taker flow</th><th>Book pressure</th><th>CG friction</th><th>CG support</th>
                   <th>Alert price</th><th>Gap</th>
                   <th>Pre-1h price</th><th>Pre-1h flow</th><th>Pre-1h book</th>
@@ -1095,7 +1095,7 @@
                 </tr>
               </thead>
               <tbody id="delayHistoryLatestRows">
-                <tr><td colspan="47">No intrusion history recorded yet</td></tr>
+                <tr><td colspan="49">No intrusion history recorded yet</td></tr>
               </tbody>
             </table>
           </div>
@@ -2639,6 +2639,17 @@
             const domLabel = study
               ? `${study.evidence?.classification || 'INSUFFICIENT'} ${Number(study.evidence?.score) || 0}/${Number(study.evidence?.available) || 0}${flowFlipLabel}`
               : '-';
+            const response = study?.responseHypothesis || {};
+            const responseLabel = response.classification || 'INCONCLUSIVE';
+            const responseClass = responseLabel === 'IMPULSE_CONTINUATION'
+              ? 'dom-positive'
+              : responseLabel === 'REJECTION_BOUNCE_WATCH'
+                ? 'dom-negative'
+                : '';
+            const audit = study?.sourceAudit;
+            const sourceLabel = audit
+              ? `${audit.complete ? 'FULL' : 'PARTIAL'} | DOM ${Number(audit.domMinutesConsulted) || 0}m | CG ${Number(audit.coinGlassLevelsConsulted) || 0} | zones ${Number(audit.activeDecentraderZones) || 0}${audit.missing?.length ? ` | missing ${audit.missing.join(', ')}` : ''}`
+              : '-';
             const metric = (value, suffix = '') => Number.isFinite(Number(value))
               ? `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(2)}${suffix}`
               : '-';
@@ -2694,6 +2705,8 @@
               <td>${record.smtpSentAt ? delayNlTime(record.smtpSentAt) : '-'}</td>
               <td>${hasDelay ? `${Number(record.completedCandles1h) || 0} candles (${Math.round(Number(record.delayMinutes))}m)` : '-'}</td>
               <td>${domLabel}</td>
+              <td class="${responseClass}">${responseLabel}</td>
+              <td>${sourceLabel}</td>
               <td class="${study?.hypothesisEntryValid ? 'dom-positive' : 'dom-negative'}">${study ? (study.hypothesisEntryValid ? 'VALID' : 'NO') : '-'}</td>
               <td class="${study?.candleReview?.status === 'PASS' ? 'dom-positive' : 'dom-negative'}">${candleStatus}</td>
               <td class="${directionClass(event.directionalPriceReturnPct)}">${metric(event.directionalPriceReturnPct, '%')}</td>
@@ -2738,7 +2751,7 @@
               <td>${Number(event.coverageMinutes) || 0}/${Number(confirmation.coverageMinutes) || 0}/${Number(delayWindow.coverageMinutes) || 0}m</td>
             </tr>`;
           }).join('')
-        : '<tr><td colspan="47">No intrusion history recorded yet</td></tr>';
+        : '<tr><td colspan="49">No intrusion history recorded yet</td></tr>';
 
       delayHistoryStatus.textContent = tableRecords.length
         ? `${tableRecords.length} reconstructed intrusion${tableRecords.length === 1 ? '' : 's'} | ${totalRecords} sent mail${totalRecords === 1 ? '' : 's'} | pre-context uses only data available before each alert`
