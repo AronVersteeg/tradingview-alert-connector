@@ -77,6 +77,11 @@ type IntrusionCandleReview = {
   expectedColor?: CandleColor;
   intrusionColor: CandleColor;
   nextColor: CandleColor;
+  candleColors?: CandleColor[];
+  candleTimestamps?: string[];
+  closedCandlesChecked?: number;
+  delayCutoffAt?: string;
+  firstMismatchTimestamp?: string;
   intrusionTimestamp: string;
   nextTimestamp?: string;
   source: 'dydx' | 'ohlc' | 'price-delta' | 'unknown';
@@ -439,6 +444,7 @@ type AlertState = {
   pendingIntrusionCandleAlertSignatures?: string[];
   pendingIntrusionCandleAlerts?: Record<string, {
     firstObservedAt: string;
+    normalSmtpSentAt?: string;
     coinGlassGapLevels?: DelayCoinGlassLevel[];
   }>;
   lastAlertSentAt?: string;
@@ -1834,7 +1840,8 @@ export function intrusionCandleReview(
   rows: DecentraderRow[],
   alert: GapAlert,
   enabled = decentraderIntrusionCandleFilterEnabled(),
-  dydxCandles?: DydxRsiCandle[]
+  dydxCandles?: DydxRsiCandle[],
+  delayCutoffAt?: string
 ): IntrusionCandleReview {
   const direction = alertDirection(alert);
   const frameIndex =
@@ -1860,6 +1867,7 @@ export function intrusionCandleReview(
       direction,
       intrusionColor,
       nextColor,
+      delayCutoffAt,
       intrusionTimestamp: alert.timestamp,
       nextTimestamp,
       source,
@@ -1874,6 +1882,7 @@ export function intrusionCandleReview(
       direction,
       intrusionColor,
       nextColor,
+      delayCutoffAt,
       intrusionTimestamp: alert.timestamp,
       nextTimestamp,
       source,
@@ -1890,6 +1899,7 @@ export function intrusionCandleReview(
       expectedColor,
       intrusionColor,
       nextColor,
+      delayCutoffAt,
       intrusionTimestamp: alert.timestamp,
       nextTimestamp,
       source,
@@ -1897,7 +1907,9 @@ export function intrusionCandleReview(
     };
   }
 
-  if (!dydxIntrusionOpenClose || !dydxNextOpenClose) {
+  const intrusionStartMs = coinGlassFrameTimeMs(alert.timestamp);
+  const delayCutoffMs = Date.parse(String(delayCutoffAt || ''));
+  if (intrusionStartMs === undefined || !Number.isFinite(delayCutoffMs)) {
     return {
       enabled,
       status: 'PENDING',
@@ -1905,10 +1917,11 @@ export function intrusionCandleReview(
       expectedColor,
       intrusionColor,
       nextColor,
+      delayCutoffAt,
       intrusionTimestamp: alert.timestamp,
       nextTimestamp,
       source,
-      reason: 'dYdX 1H intrusion candle or following candle is not available yet.'
+      reason: 'Waiting for the normal intrusion email to be accepted by SMTP before fixing The Delay window.'
     };
   }
 
@@ -1920,6 +1933,7 @@ export function intrusionCandleReview(
       expectedColor,
       intrusionColor,
       nextColor,
+      delayCutoffAt,
       intrusionTimestamp: alert.timestamp,
       nextTimestamp,
       source,
@@ -1927,34 +1941,75 @@ export function intrusionCandleReview(
     };
   }
 
-  const nextCandleStartMs = dydxNextCandle ? Date.parse(dydxNextCandle.startedAt) : NaN;
-  if (!Number.isFinite(nextCandleStartMs) || Date.now() < nextCandleStartMs + 60 * 60 * 1000) {
+  const hourMs = 60 * 60 * 1000;
+  const expectedClosedCandles = Math.floor(
+    Math.max(0, (delayCutoffMs - intrusionStartMs) / hourMs) + 1e-9
+  );
+  if (expectedClosedCandles < 2) {
     return {
       enabled,
-      status: 'PENDING',
+      status: 'FAIL',
       direction,
       expectedColor,
       intrusionColor,
       nextColor,
+      closedCandlesChecked: expectedClosedCandles,
+      delayCutoffAt,
       intrusionTimestamp: alert.timestamp,
       nextTimestamp,
       source,
-      reason: 'Waiting for the dYdX following 1H candle to close before confirming the intrusion.'
+      reason: `The Delay contained only ${expectedClosedCandles} fully closed 1H candle(s); at least 2 are required.`
     };
   }
 
-  if (intrusionColor === expectedColor && nextColor === expectedColor) {
+  const candlesByStartedAt = new Map(
+    dydxCandles.map((candle) => [Date.parse(candle.startedAt), candle])
+  );
+  const closedCandles: DydxRsiCandle[] = [];
+  for (let offset = 0; offset < expectedClosedCandles; offset += 1) {
+    const expectedStartedAt = intrusionStartMs + offset * hourMs;
+    const candle = candlesByStartedAt.get(expectedStartedAt);
+    if (!candle || !dydxOpenClose(candle)) {
+      return {
+        enabled,
+        status: 'PENDING',
+        direction,
+        expectedColor,
+        intrusionColor,
+        nextColor,
+        closedCandlesChecked: closedCandles.length,
+        delayCutoffAt,
+        intrusionTimestamp: alert.timestamp,
+        nextTimestamp,
+        source: 'dydx',
+        reason: `Waiting for complete dYdX 1H candle data for The Delay window (${closedCandles.length}/${expectedClosedCandles} available).`
+      };
+    }
+    closedCandles.push(candle);
+  }
+
+  const candleColors = closedCandles.map((candle) => candleColor(dydxOpenClose(candle)));
+  const candleTimestamps = closedCandles.map((candle) => candle.startedAt);
+  const firstMismatchIndex = candleColors.findIndex((color) => color !== expectedColor);
+  const firstMismatchTimestamp =
+    firstMismatchIndex >= 0 ? candleTimestamps[firstMismatchIndex] : undefined;
+
+  if (firstMismatchIndex < 0) {
     return {
       enabled,
       status: 'PASS',
       direction,
       expectedColor,
-      intrusionColor,
-      nextColor,
+      intrusionColor: candleColors[0],
+      nextColor: candleColors[1],
+      candleColors,
+      candleTimestamps,
+      closedCandlesChecked: closedCandles.length,
+      delayCutoffAt,
       intrusionTimestamp: alert.timestamp,
-      nextTimestamp,
-      source,
-      reason: `Intrusion candle and next candle are both ${expectedColor}.`
+      nextTimestamp: candleTimestamps[1],
+      source: 'dydx',
+      reason: `All ${closedCandles.length} fully closed 1H candles in The Delay are ${expectedColor}.`
     };
   }
 
@@ -1963,12 +2018,17 @@ export function intrusionCandleReview(
     status: 'FAIL',
     direction,
     expectedColor,
-    intrusionColor,
-    nextColor,
+    intrusionColor: candleColors[0],
+    nextColor: candleColors[1],
+    candleColors,
+    candleTimestamps,
+    closedCandlesChecked: closedCandles.length,
+    delayCutoffAt,
+    firstMismatchTimestamp,
     intrusionTimestamp: alert.timestamp,
-    nextTimestamp,
-    source,
-    reason: `Expected ${expectedColor}/${expectedColor}, got ${intrusionColor}/${nextColor}.`
+    nextTimestamp: candleTimestamps[1],
+    source: 'dydx',
+    reason: `Expected every closed candle in The Delay to be ${expectedColor}; got ${candleColors.join(' / ')}.`
   };
 }
 
@@ -4556,6 +4616,9 @@ function alertBody(alert: GapAlert, symbol: string): string {
 }
 
 function filteredAlertBody(alert: GapAlert, symbol: string, review: IntrusionCandleReview): string {
+  const candleSequence = review.candleColors?.length
+    ? review.candleColors.join(' / ')
+    : `${review.intrusionColor} / ${review.nextColor}`;
   return [
     `FILTERED Decentrader ${symbol.toUpperCase()} liquidity gap alert`,
     '',
@@ -4563,8 +4626,10 @@ function filteredAlertBody(alert: GapAlert, symbol: string, review: IntrusionCan
     `Signal: ${sideCounts(alert)}`,
     `Direction: ${review.direction ? review.direction.toUpperCase() : 'UNKNOWN'}`,
     `Candle filter: ${review.status}`,
-    `Candle check: ${review.intrusionColor} / ${review.nextColor}`,
-    `Expected: ${review.expectedColor || '-'}/${review.expectedColor || '-'}`,
+    `Closed candles checked: ${review.closedCandlesChecked || 0}`,
+    `Candle sequence: ${candleSequence}`,
+    `Expected: all ${review.expectedColor || '-'}`,
+    `Delay cutoff (SMTP): ${review.delayCutoffAt || '-'}`,
     `Source: ${review.source}`,
     `Reason: ${review.reason}`,
     '',
@@ -4815,6 +4880,12 @@ export class DecentraderGapMonitor {
       const pendingCandleAlerts = intrusionCandleFilterEnabled
         ? { ...(state.pendingIntrusionCandleAlerts || {}) }
         : {};
+      const normalDelaySentAtBySignature = new Map<string, string>();
+      for (const record of readDecentraderDelayHistory().records) {
+        if (record.emailType === 'normal') {
+          normalDelaySentAtBySignature.set(record.signature, record.smtpSentAt);
+        }
+      }
       for (const signature of pendingCandleSignatures) {
         pendingCandleAlerts[signature] = pendingCandleAlerts[signature] || {
           firstObservedAt: nowNlIso(),
@@ -4997,10 +5068,21 @@ export class DecentraderGapMonitor {
         const signature = gapAlertSignature(alert);
         const existingPendingAlert = pendingCandleAlerts[signature];
         const signalFirstObservedAt = existingPendingAlert?.firstObservedAt || nowNlIso();
+        let normalSmtpSentAt =
+          existingPendingAlert?.normalSmtpSentAt ||
+          normalDelaySentAtBySignature.get(signature);
+        if (
+          !normalSmtpSentAt &&
+          signature === state.lastAlertSentSignature &&
+          state.lastAlertSentAt
+        ) {
+          normalSmtpSentAt = state.lastAlertSentAt;
+        }
         const initialCoinGlassGapLevels = existingPendingAlert?.coinGlassGapLevels ||
           delayCoinGlassLevelsInsideGap(coinglassWhaleSnapshot().levels, alert.previousGap);
         pendingCandleAlerts[signature] = {
           firstObservedAt: signalFirstObservedAt,
+          normalSmtpSentAt,
           coinGlassGapLevels: initialCoinGlassGapLevels
         };
         const alertSummary = {
@@ -5012,26 +5094,14 @@ export class DecentraderGapMonitor {
           gap: alert.previousGap,
           entrants: alert.entrants
         };
-        const candleReview = intrusionCandleReview(rows, alert, intrusionCandleFilterEnabled, intrusionCandleCandles);
-        (alertSummary as any).intrusionCandleReview = candleReview;
-        result.intrusionCandleReviews.push({
-          signature,
-          timestamp: alert.timestamp,
-          timestampNl: alert.timestampNl,
-          sideCounts: sideCounts(alert),
-          ...candleReview
-        });
         state.lastAlertObservedSignature = signature;
-        result.alert = alertSummary;
-        result.alerts.push(alertSummary);
-        console.log('Decentrader gap alert detected:', alertSummary);
 
         const pendingCandleReview = pendingCandleSignatures.has(signature);
         const emailDuplicate = signature === state.lastAlertSentSignature;
-        if (pendingCandleReview) {
-          result.duplicate = true;
-        } else if (emailDuplicate) {
-          result.duplicate = true;
+        if (normalSmtpSentAt) {
+          if (pendingCandleReview || emailDuplicate) {
+            result.duplicate = true;
+          }
         } else if (smtpSettings) {
           const emailResult = await sendEmailBestEffort(
             smtpSettings,
@@ -5040,10 +5110,15 @@ export class DecentraderGapMonitor {
           );
 
           if (emailResult.sent) {
-            const smtpSentAt = nowNlIso();
+            normalSmtpSentAt = nowNlIso();
+            normalDelaySentAtBySignature.set(signature, normalSmtpSentAt);
+            pendingCandleAlerts[signature] = {
+              ...pendingCandleAlerts[signature],
+              normalSmtpSentAt
+            };
             state.lastAlertSentSignature = signature;
-            state.lastAlertSentAt = smtpSentAt;
-            recordDelayHistoryBestEffort(alert, signature, 'normal', smtpSentAt);
+            state.lastAlertSentAt = normalSmtpSentAt;
+            recordDelayHistoryBestEffort(alert, signature, 'normal', normalSmtpSentAt);
             result.emailSent = true;
             result.emailSentCount += 1;
           } else {
@@ -5055,7 +5130,28 @@ export class DecentraderGapMonitor {
               error: emailResult.error
             });
           }
+        } else if (pendingCandleReview || emailDuplicate) {
+          result.duplicate = true;
         }
+
+        const candleReview = intrusionCandleReview(
+          rows,
+          alert,
+          intrusionCandleFilterEnabled,
+          intrusionCandleCandles,
+          normalSmtpSentAt
+        );
+        (alertSummary as any).intrusionCandleReview = candleReview;
+        result.intrusionCandleReviews.push({
+          signature,
+          timestamp: alert.timestamp,
+          timestampNl: alert.timestampNl,
+          sideCounts: sideCounts(alert),
+          ...candleReview
+        });
+        result.alert = alertSummary;
+        result.alerts.push(alertSummary);
+        console.log('Decentrader gap alert detected:', alertSummary);
 
         if (candleReview.enabled && candleReview.status !== 'PASS') {
           if (candleReview.status === 'PENDING') {
