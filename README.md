@@ -131,6 +131,21 @@ DECENTRALIZED_DOM_HISTORY_DIR=/app/data/decentralized-dom
 
 Raw status and replay-window data are available from `GET /research/dom-collector/status` and `GET /research/dom-collector/history?from=<ISO>&to=<ISO>`.
 
+The Public Perp V2 panel is a separate observe-only replacement track for the original synthetic public study. It records compact GMX protocol-position snapshots on the persistent disk, backfills GMX's historical daily position snapshots, and reconstructs each map frame from the position state effective at that time. Current leverage, rather than entry leverage alone, drives a liquidation-price estimate; real position notional becomes the histogram weight and every bucket carries confidence and an uncertainty range. The V2 gap is bounded by strong opposite-side position clusters and scored on the actual density inside it. It remains a one-source `candidate` until a second independent position source, planned as a direct Drift/Solana UserMap adapter, confirms it. V2 does not import or call the Decentrader execution path.
+
+```text
+OPEN_LIQUIDITY_V2_ENABLED=true
+OPEN_LIQUIDITY_V2_POLL_MINUTES=60
+OPEN_LIQUIDITY_V2_BACKFILL_DAYS=21
+OPEN_LIQUIDITY_V2_HISTORY_DIR=/app/data/open-liquidity-v2
+OPEN_LIQUIDITY_V2_PRICE_STEP_USD=50
+OPEN_LIQUIDITY_V2_MIN_CLUSTER_USD=250000
+# Optional: point V2 at a mirror or self-hosted GMX protocol indexer.
+OPEN_LIQUIDITY_V2_GMX_GRAPHQL_URL=https://gmx.squids.live/gmx-synthetics-arbitrum:prod/api/graphql
+```
+
+The V2 payload and collector status are available from `GET /open-liquidity/v2/liquidity-timelapse` and `GET /open-liquidity/v2/status`. The collector can infer its persistent directory from `DECENTRALIZED_DOM_HISTORY_DIR`, so the explicit V2 path is optional when the existing Render disk is mounted at `/app/data`.
+
 ```text
 COINGLASS_WHALE_LEVELS_ENABLED=true
 COINGLASS_WHALE_SYMBOL=Binance_BTCUSDT

@@ -1308,13 +1308,35 @@
       ></iframe>
     </section>
 
+    <section class="comparison" id="openV2StudySection">
+      <div class="comparison-header">
+        <h2 class="comparison-title">Public perp BTC/USD V2</h2>
+        <div class="comparison-note">
+          Persistente protocolposities, causale replay en expliciete onzekerheid. Observe-only; nog niet gekoppeld aan alerts of orders.
+        </div>
+      </div>
+      <iframe
+        class="comparison-frame"
+        id="openV2StudyFrame"
+        title="Public perp BTC/USD liquidity study V2"
+        src="/decentrader/map?source=open-v2&embedded=1"
+      ></iframe>
+    </section>
+
     <footer id="note"></footer>
   </main>
 
   <script src="data/decentrader_btc_liquidity_timelapse_data.js"></script>
   <script>
     const queryParams = new URLSearchParams(window.location.search);
-    const activeSource = queryParams.get('source') === 'open' ? 'open' : 'decentrader';
+    const requestedSource = queryParams.get('source');
+    const activeSource = requestedSource === 'open-v2'
+      ? 'open-v2'
+      : requestedSource === 'open'
+        ? 'open'
+        : 'decentrader';
+    const isOpenStudy = activeSource !== 'decentrader';
+    const isOpenV2 = activeSource === 'open-v2';
     const isEmbedded = queryParams.get('embedded') === '1';
     const CLOUD_DECENTRADER_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/liquidity-timelapse'
@@ -1322,6 +1344,9 @@
     const CLOUD_OPEN_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/open-liquidity/liquidity-timelapse'
       : '/open-liquidity/liquidity-timelapse';
+    const CLOUD_OPEN_V2_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+      ? 'https://arons-tradingview-alert-connector.onrender.com/open-liquidity/v2/liquidity-timelapse'
+      : '/open-liquidity/v2/liquidity-timelapse';
     const CLOUD_TRADE_PLAN_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/trade-plan'
       : '/decentrader/trade-plan';
@@ -1354,6 +1379,8 @@
     const pageTitle = document.getElementById('pageTitle');
     const openStudySection = document.getElementById('openStudySection');
     const openStudyFrame = document.getElementById('openStudyFrame');
+    const openV2StudySection = document.getElementById('openV2StudySection');
+    const openV2StudyFrame = document.getElementById('openV2StudyFrame');
     const meta = document.getElementById('meta');
     const note = document.getElementById('note');
     const gapWidth = document.getElementById('gapWidth');
@@ -1453,10 +1480,13 @@
     if (isEmbedded) {
       document.body.classList.add('is-embedded');
       openStudySection?.remove();
+      openV2StudySection?.remove();
     }
 
-    if (activeSource === 'open') {
-      pageTitle.textContent = 'BTC/USD Public Perp Liquidity Study';
+    if (isOpenStudy) {
+      pageTitle.textContent = isOpenV2
+        ? 'BTC/USD Public Perp Liquidity V2'
+        : 'BTC/USD Public Perp Liquidity Study';
       if (domObserverPanel) domObserverPanel.hidden = true;
     } else {
       pageTitle.textContent = 'BTC/USD Decentrader Liquidity Timelapse';
@@ -1464,6 +1494,9 @@
 
     if (openStudyFrame && ['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
       openStudyFrame.src = 'https://arons-tradingview-alert-connector.onrender.com/decentrader/map?source=open&embedded=1';
+    }
+    if (openV2StudyFrame && ['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
+      openV2StudyFrame.src = 'https://arons-tradingview-alert-connector.onrender.com/decentrader/map?source=open-v2&embedded=1';
     }
 
     function money(value) {
@@ -1825,6 +1858,70 @@
         return activeDrawCache.frameEvents.get(cacheKey);
       }
 
+      if (payload.snapshotZones) {
+        const frame = payload.frames?.[frameIndex];
+        const snapshot = payload.snapshots?.[Number(frame?.snapshot)];
+        const previousFrame = payload.frames?.[frameIndex - 1];
+        const previousSnapshot = payload.snapshots?.[Number(previousFrame?.snapshot)];
+        const previousCounts = new Map(
+          (previousSnapshot?.zones || []).map((zone) => [
+            `${zone.side}|${zone.leverage}|${zone.price}`,
+            Number(zone.weightedUsd || 0) / 1_000_000
+          ])
+        );
+        const candidateBars = [];
+        for (const zone of snapshot?.zones || []) {
+          const event = { s: zone.side, l: zone.leverage, p: zone.price };
+          if (!eventAllowed(event)) continue;
+          const key = `${zone.side}|${zone.leverage}|${zone.price}`;
+          const currentCount = Number(zone.weightedUsd || 0) / 1_000_000;
+          const previousCount = previousCounts.get(key) || 0;
+          const count = mode === 'new' ? Math.max(0, currentCount - previousCount) : currentCount;
+          if (count <= 0) continue;
+          const bar = {
+            key,
+            side: zone.side,
+            leverage: zone.leverage,
+            price: zone.price,
+            count,
+            first: previousCount <= 0,
+            contextOnly: false,
+            notionalUsd: Number(zone.notionalUsd || 0),
+            weightedUsd: Number(zone.weightedUsd || 0),
+            positionCount: Number(zone.positionCount || 0),
+            confidence: Number(zone.confidence || 0),
+            uncertaintyUsd: Number(zone.uncertaintyUsd || 0),
+          };
+          candidateBars.push(bar);
+        }
+        const rankedBars = candidateBars
+          .slice()
+          .sort((a, b) => b.count - a.count || a.price - b.price);
+        const totalWeight = rankedBars.reduce((sum, bar) => sum + bar.count, 0);
+        const selectedKeys = new Set();
+        let selectedWeight = 0;
+        for (const bar of rankedBars) {
+          if (selectedKeys.size >= 140) break;
+          if (selectedKeys.size >= 60 && selectedWeight >= totalWeight * 0.95) break;
+          selectedKeys.add(bar.key);
+          selectedWeight += bar.count;
+        }
+        const serverGap = payload.gaps?.[frameIndex];
+        if (serverGap) {
+          selectedKeys.add(`L|${serverGap.leftEdge.leverage}|${serverGap.left}`);
+          selectedKeys.add(`S|${serverGap.rightEdge.leverage}|${serverGap.right}`);
+        }
+        const bars = candidateBars
+          .filter((bar) => selectedKeys.has(bar.key))
+          .sort((a, b) => a.price - b.price || a.side.localeCompare(b.side) || a.leverage - b.leverage);
+        // Snapshot buckets can move one price step when leverage changes. Treat
+        // that as density migration, not as a full-height "first seen" event.
+        const firstSeen = [];
+        const result = { bars, firstSeen };
+        activeDrawCache?.frameEvents?.set(cacheKey, result);
+        return result;
+      }
+
       const bins = new Map();
       const firstSeen = [];
       const eventGroups = [{ events: payload.events || [], context: false }];
@@ -1853,7 +1950,7 @@
               first: false,
               contextOnly: true,
             };
-          existing.count += 1;
+          existing.count += Number(event.w) > 0 ? Number(event.w) : 1;
           existing.contextOnly = existing.contextOnly && group.context;
           existing.first = existing.first || Boolean(event.n && event.i === frameIndex && !group.context);
           bins.set(key, existing);
@@ -3368,6 +3465,37 @@
 
     function getVisualGapForBars(frame, bars, xFor, xToPrice) {
       if (!frame || !Number.isFinite(frame.price)) return null;
+      if (isOpenV2) {
+        const serverGap = payload.gaps?.[frame.i];
+        if (!serverGap) return null;
+        const leftEdge = {
+          key: `L|${serverGap.leftEdge.leverage}|${serverGap.left}`,
+          side: 'L',
+          leverage: serverGap.leftEdge.leverage,
+          price: serverGap.left,
+          count: Number(serverGap.leftEdge.weightedUsd || 0) / 1_000_000,
+          positionCount: serverGap.leftEdge.positionCount,
+          confidence: serverGap.leftEdge.confidence,
+        };
+        const rightEdge = {
+          key: `S|${serverGap.rightEdge.leverage}|${serverGap.right}`,
+          side: 'S',
+          leverage: serverGap.rightEdge.leverage,
+          price: serverGap.right,
+          count: Number(serverGap.rightEdge.weightedUsd || 0) / 1_000_000,
+          positionCount: serverGap.rightEdge.positionCount,
+          confidence: serverGap.rightEdge.confidence,
+        };
+        return {
+          ...serverGap,
+          leftX: xFor(serverGap.left) + GAP_EDGE_PADDING,
+          rightX: xFor(serverGap.right) - GAP_EDGE_PADDING,
+          leftEdge,
+          rightEdge,
+          leftToPrice: frame.price - serverGap.left,
+          rightToPrice: serverGap.right - frame.price,
+        };
+      }
       const leftBars = bars.filter((bar) => bar.price < frame.price);
       const rightBars = bars.filter((bar) => bar.price > frame.price);
       if (!leftBars.length || !rightBars.length) return null;
@@ -3839,7 +3967,8 @@
         ctx.moveTo(area.left, y);
         ctx.lineTo(area.right, y);
         ctx.stroke();
-        ctx.fillText(String(Math.round(maxCount * i / 5)), 12, y + 4);
+        const yValue = maxCount * i / 5;
+        ctx.fillText(isOpenV2 ? `$${yValue.toFixed(1)}M` : String(Math.round(yValue)), 12, y + 4);
       }
 
       ctx.strokeStyle = 'rgba(236, 242, 248, 0.28)';
@@ -4318,8 +4447,15 @@
       gapLeft.textContent = money(gap.left);
       gapPrice.textContent = money(frame.price);
       gapRight.textContent = money(gap.right);
-      const gapPrefix = activeSource === 'open' ? 'Raw public gap | ' : '';
-      gapStatus.textContent = `${gapPrefix}${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}`;
+      const gapPrefix = activeSource === 'open'
+        ? 'Raw public gap | '
+        : isOpenV2
+          ? `${gap.status === 'confirmed' ? 'Confirmed' : 'Candidate'} | confidence ${Math.round(Number(gap.confidence || 0) * 100)}% | `
+          : '';
+      const qualityText = isOpenV2
+        ? ` | clean ${Math.round(Number(gap.cleanliness || 0) * 100)}% | sources ${gap.sourceAgreement || 1}/2`
+        : '';
+      gapStatus.textContent = `${gapPrefix}${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}${qualityText}`;
 
       if (intrusion?.entrants?.length) {
         const leftText = intrusion.left.length ? `${intrusion.left.length} left edge` : '';
@@ -4688,10 +4824,11 @@
 
       ctx.fillStyle = '#ecf2f8';
       ctx.font = '600 15px Inter, system-ui, sans-serif';
-      const sourceName = payload.source?.name || (activeSource === 'open' ? 'Public perp study' : 'Decentrader');
+      const sourceName = payload.source?.name || (isOpenV2 ? 'Public perp V2' : activeSource === 'open' ? 'Public perp study' : 'Decentrader');
       ctx.fillText(`${sourceName} | ${nlTime(frame.t)} NL | ${priceLevel(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
 
-      meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
+      const sourceEventCount = Number(payload.eventCount ?? payload.events?.length ?? 0);
+      meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${sourceEventCount.toLocaleString('en-US')} zone events`;
       syncJumpTimeInput(frame);
       updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview);
       try {
@@ -4792,7 +4929,11 @@
     }
 
     async function fetchCloudPayload() {
-      const dataUrl = activeSource === 'open' ? CLOUD_OPEN_DATA_URL : CLOUD_DECENTRADER_DATA_URL;
+      const dataUrl = isOpenV2
+        ? CLOUD_OPEN_V2_DATA_URL
+        : activeSource === 'open'
+          ? CLOUD_OPEN_DATA_URL
+          : CLOUD_DECENTRADER_DATA_URL;
       const response = await fetch(`${dataUrl}?market=BTC-USD&ts=${Date.now()}`, { cache: 'no-store' });
       if (!response.ok) throw new Error(`Cloud data ${response.status}`);
       return { payload: await response.json(), source: 'cloud' };
@@ -4875,8 +5016,9 @@
       frameInput.max = String(payload.frames.length - 1);
       frameInput.value = String(payload.frames.length - 1);
       syncJumpTimeBounds();
-      const sourceName = payload.source?.name || (activeSource === 'open' ? 'Public perp study' : 'Decentrader');
-      meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${payload.events.length.toLocaleString('en-US')} zone events`;
+      const sourceName = payload.source?.name || (isOpenV2 ? 'Public perp V2' : activeSource === 'open' ? 'Public perp study' : 'Decentrader');
+      const sourceEventCount = Number(payload.eventCount ?? payload.events?.length ?? 0);
+      meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${sourceEventCount.toLocaleString('en-US')} zone events`;
       note.textContent = payload.source.note;
       resizeCanvas();
     }
