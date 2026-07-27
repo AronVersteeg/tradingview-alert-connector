@@ -367,7 +367,22 @@ export function detectV2LiquidityGap(
   const interiorWeightedUsd = interior.reduce((sum, zone) => sum + zone.weightedUsd, 0);
   const interiorPeak = interior.reduce((peak, zone) => Math.max(peak, zone.weightedUsd), 0);
   const edgeFloor = Math.max(1, Math.min(leftEdge.weightedUsd, rightEdge.weightedUsd));
-  const cleanliness = clamp(1 - interiorPeak / edgeFloor, 0, 1);
+  const edgeTotal = Math.max(1, leftEdge.weightedUsd + rightEdge.weightedUsd);
+  const peakToEdgeRatio = interiorPeak / edgeFloor;
+  const interiorToEdgeRatio = interiorWeightedUsd / edgeTotal;
+  const cleanliness = clamp(1 - Math.max(peakToEdgeRatio, interiorToEdgeRatio), 0, 1);
+  const minimumCleanliness = clamp(
+    Number(process.env.OPEN_LIQUIDITY_V2_MIN_GAP_CLEANLINESS || 0.72),
+    0.5,
+    0.98
+  );
+  if (
+    cleanliness < minimumCleanliness ||
+    peakToEdgeRatio > 0.3 ||
+    interiorToEdgeRatio > 0.28
+  ) {
+    return undefined;
+  }
   const sourceAgreement = Math.max(1, Math.floor(options.sourceAgreement || 1));
   const sourceFactor = clamp(sourceAgreement / 2, 0.5, 1);
   const confidence = rounded(

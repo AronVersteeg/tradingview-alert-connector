@@ -8,7 +8,7 @@ import { DexRegistry } from '../services/dexRegistry';
 import { decentralizedDomCollector } from '../services/decentralizedDomCollector';
 import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
 import { getOpenLiquidityTimelapsePayload } from '../services/openLiquidityTimelapse';
-import { openLiquidityV2Collector } from '../services/openLiquidityV2';
+import { openLiquidityV2MultiSourceCollector as openLiquidityV2Collector } from '../services/openLiquidityV2MultiSource';
 import { buildSnoekScout } from '../services/snoekScout';
 import { getSnoekCurrent } from '../services/snoekCurrent';
 import { getSnoekStructures } from '../services/snoekStructures';

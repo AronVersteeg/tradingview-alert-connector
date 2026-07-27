@@ -98,4 +98,19 @@ describe('Open Liquidity V2', () => {
     expect(gap?.status).toBe('confirmed');
     expect(gap?.confidence).toBeGreaterThan(0.7);
   });
+
+  test('rejects a visually filled corridor even when both edge clusters are strong', () => {
+    const gap = detectV2LiquidityGap(
+      [
+        zone({ side: 'L', price: 57_700, weightedUsd: 546_299 }),
+        zone({ side: 'L', price: 60_000, weightedUsd: 500_000 }),
+        zone({ side: 'S', price: 63_000, weightedUsd: 917_102 }),
+        zone({ side: 'S', price: 66_200, weightedUsd: 272_660 })
+      ],
+      64_978,
+      { minClusterUsd: 250_000, sourceAgreement: 1 }
+    );
+
+    expect(gap).toBeUndefined();
+  });
 });
