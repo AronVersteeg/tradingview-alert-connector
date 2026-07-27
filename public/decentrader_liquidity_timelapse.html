@@ -3423,6 +3423,46 @@
       };
     }
 
+    function fibonacciConfluenceConfig() {
+      const config = payload?.fibonacciTpConfluence || {};
+      return {
+        enabled: config.enabled !== false,
+        observeOnly: config.observeOnly !== false,
+        ratios: Array.isArray(config.ratios) && config.ratios.length
+          ? config.ratios.map(Number).filter((ratio) => Number.isFinite(ratio) && ratio > 1)
+          : [1.272, 1.618, 2, 2.618],
+        toleranceGapPct: Number(config.toleranceGapPct) || 0.015,
+      };
+    }
+
+    function gapFibonacciConfluenceForZone(direction, zonePrice, gap, priceStep = 50) {
+      const config = fibonacciConfluenceConfig();
+      if (!config.enabled || !gap || !Number.isFinite(zonePrice) || zonePrice <= 0 || gap.width <= 0) return null;
+      if (direction === 'long' ? zonePrice <= gap.right : zonePrice >= gap.left) return null;
+
+      const tolerance = Math.max(priceStep, gap.width * config.toleranceGapPct);
+      let best = null;
+      for (const ratio of config.ratios) {
+        const fibonacciPrice = direction === 'long'
+          ? gap.left + gap.width * ratio
+          : gap.right - gap.width * ratio;
+        const distance = Math.abs(zonePrice - fibonacciPrice);
+        if (distance > tolerance) continue;
+
+        const candidate = {
+          source: 'gap-extension',
+          ratio,
+          price: fibonacciPrice,
+          distance,
+          tolerance,
+          proximity: Math.max(0, 1 - distance / Math.max(1, tolerance)),
+          observeOnly: config.observeOnly,
+        };
+        if (!best || candidate.distance < best.distance) best = candidate;
+      }
+      return best;
+    }
+
     function coinGlassLevelVolumeUsd(level) {
       return Math.max(Number(level?.volumeUsd) || 0, Number(level?.maxVolumeUsd) || 0);
     }
@@ -3628,11 +3668,13 @@
             const peakBoost = peak ? 1.18 : 1;
             const baseSelectionScore = zone.score * overlapBoost * freshBoost * peakBoost;
             const cgConfluence = coinGlassTpConfluenceForZone(direction, zone.price, frame, gap);
+            const fibConfluence = gapFibonacciConfluenceForZone(direction, zone.price, gap, step);
 
             return {
               ...zone,
               peak,
               cgConfluence,
+              fibConfluence,
               selectionScore: Math.round(baseSelectionScore * (cgConfluence?.multiplier || 1)),
             };
           });
@@ -3901,7 +3943,10 @@
         if (zone.price < minPrice || zone.price > maxPrice) continue;
         const x = xFor(zone.price);
         const lane = zone.direction === 'long' ? zone.rank - 1 : zone.rank + 2;
-        const label = `${zone.prefix}${zone.rank} ${priceLevel(zone.price)} · ${zone.score}`;
+        const fibLabel = zone.fibConfluence
+          ? ` F${Number(zone.fibConfluence.ratio).toFixed(3).replace(/\.?0+$/, '')}`
+          : '';
+        const label = `${zone.prefix}${zone.rank} ${priceLevel(zone.price)} · ${zone.score}${fibLabel}`;
         const labelWidth = Math.ceil(ctx.measureText(label).width) + 16;
         const labelHeight = 22;
         const labelX = Math.max(area.left + 6, Math.min(x - labelWidth / 2, area.right - labelWidth - 6));

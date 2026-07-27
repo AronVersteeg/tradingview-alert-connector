@@ -102,6 +102,7 @@ type TradeZone = {
   score: number;
   selectionScore?: number;
   cgConfluence?: CoinGlassTpConfluence;
+  fibConfluence?: FibonacciTpConfluence;
   peak?: boolean;
   edge?: boolean;
   edgePrice?: number;
@@ -163,6 +164,15 @@ type CoinGlassTpConfluence = {
   side: CoinGlassWhaleSide;
   multiplier: number;
   longDuration: boolean;
+};
+
+type FibonacciTpConfluence = {
+  source: 'gap-extension';
+  ratio: number;
+  price: number;
+  distance: number;
+  tolerance: number;
+  proximity: number;
 };
 
 type DelayCoinGlassLevel = {
@@ -2055,6 +2065,42 @@ function coinGlassTpConfluenceLongDurationHours(): number {
   return envPositiveNumber('COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS', 14 * 24);
 }
 
+const GAP_FIBONACCI_EXTENSION_RATIOS = [1.272, 1.618, 2, 2.618] as const;
+const GAP_FIBONACCI_TOLERANCE_PCT = 0.015;
+
+export function gapFibonacciConfluenceForZone(
+  direction: 'long' | 'short',
+  zonePrice: number,
+  gap: Pick<Gap, 'left' | 'right' | 'width'> | undefined,
+  priceStep = 50
+): FibonacciTpConfluence | undefined {
+  if (!gap || !Number.isFinite(zonePrice) || zonePrice <= 0 || gap.width <= 0) return undefined;
+  if (direction === 'long' ? zonePrice <= gap.right : zonePrice >= gap.left) return undefined;
+
+  const tolerance = Math.max(priceStep, gap.width * GAP_FIBONACCI_TOLERANCE_PCT);
+  let best: FibonacciTpConfluence | undefined;
+
+  for (const ratio of GAP_FIBONACCI_EXTENSION_RATIOS) {
+    const fibonacciPrice = direction === 'long'
+      ? gap.left + gap.width * ratio
+      : gap.right - gap.width * ratio;
+    const distance = Math.abs(zonePrice - fibonacciPrice);
+    if (distance > tolerance) continue;
+
+    const candidate: FibonacciTpConfluence = {
+      source: 'gap-extension',
+      ratio,
+      price: fibonacciPrice,
+      distance,
+      tolerance,
+      proximity: Math.max(0, 1 - distance / Math.max(1, tolerance))
+    };
+    if (!best || candidate.distance < best.distance) best = candidate;
+  }
+
+  return best;
+}
+
 function coinGlassFrameTimeMs(timestamp: any): number | undefined {
   if (!timestamp) return undefined;
   const parsed = Date.parse(String(timestamp).replace(' ', 'T') + 'Z');
@@ -2440,11 +2486,13 @@ function tradeZonesForFrame(rows: DecentraderRow[], frameIndex: number): { longT
           gap,
           coinGlassLevels
         );
+        const fibConfluence = gapFibonacciConfluenceForZone(direction, zone.price, gap, step);
 
         return {
           ...zone,
           peak,
           cgConfluence,
+          fibConfluence,
           selectionScore: Math.round(baseSelectionScore * (cgConfluence?.multiplier || 1))
         };
       });
@@ -2821,8 +2869,11 @@ function backtestTpZones(rows: DecentraderRow[], options: TpBacktestOptions = {}
   const byFeature = {
     peak: { candidates: 0, hitsBeforeStop: 0 },
     overlap2Plus: { candidates: 0, hitsBeforeStop: 0 },
-    fresh: { candidates: 0, hitsBeforeStop: 0 }
+    fresh: { candidates: 0, hitsBeforeStop: 0 },
+    fibGapExtensionTp2Plus: { candidates: 0, hitsBeforeStop: 0 },
+    noFibGapExtensionTp2Plus: { candidates: 0, hitsBeforeStop: 0 }
   };
+  const byFibRatio = new Map<number, { ratio: number; candidates: number; hitsBeforeStop: number }>();
 
   function rankStats(rank: number): any {
     const existing =
@@ -2868,6 +2919,7 @@ function backtestTpZones(rows: DecentraderRow[], options: TpBacktestOptions = {}
       peak: Boolean(zone.peak),
       fresh: zone.fresh,
       leverages: zone.leverages,
+      fibConfluence: zone.fibConfluence,
       distancePct: Math.abs(zone.price - entry.price) / Math.max(1, entry.price),
       hit: false,
       hitBeforeStop: false,
@@ -2933,6 +2985,22 @@ function backtestTpZones(rows: DecentraderRow[], options: TpBacktestOptions = {}
         byFeature.fresh.candidates += 1;
         byFeature.fresh.hitsBeforeStop += tp.hitBeforeStop ? 1 : 0;
       }
+      if (tp.rank > 1) {
+        const fibFeature = tp.fibConfluence
+          ? byFeature.fibGapExtensionTp2Plus
+          : byFeature.noFibGapExtensionTp2Plus;
+        fibFeature.candidates += 1;
+        fibFeature.hitsBeforeStop += tp.hitBeforeStop ? 1 : 0;
+      }
+      if (tp.fibConfluence) {
+        const ratio = tp.fibConfluence.ratio;
+        const ratioStats =
+          byFibRatio.get(ratio) ||
+          { ratio, candidates: 0, hitsBeforeStop: 0 };
+        ratioStats.candidates += 1;
+        ratioStats.hitsBeforeStop += tp.hitBeforeStop ? 1 : 0;
+        byFibRatio.set(ratio, ratioStats);
+      }
     }
 
     trades.push({
@@ -2972,16 +3040,23 @@ function backtestTpZones(rows: DecentraderRow[], options: TpBacktestOptions = {}
       }
     ])
   );
+  const fibonacciSummary = Array.from(byFibRatio.values())
+    .sort((a, b) => a.ratio - b.ratio)
+    .map((stats) => ({
+      ...stats,
+      hitRateBeforeStop: stats.candidates ? stats.hitsBeforeStop / stats.candidates : 0
+    }));
 
   return {
     ok: true,
     methodology:
-      'Historical Decentrader edge replay. For each edge alert, the current TP selector is frozen, then future candles are scanned for TP touches before the fractal SL. Same-candle TP+SL is treated as ambiguous, not a clean hit.',
+      'Historical Decentrader edge replay. For each edge alert, the current TP selector is frozen, then future candles are scanned for TP touches before the fractal SL. Same-candle TP+SL is treated as ambiguous, not a clean hit. Gap Fibonacci extensions are observe-only features and do not influence TP selection.',
     lookaheadBars,
     maxTrades,
     tradeCount: trades.length,
     rankSummary,
     featureSummary,
+    fibonacciSummary,
     trades: trades.slice(-50)
   };
 }
@@ -3535,7 +3610,7 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
     events,
     intrusionCandleFilter: {
       enabled: decentraderIntrusionCandleFilterEnabled(),
-      note: 'When enabled, one-sided gap intrusions require the intrusion candle and following candle to match the trade direction.'
+      note: 'When enabled, one-sided gap intrusions require every fully closed dYdX 1H candle in The Delay to match the trade direction.'
     },
     delayHistory: decentraderDelaySnapshot(),
     intrusionDomStudy: intrusionDomStudySnapshot(),
@@ -3545,6 +3620,13 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
       minUsd: coinGlassTpConfluenceMinUsd(),
       maxDistanceUsd: coinGlassTpConfluenceMaxDistanceUsd(),
       longDurationHours: coinGlassTpConfluenceLongDurationHours()
+    },
+    fibonacciTpConfluence: {
+      enabled: true,
+      observeOnly: true,
+      source: 'gap-extension',
+      ratios: [...GAP_FIBONACCI_EXTENSION_RATIOS],
+      toleranceGapPct: GAP_FIBONACCI_TOLERANCE_PCT
     },
     topCurrentZones: Array.from(currentZoneCounts.values())
       .sort((a, b) => b.c - a.c || a.p - b.p)
@@ -4211,6 +4293,7 @@ function buildDirectionalPlan(
       frontRunBuffer: zone.frontRunBuffer,
       continuation: zone.continuation,
       cgConfluence: zone.cgConfluence,
+      fibConfluence: zone.fibConfluence,
       distance: Math.abs(zone.price - marketPrice)
     })),
     sizing: {
@@ -4329,6 +4412,12 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
         zone_cg_duration_hours: numberOrZero(tp.cgConfluence?.durationHours),
         zone_cg_boost_multiplier: numberOrZero(tp.cgConfluence?.multiplier),
         zone_cg_long_duration: Boolean(tp.cgConfluence?.longDuration),
+        zone_fib_source: tp.fibConfluence?.source || '',
+        zone_fib_ratio: numberOrZero(tp.fibConfluence?.ratio),
+        zone_fib_price: numberOrZero(tp.fibConfluence?.price),
+        zone_fib_distance: numberOrZero(tp.fibConfluence?.distance),
+        zone_fib_tolerance: numberOrZero(tp.fibConfluence?.tolerance),
+        zone_fib_proximity: numberOrZero(tp.fibConfluence?.proximity),
         distance: numberOrZero(tp.distance)
       }))
       .filter((tp: any) => tp.size > 0),
@@ -4404,6 +4493,12 @@ function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): 
         zone_cg_duration_hours: numberOrZero(tp.cgConfluence?.durationHours),
         zone_cg_boost_multiplier: numberOrZero(tp.cgConfluence?.multiplier),
         zone_cg_long_duration: Boolean(tp.cgConfluence?.longDuration),
+        zone_fib_source: tp.fibConfluence?.source || '',
+        zone_fib_ratio: numberOrZero(tp.fibConfluence?.ratio),
+        zone_fib_price: numberOrZero(tp.fibConfluence?.price),
+        zone_fib_distance: numberOrZero(tp.fibConfluence?.distance),
+        zone_fib_tolerance: numberOrZero(tp.fibConfluence?.tolerance),
+        zone_fib_proximity: numberOrZero(tp.fibConfluence?.proximity),
         distance: numberOrZero(tp.distance)
       }))
       .filter((tp: any) => tp.size > 0),
