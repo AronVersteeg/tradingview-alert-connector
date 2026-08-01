@@ -85,6 +85,32 @@ describe('Public Perp V2 Binance Spot replica', () => {
     expect(snapshots.map((snapshot) => snapshot.activeCohortCount)).toEqual([6, 12, 12]);
   });
 
+  test('encodes the complete histogram as one seed followed by compact deltas', () => {
+    const snapshots = buildReplicaSnapshots([
+      candle(1, 60_000, 60_500, 59_500, 60_000),
+      candle(2, 60_000, 60_500, 59_500, 60_000),
+      candle(3, 60_000, 67_000, 54_000, 60_000)
+    ], { frameLimit: 3 });
+    const state = new Map<string, number>();
+    const apply = (tuples: Array<['L' | 'S', 3 | 5 | 10, number, number]>) => {
+      for (const [side, leverage, price, count] of tuples) {
+        const key = `${side}|${leverage}|${price}`;
+        if (count > 0) state.set(key, count);
+        else state.delete(key);
+      }
+    };
+
+    expect(snapshots[0].zoneSeed).toHaveLength(6);
+    expect(snapshots[0].zoneDeltas).toEqual([]);
+    apply(snapshots[0].zoneSeed || []);
+    expect([...state.values()].reduce((sum, count) => sum + count, 0)).toBe(6);
+    apply(snapshots[1].zoneDeltas);
+    expect([...state.values()].reduce((sum, count) => sum + count, 0)).toBe(12);
+    apply(snapshots[2].zoneDeltas);
+    expect([...state.values()].reduce((sum, count) => sum + count, 0))
+      .toBe(snapshots[2].activeCohortCount);
+  });
+
   test('uses the nearest occupied prices as gap edges regardless of side', () => {
     const gap = detectReplicaGap([
       zone({ side: 'S', leverage: 3, price: 59_000, relativeCount: 4, positionCount: 4 }),

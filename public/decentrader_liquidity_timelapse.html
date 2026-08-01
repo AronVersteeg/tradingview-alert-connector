@@ -1869,6 +1869,62 @@
         return activeDrawCache.frameEvents.get(cacheKey);
       }
 
+      if (payload.compactZoneTimeline) {
+        const stateAtFrame = (targetFrameIndex) => {
+          const state = new Map();
+          for (const tuple of payload.zoneSeed || []) {
+            const [side, leverage, price, count] = tuple;
+            if (Number(count) <= 0) continue;
+            state.set(`${side}|${leverage}|${price}`, { side, leverage, price, count: Number(count) });
+          }
+          for (let index = 0; index <= targetFrameIndex; index += 1) {
+            for (const tuple of payload.zoneDeltas?.[index] || []) {
+              const [side, leverage, price, count] = tuple;
+              const key = `${side}|${leverage}|${price}`;
+              if (Number(count) > 0) {
+                state.set(key, { side, leverage, price, count: Number(count) });
+              } else {
+                state.delete(key);
+              }
+            }
+          }
+          return state;
+        };
+        const currentState = stateAtFrame(frameIndex);
+        const previousState = frameIndex > 0 ? stateAtFrame(frameIndex - 1) : new Map();
+        const bars = [];
+        const firstSeen = [];
+        for (const [key, zone] of currentState) {
+          const event = { s: zone.side, l: zone.leverage, p: zone.price };
+          if (!eventAllowed(event)) continue;
+          const previousCount = Number(previousState.get(key)?.count || 0);
+          const count = mode === 'new'
+            ? Math.max(0, zone.count - previousCount)
+            : zone.count;
+          if (count <= 0) continue;
+          const bar = {
+            key,
+            side: zone.side,
+            leverage: zone.leverage,
+            price: zone.price,
+            count,
+            first: previousCount <= 0,
+            contextOnly: false,
+            notionalUsd: 0,
+            weightedUsd: zone.count,
+            positionCount: zone.count,
+            confidence: 1,
+            uncertaintyUsd: 50,
+          };
+          bars.push(bar);
+          if (bar.first) firstSeen.push(bar);
+        }
+        bars.sort((a, b) => a.price - b.price || a.side.localeCompare(b.side) || a.leverage - b.leverage);
+        const result = { bars, firstSeen };
+        activeDrawCache?.frameEvents?.set(cacheKey, result);
+        return result;
+      }
+
       if (payload.snapshotZones) {
         const frame = payload.frames?.[frameIndex];
         const snapshot = payload.snapshots?.[Number(frame?.snapshot)];

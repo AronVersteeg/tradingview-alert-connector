@@ -5,7 +5,7 @@ import axios from 'axios';
 
 const MARKET = 'BTC-USD' as const;
 const SYMBOL = 'BTCUSDT' as const;
-const MODEL_VERSION = 'binance-spot-liquidation-cohorts-v2.3';
+const MODEL_VERSION = 'binance-spot-liquidation-cohorts-v2.4';
 const BINANCE_SPOT_URL = 'https://api.binance.com/api/v3/klines';
 const HOUR_MS = 3_600_000;
 const COHORT_WINDOW_HOURS = 8_760;
@@ -56,6 +56,10 @@ export type ReplicaGap = {
   method: 'nearest-active-cohort-edges';
 };
 
+// [side, leverage, rounded price, active cohort count]. The first replay
+// frame carries a complete seed; later frames only carry changed bins.
+export type CompactReplicaZone = [Side, Leverage, number, number];
+
 export type ReplicaSnapshot = {
   version: 2;
   modelVersion: string;
@@ -68,6 +72,8 @@ export type ReplicaSnapshot = {
   availableSources: string[];
   activeCohortCount: number;
   zones: ReplicaLiquidityZone[];
+  zoneSeed?: CompactReplicaZone[];
+  zoneDeltas: CompactReplicaZone[];
   gap: ReplicaGap | null;
 };
 
@@ -303,6 +309,7 @@ export function buildReplicaSnapshots(
   const bins = new Map<string, ActiveBin>();
   const birthKeysByIndex: string[][] = [];
   const snapshots: ReplicaSnapshot[] = [];
+  let previousZoneCounts = new Map<string, CompactReplicaZone>();
 
   for (let frameIndex = 0; frameIndex < ordered.length; frameIndex += 1) {
     const candle = ordered[frameIndex];
@@ -317,6 +324,31 @@ export function buildReplicaSnapshots(
     const referencePrice = ohlc4(candle);
     const gap = detectReplicaGap(allZones, referencePrice);
     const zones = selectDisplayZones(allZones, referencePrice, gap);
+    const currentZoneCounts = new Map<string, CompactReplicaZone>(
+      allZones.map((zone) => [
+        binKey(zone.side, zone.leverage, zone.price),
+        [zone.side, zone.leverage, zone.price, zone.relativeCount]
+      ])
+    );
+    const zoneSeed = snapshots.length === 0
+      ? [...currentZoneCounts.values()]
+      : undefined;
+    const zoneDeltas: CompactReplicaZone[] = [];
+    if (snapshots.length > 0) {
+      const changedKeys = new Set([
+        ...previousZoneCounts.keys(),
+        ...currentZoneCounts.keys()
+      ]);
+      for (const key of changedKeys) {
+        const previous = previousZoneCounts.get(key);
+        const current = currentZoneCounts.get(key);
+        const previousCount = previous?.[3] || 0;
+        const currentCount = current?.[3] || 0;
+        if (previousCount === currentCount) continue;
+        zoneDeltas.push(current || [previous![0], previous![1], previous![2], 0]);
+      }
+    }
+    previousZoneCounts = currentZoneCounts;
     snapshots.push({
       version: 2,
       modelVersion: MODEL_VERSION,
@@ -329,6 +361,8 @@ export function buildReplicaSnapshots(
       availableSources: ['binance-spot'],
       activeCohortCount: allZones.reduce((sum, zone) => sum + zone.relativeCount, 0),
       zones,
+      zoneSeed,
+      zoneDeltas,
       gap: gap || null
     });
   }
@@ -541,14 +575,21 @@ export class OpenLiquidityV2ReplicaCollector {
       return this.payloadCache.payload;
     }
     const recent = this.snapshots.slice(-FRAME_LIMIT);
-    const snapshots = recent.map((snapshot, index) => ({
-      ...snapshot,
-      i: index,
-      kind: index === recent.length - 1 ? 'live-observation' : 'historical-backfill',
-      source: 'binance-spot-replica',
-      positionCount: snapshot.activeCohortCount,
-      acceptedPositionCount: snapshot.zones.length
-    }));
+    const zoneSeed = recent[0]?.zoneSeed || [];
+    const zoneDeltas = recent.map((snapshot) => snapshot.zoneDeltas || []);
+    const snapshots = recent.map((snapshot, index) => {
+      const { zoneSeed: _zoneSeed, zoneDeltas: _zoneDeltas, ...compactSnapshot } = snapshot;
+      return {
+        ...compactSnapshot,
+        // Full histogram state is reconstructed from the compact timeline.
+        zones: [],
+        i: index,
+        kind: index === recent.length - 1 ? 'live-observation' : 'historical-backfill',
+        source: 'binance-spot-replica',
+        positionCount: snapshot.activeCohortCount,
+        acceptedPositionCount: snapshot.zones.length
+      };
+    });
     const frames = snapshots.map((snapshot, index) => ({
       i: index,
       t: timestampForMs(Date.parse(snapshot.effectiveAt)),
@@ -558,16 +599,20 @@ export class OpenLiquidityV2ReplicaCollector {
       high: snapshot.high,
       snapshot: index
     }));
-    const prices = snapshots.flatMap((snapshot) => [
-      snapshot.referencePrice,
-      ...snapshot.zones.map((zone) => zone.price)
-    ]).filter(Number.isFinite);
-    const latestSnapshot = snapshots[snapshots.length - 1];
-    const eventCount = snapshots.reduce((sum, snapshot) => sum + snapshot.zones.length, 0);
+    const prices = [
+      ...snapshots.map((snapshot) => snapshot.referencePrice),
+      ...zoneSeed.map((zone) => zone[2]),
+      ...zoneDeltas.flatMap((deltas) => deltas.map((zone) => zone[2]))
+    ].filter(Number.isFinite);
+    const latestInternalSnapshot = recent[recent.length - 1];
+    const eventCount = zoneSeed.length + zoneDeltas.reduce((sum, deltas) => sum + deltas.length, 0);
     const payload = {
       version: 2,
       modelVersion: MODEL_VERSION,
       snapshotZones: true,
+      compactZoneTimeline: true,
+      zoneSeed,
+      zoneDeltas,
       weightUnit: 'relative active cohort count',
       eventCount,
       source: {
@@ -612,8 +657,8 @@ export class OpenLiquidityV2ReplicaCollector {
       gaps: snapshots.map((snapshot) => snapshot.gap || null),
       events: [],
       contextEvents: [],
-      topCurrentZones: latestSnapshot
-        ? latestSnapshot.zones.slice().sort((a, b) => b.relativeCount - a.relativeCount).slice(0, 40)
+      topCurrentZones: latestInternalSnapshot
+        ? latestInternalSnapshot.zones.slice().sort((a, b) => b.relativeCount - a.relativeCount).slice(0, 40)
         : []
     };
     this.payloadCache = { at: Date.now(), payload };
