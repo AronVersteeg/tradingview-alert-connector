@@ -131,7 +131,7 @@ DECENTRALIZED_DOM_HISTORY_DIR=/app/data/decentralized-dom
 
 Raw status and replay-window data are available from `GET /research/dom-collector/status` and `GET /research/dom-collector/history?from=<ISO>&to=<ISO>`.
 
-The Public Perp V2 panels are separate observe-only reconstructions of the Decentrader-style histogram for BTC/USD and ETH/USD. They use free Binance Spot `BTCUSDT` and `ETHUSDT` 1H OHLC data. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC and $5 for ETH. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. V2 persists BTC and ETH observations independently and never imports or calls the Decentrader alert or execution path.
+The Public Perp V2 panels are separate observe-only reconstructions of the Decentrader-style histogram for BTC/USD and ETH/USD. They use free Binance Spot `BTCUSDT` and `ETHUSDT` 1H OHLC data. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC and $5 for ETH. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. Both V2 maps receive their matching CoinGlass whale-order snapshot and history: BTC reuses the established BTC store, while ETH subscribes to `Binance_ETHUSDT` and writes a separate history file. CoinGlass can boost nearby TP2+ candidates but V2 remains observe-only and never imports or calls the Decentrader alert or execution path.
 
 ```text
 OPEN_LIQUIDITY_V2_ENABLED=true
@@ -154,11 +154,19 @@ COINGLASS_WHALE_HISTORY_RETENTION_HOURS=720
 COINGLASS_WHALE_HISTORY_MAX_RECORDS=1500
 COINGLASS_WHALE_OBSERVATION_MAX_RECORDS=1000
 COINGLASS_WHALE_HISTORY_FILE=/var/data/coinglass-whale-history.json
+COINGLASS_WHALE_ETH_ENABLED=true
+COINGLASS_WHALE_ETH_SYMBOL=Binance_ETHUSDT
+COINGLASS_WHALE_ETH_LEVEL_MIN_USD=10000000
+COINGLASS_WHALE_ETH_LEVEL_STRONG_USD=20000000
+COINGLASS_WHALE_ETH_HISTORY_FILE=/app/data/coinglass-whale-history-eth.json
 COINGLASS_TP_CONFLUENCE_ENABLED=true
 COINGLASS_TP_CONFLUENCE_MIN_USD=10000000
 COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD=200
+COINGLASS_TP_CONFLUENCE_ETH_MAX_DISTANCE_USD=15
 COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS=336
 ```
+
+The ETH-specific variables are optional. When `COINGLASS_WHALE_ETH_HISTORY_FILE` is omitted, the collector creates an `-eth` sibling beside `COINGLASS_WHALE_HISTORY_FILE`, keeping both assets on the same persistent disk without sharing records.
 
 The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. The master scanner is Daily-only: when Daily RSI enters the configured master zone, the first configured number of future gap-intrusion histogram bars are armed as fertile. Those fertile slots stay armed even after Daily RSI leaves the zone; leaving the zone only sends a "Master RSI zone deactivated" notification for the RSI-zone state. Every master-scanner email includes the current state and next action so the zone state cannot be confused with the armed fertile scanner state. After the configured number of fertile histos has been used, or when price touches the armed clean-gap edge/TP1 edge first, the scanner is disarmed until Daily RSI touches the master zone again. This is visual research only until promoted into a trade filter.
 

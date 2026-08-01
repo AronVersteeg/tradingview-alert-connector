@@ -3563,7 +3563,20 @@
       };
     }
 
+    function liquiditySourcePriceStep() {
+      const configured = Number(payload?.quality?.priceStepUsd);
+      if (Number.isFinite(configured) && configured > 0) return configured;
+      return isOpenV2 && openV2Asset === 'ETH' ? 5 : 50;
+    }
+
     function tradeClusterStep(span) {
+      if (isOpenV2 && openV2Asset === 'ETH') {
+        if (span > 6000) return 100;
+        if (span > 3000) return 50;
+        if (span > 1200) return 25;
+        if (span > 600) return 10;
+        return 5;
+      }
       if (span > 60000) return 1000;
       if (span > 30000) return 500;
       if (span > 12000) return 250;
@@ -3702,7 +3715,10 @@
 
       const span = maxPrice - minPrice;
       const step = tradeClusterStep(span);
-      const minDistance = Math.max(100, step * 0.5);
+      const sourcePriceStep = liquiditySourcePriceStep();
+      const minDistance = isOpenV2 && openV2Asset === 'ETH'
+        ? Math.max(sourcePriceStep, step * 0.5)
+        : Math.max(100, step * 0.5);
       const firstSeenKeys = new Set(firstSeen.map((bar) => bar.key));
       const clusters = new Map();
       const leverageWeight = { 3: 1, 5: 1.35, 10: 1.7 };
@@ -3745,7 +3761,7 @@
       }
 
       const zones = [...clusters.values()].map((cluster) => {
-        const price = Math.round((cluster.priceSum / cluster.weightSum) / 50) * 50;
+        const price = Math.round((cluster.priceSum / cluster.weightSum) / sourcePriceStep) * sourcePriceStep;
         const distance = Math.abs(price - frame.price);
         const distancePct = distance / Math.max(1, frame.price);
         const distanceFactor = Math.max(0.35, 1 - Math.min(distancePct / 0.22, 1) * 0.65);
@@ -3774,10 +3790,10 @@
         if (!gap) return null;
         const edge = direction === 'long' ? gap.rightEdge : gap.leftEdge;
         const edgePrice = direction === 'long' ? gap.right : gap.left;
-        const frontRunBuffer = Math.max(50, frame.price * 0.0005);
+        const frontRunBuffer = Math.max(sourcePriceStep, frame.price * 0.0005);
         const frontRunPrice = direction === 'long'
-          ? Math.floor((edgePrice - frontRunBuffer) / 50) * 50
-          : Math.ceil((edgePrice + frontRunBuffer) / 50) * 50;
+          ? Math.floor((edgePrice - frontRunBuffer) / sourcePriceStep) * sourcePriceStep
+          : Math.ceil((edgePrice + frontRunBuffer) / sourcePriceStep) * sourcePriceStep;
         const isStillAhead = direction === 'long'
           ? frontRunPrice > frame.price
           : frontRunPrice < frame.price;

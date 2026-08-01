@@ -6,7 +6,11 @@ import express, { Router } from 'express';
 import { validateAlert } from '../services';
 import { DexRegistry } from '../services/dexRegistry';
 import { decentralizedDomCollector } from '../services/decentralizedDomCollector';
-import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
+import {
+  btcCoinGlassWhaleSnapshot,
+  decentraderGapMonitor
+} from '../services/decentraderGapMonitor';
+import { coinGlassEthWhaleCollector } from '../services/coinGlassEthWhaleCollector';
 import {
   openLiquidityV2BtcCollector,
   openLiquidityV2EthCollector
@@ -128,6 +132,16 @@ initializeExchanges()
     decentralizedDomCollector.start();
     openLiquidityV2BtcCollector.start();
     openLiquidityV2EthCollector.start(30_000);
+    coinGlassEthWhaleCollector.configureObservationProvider(async () => {
+      const payload = await openLiquidityV2EthCollector.getPayload();
+      const frame = payload.frames?.[payload.frames.length - 1];
+      return {
+        frameTimestamp: frame?.t,
+        currentPrice: Number(frame?.price),
+        gap: payload.gaps?.[payload.gaps.length - 1]
+      };
+    });
+    coinGlassEthWhaleCollector.start(45_000);
   })
   .catch((err) => {
     console.error("Exchange initialization failed:", err);
@@ -375,9 +389,23 @@ router.get('/open-liquidity/v2/status', async (req, res) => {
   if (!collector) {
     return res.status(400).send({ ok: false, error: 'Open Liquidity V2 supports BTC-USD and ETH-USD.' });
   }
+  const coinGlass = market === 'ETH-USD'
+    ? coinGlassEthWhaleCollector.snapshot()
+    : btcCoinGlassWhaleSnapshot();
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.send(collector.getStatus());
+  res.send({
+    ...collector.getStatus(),
+    coinGlass: {
+      enabled: coinGlass.enabled,
+      symbol: coinGlass.symbol,
+      levels: coinGlass.levels.length,
+      history: coinGlass.history.length,
+      observations: coinGlass.observations.length,
+      fetchedAt: coinGlass.fetchedAt,
+      error: coinGlass.error
+    }
+  });
 });
 
 router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
@@ -390,9 +418,45 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
         error: 'Open Liquidity V2 supports BTC-USD and ETH-USD.'
       });
     }
+    const payload = await collector.getPayload();
+    const latestFrame = payload.frames?.[payload.frames.length - 1];
+    const latestGap = payload.gaps?.[payload.gaps.length - 1];
+    if (market === 'ETH-USD') {
+      coinGlassEthWhaleCollector.recordObservation(
+        latestFrame?.t,
+        Number(latestFrame?.price),
+        latestGap
+      );
+    }
+    const coinGlassWhaleLevels = market === 'ETH-USD'
+      ? coinGlassEthWhaleCollector.snapshot()
+      : btcCoinGlassWhaleSnapshot();
+    const configuredMinUsd = Number(process.env.COINGLASS_TP_CONFLUENCE_MIN_USD);
+    const configuredMaxDistanceUsd = Number(
+      market === 'ETH-USD'
+        ? process.env.COINGLASS_TP_CONFLUENCE_ETH_MAX_DISTANCE_USD
+        : process.env.COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD
+    );
+    const configuredLongDurationHours = Number(process.env.COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS);
+
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(await collector.getPayload());
+    res.send({
+      ...payload,
+      coinGlassWhaleLevels,
+      coinGlassTpConfluence: {
+        enabled: String(process.env.COINGLASS_TP_CONFLUENCE_ENABLED || 'true').toLowerCase() !== 'false',
+        minUsd: Number.isFinite(configuredMinUsd) && configuredMinUsd > 0
+          ? configuredMinUsd
+          : coinGlassWhaleLevels.minUsd,
+        maxDistanceUsd: Number.isFinite(configuredMaxDistanceUsd) && configuredMaxDistanceUsd > 0
+          ? configuredMaxDistanceUsd
+          : market === 'ETH-USD' ? 15 : 200,
+        longDurationHours: Number.isFinite(configuredLongDurationHours) && configuredLongDurationHours > 0
+          ? configuredLongDurationHours
+          : 14 * 24
+      }
+    });
   } catch (error) {
     console.error('Open Liquidity V2 payload request failed:', error);
     res.status(500).send({

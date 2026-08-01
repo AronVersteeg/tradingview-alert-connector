@@ -113,9 +113,9 @@ type TradeZone = {
   fresh: number;
 };
 
-type CoinGlassWhaleSide = 'buy' | 'sell' | 'unknown';
+export type CoinGlassWhaleSide = 'buy' | 'sell' | 'unknown';
 
-type CoinGlassWhaleLevel = {
+export type CoinGlassWhaleLevel = {
   source: 'coinglass';
   symbol: string;
   instrument?: string;
@@ -130,7 +130,7 @@ type CoinGlassWhaleLevel = {
   updatedAt: string;
 };
 
-type CoinGlassWhaleHistoryLevel = CoinGlassWhaleLevel & {
+export type CoinGlassWhaleHistoryLevel = CoinGlassWhaleLevel & {
   key: string;
   firstSeenAt: string;
   firstObservedAt: string;
@@ -139,7 +139,7 @@ type CoinGlassWhaleHistoryLevel = CoinGlassWhaleLevel & {
   active: boolean;
 };
 
-type CoinGlassWhaleObservationLevel = {
+export type CoinGlassWhaleObservationLevel = {
   key: string;
   side: CoinGlassWhaleSide;
   price: number;
@@ -147,7 +147,7 @@ type CoinGlassWhaleObservationLevel = {
   startedAt?: number;
 };
 
-type CoinGlassWhaleObservation = {
+export type CoinGlassWhaleObservation = {
   observedAt: string;
   frameTimestamp: string;
   currentPrice: number;
@@ -203,7 +203,7 @@ type DelayCoinGlassReview = {
   bias: 'SUPPORTIVE' | 'FRICTION' | 'BALANCED' | 'EMPTY';
 };
 
-type CoinGlassWhaleSnapshot = {
+export type CoinGlassWhaleSnapshot = {
   enabled: boolean;
   source: 'coinglass';
   url: string;
@@ -851,7 +851,15 @@ function normalizeCoinGlassWhaleLevels(
   const updatedAt = new Date().toISOString();
 
   for (const group of data) {
-    const instrument = String(group?.instrument || group?.symbol || symbol || '').trim() || symbol;
+    const rawInstrument = group?.instrument;
+    const instrument = (
+      typeof rawInstrument === 'string'
+        ? rawInstrument
+        : rawInstrument && typeof rawInstrument === 'object'
+          ? rawInstrument.symbol || rawInstrument.instrument || rawInstrument.name
+          : group?.symbol
+    );
+    const normalizedInstrument = String(instrument || symbol || '').trim() || symbol;
     const list = Array.isArray(group?.list)
       ? group.list
       : Array.isArray(group?.data)
@@ -880,11 +888,11 @@ function normalizeCoinGlassWhaleLevels(
             ? 'buy'
             : 'unknown';
       const id = item?.id !== undefined ? String(item.id) : undefined;
-      const key = id || `${instrument}|${side}|${priceKey(price)}`;
+      const key = id || `${normalizedInstrument}|${side}|${priceKey(price)}`;
       const level: CoinGlassWhaleLevel = {
         source: 'coinglass',
         symbol,
-        instrument,
+        instrument: normalizedInstrument,
         id,
         key,
         side,
@@ -1043,7 +1051,7 @@ function recordCoinGlassWhaleObservation(rows: DecentraderRow[]): CoinGlassWhale
   return observation;
 }
 
-function fetchCoinGlassWhaleLevelsViaWebSocket(
+export function fetchCoinGlassWhaleLevelsViaWebSocket(
   symbol: string,
   interval: string,
   minUsd: number,
@@ -1486,6 +1494,10 @@ async function sendEmailBestEffort(
       error: message
     };
   }
+}
+
+export function btcCoinGlassWhaleSnapshot(): CoinGlassWhaleSnapshot {
+  return coinglassWhaleSnapshot();
 }
 
 function recordDelayHistoryBestEffort(
