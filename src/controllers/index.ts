@@ -10,12 +10,19 @@ import {
   btcCoinGlassWhaleSnapshot,
   decentraderGapMonitor
 } from '../services/decentraderGapMonitor';
-import { coinGlassEthWhaleCollector } from '../services/coinGlassEthWhaleCollector';
+import {
+  coinGlassEthWhaleCollector,
+  coinGlassInjWhaleCollector
+} from '../services/coinGlassEthWhaleCollector';
 import {
   openLiquidityV2BtcCollector,
-  openLiquidityV2EthCollector
+  openLiquidityV2EthCollector,
+  openLiquidityV2InjCollector
 } from '../services/openLiquidityV2Replica';
-import { openLiquidityV2EthTradeMonitor } from '../services/openLiquidityV2EthTradeMonitor';
+import {
+  openLiquidityV2EthTradeMonitor,
+  openLiquidityV2InjTradeMonitor
+} from '../services/openLiquidityV2EthTradeMonitor';
 import { buildSnoekScout } from '../services/snoekScout';
 import { getSnoekCurrent } from '../services/snoekCurrent';
 import { getSnoekStructures } from '../services/snoekStructures';
@@ -104,6 +111,12 @@ function configureDecentraderTradeExecutor() {
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
+  openLiquidityV2InjTradeMonitor.configureTradeExecutor({
+    getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    placeOrder: (alert: any) => client.placeOrder(alert),
+    syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
+    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+  });
 }
 
 async function initializeExchanges() {
@@ -139,6 +152,7 @@ initializeExchanges()
     decentralizedDomCollector.start();
     openLiquidityV2BtcCollector.start();
     openLiquidityV2EthCollector.start(30_000);
+    openLiquidityV2InjCollector.start(60_000);
     coinGlassEthWhaleCollector.configureObservationProvider(async () => {
       const payload = await openLiquidityV2EthCollector.getPayload();
       const frame = payload.frames?.[payload.frames.length - 1];
@@ -149,7 +163,18 @@ initializeExchanges()
       };
     });
     coinGlassEthWhaleCollector.start(45_000);
+    coinGlassInjWhaleCollector.configureObservationProvider(async () => {
+      const payload = await openLiquidityV2InjCollector.getPayload();
+      const frame = payload.frames?.[payload.frames.length - 1];
+      return {
+        frameTimestamp: frame?.t,
+        currentPrice: Number(frame?.price),
+        gap: payload.gaps?.[payload.gaps.length - 1]
+      };
+    });
+    coinGlassInjWhaleCollector.start(90_000);
     openLiquidityV2EthTradeMonitor.start(75_000);
+    openLiquidityV2InjTradeMonitor.start(105_000);
   })
   .catch((err) => {
     console.error("Exchange initialization failed:", err);
@@ -388,6 +413,19 @@ router.get('/research/dom-collector/history', async (req, res) => {
 function openLiquidityV2CollectorForMarket(market: string) {
   if (market === 'BTC-USD') return openLiquidityV2BtcCollector;
   if (market === 'ETH-USD') return openLiquidityV2EthCollector;
+  if (market === 'INJ-USD') return openLiquidityV2InjCollector;
+  return undefined;
+}
+
+function openLiquidityV2MonitorForMarket(market: string) {
+  if (market === 'ETH-USD') return openLiquidityV2EthTradeMonitor;
+  if (market === 'INJ-USD') return openLiquidityV2InjTradeMonitor;
+  return undefined;
+}
+
+function openLiquidityV2CoinGlassForMarket(market: string) {
+  if (market === 'ETH-USD') return coinGlassEthWhaleCollector;
+  if (market === 'INJ-USD') return coinGlassInjWhaleCollector;
   return undefined;
 }
 
@@ -395,16 +433,16 @@ router.get('/open-liquidity/v2/status', async (req, res) => {
   const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
   const collector = openLiquidityV2CollectorForMarket(market);
   if (!collector) {
-    return res.status(400).send({ ok: false, error: 'Open Liquidity V2 supports BTC-USD and ETH-USD.' });
+    return res.status(400).send({ ok: false, error: 'Open Liquidity V2 supports BTC-USD, ETH-USD and INJ-USD.' });
   }
-  const coinGlass = market === 'ETH-USD'
-    ? coinGlassEthWhaleCollector.snapshot()
-    : btcCoinGlassWhaleSnapshot();
+  const monitor = openLiquidityV2MonitorForMarket(market);
+  const coinGlassCollector = openLiquidityV2CoinGlassForMarket(market);
+  const coinGlass = coinGlassCollector?.snapshot() || btcCoinGlassWhaleSnapshot();
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.send({
     ...collector.getStatus(),
-    execution: market === 'ETH-USD' ? openLiquidityV2EthTradeMonitor.getStatus() : undefined,
+    execution: monitor?.getStatus(),
     coinGlass: {
       enabled: coinGlass.enabled,
       symbol: coinGlass.symbol,
@@ -424,43 +462,44 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
     if (!collector) {
       return res.status(400).send({
         ok: false,
-        error: 'Open Liquidity V2 supports BTC-USD and ETH-USD.'
+        error: 'Open Liquidity V2 supports BTC-USD, ETH-USD and INJ-USD.'
       });
     }
     const payload = await collector.getPayload();
     const latestFrame = payload.frames?.[payload.frames.length - 1];
     const latestGap = payload.gaps?.[payload.gaps.length - 1];
-    if (market === 'ETH-USD') {
-      coinGlassEthWhaleCollector.recordObservation(
+    const monitor = openLiquidityV2MonitorForMarket(market);
+    const coinGlassCollector = openLiquidityV2CoinGlassForMarket(market);
+    if (coinGlassCollector) {
+      coinGlassCollector.recordObservation(
         latestFrame?.t,
         Number(latestFrame?.price),
         latestGap
       );
     }
-    const coinGlassWhaleLevels = market === 'ETH-USD'
-      ? coinGlassEthWhaleCollector.snapshot()
-      : btcCoinGlassWhaleSnapshot();
-    const configuredMinUsd = Number(process.env.COINGLASS_TP_CONFLUENCE_MIN_USD);
+    const coinGlassWhaleLevels = coinGlassCollector?.snapshot() || btcCoinGlassWhaleSnapshot();
+    const asset = market.split('-')[0];
+    const configuredAssetMinUsd = Number(process.env[`COINGLASS_WHALE_${asset}_LEVEL_MIN_USD`]);
+    const configuredMinUsd = market === 'BTC-USD'
+      ? Number(process.env.COINGLASS_TP_CONFLUENCE_MIN_USD)
+      : configuredAssetMinUsd;
     const configuredMaxDistanceUsd = Number(
-      market === 'ETH-USD'
-        ? process.env.COINGLASS_TP_CONFLUENCE_ETH_MAX_DISTANCE_USD
-        : process.env.COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD
+      process.env[`COINGLASS_TP_CONFLUENCE_${asset}_MAX_DISTANCE_USD`] ||
+      process.env.COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD
     );
     const configuredLongDurationHours = Number(process.env.COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS);
 
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    const ethExecution = market === 'ETH-USD'
-      ? openLiquidityV2EthTradeMonitor.snapshot()
-      : undefined;
+    const execution = monitor?.snapshot();
     res.send({
       ...payload,
-      ...(ethExecution || {}),
-      source: market === 'ETH-USD'
+      ...(execution || {}),
+      source: monitor
         ? {
             ...payload.source,
             note:
-              'ETH Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ETH-USD with the BTC risk, fractal SL and TP environment settings.'
+              `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
           }
         : payload.source,
       coinGlassWhaleLevels,
@@ -471,7 +510,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
           : coinGlassWhaleLevels.minUsd,
         maxDistanceUsd: Number.isFinite(configuredMaxDistanceUsd) && configuredMaxDistanceUsd > 0
           ? configuredMaxDistanceUsd
-          : market === 'ETH-USD' ? 15 : 200,
+          : market === 'ETH-USD' ? 15 : market === 'INJ-USD' ? 0.05 : 200,
         longDurationHours: Number.isFinite(configuredLongDurationHours) && configuredLongDurationHours > 0
           ? configuredLongDurationHours
           : 14 * 24
@@ -499,10 +538,11 @@ router.get('/decentrader/trade-plan', async (req, res) => {
     }
 
     const account = await client.getAccountSnapshot([market]);
+    const monitor = openLiquidityV2MonitorForMarket(market);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.send(
-      market === 'ETH-USD'
-        ? await openLiquidityV2EthTradeMonitor.getTradePlan(account)
+      monitor
+        ? await monitor.getTradePlan(account)
         : await decentraderGapMonitor.getTradePlan(account, market)
     );
   } catch (error) {

@@ -1,8 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 
-import { AlertObject } from '../types';
-import { coinGlassEthWhaleCollector } from './coinGlassEthWhaleCollector';
+import {
+  coinGlassEthWhaleCollector,
+  coinGlassInjWhaleCollector
+} from './coinGlassEthWhaleCollector';
 import {
   AlertState,
   DecentraderRow,
@@ -34,13 +36,69 @@ import {
 import {
   CompactReplicaZone,
   OpenLiquidityV2ReplicaCollector,
-  openLiquidityV2EthCollector
+  openLiquidityV2EthCollector,
+  openLiquidityV2InjCollector
 } from './openLiquidityV2Replica';
 
 const MARKET = 'ETH-USD';
 const SYMBOL = 'ETHUSDT';
 const PRICE_STEP = 5;
 const HOUR_MS = 3_600_000;
+
+type WhaleSnapshotProvider = {
+  snapshot(): any;
+};
+
+export type OpenLiquidityV2TradeMonitorConfig = {
+  market: string;
+  symbol: string;
+  asset: 'ETH' | 'INJ';
+  priceStep: number;
+  enabledEnv: string;
+  autoTradeEnv: string;
+  inheritDecentraderAutoTrade: boolean;
+  stateFileEnv: string;
+  stateFileName: string;
+  strategyPrefix: string;
+  coinGlassMinUsdEnv: string;
+  coinGlassMaxDistanceEnv: string;
+  coinGlassMaxDistanceUsd: number;
+  coinGlass?: WhaleSnapshotProvider;
+};
+
+const ETH_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
+  market: MARKET,
+  symbol: SYMBOL,
+  asset: 'ETH',
+  priceStep: PRICE_STEP,
+  enabledEnv: 'OPEN_LIQUIDITY_V2_ETH_INTRUSION_MONITOR_ENABLED',
+  autoTradeEnv: 'OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED',
+  inheritDecentraderAutoTrade: true,
+  stateFileEnv: 'OPEN_LIQUIDITY_V2_ETH_TRADE_STATE_FILE',
+  stateFileName: 'open-liquidity-v2-eth-trade-state.json',
+  strategyPrefix: 'open_liquidity_v2_eth',
+  coinGlassMinUsdEnv: 'COINGLASS_WHALE_ETH_LEVEL_MIN_USD',
+  coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_ETH_MAX_DISTANCE_USD',
+  coinGlassMaxDistanceUsd: 15,
+  coinGlass: coinGlassEthWhaleCollector
+};
+
+const INJ_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
+  market: 'INJ-USD',
+  symbol: 'INJUSDT',
+  asset: 'INJ',
+  priceStep: 0.01,
+  enabledEnv: 'OPEN_LIQUIDITY_V2_INJ_INTRUSION_MONITOR_ENABLED',
+  autoTradeEnv: 'OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED',
+  inheritDecentraderAutoTrade: false,
+  stateFileEnv: 'OPEN_LIQUIDITY_V2_INJ_TRADE_STATE_FILE',
+  stateFileName: 'open-liquidity-v2-inj-trade-state.json',
+  strategyPrefix: 'open_liquidity_v2_inj',
+  coinGlassMinUsdEnv: 'COINGLASS_WHALE_INJ_LEVEL_MIN_USD',
+  coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_INJ_MAX_DISTANCE_USD',
+  coinGlassMaxDistanceUsd: 0.05,
+  coinGlass: coinGlassInjWhaleCollector
+};
 
 type PendingEthAlert = {
   alert: GapAlert;
@@ -107,13 +165,19 @@ function finite(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function roundedToStep(value: number, step: number): number {
+  const inverse = 1 / step;
+  if (Number.isInteger(inverse)) return Math.round(value * inverse) / inverse;
+  return Number((Math.round(value / step) * step).toFixed(8));
+}
+
 function normalizedMarket(value: unknown): string {
   return String(value || '').replace(/_/g, '-').toUpperCase();
 }
 
-function existingPosition(account: DydxSizingAccountSnapshot): DydxOpenPosition | undefined {
+function existingPosition(account: DydxSizingAccountSnapshot, market = MARKET): DydxOpenPosition | undefined {
   return account.openPositions?.find((position) =>
-    normalizedMarket(position.market) === MARKET && Math.abs(finite(position.size)) > 0
+    normalizedMarket(position.market) === market && Math.abs(finite(position.size)) > 0
   );
 }
 
@@ -134,8 +198,8 @@ function sideCounts(alert: GapAlert): string {
   return parts.join(' + ') || `${alert.entrants.length} inside gap`;
 }
 
-function signatureForAlert(alert: GapAlert): string {
-  return `${MARKET}|${alert.timestamp}|${alert.entrants
+function signatureForAlert(alert: GapAlert, market = MARKET): string {
+  return `${market}|${alert.timestamp}|${alert.entrants
     .map((bar) => `${bar.key}:${bar.count}`)
     .sort()
     .join('|')}`;
@@ -252,21 +316,36 @@ export function reconstructReplicaIntrusions(payload: any, afterTimestamp?: stri
   return { alerts, latestBars: [...active.values()].map(replicaBar) };
 }
 
-function clusterStep(bars: LiquidityBar[], price: number): number {
+function clusterStep(bars: LiquidityBar[], price: number, minimumStep = PRICE_STEP): number {
   const prices = [price, ...bars.map((bar) => bar.price)];
   const span = Math.max(...prices) - Math.min(...prices);
+  if (price < 100) return Math.max(minimumStep, span > 20 ? 0.1 : span > 5 ? 0.05 : minimumStep);
   if (span > 6_000) return 100;
   if (span > 3_000) return 50;
   if (span > 1_200) return 25;
   if (span > 600) return 10;
-  return PRICE_STEP;
+  return minimumStep;
 }
 
-function coinGlassConfluence(direction: TradePlanDirection, price: number, gap: Gap | undefined): any {
+function coinGlassConfluence(
+  direction: TradePlanDirection,
+  price: number,
+  gap: Gap | undefined,
+  options: {
+    coinGlass?: WhaleSnapshotProvider;
+    minUsdEnv?: string;
+    maxDistanceEnv?: string;
+    maxDistanceUsd?: number;
+  } = {}
+): any {
   if (!boolEnv('COINGLASS_TP_CONFLUENCE_ENABLED', true)) return undefined;
-  const snapshot = coinGlassEthWhaleCollector.snapshot();
-  const minUsd = numberEnv('COINGLASS_TP_CONFLUENCE_MIN_USD', snapshot.minUsd || 10_000_000);
-  const maxDistance = numberEnv('COINGLASS_TP_CONFLUENCE_ETH_MAX_DISTANCE_USD', 15);
+  const snapshot = options.coinGlass?.snapshot();
+  if (!snapshot) return undefined;
+  const minUsd = numberEnv(
+    options.minUsdEnv || 'COINGLASS_TP_CONFLUENCE_MIN_USD',
+    snapshot.minUsd || 10_000_000
+  );
+  const maxDistance = numberEnv(options.maxDistanceEnv || 'COINGLASS_TP_CONFLUENCE_ETH_MAX_DISTANCE_USD', options.maxDistanceUsd ?? 15);
   const longDurationHours = numberEnv('COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS', 14 * 24);
   const expectedSide = direction === 'long' ? 'sell' : 'buy';
   let best: any;
@@ -298,9 +377,18 @@ function coinGlassConfluence(direction: TradePlanDirection, price: number, gap: 
 export function buildReplicaTradeZones(
   bars: LiquidityBar[],
   price: number,
-  gap: Gap | undefined
+  gap: Gap | undefined,
+  options: {
+    priceStep?: number;
+    edgeBufferEnv?: string;
+    coinGlass?: WhaleSnapshotProvider;
+    coinGlassMinUsdEnv?: string;
+    coinGlassMaxDistanceEnv?: string;
+    coinGlassMaxDistanceUsd?: number;
+  } = {}
 ): { longTp: TradeZone[]; shortTp: TradeZone[] } {
-  const step = clusterStep(bars, price);
+  const priceStep = options.priceStep || PRICE_STEP;
+  const step = clusterStep(bars, price, priceStep);
   const leverageWeight = new Map([[3, 1], [5, 1.35], [10, 1.7]]);
   const clusters = new Map<string, any>();
   for (const direction of ['long', 'short'] as TradePlanDirection[]) {
@@ -309,7 +397,7 @@ export function buildReplicaTradeZones(
         ? bar.side === 'S' && bar.price > price
         : bar.side === 'L' && bar.price < price;
       if (!correct) continue;
-      const bucket = Math.round(bar.price / step) * step;
+      const bucket = roundedToStep(bar.price, step);
       const key = `${direction}|${bucket}`;
       const cluster = clusters.get(key) || {
         direction, priceSum: 0, weightSum: 0, weighted: 0, count: 0, leverages: new Set<number>()
@@ -324,7 +412,7 @@ export function buildReplicaTradeZones(
     }
   }
   const candidates = [...clusters.values()].map((cluster) => {
-    const zonePrice = Math.round((cluster.priceSum / cluster.weightSum) / PRICE_STEP) * PRICE_STEP;
+    const zonePrice = roundedToStep(cluster.priceSum / cluster.weightSum, priceStep);
     const distance = Math.abs(zonePrice - price);
     const distanceFactor = Math.max(0.35, 1 - Math.min(distance / Math.max(1, price * 0.22), 1) * 0.65);
     const overlapFactor = 1 + Math.max(0, cluster.leverages.size - 1) * 0.22;
@@ -347,13 +435,13 @@ export function buildReplicaTradeZones(
     if (!gap) return undefined;
     const edge = direction === 'long' ? gap.rightEdge : gap.leftEdge;
     const edgePrice = direction === 'long' ? gap.right : gap.left;
-    const configuredBuffer = Number(process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD);
+    const configuredBuffer = Number(process.env[options.edgeBufferEnv || 'DECENTRADER_TP1_EDGE_FRONT_RUN_USD']);
     const buffer = Number.isFinite(configuredBuffer) && configuredBuffer >= 0
       ? configuredBuffer
-      : Math.max(PRICE_STEP, price * fractionEnv('DECENTRADER_TP1_EDGE_FRONT_RUN_PCT', 0.0005));
+      : Math.max(priceStep, price * fractionEnv('DECENTRADER_TP1_EDGE_FRONT_RUN_PCT', 0.0005));
     const tpPrice = direction === 'long'
-      ? Math.floor((edgePrice - buffer) / PRICE_STEP) * PRICE_STEP
-      : Math.ceil((edgePrice + buffer) / PRICE_STEP) * PRICE_STEP;
+      ? roundedToStep(Math.floor((edgePrice - buffer) / priceStep) * priceStep, priceStep)
+      : roundedToStep(Math.ceil((edgePrice + buffer) / priceStep) * priceStep, priceStep);
     if (direction === 'long' ? tpPrice <= price : tpPrice >= price) return undefined;
     return {
       direction,
@@ -381,7 +469,12 @@ export function buildReplicaTradeZones(
       const previous = ordered[index - 1];
       const next = ordered[index + 1];
       const peak = (!previous || zone.score >= previous.score) && (!next || zone.score >= next.score);
-      const cgConfluence = coinGlassConfluence(direction, zone.price, gap);
+      const cgConfluence = coinGlassConfluence(direction, zone.price, gap, {
+        coinGlass: options.coinGlass,
+        minUsdEnv: options.coinGlassMinUsdEnv,
+        maxDistanceEnv: options.coinGlassMaxDistanceEnv,
+        maxDistanceUsd: options.coinGlassMaxDistanceUsd
+      });
       const fibConfluence = gapFibonacciConfluenceForZone(direction, zone.price, gap, step);
       const overlapBoost = 1 + Math.max(0, zone.leverages.length - 1) * 0.08;
       const peakBoost = peak ? 1.18 : 1;
@@ -415,8 +508,9 @@ export function buildReplicaTradeZones(
   return { longTp: ranked('long'), shortTp: ranked('short') };
 }
 
-function coinGlassBenchmark(alert: GapAlert): any {
-  const snapshot = coinGlassEthWhaleCollector.snapshot();
+function coinGlassBenchmark(alert: GapAlert, provider?: WhaleSnapshotProvider): any {
+  const snapshot = provider?.snapshot();
+  if (!snapshot) return { source: null, levelsInsideGap: 0, buyUsd: 0, sellUsd: 0, bias: 'UNAVAILABLE' };
   const inside = (snapshot.levels || []).filter((level) =>
     finite(level.volumeUsd) >= snapshot.minUsd &&
     finite(level.price) > alert.previousGap.left &&
@@ -435,12 +529,12 @@ function coinGlassBenchmark(alert: GapAlert): any {
   };
 }
 
-function rawAlertBody(alert: GapAlert): string {
+function rawAlertBody(alert: GapAlert, asset = 'ETH', symbol = 'ETHUSDT'): string {
   const bars = alert.entrants.map((bar) =>
     `- ${bar.side === 'L' ? 'Long' : 'Short'} ${bar.leverage}x $${bar.price.toLocaleString('en-US')} (${bar.gapSide} edge)`
   );
   return [
-    'Public Perp V2 ETHUSDT liquidity gap alert',
+    `Public Perp V2 ${symbol} liquidity gap alert`,
     '',
     `Time: ${alert.timestampNl} (${alert.timestamp} UTC)`,
     `Price: $${alert.price.toLocaleString('en-US')}`,
@@ -450,7 +544,7 @@ function rawAlertBody(alert: GapAlert): string {
     `New or expanded histos inside previous gap: ${sideCounts(alert)}`,
     ...bars,
     '',
-    'Source: Public Perp V2 ETH replica (Binance Spot causal liquidation cohorts).'
+    `Source: Public Perp V2 ${asset} replica (Binance Spot causal liquidation cohorts).`
   ].join('\n');
 }
 
@@ -458,26 +552,26 @@ function trimList(values: string[] | undefined, max = 500): string[] {
   return [...new Set(values || [])].slice(-max);
 }
 
-function stateFile(): string {
-  const explicit = String(process.env.OPEN_LIQUIDITY_V2_ETH_TRADE_STATE_FILE || '').trim();
+function stateFile(config: OpenLiquidityV2TradeMonitorConfig = ETH_MONITOR_CONFIG): string {
+  const explicit = String(process.env[config.stateFileEnv] || '').trim();
   if (explicit) return explicit;
   const btcState = String(process.env.DECENTRADER_GAP_ALERT_STATE_FILE || '').trim();
-  if (btcState) return path.join(path.dirname(btcState), 'open-liquidity-v2-eth-trade-state.json');
+  if (btcState) return path.join(path.dirname(btcState), config.stateFileName);
   const renderDisk = path.join(path.parse(process.cwd()).root, 'app', 'data');
   const base = fs.existsSync(renderDisk) ? renderDisk : path.join(process.cwd(), 'data');
-  return path.join(base, 'open-liquidity-v2-eth-trade-state.json');
+  return path.join(base, config.stateFileName);
 }
 
-function readState(): EthMonitorState {
+function readState(config: OpenLiquidityV2TradeMonitorConfig = ETH_MONITOR_CONFIG): EthMonitorState {
   try {
-    return JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
+    return JSON.parse(fs.readFileSync(stateFile(config), 'utf8'));
   } catch {
     return {};
   }
 }
 
-function writeState(state: EthMonitorState): void {
-  const file = stateFile();
+function writeState(state: EthMonitorState, config: OpenLiquidityV2TradeMonitorConfig = ETH_MONITOR_CONFIG): void {
+  const file = stateFile(config);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(state));
@@ -493,20 +587,25 @@ export class OpenLiquidityV2EthTradeMonitor {
   private lastStartedAt: string | undefined;
   private lastFinishedAt: string | undefined;
 
-  constructor(private readonly collector: OpenLiquidityV2ReplicaCollector) {}
+  constructor(
+    private readonly collector: OpenLiquidityV2ReplicaCollector,
+    private readonly config: OpenLiquidityV2TradeMonitorConfig = ETH_MONITOR_CONFIG
+  ) {}
 
   configureTradeExecutor(executor: DecentraderTradeExecutor): void {
     this.executor = executor;
   }
 
   private enabled(): boolean {
-    return boolEnv('OPEN_LIQUIDITY_V2_ETH_INTRUSION_MONITOR_ENABLED', true);
+    return boolEnv(this.config.enabledEnv, true);
   }
 
   private autoTradeEnabled(): boolean {
     return boolEnv(
-      'OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED',
-      boolEnv('DECENTRADER_AUTO_TRADE_ENABLED', false)
+      this.config.autoTradeEnv,
+      this.config.inheritDecentraderAutoTrade
+        ? boolEnv('DECENTRADER_AUTO_TRADE_ENABLED', false)
+        : false
     );
   }
 
@@ -518,31 +617,31 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (!this.enabled() || this.interval || this.initialTimer) return;
     const begin = () => {
       this.initialTimer = undefined;
-      this.check().catch((error) => console.error('ETH V2 intrusion monitor initial check failed:', error));
+      this.check().catch((error) => console.error(`${this.config.asset} V2 intrusion monitor initial check failed:`, error));
       this.interval = setInterval(() => {
-        this.check().catch((error) => console.error('ETH V2 intrusion monitor check failed:', error));
+        this.check().catch((error) => console.error(`${this.config.asset} V2 intrusion monitor check failed:`, error));
       }, this.pollMinutes() * 60_000);
     };
     this.initialTimer = setTimeout(begin, initialDelayMs);
-    console.log('ETH Public Perp V2 intrusion/trade monitor scheduled:', {
-      market: MARKET,
+    console.log(`${this.config.asset} Public Perp V2 intrusion/trade monitor scheduled:`, {
+      market: this.config.market,
       pollMinutes: this.pollMinutes(),
       autoTradeEnabled: this.autoTradeEnabled(),
-      stateFile: stateFile(),
+      stateFile: stateFile(this.config),
       inheritsDecentraderRiskAndOrderEnvs: true
     });
   }
 
   getStatus(): any {
-    const state = readState();
+    const state = readState(this.config);
     return {
       enabled: this.enabled(),
       running: this.running,
-      market: MARKET,
+      market: this.config.market,
       autoTradeEnabled: this.autoTradeEnabled(),
       hasTradeExecutor: Boolean(this.executor),
       pollMinutes: this.pollMinutes(),
-      stateFile: stateFile(),
+      stateFile: stateFile(this.config),
       lastStartedAt: this.lastStartedAt,
       lastFinishedAt: this.lastFinishedAt,
       lastResult: this.lastResult,
@@ -553,7 +652,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   snapshot(): any {
-    const state = readState();
+    const state = readState(this.config);
     const records = (state.delayRecords || []).slice(-300).reverse();
     const completed = records.map((record) => record.completedCandles1h);
     const average = completed.length ? completed.reduce((sum, value) => sum + value, 0) / completed.length : 0;
@@ -604,7 +703,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       sideCounts: sideCounts(alert),
       direction: mapDirectionFromAlert(alert) || 'mixed',
       filtered: false,
-      coinGlass: coinGlassBenchmark(alert),
+      coinGlass: coinGlassBenchmark(alert, this.config.coinGlass),
       observedAt: nowNlIso(),
       ...details
     };
@@ -619,27 +718,36 @@ export class OpenLiquidityV2EthTradeMonitor {
     const rows = replicaRows(payload);
     const frameIndex = rows.length - 1;
     const frame = payload.frames?.[frameIndex];
-    if (!frame || frameIndex < 0) throw new Error('No ETH V2 replica frame available for trade planning.');
+    if (!frame || frameIndex < 0) throw new Error(`No ${this.config.asset} V2 replica frame available for trade planning.`);
     const reconstructed = reconstructReplicaIntrusions(payload, frame.t);
     const bars = reconstructed.latestBars;
     const gap = normalizedGap(payload.gaps?.[frameIndex], finite(frame.price));
-    const zones = buildReplicaTradeZones(bars, finite(frame.price), gap);
-    const marketInfo = account.markets?.[MARKET] || account.markets?.[MARKET.replace('-', '_')];
-    if (!marketInfo) throw new Error(`No dYdX market info available for ${MARKET}.`);
+    const zones = buildReplicaTradeZones(bars, finite(frame.price), gap, {
+      priceStep: this.config.priceStep,
+      edgeBufferEnv: this.config.asset === 'INJ'
+        ? 'OPEN_LIQUIDITY_V2_INJ_TP1_EDGE_FRONT_RUN_USD'
+        : 'DECENTRADER_TP1_EDGE_FRONT_RUN_USD',
+      coinGlass: this.config.coinGlass,
+      coinGlassMinUsdEnv: this.config.coinGlassMinUsdEnv,
+      coinGlassMaxDistanceEnv: this.config.coinGlassMaxDistanceEnv,
+      coinGlassMaxDistanceUsd: this.config.coinGlassMaxDistanceUsd
+    });
+    const marketInfo = account.markets?.[this.config.market] || account.markets?.[this.config.market.replace('-', '_')];
+    if (!marketInfo) throw new Error(`No dYdX market info available for ${this.config.market}.`);
     const mode = String(process.env.DECENTRADER_TRADE_SIZING_MODE || 'growth').trim().toLowerCase();
     const longPlan = buildDirectionalPlan('long', account, marketInfo, rows, frameIndex, gap, signalAlert, zones, finite(frame.price), mode);
     const shortPlan = buildDirectionalPlan('short', account, marketInfo, rows, frameIndex, gap, signalAlert, zones, finite(frame.price), mode);
     const activeDirection = mapDirectionFromAlert(signalAlert);
     return {
       ok: true,
-      symbol: SYMBOL,
-      market: MARKET,
+      symbol: this.config.symbol,
+      market: this.config.market,
       timestamp: frame.t,
       timestampNl: nlTime(frame.t),
       price: finite(frame.price),
       signal: {
         direction: activeDirection || 'none',
-        reason: activeDirection ? `${activeDirection} bias from ETH V2 gap intrusion` : 'No fresh ETH intrusion'
+        reason: activeDirection ? `${activeDirection} bias from ${this.config.asset} V2 gap intrusion` : `No fresh ${this.config.asset} intrusion`
       },
       account: {
         equity: account.equity,
@@ -651,38 +759,38 @@ export class OpenLiquidityV2EthTradeMonitor {
       marketInfo,
       activePlan: activeDirection === 'long' ? longPlan : activeDirection === 'short' ? shortPlan : null,
       plans: { long: longPlan, short: shortPlan },
-      note: 'ETH V2 planning uses the shared Decentrader risk, fractal SL, managed TP and dYdX execution rules.'
+      note: `${this.config.asset} V2 planning uses the shared Decentrader risk, fractal SL, managed TP and dYdX execution rules.`
     };
   }
 
   private async executeAlert(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
     if (!this.autoTradeEnabled()) {
-      result.tradeSkipped = 'ETH V2 auto-trading is disabled.';
+      result.tradeSkipped = `${this.config.asset} V2 auto-trading is disabled.`;
       return;
     }
     if (!this.executor) {
-      result.tradeSkipped = 'No dYdX executor is configured for ETH V2.';
+      result.tradeSkipped = `No dYdX executor is configured for ${this.config.asset} V2.`;
       return;
     }
     if (state.lastTradeExecutedSignature === signature) {
-      result.tradeSkipped = 'Duplicate ETH V2 trade signature.';
+      result.tradeSkipped = `Duplicate ${this.config.asset} V2 trade signature.`;
       return;
     }
     const direction = mapDirectionFromAlert(alert);
     if (!direction) {
-      result.tradeSkipped = 'Mixed ETH V2 intrusion has no trade direction.';
+      result.tradeSkipped = `Mixed ${this.config.asset} V2 intrusion has no trade direction.`;
       return;
     }
     const delayHours = (Date.now() - timestampMs(alert.timestamp)) / HOUR_MS;
     const maxDelayHours = numberEnv('DECENTRADER_INTRUSION_MAX_EXECUTION_DELAY_HOURS', 8);
     if (delayHours > maxDelayHours) {
-      result.tradeSkipped = `ETH V2 Delay ${delayHours.toFixed(2)}h exceeds ${maxDelayHours}h.`;
+      result.tradeSkipped = `${this.config.asset} V2 Delay ${delayHours.toFixed(2)}h exceeds ${maxDelayHours}h.`;
       return;
     }
-    const account = await this.executor.getAccountSnapshot([MARKET]);
-    const openPosition = existingPosition(account);
+    const account = await this.executor.getAccountSnapshot([this.config.market]);
+    const openPosition = existingPosition(account, this.config.market);
     if (openPosition && directionForPosition(openPosition) === direction) {
-      result.tradeSkipped = `Existing ${MARKET} ${direction} position detected; new intrusion skipped.`;
+      result.tradeSkipped = `Existing ${this.config.market} ${direction} position detected; new intrusion skipped.`;
       return;
     }
     const plan = await this.getTradePlan(account, alert);
@@ -690,22 +798,22 @@ export class OpenLiquidityV2EthTradeMonitor {
     const drift = Math.abs(oraclePrice - alert.price) / Math.max(1, alert.price);
     const maxDrift = fractionEnv('DECENTRADER_INTRUSION_MAX_PRICE_DRIFT_PCT', 0.04);
     if (drift > maxDrift) {
-      result.tradeSkipped = `ETH price drift ${(drift * 100).toFixed(2)}% exceeds ${(maxDrift * 100).toFixed(2)}%.`;
+      result.tradeSkipped = `${this.config.asset} price drift ${(drift * 100).toFixed(2)}% exceeds ${(maxDrift * 100).toFixed(2)}%.`;
       return;
     }
     const orderAlert = buildDecentraderOrderAlert(plan, signature);
-    (orderAlert as any).strategy = 'open_liquidity_v2_eth';
+    (orderAlert as any).strategy = this.config.strategyPrefix;
     await this.executor.placeOrder(orderAlert);
-    const after = await this.executor.getAccountSnapshot([MARKET]);
-    const placedPosition = existingPosition(after);
+    const after = await this.executor.getAccountSnapshot([this.config.market]);
+    const placedPosition = existingPosition(after, this.config.market);
     if (!placedPosition || directionForPosition(placedPosition) !== direction) {
-      throw new Error(`dYdX did not report the requested ${MARKET} ${direction} position after execution.`);
+      throw new Error(`dYdX did not report the requested ${this.config.market} ${direction} position after execution.`);
     }
     const stop = plan.activePlan?.stop;
     state.lastTradeExecutedSignature = signature;
     state.lastTradeExecutedAt = nowNlIso();
     state.managedPosition = {
-      market: MARKET,
+      market: this.config.market,
       direction,
       openedAt: nowNlIso(),
       entrySignature: signature,
@@ -719,26 +827,26 @@ export class OpenLiquidityV2EthTradeMonitor {
       currentStopFractalSource: stop?.fractal?.source
     };
     state.lastTradeDecision = {
-      at: nowNlIso(), outcome: 'PLACED', market: MARKET, direction, signature,
+      at: nowNlIso(), outcome: 'PLACED', market: this.config.market, direction, signature,
       size: Math.abs(finite(placedPosition.size)), stop: finite(stop?.price),
       takeProfits: (orderAlert as any).take_profits || []
     };
     result.tradePlaced = true;
     result.tradePlan = plan;
     result.tradeDecision = state.lastTradeDecision;
-    console.log('ETH V2 filtered intrusion trade placed:', state.lastTradeDecision);
+    console.log(`${this.config.asset} V2 filtered intrusion trade placed:`, state.lastTradeDecision);
   }
 
   private async syncManagedOrders(state: EthMonitorState, result: any): Promise<void> {
     const executor = this.executor;
     const managed = state.managedPosition;
     if (!executor || !managed || !this.autoTradeEnabled()) return;
-    const account = await executor.getAccountSnapshot([MARKET]);
-    const position = existingPosition(account);
+    const account = await executor.getAccountSnapshot([this.config.market]);
+    const position = existingPosition(account, this.config.market);
     if (!position) {
-      await executor.placeOrder(buildDecentraderFlatCleanupAlert(MARKET, managed));
+      await executor.placeOrder(buildDecentraderFlatCleanupAlert(this.config.market, managed));
       delete state.managedPosition;
-      result.managedOrderSync = { outcome: 'FLAT_CLEANED_UP', market: MARKET };
+      result.managedOrderSync = { outcome: 'FLAT_CLEANED_UP', market: this.config.market };
       return;
     }
     const direction = directionForPosition(position);
@@ -748,14 +856,14 @@ export class OpenLiquidityV2EthTradeMonitor {
       Math.abs(position.entryPrice - managed.entryPrice) / managed.entryPrice > 0.005
     );
     if (direction !== managed.direction || grew || entryMismatch) {
-      result.managedOrderSync = { outcome: 'SKIPPED', reason: 'ETH position no longer matches the monitor-owned entry.' };
+      result.managedOrderSync = { outcome: 'SKIPPED', reason: `${this.config.asset} position no longer matches the monitor-owned entry.` };
       return;
     }
     const plan = await this.getTradePlan(account);
     result.tradePlan = plan;
     if (boolEnv('DECENTRADER_DYNAMIC_TP_ENABLED', true) && executor.syncTakeProfits) {
       const tpAlert = buildDecentraderDynamicTpAlert(plan, position);
-      (tpAlert as any).strategy = 'open_liquidity_v2_eth_dynamic_tps';
+      (tpAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_tps`;
       if (((tpAlert as any).take_profits || []).length) {
         result.dynamicTpSync = await executor.syncTakeProfits(tpAlert);
       }
@@ -766,9 +874,9 @@ export class OpenLiquidityV2EthTradeMonitor {
       ? currentPrice <= finite(managed.currentStop)
       : currentPrice >= finite(managed.currentStop);
     if (breached) {
-      await executor.placeOrder(buildDecentraderStopBreachFlatAlert(MARKET, currentPrice, position, managed.currentStop));
-      const after = await executor.getAccountSnapshot([MARKET]);
-      if (!existingPosition(after)) delete state.managedPosition;
+      await executor.placeOrder(buildDecentraderStopBreachFlatAlert(this.config.market, currentPrice, position, managed.currentStop));
+      const after = await executor.getAccountSnapshot([this.config.market]);
+      if (!existingPosition(after, this.config.market)) delete state.managedPosition;
       result.dynamicSlSync = { outcome: 'FLATTENED_AFTER_STOP_BREACH', currentPrice, stop: managed.currentStop };
       return;
     }
@@ -781,7 +889,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     const candidate = buildFractalStop(rows, rows.length - 1, direction, currentPrice, {
       afterFractalIndex: managed.currentStopFractalIndex,
       fractalDelay,
-      missingReason: `Waiting for ${fractalDelay + 1} confirmed newer ETH fractal(s).`
+      missingReason: `Waiting for ${fractalDelay + 1} confirmed newer ${this.config.asset} fractal(s).`
     });
     const candidateStop = finite(candidate.price);
     const correctSide = candidateStop > 0 && (direction === 'long' ? candidateStop < currentPrice : candidateStop > currentPrice);
@@ -798,7 +906,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       return;
     }
     const slAlert = buildDecentraderDynamicSlAlert(plan, position, candidateStop, candidate);
-    (slAlert as any).strategy = 'open_liquidity_v2_eth_dynamic_sl';
+    (slAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_sl`;
     const sync = await executor.syncTrailingStop(slAlert);
     result.dynamicSlSync = sync;
     if (sync?.outcome === 'UPDATED' || sync?.outcome === 'UNCHANGED') {
@@ -815,10 +923,10 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (this.running) return this.lastResult;
     this.running = true;
     this.lastStartedAt = nowNlIso();
-    const state = readState();
+    const state = readState(this.config);
     const result: any = {
       ok: true,
-      market: MARKET,
+      market: this.config.market,
       alerts: [],
       emailSentCount: 0,
       tradePlaced: false
@@ -840,7 +948,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         const filteredSent = new Set(state.filteredSentSignatures || []);
 
         for (const alert of reconstructed.alerts) {
-          const signature = signatureForAlert(alert);
+          const signature = signatureForAlert(alert, this.config.market);
           if (!state.pendingAlerts[signature]) {
             state.pendingAlerts[signature] = { alert, firstObservedAt: nowNlIso() };
             this.addBenchmark(state, alert, signature, {});
@@ -858,8 +966,8 @@ export class OpenLiquidityV2EthTradeMonitor {
           if (!normalSent.has(signature) && smtp) {
             const sent = await sendEmailBestEffort(
               smtp,
-              `ETH ${sideCounts(alert)} | ${alert.timestampNl}`,
-              rawAlertBody(alert)
+              `${this.config.asset} ${sideCounts(alert)} | ${alert.timestampNl}`,
+              rawAlertBody(alert, this.config.asset, this.config.symbol)
             );
             if (sent.sent) {
               pending.normalSmtpSentAt = nowNlIso();
@@ -875,7 +983,7 @@ export class OpenLiquidityV2EthTradeMonitor {
             continue;
           }
           if (!pending.normalSmtpSentAt) continue;
-          if (!dydxCandles) dydxCandles = await fetchDydxHourlyCandlesForMarket(MARKET);
+          if (!dydxCandles) dydxCandles = await fetchDydxHourlyCandlesForMarket(this.config.market);
           const review = intrusionCandleReview(replicaRows(payload), alert, true, dydxCandles, pending.normalSmtpSentAt);
           this.addBenchmark(state, alert, signature, { filtered: review.status === 'PASS', candleReview: review });
           if (review.status === 'PENDING') continue;
@@ -883,8 +991,11 @@ export class OpenLiquidityV2EthTradeMonitor {
             if (!filteredSent.has(signature) && smtp) {
               const sent = await sendEmailBestEffort(
                 smtp,
-                `FILTERED ETH ${sideCounts(alert)} | ${alert.timestampNl}`,
-                filteredAlertBody(alert, SYMBOL, review).replace(/^FILTERED Decentrader/, 'FILTERED ETH Public Perp V2')
+                `FILTERED ${this.config.asset} ${sideCounts(alert)} | ${alert.timestampNl}`,
+                filteredAlertBody(alert, this.config.symbol, review).replace(
+                  /^FILTERED Decentrader/,
+                  `FILTERED ${this.config.asset} Public Perp V2`
+                )
               );
               if (sent.sent) {
                 const sentAt = nowNlIso();
@@ -917,11 +1028,11 @@ export class OpenLiquidityV2EthTradeMonitor {
       result.ok = false;
       result.error = error instanceof Error ? error.message : String(error);
       this.lastResult = result;
-      console.error('ETH Public Perp V2 intrusion monitor failed:', error);
+      console.error(`${this.config.asset} Public Perp V2 intrusion monitor failed:`, error);
       return result;
     } finally {
       state.lastCheckedAt = nowNlIso();
-      writeState(state);
+      writeState(state, this.config);
       this.lastFinishedAt = nowNlIso();
       this.running = false;
     }
@@ -929,5 +1040,11 @@ export class OpenLiquidityV2EthTradeMonitor {
 }
 
 export const openLiquidityV2EthTradeMonitor = new OpenLiquidityV2EthTradeMonitor(
-  openLiquidityV2EthCollector
+  openLiquidityV2EthCollector,
+  ETH_MONITOR_CONFIG
+);
+
+export const openLiquidityV2InjTradeMonitor = new OpenLiquidityV2EthTradeMonitor(
+  openLiquidityV2InjCollector,
+  INJ_MONITOR_CONFIG
 );

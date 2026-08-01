@@ -67,6 +67,18 @@ describe('Public Perp V2 Binance Spot replica', () => {
     ]);
   });
 
+  test('uses INJ-scale $0.01 bins without changing the cohort multipliers', () => {
+    const levels = cohortLevelsForOhlc4(5, 0.01);
+    expect(levels.map((level) => [level.side, level.leverage, level.price])).toEqual([
+      ['L', 3, 3.75],
+      ['S', 3, 7.5],
+      ['L', 5, 4.17],
+      ['S', 5, 6.22],
+      ['L', 10, 4.57],
+      ['S', 10, 5.52]
+    ]);
+  });
+
   test('does not let a birth candle liquidate its own newly-created cohorts', () => {
     const snapshots = buildReplicaSnapshots([
       candle(1, 60_000, 90_000, 30_000, 60_000)

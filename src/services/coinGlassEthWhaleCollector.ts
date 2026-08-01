@@ -10,7 +10,29 @@ import {
   fetchCoinGlassWhaleLevelsViaWebSocket
 } from './decentraderGapMonitor';
 
-const COINGLASS_ETH_URL = 'https://www.coinglass.com/large-orderbook-statistics?symbol=ETH';
+type CoinGlassWhaleCollectorConfig = {
+  asset: 'ETH' | 'INJ';
+  defaultSymbol: string;
+  defaultMinUsd: number;
+  defaultStrongUsd: number;
+  historySuffix: string;
+};
+
+const ETH_CONFIG: CoinGlassWhaleCollectorConfig = {
+  asset: 'ETH',
+  defaultSymbol: 'Binance_ETHUSDT',
+  defaultMinUsd: 10_000_000,
+  defaultStrongUsd: 20_000_000,
+  historySuffix: 'eth'
+};
+
+const INJ_CONFIG: CoinGlassWhaleCollectorConfig = {
+  asset: 'INJ',
+  defaultSymbol: 'Binance_INJUSDT',
+  defaultMinUsd: 250_000,
+  defaultStrongUsd: 1_000_000,
+  historySuffix: 'inj'
+};
 
 type ObservationContext = {
   frameTimestamp?: string;
@@ -61,36 +83,48 @@ export class CoinGlassEthWhaleCollector {
   private error: string | undefined;
   private observationProvider: (() => Promise<ObservationContext>) | undefined;
 
+  constructor(private readonly config: CoinGlassWhaleCollectorConfig = ETH_CONFIG) {}
+
+  private env(suffix: string): string {
+    return `COINGLASS_WHALE_${this.config.asset}_${suffix}`;
+  }
+
   private enabled(): boolean {
     return boolEnv('COINGLASS_WHALE_LEVELS_ENABLED', true) &&
-      boolEnv('COINGLASS_WHALE_ETH_ENABLED', true);
+      boolEnv(this.env('ENABLED'), true);
   }
 
   private symbol(): string {
-    return String(process.env.COINGLASS_WHALE_ETH_SYMBOL || 'Binance_ETHUSDT').trim() || 'Binance_ETHUSDT';
+    return String(process.env[this.env('SYMBOL')] || this.config.defaultSymbol).trim() || this.config.defaultSymbol;
   }
 
   private intervalName(): string {
-    return String(process.env.COINGLASS_WHALE_ETH_INTERVAL || process.env.COINGLASS_WHALE_INTERVAL || 'm1').trim() || 'm1';
+    return String(process.env[this.env('INTERVAL')] || process.env.COINGLASS_WHALE_INTERVAL || 'm1').trim() || 'm1';
   }
 
   private minUsd(): number {
+    const fallback = this.config.asset === 'ETH'
+      ? numberEnv('COINGLASS_WHALE_LEVEL_MIN_USD', this.config.defaultMinUsd)
+      : this.config.defaultMinUsd;
     return numberEnv(
-      'COINGLASS_WHALE_ETH_LEVEL_MIN_USD',
-      numberEnv('COINGLASS_WHALE_LEVEL_MIN_USD', 10_000_000)
+      this.env('LEVEL_MIN_USD'),
+      fallback
     );
   }
 
   private strongUsd(): number {
+    const fallback = this.config.asset === 'ETH'
+      ? numberEnv('COINGLASS_WHALE_LEVEL_STRONG_USD', this.config.defaultStrongUsd)
+      : this.config.defaultStrongUsd;
     return Math.max(
       this.minUsd(),
-      numberEnv('COINGLASS_WHALE_ETH_LEVEL_STRONG_USD', numberEnv('COINGLASS_WHALE_LEVEL_STRONG_USD', 20_000_000))
+      numberEnv(this.env('LEVEL_STRONG_USD'), fallback)
     );
   }
 
   private timeoutMs(): number {
     return positiveIntegerEnv(
-      'COINGLASS_WHALE_ETH_TIMEOUT_MS',
+      this.env('TIMEOUT_MS'),
       positiveIntegerEnv('COINGLASS_WHALE_TIMEOUT_MS', 12_000, 3_000, 30_000),
       3_000,
       30_000
@@ -99,7 +133,7 @@ export class CoinGlassEthWhaleCollector {
 
   private pollMs(): number {
     const minutes = numberEnv(
-      'COINGLASS_WHALE_ETH_POLL_MINUTES',
+      this.env('POLL_MINUTES'),
       numberEnv('COINGLASS_WHALE_POLL_MINUTES', 10)
     );
     return Math.max(60_000, Math.max(1, minutes) * 60_000);
@@ -118,18 +152,18 @@ export class CoinGlassEthWhaleCollector {
   }
 
   historyFile(): string {
-    const explicit = String(process.env.COINGLASS_WHALE_ETH_HISTORY_FILE || '').trim();
+    const explicit = String(process.env[this.env('HISTORY_FILE')] || '').trim();
     if (explicit) return explicit;
 
     const btcFile = String(process.env.COINGLASS_WHALE_HISTORY_FILE || '').trim();
     if (btcFile) {
       const extension = path.extname(btcFile) || '.json';
-      return path.join(path.dirname(btcFile), `${path.basename(btcFile, extension)}-eth${extension}`);
+      return path.join(path.dirname(btcFile), `${path.basename(btcFile, extension)}-${this.config.historySuffix}${extension}`);
     }
 
     const renderDisk = path.join(path.parse(process.cwd()).root, 'app', 'data');
     const base = fs.existsSync(renderDisk) ? renderDisk : path.join(process.cwd(), 'data');
-    return path.join(base, 'coinglass-whale-history-eth.json');
+    return path.join(base, `coinglass-whale-history-${this.config.historySuffix}.json`);
   }
 
   private load(): void {
@@ -206,7 +240,7 @@ export class CoinGlassEthWhaleCollector {
     };
     if (initialDelayMs > 0) this.initialTimer = setTimeout(begin, initialDelayMs);
     else begin();
-    console.log('CoinGlass ETH whale collector started:', {
+    console.log(`CoinGlass ${this.config.asset} whale collector started:`, {
       symbol: this.symbol(),
       interval: this.intervalName(),
       minUsd: this.minUsd(),
@@ -246,13 +280,13 @@ export class CoinGlassEthWhaleCollector {
           const context = await this.observationProvider();
           this.recordObservation(context.frameTimestamp, context.currentPrice, context.gap);
         } catch (error) {
-          console.warn('CoinGlass ETH whale observation context unavailable; level history remains stored.', {
+          console.warn(`CoinGlass ${this.config.asset} whale observation context unavailable; level history remains stored.`, {
             reason,
             error: error instanceof Error ? error.message : String(error)
           });
         }
       }
-      console.log('CoinGlass ETH whale levels refreshed:', {
+      console.log(`CoinGlass ${this.config.asset} whale levels refreshed:`, {
         reason,
         symbol: this.symbol(),
         interval: this.intervalName(),
@@ -262,7 +296,7 @@ export class CoinGlassEthWhaleCollector {
       });
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
-      console.warn('CoinGlass ETH whale levels refresh failed; using cached levels if available.', {
+      console.warn(`CoinGlass ${this.config.asset} whale levels refresh failed; using cached levels if available.`, {
         reason,
         symbol: this.symbol(),
         error: this.error
@@ -315,7 +349,7 @@ export class CoinGlassEthWhaleCollector {
     return {
       enabled: this.enabled(),
       source: 'coinglass',
-      url: COINGLASS_ETH_URL,
+      url: `https://www.coinglass.com/large-orderbook-statistics?symbol=${this.config.asset}`,
       symbol: this.symbol(),
       interval: this.intervalName(),
       minUsd: this.minUsd(),
@@ -333,3 +367,4 @@ export class CoinGlassEthWhaleCollector {
 }
 
 export const coinGlassEthWhaleCollector = new CoinGlassEthWhaleCollector();
+export const coinGlassInjWhaleCollector = new CoinGlassEthWhaleCollector(INJ_CONFIG);

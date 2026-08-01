@@ -1,5 +1,6 @@
 import {
   buildReplicaTradeZones,
+  openLiquidityV2InjTradeMonitor,
   reconstructReplicaIntrusions
 } from '../src/services/openLiquidityV2EthTradeMonitor';
 import { Gap, LiquidityBar } from '../src/services/decentraderGapMonitor';
@@ -116,6 +117,55 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
       else process.env.DECENTRADER_TP_MAX_LEVELS = previousMax;
       if (previousSpacing === undefined) delete process.env.DECENTRADER_TP_MIN_SPACING_PCT;
       else process.env.DECENTRADER_TP_MIN_SPACING_PCT = previousSpacing;
+    }
+  });
+
+  test('supports low-priced INJ zones and keeps live execution explicitly opt-in', () => {
+    const previousAutoTrade = process.env.OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED;
+    delete process.env.OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED;
+    try {
+      const bar = (side: 'L' | 'S', price: number, count: number, leverage = 10): LiquidityBar => ({
+        key: `${side}|${leverage}|${price}`,
+        side,
+        leverage,
+        price,
+        count
+      });
+      const gap: Gap = {
+        left: 4.5,
+        right: 5.5,
+        width: 1,
+        price: 5,
+        leftEdge: bar('L', 4.5, 8),
+        rightEdge: bar('S', 5.5, 7),
+        leftToPrice: 0.5,
+        rightToPrice: 0.5
+      };
+      const zones = buildReplicaTradeZones([
+        gap.leftEdge,
+        gap.rightEdge,
+        bar('S', 5.8, 12),
+        bar('S', 6.2, 9),
+        bar('L', 4.2, 11),
+        bar('L', 3.8, 14)
+      ], 5, gap, {
+        priceStep: 0.01,
+        edgeBufferEnv: 'OPEN_LIQUIDITY_V2_INJ_TP1_EDGE_FRONT_RUN_USD'
+      });
+
+      expect(zones.longTp[0]).toMatchObject({ edge: true, edgePrice: 5.5 });
+      expect(zones.shortTp[0]).toMatchObject({ edge: true, edgePrice: 4.5 });
+      expect(zones.longTp[0].price).toBeGreaterThan(5);
+      expect(zones.shortTp[0].price).toBeLessThan(5);
+      expect(zones.longTp.length).toBeLessThanOrEqual(6);
+      expect(zones.shortTp.length).toBeLessThanOrEqual(6);
+      expect(openLiquidityV2InjTradeMonitor.getStatus()).toMatchObject({
+        market: 'INJ-USD',
+        autoTradeEnabled: false
+      });
+    } finally {
+      if (previousAutoTrade === undefined) delete process.env.OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED;
+      else process.env.OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED = previousAutoTrade;
     }
   });
 });

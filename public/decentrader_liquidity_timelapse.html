@@ -84,6 +84,56 @@
       font-size: 12px;
     }
 
+    .map-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .map-nav-tabs,
+    .map-source-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #101722;
+    }
+
+    .map-source-tabs {
+      margin-top: 10px;
+    }
+
+    .map-source-tabs[hidden] {
+      display: none;
+    }
+
+    .map-nav-tab,
+    .map-source-tab {
+      min-width: 72px;
+      padding: 7px 12px;
+      border-radius: 4px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 650;
+      text-align: center;
+      text-decoration: none;
+    }
+
+    .map-nav-tab:hover,
+    .map-source-tab:hover {
+      color: var(--text);
+      background: var(--panel-2);
+    }
+
+    .map-nav-tab.is-active,
+    .map-source-tab.is-active {
+      color: #071712;
+      background: var(--price);
+    }
+
     .toolbar {
       display: flex;
       gap: 12px;
@@ -824,6 +874,22 @@
     }
 
     @media (max-width: 760px) {
+      .map-nav {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .map-nav-tabs,
+      .map-source-tabs {
+        width: 100%;
+      }
+
+      .map-nav-tab,
+      .map-source-tab {
+        flex: 1;
+        min-width: 0;
+      }
+
       html,
       body,
       main {
@@ -948,8 +1014,21 @@
 <body>
   <main>
     <header>
-      <h1 id="pageTitle">BTC/USD Liquidity Timelapse</h1>
-      <div class="meta" id="meta">Loading data</div>
+      <div class="map-nav">
+        <div>
+          <h1 id="pageTitle">BTC/USD Liquidity Timelapse</h1>
+          <div class="meta" id="meta">Loading data</div>
+        </div>
+        <nav class="map-nav-tabs" aria-label="Liquidity pair">
+          <a class="map-nav-tab" id="pairTabBtc" href="/decentrader/map">BTC</a>
+          <a class="map-nav-tab" id="pairTabEth" href="/decentrader/map?source=open-v2-eth">ETH</a>
+          <a class="map-nav-tab" id="pairTabInj" href="/decentrader/map?source=open-v2-inj">INJ</a>
+        </nav>
+      </div>
+      <nav class="map-source-tabs" id="btcSourceTabs" aria-label="BTC data source">
+        <a class="map-source-tab" id="sourceTabDecentrader" href="/decentrader/map">Decentrader</a>
+        <a class="map-source-tab" id="sourceTabOpenV2" href="/decentrader/map?source=open-v2">Public V2</a>
+      </nav>
     </header>
 
     <section class="toolbar">
@@ -1293,36 +1372,6 @@
       </div>
     </section>
 
-    <section class="comparison" id="openV2StudySection">
-      <div class="comparison-header">
-        <h2 class="comparison-title">Public perp BTC/USD V2</h2>
-        <div class="comparison-note">
-          Gratis Binance Spot-cohorten, causale liquidatieverval en Decentrader-compatibele niveaus. Observe-only; niet gekoppeld aan alerts of orders.
-        </div>
-      </div>
-      <iframe
-        class="comparison-frame"
-        id="openV2StudyFrame"
-        title="Public perp BTC/USD liquidity study V2"
-        src="/decentrader/map?source=open-v2&embedded=1"
-      ></iframe>
-    </section>
-
-    <section class="comparison" id="openV2EthStudySection">
-      <div class="comparison-header">
-        <h2 class="comparison-title">Public perp ETH/USD V2</h2>
-        <div class="comparison-note">
-          Dezelfde causale Binance Spot-cohorten, gap-analyse en volledige replay voor ETH, met eigen alerts en onafhankelijk managed dYdX-orderbeheer.
-        </div>
-      </div>
-      <iframe
-        class="comparison-frame"
-        id="openV2EthStudyFrame"
-        title="Public perp ETH/USD liquidity study V2"
-        src="/decentrader/map?source=open-v2-eth&embedded=1"
-      ></iframe>
-    </section>
-
     <footer id="note"></footer>
   </main>
 
@@ -1330,15 +1379,16 @@
   <script>
     const queryParams = new URLSearchParams(window.location.search);
     const requestedSource = queryParams.get('source');
-    const activeSource = requestedSource === 'open-v2-eth'
-      ? 'open-v2-eth'
-      : requestedSource === 'open-v2'
-        ? 'open-v2'
-        : 'decentrader';
+    const openV2Sources = new Set(['open-v2', 'open-v2-eth', 'open-v2-inj']);
+    const activeSource = openV2Sources.has(requestedSource) ? requestedSource : 'decentrader';
     const isOpenStudy = activeSource !== 'decentrader';
-    const isOpenV2 = activeSource === 'open-v2' || activeSource === 'open-v2-eth';
-    const openV2Asset = activeSource === 'open-v2-eth' ? 'ETH' : 'BTC';
-    const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth';
+    const isOpenV2 = openV2Sources.has(activeSource);
+    const openV2Asset = activeSource === 'open-v2-eth'
+      ? 'ETH'
+      : activeSource === 'open-v2-inj'
+        ? 'INJ'
+        : 'BTC';
+    const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj';
     const openV2Market = `${openV2Asset}-USD`;
     const isEmbedded = queryParams.get('embedded') === '1';
     const CLOUD_DECENTRADER_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
@@ -1377,10 +1427,12 @@
     const jumpTimeInput = document.getElementById('jumpTime');
     const jumpTimeButton = document.getElementById('jumpTimeButton');
     const pageTitle = document.getElementById('pageTitle');
-    const openV2StudySection = document.getElementById('openV2StudySection');
-    const openV2StudyFrame = document.getElementById('openV2StudyFrame');
-    const openV2EthStudySection = document.getElementById('openV2EthStudySection');
-    const openV2EthStudyFrame = document.getElementById('openV2EthStudyFrame');
+    const pairTabBtc = document.getElementById('pairTabBtc');
+    const pairTabEth = document.getElementById('pairTabEth');
+    const pairTabInj = document.getElementById('pairTabInj');
+    const btcSourceTabs = document.getElementById('btcSourceTabs');
+    const sourceTabDecentrader = document.getElementById('sourceTabDecentrader');
+    const sourceTabOpenV2 = document.getElementById('sourceTabOpenV2');
     const meta = document.getElementById('meta');
     const note = document.getElementById('note');
     const gapWidth = document.getElementById('gapWidth');
@@ -1479,33 +1531,45 @@
 
     if (isEmbedded) {
       document.body.classList.add('is-embedded');
-      openV2StudySection?.remove();
-      openV2EthStudySection?.remove();
     }
+
+    const activePair = isOpenV2 ? openV2Asset : 'BTC';
+    pairTabBtc?.classList.toggle('is-active', activePair === 'BTC');
+    pairTabEth?.classList.toggle('is-active', activePair === 'ETH');
+    pairTabInj?.classList.toggle('is-active', activePair === 'INJ');
+    pairTabBtc?.setAttribute('aria-current', activePair === 'BTC' ? 'page' : 'false');
+    pairTabEth?.setAttribute('aria-current', activePair === 'ETH' ? 'page' : 'false');
+    pairTabInj?.setAttribute('aria-current', activePair === 'INJ' ? 'page' : 'false');
+    if (btcSourceTabs) btcSourceTabs.hidden = activePair !== 'BTC';
+    sourceTabDecentrader?.classList.toggle('is-active', activeSource === 'decentrader');
+    sourceTabOpenV2?.classList.toggle('is-active', activeSource === 'open-v2');
 
     if (isOpenStudy) {
       pageTitle.textContent = `${openV2Asset}/USD Public Perp Liquidity V2`;
+      document.title = `${openV2Asset}/USD Public Perp Liquidity V2`;
       if (domObserverPanel) domObserverPanel.hidden = true;
     } else {
       pageTitle.textContent = 'BTC/USD Decentrader Liquidity Timelapse';
-    }
-
-    if (openV2StudyFrame && ['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
-      openV2StudyFrame.src = 'https://arons-tradingview-alert-connector.onrender.com/decentrader/map?source=open-v2&embedded=1';
-    }
-    if (openV2EthStudyFrame && ['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
-      openV2EthStudyFrame.src = 'https://arons-tradingview-alert-connector.onrender.com/decentrader/map?source=open-v2-eth&embedded=1';
+      document.title = 'BTC/USD Decentrader Liquidity Timelapse';
     }
 
     function money(value) {
       if (!Number.isFinite(Number(value))) return '-';
-      return '$' + Math.round(value).toLocaleString('en-US');
+      const decimals = openV2Asset === 'INJ' ? 2 : 0;
+      return '$' + Number(value).toLocaleString('en-US', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals
+      });
     }
 
     function priceLevel(value) {
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return '-';
-      return Math.round(parsed).toLocaleString('nl-NL');
+      const decimals = openV2Asset === 'INJ' ? 2 : 0;
+      return parsed.toLocaleString('nl-NL', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals
+      });
     }
 
     function money2(value) {
@@ -1538,7 +1602,7 @@
 
     function btcSize(value) {
       const parsed = Number(value);
-      const asset = activeSource === 'open-v2-eth' ? 'ETH' : 'BTC';
+      const asset = isOpenV2 ? openV2Asset : 'BTC';
       if (!Number.isFinite(parsed) || parsed <= 0) return `0 ${asset}`;
       return parsed.toLocaleString('en-US', { maximumFractionDigits: 6 }) + ` ${asset}`;
     }
@@ -2717,8 +2781,8 @@
 
     function updateDelayHistory() {
       if (!delayHistoryCard) return;
-      delayHistoryCard.hidden = activeSource !== 'decentrader' && activeSource !== 'open-v2-eth';
-      if (activeSource !== 'decentrader' && activeSource !== 'open-v2-eth') return;
+      delayHistoryCard.hidden = !hasLiveTradePlan;
+      if (!hasLiveTradePlan) return;
 
       const history = payload?.delayHistory;
       const totalRecords = Number(history?.totalRecords) || 0;
@@ -3568,10 +3632,16 @@
     function liquiditySourcePriceStep() {
       const configured = Number(payload?.quality?.priceStepUsd);
       if (Number.isFinite(configured) && configured > 0) return configured;
+      if (isOpenV2 && openV2Asset === 'INJ') return 0.01;
       return isOpenV2 && openV2Asset === 'ETH' ? 5 : 50;
     }
 
     function tradeClusterStep(span) {
+      if (isOpenV2 && openV2Asset === 'INJ') {
+        if (span > 20) return 0.1;
+        if (span > 5) return 0.05;
+        return 0.01;
+      }
       if (isOpenV2 && openV2Asset === 'ETH') {
         if (span > 6000) return 100;
         if (span > 3000) return 50;
@@ -3718,7 +3788,7 @@
       const span = maxPrice - minPrice;
       const step = tradeClusterStep(span);
       const sourcePriceStep = liquiditySourcePriceStep();
-      const minDistance = isOpenV2 && openV2Asset === 'ETH'
+      const minDistance = isOpenV2
         ? Math.max(sourcePriceStep, step * 0.5)
         : Math.max(100, step * 0.5);
       const firstSeenKeys = new Set(firstSeen.map((bar) => bar.key));
@@ -3993,6 +4063,12 @@
     }
 
     function priceTickStep(span) {
+      if (span <= 1) return 0.1;
+      if (span <= 2.5) return 0.25;
+      if (span <= 5) return 0.5;
+      if (span <= 10) return 1;
+      if (span <= 25) return 2.5;
+      if (span <= 50) return 5;
       if (span > 60000) return 5000;
       if (span > 30000) return 2500;
       if (span > 12000) return 1000;
@@ -4035,7 +4111,8 @@
 
       for (let price = firstTick; price <= maxPrice + step * 0.5; price += step) {
         const x = area.left + ((price - minPrice) / (maxPrice - minPrice)) * area.width;
-        const isMajor = Math.round(price / 5000) * 5000 === Math.round(price);
+        const majorStep = step * 5;
+        const isMajor = Math.abs(price / majorStep - Math.round(price / majorStep)) < 1e-6;
         ctx.strokeStyle = isMajor ? 'rgba(236, 242, 248, 0.22)' : 'rgba(236, 242, 248, 0.10)';
         ctx.beginPath();
         ctx.moveTo(x, area.top);
@@ -4643,7 +4720,7 @@
       const body = `${nlTime(frame.t)} NL: ${[leftText, rightText].filter(Boolean).join(' + ') || 'Inside'} gap intrusion near ${money(frame.price)}`;
 
       if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('BTC liquidity gap alert', { body });
+        new Notification(`${isOpenV2 ? openV2Asset : 'BTC'} liquidity gap alert`, { body });
       }
     }
 
@@ -4660,7 +4737,7 @@
         .join(', ')} | price ${money(frame.price)}`;
 
       if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('BTC liquidity TP hit', { body });
+        new Notification(`${isOpenV2 ? openV2Asset : 'BTC'} liquidity TP hit`, { body });
       }
     }
 
@@ -4995,7 +5072,7 @@
         return null;
       }
 
-      const tradeMarket = activeSource === 'open-v2-eth' ? 'ETH-USD' : 'BTC-USD';
+      const tradeMarket = isOpenV2 ? openV2Market : 'BTC-USD';
       const response = await fetch(`${CLOUD_TRADE_PLAN_URL}?market=${tradeMarket}&ts=${Date.now()}`, { cache: 'no-store' });
       const plan = await response.json();
       if (!response.ok || plan.error) throw new Error(plan.error || `Trade plan ${response.status}`);

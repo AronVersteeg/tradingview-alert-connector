@@ -131,24 +131,30 @@ DECENTRALIZED_DOM_HISTORY_DIR=/app/data/decentralized-dom
 
 Raw status and replay-window data are available from `GET /research/dom-collector/status` and `GET /research/dom-collector/history?from=<ISO>&to=<ISO>`.
 
-The Public Perp V2 panels are separate reconstructions of the Decentrader-style histogram for BTC/USD and ETH/USD. They use free Binance Spot `BTCUSDT` and `ETHUSDT` 1H OHLC data. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC and $5 for ETH. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. Both V2 maps receive their matching CoinGlass whale-order snapshot and history: BTC reuses the established BTC store, while ETH subscribes to `Binance_ETHUSDT` and writes a separate history file.
+The pair tabs expose separate reconstructions of the Decentrader-style histogram for BTC/USD, ETH/USD and INJ/USD without stacking maps vertically. BTC retains a compact Decentrader/Public V2 source selector. The V2 maps use free Binance Spot `BTCUSDT`, `ETHUSDT` and `INJUSDT` 1H OHLC data. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC, $5 for ETH and $0.01 for INJ. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. Every V2 map receives its matching CoinGlass whale-order snapshot and separate history store.
 
-BTC V2 remains observe-only. ETH V2 additionally monitors new or expanded cohorts inside the previous clean gap, sends asset-labelled raw and `FILTERED ETH` emails, and can manage an independent `ETH-USD` dYdX position alongside BTC. It deliberately inherits the existing `DECENTRADER_*` Delay-filter, USD/equity risk, fractal SL, dynamic SL and dynamic TP settings. ETH TP1 uses the opposite gap edge; TP2+ uses the reconstructed ETH histogram with ETH CoinGlass and Fibonacci confluence, with at most `DECENTRADER_TP_MAX_LEVELS` targets. The monitor stores its own signatures and managed-position state, so BTC and ETH cannot suppress one another.
+BTC V2 remains observe-only. ETH and INJ V2 monitor new or expanded cohorts inside the previous clean gap, send asset-labelled raw and `FILTERED ETH`/`FILTERED INJ` emails, and can independently manage `ETH-USD` and `INJ-USD` dYdX positions alongside BTC. Both inherit the existing `DECENTRADER_*` Delay-filter, fixed USD/equity risk, fractal entry SL, dynamic trailing SL and dynamic TP settings. TP1 uses the opposite gap edge; TP2+ uses the matching histogram with CoinGlass and Fibonacci confluence, with at most `DECENTRADER_TP_MAX_LEVELS` targets. Each monitor stores separate signatures and managed-position state, so pairs cannot suppress one another. INJ live execution is explicitly opt-in and never inherits the BTC auto-trade switch.
 
 ```text
 OPEN_LIQUIDITY_V2_ENABLED=true
 OPEN_LIQUIDITY_V2_ETH_ENABLED=true
+OPEN_LIQUIDITY_V2_INJ_ENABLED=true
 OPEN_LIQUIDITY_V2_POLL_MINUTES=60
 OPEN_LIQUIDITY_V2_HISTORY_DIR=/app/data/open-liquidity-v2
 OPEN_LIQUIDITY_V2_ETH_HISTORY_DIR=/app/data/open-liquidity-v2-eth
+OPEN_LIQUIDITY_V2_INJ_HISTORY_DIR=/app/data/open-liquidity-v2-inj
 # Optional ETH-specific kill switches; when omitted, monitoring is on and
 # auto-trading inherits DECENTRADER_AUTO_TRADE_ENABLED.
 OPEN_LIQUIDITY_V2_ETH_INTRUSION_MONITOR_ENABLED=true
 OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED=true
 OPEN_LIQUIDITY_V2_ETH_TRADE_STATE_FILE=/app/data/open-liquidity-v2-eth-trade-state.json
+OPEN_LIQUIDITY_V2_INJ_INTRUSION_MONITOR_ENABLED=true
+# Explicit live-order opt-in for the new market.
+OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED=false
+OPEN_LIQUIDITY_V2_INJ_TRADE_STATE_FILE=/app/data/open-liquidity-v2-inj-trade-state.json
 ```
 
-The BTC replica fixes its price step at $100 and ETH at $5; the old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status are available from `GET /open-liquidity/v2/liquidity-timelapse?market=BTC-USD|ETH-USD` and `GET /open-liquidity/v2/status?market=BTC-USD|ETH-USD`. Both collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.
+The old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status accept `market=BTC-USD`, `ETH-USD` or `INJ-USD`. All collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.
 
 ```text
 COINGLASS_WHALE_LEVELS_ENABLED=true
@@ -166,14 +172,20 @@ COINGLASS_WHALE_ETH_SYMBOL=Binance_ETHUSDT
 COINGLASS_WHALE_ETH_LEVEL_MIN_USD=10000000
 COINGLASS_WHALE_ETH_LEVEL_STRONG_USD=20000000
 COINGLASS_WHALE_ETH_HISTORY_FILE=/app/data/coinglass-whale-history-eth.json
+COINGLASS_WHALE_INJ_ENABLED=true
+COINGLASS_WHALE_INJ_SYMBOL=Binance_INJUSDT
+COINGLASS_WHALE_INJ_LEVEL_MIN_USD=250000
+COINGLASS_WHALE_INJ_LEVEL_STRONG_USD=1000000
+COINGLASS_WHALE_INJ_HISTORY_FILE=/app/data/coinglass-whale-history-inj.json
 COINGLASS_TP_CONFLUENCE_ENABLED=true
 COINGLASS_TP_CONFLUENCE_MIN_USD=10000000
 COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD=200
 COINGLASS_TP_CONFLUENCE_ETH_MAX_DISTANCE_USD=15
+COINGLASS_TP_CONFLUENCE_INJ_MAX_DISTANCE_USD=0.05
 COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS=336
 ```
 
-The ETH-specific variables are optional. When `COINGLASS_WHALE_ETH_HISTORY_FILE` is omitted, the collector creates an `-eth` sibling beside `COINGLASS_WHALE_HISTORY_FILE`, keeping both assets on the same persistent disk without sharing records.
+The ETH/INJ-specific variables are optional. Omitted history paths become `-eth` and `-inj` siblings beside `COINGLASS_WHALE_HISTORY_FILE`, keeping all assets on the same persistent disk without sharing records. The INJ public CoinGlass stream can be intermittent; a timeout preserves the last cached snapshot and never blocks alerts, sizing or protective orders.
 
 The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. The master scanner is Daily-only: when Daily RSI enters the configured master zone, the first configured number of future gap-intrusion histogram bars are armed as fertile. Those fertile slots stay armed even after Daily RSI leaves the zone; leaving the zone only sends a "Master RSI zone deactivated" notification for the RSI-zone state. Every master-scanner email includes the current state and next action so the zone state cannot be confused with the armed fertile scanner state. After the configured number of fertile histos has been used, or when price touches the armed clean-gap edge/TP1 edge first, the scanner is disarmed until Daily RSI touches the master zone again. This is visual research only until promoted into a trade filter.
 

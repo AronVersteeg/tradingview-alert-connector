@@ -12,13 +12,13 @@ const FRAME_LIMIT = 500;
 const HISTORY_LIMIT = FRAME_LIMIT;
 const DISPLAY_ZONE_LIMIT = 150;
 
-type ReplicaMarket = 'BTC-USD' | 'ETH-USD';
-type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT';
+type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD';
+type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT';
 
 type ReplicaMarketConfig = {
   market: ReplicaMarket;
   symbol: ReplicaSymbol;
-  asset: 'BTC' | 'ETH';
+  asset: 'BTC' | 'ETH' | 'INJ';
   modelVersion: string;
   priceStepUsd: number;
   historyDirectoryName: string;
@@ -46,6 +46,17 @@ const ETH_CONFIG: ReplicaMarketConfig = {
   historyDirectoryName: 'open-liquidity-v2-eth',
   historyEnv: 'OPEN_LIQUIDITY_V2_ETH_HISTORY_DIR',
   enabledEnv: 'OPEN_LIQUIDITY_V2_ETH_ENABLED'
+};
+
+const INJ_CONFIG: ReplicaMarketConfig = {
+  market: 'INJ-USD',
+  symbol: 'INJUSDT',
+  asset: 'INJ',
+  modelVersion: 'binance-spot-inj-liquidation-cohorts-v2.1',
+  priceStepUsd: 0.01,
+  historyDirectoryName: 'open-liquidity-v2-inj',
+  historyEnv: 'OPEN_LIQUIDITY_V2_INJ_HISTORY_DIR',
+  enabledEnv: 'OPEN_LIQUIDITY_V2_INJ_ENABLED'
 };
 
 type Side = 'L' | 'S';
@@ -144,6 +155,12 @@ function rounded(value: number, decimals = 4): number {
   return Number.isFinite(value) ? Math.round(value * factor) / factor : 0;
 }
 
+function roundedToStep(value: number, step: number): number {
+  const inverse = 1 / step;
+  if (Number.isInteger(inverse)) return Math.round(value * inverse) / inverse;
+  return rounded(Math.round(value / step) * step, 8);
+}
+
 function enabled(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -179,7 +196,7 @@ export function cohortLevelsForOhlc4(
       side,
       leverage,
       rawPrice,
-      price: Math.round(rawPrice / priceStepUsd) * priceStepUsd
+      price: roundedToStep(rawPrice, priceStepUsd)
     };
   });
 }
@@ -736,3 +753,4 @@ export class OpenLiquidityV2ReplicaCollector {
 
 export const openLiquidityV2BtcCollector = new OpenLiquidityV2ReplicaCollector(BTC_CONFIG);
 export const openLiquidityV2EthCollector = new OpenLiquidityV2ReplicaCollector(ETH_CONFIG);
+export const openLiquidityV2InjCollector = new OpenLiquidityV2ReplicaCollector(INJ_CONFIG);
