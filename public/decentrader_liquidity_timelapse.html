@@ -1312,7 +1312,7 @@
       <div class="comparison-header">
         <h2 class="comparison-title">Public perp BTC/USD V2</h2>
         <div class="comparison-note">
-          Persistente protocolposities, causale replay en expliciete onzekerheid. Observe-only; nog niet gekoppeld aan alerts of orders.
+          Gratis Binance Spot-cohorten, causale liquidatieverval en Decentrader-compatibele niveaus. Observe-only; niet gekoppeld aan alerts of orders.
         </div>
       </div>
       <iframe
@@ -1851,6 +1851,17 @@
       return (side === 'all' || event.s === side) && (leverage === 'all' || String(event.l) === leverage);
     }
 
+    function openV2UsesRelativeCounts() {
+      return isOpenV2 && payload?.weightUnit === 'relative active cohort count';
+    }
+
+    function openV2ZoneWeight(zone) {
+      if (openV2UsesRelativeCounts()) {
+        return Number(zone?.relativeCount ?? zone?.positionCount ?? zone?.weightedUsd ?? 0);
+      }
+      return Number(zone?.weightedUsd || 0) / 1_000_000;
+    }
+
     function getFrameEvents(frameIndex, options = {}) {
       const mode = options.mode || modeInput.value;
       const cacheKey = `${frameIndex}|${mode}|${Boolean(options.includeContext)}|${sideInput.value}|${levInput.value}`;
@@ -1866,7 +1877,7 @@
         const previousCounts = new Map(
           (previousSnapshot?.zones || []).map((zone) => [
             `${zone.side}|${zone.leverage}|${zone.price}`,
-            Number(zone.weightedUsd || 0) / 1_000_000
+            openV2ZoneWeight(zone)
           ])
         );
         const candidateBars = [];
@@ -1874,7 +1885,7 @@
           const event = { s: zone.side, l: zone.leverage, p: zone.price };
           if (!eventAllowed(event)) continue;
           const key = `${zone.side}|${zone.leverage}|${zone.price}`;
-          const currentCount = Number(zone.weightedUsd || 0) / 1_000_000;
+          const currentCount = openV2ZoneWeight(zone);
           const previousCount = previousCounts.get(key) || 0;
           const count = mode === 'new' ? Math.max(0, currentCount - previousCount) : currentCount;
           if (count <= 0) continue;
@@ -3169,6 +3180,7 @@
     }
 
     function estimateHistoUsd(bar, count) {
+      if (openV2UsesRelativeCounts()) return count;
       const price = Number(bar?.price);
       if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(count) || count <= 0) return 0;
       return price * count;
@@ -3318,8 +3330,11 @@
       liquidityTrendCtx.fillStyle = muted;
       liquidityTrendCtx.font = '10px Inter, system-ui, sans-serif';
       liquidityTrendCtx.textBaseline = 'middle';
-      liquidityTrendCtx.fillText(compactUsd(maxValue), 4, area.top + 2);
-      liquidityTrendCtx.fillText('$0', 4, area.bottom);
+      const metricText = (value) => openV2UsesRelativeCounts()
+        ? `${Math.round(value)}`
+        : compactUsd(value);
+      liquidityTrendCtx.fillText(metricText(maxValue), 4, area.top + 2);
+      liquidityTrendCtx.fillText(openV2UsesRelativeCounts() ? '0' : '$0', 4, area.bottom);
 
       function xFor(position) {
         if (points.length <= 1) return area.right;
@@ -3428,12 +3443,15 @@
 
       liqLongCell.classList.toggle('is-dominant-long', longDominant);
       liqShortCell.classList.toggle('is-dominant-short', shortDominant);
-      liqLongValue.textContent = compactUsd(stats.longUsd);
-      liqShortValue.textContent = compactUsd(stats.shortUsd);
+      const metricText = (value) => openV2UsesRelativeCounts()
+        ? `${Math.round(value)} cohorts`
+        : compactUsd(value);
+      liqLongValue.textContent = metricText(stats.longUsd);
+      liqShortValue.textContent = metricText(stats.shortUsd);
       liqWindowValue.textContent = `${stats.hours}h`;
       liqLongMeta.textContent = sharePct(stats.longUsd, totalUsd);
       liqShortMeta.textContent = sharePct(stats.shortUsd, totalUsd);
-      liqTotalMeta.textContent = `${compactUsd(totalUsd)} total`;
+      liqTotalMeta.textContent = `${metricText(totalUsd)} total`;
       drawLiquidityTrend(points, stats);
 
       if (!frame || !stats.split) {
@@ -3442,9 +3460,9 @@
       }
 
       const dominance = longDominant
-        ? `long overhand by ${compactUsd(netUsd)}`
+        ? `long overhand by ${metricText(netUsd)}`
         : shortDominant
-          ? `short overhand by ${compactUsd(netUsd)}`
+          ? `short overhand by ${metricText(netUsd)}`
           : totalUsd
             ? 'balanced'
             : 'no new buildup';
@@ -3473,7 +3491,7 @@
           side: 'L',
           leverage: serverGap.leftEdge.leverage,
           price: serverGap.left,
-          count: Number(serverGap.leftEdge.weightedUsd || 0) / 1_000_000,
+          count: openV2ZoneWeight(serverGap.leftEdge),
           positionCount: serverGap.leftEdge.positionCount,
           confidence: serverGap.leftEdge.confidence,
         };
@@ -3482,7 +3500,7 @@
           side: 'S',
           leverage: serverGap.rightEdge.leverage,
           price: serverGap.right,
-          count: Number(serverGap.rightEdge.weightedUsd || 0) / 1_000_000,
+          count: openV2ZoneWeight(serverGap.rightEdge),
           positionCount: serverGap.rightEdge.positionCount,
           confidence: serverGap.rightEdge.confidence,
         };
@@ -3968,7 +3986,10 @@
         ctx.lineTo(area.right, y);
         ctx.stroke();
         const yValue = maxCount * i / 5;
-        ctx.fillText(isOpenV2 ? `$${yValue.toFixed(1)}M` : String(Math.round(yValue)), 12, y + 4);
+        const yLabel = isOpenV2 && !openV2UsesRelativeCounts()
+          ? `$${yValue.toFixed(1)}M`
+          : String(Math.round(yValue));
+        ctx.fillText(yLabel, 12, y + 4);
       }
 
       ctx.strokeStyle = 'rgba(236, 242, 248, 0.28)';
@@ -4447,13 +4468,18 @@
       gapLeft.textContent = money(gap.left);
       gapPrice.textContent = money(frame.price);
       gapRight.textContent = money(gap.right);
+      const replicaGap = isOpenV2 && payload?.quality?.decentraderFormulaParity;
       const gapPrefix = activeSource === 'open'
         ? 'Raw public gap | '
         : isOpenV2
-          ? `${gap.status === 'confirmed' ? 'Confirmed' : 'Candidate'} | confidence ${Math.round(Number(gap.confidence || 0) * 100)}% | `
+          ? replicaGap
+            ? 'Binance Spot replica | '
+            : `${gap.status === 'confirmed' ? 'Confirmed' : 'Candidate'} | confidence ${Math.round(Number(gap.confidence || 0) * 100)}% | `
           : '';
       const qualityText = isOpenV2
-          ? ` | clean ${Math.round(Number(gap.cleanliness || 0) * 100)}% | sources ${gap.sourceAgreement || 1}/${payload.quality?.requiredSourceAgreement || 2}`
+          ? replicaGap
+            ? ` | relative cohorts ${Number(gap.leftEdge?.relativeCount || gap.leftEdge?.positionCount || 0)}/${Number(gap.rightEdge?.relativeCount || gap.rightEdge?.positionCount || 0)}`
+            : ` | clean ${Math.round(Number(gap.cleanliness || 0) * 100)}% | sources ${gap.sourceAgreement || 1}/${payload.quality?.requiredSourceAgreement || 2}`
         : '';
       gapStatus.textContent = `${gapPrefix}${formatZone(gap.leftEdge)} -> ${formatZone(gap.rightEdge)} | L ${money(gap.leftToPrice)} / R ${money(gap.rightToPrice)}${qualityText}`;
 
