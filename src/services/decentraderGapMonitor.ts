@@ -33,9 +33,9 @@ const COINGLASS_WS_PATH = '/v2/ws';
 const COINGLASS_WHALE_URL = 'https://www.coinglass.com/large-orderbook-statistics';
 const DYDX_INDEXER_URL = 'https://indexer.dydx.trade/v4';
 
-type DecentraderRow = Record<string, any>;
+export type DecentraderRow = Record<string, any>;
 
-type LiquidityBar = {
+export type LiquidityBar = {
   key: string;
   side: 'L' | 'S';
   leverage: number;
@@ -46,7 +46,7 @@ type LiquidityBar = {
   sideOfPrice?: 'left' | 'right' | 'price';
 };
 
-type Gap = {
+export type Gap = {
   left: number;
   right: number;
   width: number;
@@ -57,7 +57,7 @@ type Gap = {
   rightToPrice: number;
 };
 
-type GapAlert = {
+export type GapAlert = {
   frameIndex: number;
   timestamp: string;
   timestampNl: string;
@@ -70,7 +70,7 @@ type GapAlert = {
 
 type CandleColor = 'green' | 'red' | 'flat' | 'unknown';
 
-type IntrusionCandleReview = {
+export type IntrusionCandleReview = {
   enabled: boolean;
   status: 'DISABLED' | 'PASS' | 'FAIL' | 'PENDING';
   direction?: TradePlanDirection;
@@ -94,7 +94,7 @@ type CandleOpenClose = {
   source: 'dydx' | 'ohlc' | 'price-delta';
 };
 
-type TradeZone = {
+export type TradeZone = {
   direction: 'long' | 'short';
   rank: number;
   price: number;
@@ -221,7 +221,7 @@ export type CoinGlassWhaleSnapshot = {
   historyRetentionHours: number;
 };
 
-type DydxRsiCandle = {
+export type DydxRsiCandle = {
   startedAt: string;
   resolution: string;
   open?: string;
@@ -320,14 +320,14 @@ type TpBacktestOptions = {
   maxTrades?: number;
 };
 
-type DydxOpenPosition = {
+export type DydxOpenPosition = {
   market: string;
   side?: string;
   size: number;
   entryPrice?: number;
 };
 
-type DydxSizingAccountSnapshot = {
+export type DydxSizingAccountSnapshot = {
   equity: number;
   freeCollateral: number;
   openPositionsCount: number;
@@ -345,7 +345,7 @@ type DydxSizingAccountSnapshot = {
   updatedAt?: string;
 };
 
-type TradePlanDirection = 'long' | 'short';
+export type TradePlanDirection = 'long' | 'short';
 type TradeDecisionOutcome = 'PLACED' | 'SKIPPED' | 'ERROR' | 'READY';
 
 type TradeEvaluationOptions = {
@@ -387,13 +387,13 @@ type FractalStop = {
   reason?: string;
 };
 
-type FractalStopOptions = {
+export type FractalStopOptions = {
   afterFractalIndex?: number;
   fractalDelay?: number;
   missingReason?: string;
 };
 
-type DecentraderTradeExecutor = {
+export type DecentraderTradeExecutor = {
   getAccountSnapshot: (markets: string[]) => Promise<DydxSizingAccountSnapshot>;
   placeOrder: (alert: AlertObject) => Promise<void>;
   syncTakeProfits?: (alert: AlertObject) => Promise<any>;
@@ -434,7 +434,7 @@ type MonitorStatus = {
   lastTradeDecision?: any;
 };
 
-type SmtpSettings = {
+export type SmtpSettings = {
   host: string;
   port: number;
   username: string;
@@ -447,7 +447,7 @@ type SmtpSettings = {
   jobName: string;
 };
 
-type AlertState = {
+export type AlertState = {
   lastAlertObservedSignature?: string | null;
   lastAlertSentSignature?: string;
   lastFilteredAlertSentSignature?: string;
@@ -1267,7 +1267,7 @@ async function refreshCoinGlassWhaleLevels(reason: string): Promise<CoinGlassWha
   return coinGlassWhaleFetchPromise;
 }
 
-function nlTime(timestamp: string | undefined): string {
+export function nlTime(timestamp: string | undefined): string {
   if (!timestamp) return '-';
   const date = new Date(timestamp.replace(' ', 'T') + 'Z');
   return new Intl.DateTimeFormat('nl-NL', {
@@ -1283,11 +1283,11 @@ function nlTime(timestamp: string | undefined): string {
     .replace(',', '') + ' NL';
 }
 
-function nowNlIso(): string {
+export function nowNlIso(): string {
   return new Date().toISOString();
 }
 
-function smtpSettingsFromEnv(): SmtpSettings | undefined {
+export function smtpSettingsFromEnv(): SmtpSettings | undefined {
   const host = String(process.env.SMTP_HOST || '').trim();
   const recipients = parseRecipients(process.env.SMTP_TO || process.env.NOTIFY_EMAIL);
   if (!host || !recipients.length) return undefined;
@@ -1473,7 +1473,7 @@ async function sendEmail(settings: SmtpSettings, subject: string, body: string):
   await new SmtpSession(settings).send(subject, body);
 }
 
-async function sendEmailBestEffort(
+export async function sendEmailBestEffort(
   settings: SmtpSettings,
   subject: string,
   body: string
@@ -3235,6 +3235,12 @@ function compactRsiPoint(point: RsiPoint | undefined): RsiFramePoint | undefined
   };
 }
 
+export async function fetchDydxHourlyCandlesForMarket(
+  market: string
+): Promise<DydxRsiCandle[] | undefined> {
+  return fetchDydxRsiCandles(String(market).replace(/_/g, '-').toUpperCase(), '1HOUR', 1000);
+}
+
 function rsiFrameBias(h4: RsiPoint | undefined, d1: RsiPoint | undefined): 'long' | 'short' | 'neutral' {
   const slopes = [h4?.slope, d1?.slope].filter((value): value is number => Number.isFinite(value));
   if (slopes.length < 2) return 'neutral';
@@ -4049,7 +4055,7 @@ function wickGuardForFractal(
   };
 }
 
-function buildFractalStop(
+export function buildFractalStop(
   rows: DecentraderRow[],
   frameIndex: number,
   direction: TradePlanDirection,
@@ -4147,7 +4153,7 @@ function buildFractalStop(
   };
 }
 
-function mapDirectionFromAlert(alert: GapAlert | undefined): TradePlanDirection | undefined {
+export function mapDirectionFromAlert(alert: GapAlert | undefined): TradePlanDirection | undefined {
   if (!alert?.entrants.length) return undefined;
   const leftWeight = alert.left.reduce((sum, bar) => sum + (bar.newCount || 1) * bar.leverage, 0);
   const rightWeight = alert.right.reduce((sum, bar) => sum + (bar.newCount || 1) * bar.leverage, 0);
@@ -4177,7 +4183,7 @@ function mapScoreForDirection(
   return Math.round(clamp(tpScore + overlapScore + freshScore + alertScore + stopScore + gapScore, 0, 100));
 }
 
-function buildDirectionalPlan(
+export function buildDirectionalPlan(
   direction: TradePlanDirection,
   account: DydxSizingAccountSnapshot,
   marketInfo: DydxSizingAccountSnapshot['markets'][string],
@@ -4345,7 +4351,7 @@ function buildDirectionalPlan(
   };
 }
 
-function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
+export function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
   const activePlan = plan.activePlan;
   const direction = activePlan?.direction as TradePlanDirection | undefined;
   const maxTpLevels = decentraderMaxTpLevels();
@@ -4447,7 +4453,7 @@ function buildDecentraderOrderAlert(plan: any, signature: string): AlertObject {
   } as AlertObject;
 }
 
-function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): AlertObject {
+export function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): AlertObject {
   const direction: TradePlanDirection = position.size > 0 ? 'long' : 'short';
   const directionalPlan = plan?.plans?.[direction];
   const maxTpLevels = decentraderMaxTpLevels();
@@ -4524,7 +4530,7 @@ function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosition): 
   } as AlertObject;
 }
 
-function buildDecentraderDynamicSlAlert(
+export function buildDecentraderDynamicSlAlert(
   plan: any,
   position: DydxOpenPosition,
   trailStop: number,
@@ -4556,7 +4562,7 @@ function buildDecentraderDynamicSlAlert(
       direction,
       dynamicSlSync: true,
       stop: stop || directionalPlan?.stop,
-      note: 'Add-only delayed fractal trailing SL; older stops are preserved as fallback.'
+      note: 'Delayed fractal trailing SL replacement; older managed stops are cancelled best-effort after the replacement is submitted.'
     }
   } as AlertObject;
 }
@@ -4626,7 +4632,7 @@ function buildDecentraderLiveTestFlatAlert(orderAlert: AlertObject): AlertObject
   } as AlertObject;
 }
 
-function buildDecentraderStopBreachFlatAlert(
+export function buildDecentraderStopBreachFlatAlert(
   market: string,
   price: number,
   position: DydxOpenPosition,
@@ -4655,7 +4661,7 @@ function buildDecentraderStopBreachFlatAlert(
   } as AlertObject;
 }
 
-function buildDecentraderFlatCleanupAlert(
+export function buildDecentraderFlatCleanupAlert(
   market: string,
   managedPosition: NonNullable<AlertState['managedPosition']>
 ): AlertObject {
@@ -4693,7 +4699,7 @@ function sideCounts(alert: GapAlert): string {
   return parts.join(' + ') || 'no intrusions';
 }
 
-function alertBody(alert: GapAlert, symbol: string): string {
+export function alertBody(alert: GapAlert, symbol: string): string {
   const gap = alert.previousGap;
   const lines = [
     `Decentrader ${symbol.toUpperCase()} liquidity gap alert`,
@@ -4722,7 +4728,7 @@ function alertBody(alert: GapAlert, symbol: string): string {
   return lines.join('\n');
 }
 
-function filteredAlertBody(alert: GapAlert, symbol: string, review: IntrusionCandleReview): string {
+export function filteredAlertBody(alert: GapAlert, symbol: string, review: IntrusionCandleReview): string {
   const candleSequence = review.candleColors?.length
     ? review.candleColors.join(' / ')
     : `${review.intrusionColor} / ${review.nextColor}`;
@@ -5292,7 +5298,7 @@ export class DecentraderGapMonitor {
           if (filteredSignature !== state.lastFilteredAlertSentSignature) {
             const filteredEmailResult = await sendEmailBestEffort(
               smtpSettings,
-              `FILTERED ${sideCounts(alert)} | ${alert.timestampNl}`,
+              `FILTERED BTC ${sideCounts(alert)} | ${alert.timestampNl}`,
               filteredAlertBody(alert, config.symbol, candleReview)
             );
 

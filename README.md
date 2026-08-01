@@ -131,7 +131,9 @@ DECENTRALIZED_DOM_HISTORY_DIR=/app/data/decentralized-dom
 
 Raw status and replay-window data are available from `GET /research/dom-collector/status` and `GET /research/dom-collector/history?from=<ISO>&to=<ISO>`.
 
-The Public Perp V2 panels are separate observe-only reconstructions of the Decentrader-style histogram for BTC/USD and ETH/USD. They use free Binance Spot `BTCUSDT` and `ETHUSDT` 1H OHLC data. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC and $5 for ETH. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. Both V2 maps receive their matching CoinGlass whale-order snapshot and history: BTC reuses the established BTC store, while ETH subscribes to `Binance_ETHUSDT` and writes a separate history file. CoinGlass can boost nearby TP2+ candidates but V2 remains observe-only and never imports or calls the Decentrader alert or execution path.
+The Public Perp V2 panels are separate reconstructions of the Decentrader-style histogram for BTC/USD and ETH/USD. They use free Binance Spot `BTCUSDT` and `ETHUSDT` 1H OHLC data. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC and $5 for ETH. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. Both V2 maps receive their matching CoinGlass whale-order snapshot and history: BTC reuses the established BTC store, while ETH subscribes to `Binance_ETHUSDT` and writes a separate history file.
+
+BTC V2 remains observe-only. ETH V2 additionally monitors new or expanded cohorts inside the previous clean gap, sends asset-labelled raw and `FILTERED ETH` emails, and can manage an independent `ETH-USD` dYdX position alongside BTC. It deliberately inherits the existing `DECENTRADER_*` Delay-filter, USD/equity risk, fractal SL, dynamic SL and dynamic TP settings. ETH TP1 uses the opposite gap edge; TP2+ uses the reconstructed ETH histogram with ETH CoinGlass and Fibonacci confluence, with at most `DECENTRADER_TP_MAX_LEVELS` targets. The monitor stores its own signatures and managed-position state, so BTC and ETH cannot suppress one another.
 
 ```text
 OPEN_LIQUIDITY_V2_ENABLED=true
@@ -139,6 +141,11 @@ OPEN_LIQUIDITY_V2_ETH_ENABLED=true
 OPEN_LIQUIDITY_V2_POLL_MINUTES=60
 OPEN_LIQUIDITY_V2_HISTORY_DIR=/app/data/open-liquidity-v2
 OPEN_LIQUIDITY_V2_ETH_HISTORY_DIR=/app/data/open-liquidity-v2-eth
+# Optional ETH-specific kill switches; when omitted, monitoring is on and
+# auto-trading inherits DECENTRADER_AUTO_TRADE_ENABLED.
+OPEN_LIQUIDITY_V2_ETH_INTRUSION_MONITOR_ENABLED=true
+OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED=true
+OPEN_LIQUIDITY_V2_ETH_TRADE_STATE_FILE=/app/data/open-liquidity-v2-eth-trade-state.json
 ```
 
 The BTC replica fixes its price step at $100 and ETH at $5; the old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status are available from `GET /open-liquidity/v2/liquidity-timelapse?market=BTC-USD|ETH-USD` and `GET /open-liquidity/v2/status?market=BTC-USD|ETH-USD`. Both collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.

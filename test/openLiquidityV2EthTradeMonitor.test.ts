@@ -1,0 +1,121 @@
+import {
+  buildReplicaTradeZones,
+  reconstructReplicaIntrusions
+} from '../src/services/openLiquidityV2EthTradeMonitor';
+import { Gap, LiquidityBar } from '../src/services/decentraderGapMonitor';
+
+function replicaGap(left: number, right: number) {
+  return {
+    left,
+    right,
+    width: right - left,
+    leftEdge: { side: 'L', leverage: 10, price: left, positionCount: 4, relativeCount: 4 },
+    rightEdge: { side: 'S', leverage: 10, price: right, positionCount: 3, relativeCount: 3 }
+  };
+}
+
+describe('ETH Public Perp V2 intrusion execution inputs', () => {
+  test('detects only a cohort increase inside the previous gap', () => {
+    const payload = {
+      frames: [
+        { i: 0, t: '2026-08-01 10:00:00', price: 3_000 },
+        { i: 1, t: '2026-08-01 11:00:00', price: 3_030 }
+      ],
+      gaps: [replicaGap(2_800, 3_200), replicaGap(2_850, 3_200)],
+      zoneSeed: [
+        ['L', 10, 2_800, 4],
+        ['S', 10, 3_200, 3]
+      ],
+      zoneDeltas: [
+        [],
+        [['L', 10, 2_900, 1]]
+      ]
+    };
+
+    const result = reconstructReplicaIntrusions(payload, '2026-08-01 10:00:00');
+
+    expect(result.alerts).toHaveLength(1);
+    expect(result.alerts[0].left).toHaveLength(1);
+    expect(result.alerts[0].right).toHaveLength(0);
+    expect(result.alerts[0].left[0]).toMatchObject({
+      side: 'L',
+      leverage: 10,
+      price: 2_900,
+      newCount: 1,
+      gapSide: 'left'
+    });
+  });
+
+  test('does not treat removals or unchanged cohorts as intrusions', () => {
+    const payload = {
+      frames: [
+        { i: 0, t: '2026-08-01 10:00:00', price: 3_000 },
+        { i: 1, t: '2026-08-01 11:00:00', price: 3_030 }
+      ],
+      gaps: [replicaGap(2_800, 3_200), replicaGap(2_800, 3_200)],
+      zoneSeed: [
+        ['L', 10, 2_900, 2],
+        ['L', 10, 2_800, 4],
+        ['S', 10, 3_200, 3]
+      ],
+      zoneDeltas: [[], [['L', 10, 2_900, 1]]]
+    };
+
+    expect(reconstructReplicaIntrusions(payload, '2026-08-01 10:00:00').alerts).toEqual([]);
+  });
+
+  test('uses the opposite gap edge as TP1 and never returns more than six targets', () => {
+    const previousBuffer = process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD;
+    const previousMax = process.env.DECENTRADER_TP_MAX_LEVELS;
+    const previousSpacing = process.env.DECENTRADER_TP_MIN_SPACING_PCT;
+    process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD = '5';
+    process.env.DECENTRADER_TP_MAX_LEVELS = '6';
+    process.env.DECENTRADER_TP_MIN_SPACING_PCT = '0.005';
+    try {
+      const bar = (side: 'L' | 'S', price: number, count: number, leverage = 10): LiquidityBar => ({
+        key: `${side}|${leverage}|${price}`,
+        side,
+        leverage,
+        price,
+        count
+      });
+      const bars = [
+        bar('L', 2_800, 8),
+        bar('S', 3_200, 7),
+        bar('S', 3_300, 12),
+        bar('S', 3_400, 9),
+        bar('S', 3_500, 15),
+        bar('S', 3_600, 10),
+        bar('S', 3_700, 13),
+        bar('S', 3_800, 8),
+        bar('L', 2_700, 11),
+        bar('L', 2_600, 14),
+        bar('L', 2_500, 9)
+      ];
+      const gap: Gap = {
+        left: 2_800,
+        right: 3_200,
+        width: 400,
+        price: 3_000,
+        leftEdge: bar('L', 2_800, 8),
+        rightEdge: bar('S', 3_200, 7),
+        leftToPrice: 200,
+        rightToPrice: 200
+      };
+
+      const zones = buildReplicaTradeZones(bars, 3_000, gap);
+
+      expect(zones.longTp[0]).toMatchObject({ price: 3_195, edge: true, edgePrice: 3_200 });
+      expect(zones.shortTp[0]).toMatchObject({ price: 2_805, edge: true, edgePrice: 2_800 });
+      expect(zones.longTp.length).toBeLessThanOrEqual(6);
+      expect(zones.shortTp.length).toBeLessThanOrEqual(6);
+    } finally {
+      if (previousBuffer === undefined) delete process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD;
+      else process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD = previousBuffer;
+      if (previousMax === undefined) delete process.env.DECENTRADER_TP_MAX_LEVELS;
+      else process.env.DECENTRADER_TP_MAX_LEVELS = previousMax;
+      if (previousSpacing === undefined) delete process.env.DECENTRADER_TP_MIN_SPACING_PCT;
+      else process.env.DECENTRADER_TP_MIN_SPACING_PCT = previousSpacing;
+    }
+  });
+});

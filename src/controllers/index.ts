@@ -15,6 +15,7 @@ import {
   openLiquidityV2BtcCollector,
   openLiquidityV2EthCollector
 } from '../services/openLiquidityV2Replica';
+import { openLiquidityV2EthTradeMonitor } from '../services/openLiquidityV2EthTradeMonitor';
 import { buildSnoekScout } from '../services/snoekScout';
 import { getSnoekCurrent } from '../services/snoekCurrent';
 import { getSnoekStructures } from '../services/snoekStructures';
@@ -97,6 +98,12 @@ function configureDecentraderTradeExecutor() {
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
+  openLiquidityV2EthTradeMonitor.configureTradeExecutor({
+    getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    placeOrder: (alert: any) => client.placeOrder(alert),
+    syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
+    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+  });
 }
 
 async function initializeExchanges() {
@@ -142,6 +149,7 @@ initializeExchanges()
       };
     });
     coinGlassEthWhaleCollector.start(45_000);
+    openLiquidityV2EthTradeMonitor.start(75_000);
   })
   .catch((err) => {
     console.error("Exchange initialization failed:", err);
@@ -396,6 +404,7 @@ router.get('/open-liquidity/v2/status', async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.send({
     ...collector.getStatus(),
+    execution: market === 'ETH-USD' ? openLiquidityV2EthTradeMonitor.getStatus() : undefined,
     coinGlass: {
       enabled: coinGlass.enabled,
       symbol: coinGlass.symbol,
@@ -441,8 +450,19 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
 
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    const ethExecution = market === 'ETH-USD'
+      ? openLiquidityV2EthTradeMonitor.snapshot()
+      : undefined;
     res.send({
       ...payload,
+      ...(ethExecution || {}),
+      source: market === 'ETH-USD'
+        ? {
+            ...payload.source,
+            note:
+              'ETH Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ETH-USD with the BTC risk, fractal SL and TP environment settings.'
+          }
+        : payload.source,
       coinGlassWhaleLevels,
       coinGlassTpConfluence: {
         enabled: String(process.env.COINGLASS_TP_CONFLUENCE_ENABLED || 'true').toLowerCase() !== 'false',
@@ -480,7 +500,11 @@ router.get('/decentrader/trade-plan', async (req, res) => {
 
     const account = await client.getAccountSnapshot([market]);
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(await decentraderGapMonitor.getTradePlan(account, market));
+    res.send(
+      market === 'ETH-USD'
+        ? await openLiquidityV2EthTradeMonitor.getTradePlan(account)
+        : await decentraderGapMonitor.getTradePlan(account, market)
+    );
   } catch (error) {
     console.error('Decentrader trade plan request failed:', error);
     res.status(500).send({

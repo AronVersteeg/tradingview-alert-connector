@@ -98,6 +98,8 @@ export type ReplicaSnapshot = {
   effectiveAt: string;
   observedAt: string;
   referencePrice: number;
+  open: number;
+  close: number;
   high: number;
   low: number;
   sourceHours: number;
@@ -395,6 +397,8 @@ export function buildReplicaSnapshots(
       effectiveAt: new Date(candle.timestampMs).toISOString(),
       observedAt,
       referencePrice: rounded(referencePrice, 4),
+      open: rounded(candle.open, 4),
+      close: rounded(candle.close, 4),
       high: rounded(candle.high, 4),
       low: rounded(candle.low, 4),
       sourceHours: Math.min(frameIndex + 1, cohortWindowHours),
@@ -657,6 +661,8 @@ export class OpenLiquidityV2ReplicaCollector {
       t: timestampForMs(Date.parse(snapshot.effectiveAt)),
       startedAtMs: Date.parse(snapshot.effectiveAt),
       price: snapshot.referencePrice,
+      open: snapshot.open,
+      close: snapshot.close,
       low: snapshot.low,
       high: snapshot.high,
       snapshot: index

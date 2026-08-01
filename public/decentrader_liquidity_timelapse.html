@@ -1312,7 +1312,7 @@
       <div class="comparison-header">
         <h2 class="comparison-title">Public perp ETH/USD V2</h2>
         <div class="comparison-note">
-          Dezelfde causale Binance Spot-cohorten, gap-analyse en volledige replay voor ETH. Observe-only; niet gekoppeld aan alerts of orders.
+          Dezelfde causale Binance Spot-cohorten, gap-analyse en volledige replay voor ETH, met eigen alerts en onafhankelijk managed dYdX-orderbeheer.
         </div>
       </div>
       <iframe
@@ -1338,6 +1338,7 @@
     const isOpenStudy = activeSource !== 'decentrader';
     const isOpenV2 = activeSource === 'open-v2' || activeSource === 'open-v2-eth';
     const openV2Asset = activeSource === 'open-v2-eth' ? 'ETH' : 'BTC';
+    const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth';
     const openV2Market = `${openV2Asset}-USD`;
     const isEmbedded = queryParams.get('embedded') === '1';
     const CLOUD_DECENTRADER_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
@@ -1537,8 +1538,9 @@
 
     function btcSize(value) {
       const parsed = Number(value);
-      if (!Number.isFinite(parsed) || parsed <= 0) return '0 BTC';
-      return parsed.toLocaleString('en-US', { maximumFractionDigits: 6 }) + ' BTC';
+      const asset = activeSource === 'open-v2-eth' ? 'ETH' : 'BTC';
+      if (!Number.isFinite(parsed) || parsed <= 0) return `0 ${asset}`;
+      return parsed.toLocaleString('en-US', { maximumFractionDigits: 6 }) + ` ${asset}`;
     }
 
     function parseDecentraderUtc(timestamp) {
@@ -2715,8 +2717,8 @@
 
     function updateDelayHistory() {
       if (!delayHistoryCard) return;
-      delayHistoryCard.hidden = activeSource !== 'decentrader';
-      if (activeSource !== 'decentrader') return;
+      delayHistoryCard.hidden = activeSource !== 'decentrader' && activeSource !== 'open-v2-eth';
+      if (activeSource !== 'decentrader' && activeSource !== 'open-v2-eth') return;
 
       const history = payload?.delayHistory;
       const totalRecords = Number(history?.totalRecords) || 0;
@@ -4392,8 +4394,7 @@
 
     function updateWhaleStudy(frameIndex, frame, visualGap) {
       if (!whaleStudyPanel) return;
-      whaleStudyPanel.hidden = activeSource !== 'decentrader';
-      if (activeSource !== 'decentrader') return;
+      whaleStudyPanel.hidden = false;
       const observation = getCoinGlassWhaleObservation(frame);
       if (!observation) {
         whaleStudyStatus.textContent = 'No monitored CoinGlass snapshot for this replay frame';
@@ -4582,7 +4583,7 @@
     }
 
     function updateTradePlanMonitor(frame) {
-      if (activeSource !== 'decentrader') {
+      if (!hasLiveTradePlan) {
         tradePlanValue.textContent = 'Study only';
         tradePlanStatus.textContent = 'Public perp study is visual research only; no sizing, signals or dYdX orders.';
         return;
@@ -4987,14 +4988,15 @@
     }
 
     async function refreshTradePlan() {
-      if (activeSource !== 'decentrader') {
+      if (!hasLiveTradePlan) {
         latestTradePlan = null;
         latestTradePlanError = '';
         updateTradePlanMonitor(payload?.frames?.[Number(frameInput.value)]);
         return null;
       }
 
-      const response = await fetch(`${CLOUD_TRADE_PLAN_URL}?market=BTC-USD&ts=${Date.now()}`, { cache: 'no-store' });
+      const tradeMarket = activeSource === 'open-v2-eth' ? 'ETH-USD' : 'BTC-USD';
+      const response = await fetch(`${CLOUD_TRADE_PLAN_URL}?market=${tradeMarket}&ts=${Date.now()}`, { cache: 'no-store' });
       const plan = await response.json();
       if (!response.ok || plan.error) throw new Error(plan.error || `Trade plan ${response.status}`);
       latestTradePlan = plan;
