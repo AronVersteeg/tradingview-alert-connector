@@ -3,9 +3,6 @@ import path from 'path';
 
 import axios from 'axios';
 
-const MARKET = 'BTC-USD' as const;
-const SYMBOL = 'BTCUSDT' as const;
-const MODEL_VERSION = 'binance-spot-liquidation-cohorts-v2.4';
 const BINANCE_SPOT_URL = 'https://api.binance.com/api/v3/klines';
 const HOUR_MS = 3_600_000;
 const COHORT_WINDOW_HOURS = 8_760;
@@ -13,8 +10,43 @@ const FRAME_LIMIT = 500;
 // The full 500-frame replay is rebuilt from source on every refresh. Keeping
 // more rendered snapshots only inflates Render memory without adding coverage.
 const HISTORY_LIMIT = FRAME_LIMIT;
-const PRICE_STEP_USD = 100;
 const DISPLAY_ZONE_LIMIT = 150;
+
+type ReplicaMarket = 'BTC-USD' | 'ETH-USD';
+type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT';
+
+type ReplicaMarketConfig = {
+  market: ReplicaMarket;
+  symbol: ReplicaSymbol;
+  asset: 'BTC' | 'ETH';
+  modelVersion: string;
+  priceStepUsd: number;
+  historyDirectoryName: string;
+  historyEnv: string;
+  enabledEnv: string;
+};
+
+const BTC_CONFIG: ReplicaMarketConfig = {
+  market: 'BTC-USD',
+  symbol: 'BTCUSDT',
+  asset: 'BTC',
+  modelVersion: 'binance-spot-liquidation-cohorts-v2.4',
+  priceStepUsd: 100,
+  historyDirectoryName: 'open-liquidity-v2',
+  historyEnv: 'OPEN_LIQUIDITY_V2_HISTORY_DIR',
+  enabledEnv: 'OPEN_LIQUIDITY_V2_ENABLED'
+};
+
+const ETH_CONFIG: ReplicaMarketConfig = {
+  market: 'ETH-USD',
+  symbol: 'ETHUSDT',
+  asset: 'ETH',
+  modelVersion: 'binance-spot-eth-liquidation-cohorts-v2.1',
+  priceStepUsd: 5,
+  historyDirectoryName: 'open-liquidity-v2-eth',
+  historyEnv: 'OPEN_LIQUIDITY_V2_ETH_HISTORY_DIR',
+  enabledEnv: 'OPEN_LIQUIDITY_V2_ETH_ENABLED'
+};
 
 type Side = 'L' | 'S';
 type Leverage = 3 | 5 | 10;
@@ -135,19 +167,22 @@ export function ohlc4(candle: Pick<SpotCandle, 'open' | 'high' | 'low' | 'close'
   return (candle.open + candle.high + candle.low + candle.close) / 4;
 }
 
-export function cohortLevelsForOhlc4(referencePrice: number): CohortLevel[] {
+export function cohortLevelsForOhlc4(
+  referencePrice: number,
+  priceStepUsd = BTC_CONFIG.priceStepUsd
+): CohortLevel[] {
   return MULTIPLIERS.map(({ side, leverage, multiplier }) => {
     const rawPrice = referencePrice * multiplier;
     return {
       side,
       leverage,
       rawPrice,
-      price: Math.round(rawPrice / PRICE_STEP_USD) * PRICE_STEP_USD
+      price: Math.round(rawPrice / priceStepUsd) * priceStepUsd
     };
   });
 }
 
-function zoneFromBin(bin: ActiveBin): ReplicaLiquidityZone {
+function zoneFromBin(bin: ActiveBin, priceStepUsd: number): ReplicaLiquidityZone {
   const relativeCount = bin.cohorts.length;
   return {
     side: bin.side,
@@ -159,7 +194,7 @@ function zoneFromBin(bin: ActiveBin): ReplicaLiquidityZone {
     weightedUsd: relativeCount,
     notionalUsd: 0,
     confidence: 1,
-    uncertaintyUsd: PRICE_STEP_USD / 2,
+    uncertaintyUsd: priceStepUsd / 2,
     sourceCount: 1,
     sources: ['binance-spot']
   };
@@ -232,17 +267,17 @@ function selectDisplayZones(
     .slice(0, DISPLAY_ZONE_LIMIT);
 }
 
-function sweepBins(bins: Map<string, ActiveBin>, candle: SpotCandle): void {
+function sweepBins(bins: Map<string, ActiveBin>, candle: SpotCandle, priceStepUsd: number): void {
   for (const [key, bin] of bins) {
     if (bin.side === 'L') {
-      if (candle.low <= bin.price - PRICE_STEP_USD / 2) {
+      if (candle.low <= bin.price - priceStepUsd / 2) {
         bins.delete(key);
-      } else if (candle.low <= bin.price + PRICE_STEP_USD / 2) {
+      } else if (candle.low <= bin.price + priceStepUsd / 2) {
         bin.cohorts = bin.cohorts.filter((cohort) => candle.low > cohort.rawPrice);
       }
-    } else if (candle.high >= bin.price + PRICE_STEP_USD / 2) {
+    } else if (candle.high >= bin.price + priceStepUsd / 2) {
       bins.delete(key);
-    } else if (candle.high >= bin.price - PRICE_STEP_USD / 2) {
+    } else if (candle.high >= bin.price - priceStepUsd / 2) {
       bin.cohorts = bin.cohorts.filter((cohort) => candle.high < cohort.rawPrice);
     }
     if (!bin.cohorts.length) bins.delete(key);
@@ -267,10 +302,11 @@ function addCandleCohorts(
   bins: Map<string, ActiveBin>,
   birthKeysByIndex: string[][],
   candle: SpotCandle,
-  frameIndex: number
+  frameIndex: number,
+  priceStepUsd: number
 ): void {
   const keys: string[] = [];
-  for (const level of cohortLevelsForOhlc4(ohlc4(candle))) {
+  for (const level of cohortLevelsForOhlc4(ohlc4(candle), priceStepUsd)) {
     const key = binKey(level.side, level.leverage, level.price);
     const bin = bins.get(key) || {
       side: level.side,
@@ -291,6 +327,8 @@ export function buildReplicaSnapshots(
     observedAt?: string;
     cohortWindowHours?: number;
     frameLimit?: number;
+    priceStepUsd?: number;
+    modelVersion?: string;
   } = {}
 ): ReplicaSnapshot[] {
   const ordered = candles
@@ -305,6 +343,8 @@ export function buildReplicaSnapshots(
     COHORT_WINDOW_HOURS
   );
   const frameLimit = boundedInteger(options.frameLimit, FRAME_LIMIT, 1, HISTORY_LIMIT);
+  const priceStepUsd = Math.max(0.01, finite(options.priceStepUsd) || BTC_CONFIG.priceStepUsd);
+  const modelVersion = options.modelVersion || BTC_CONFIG.modelVersion;
   const snapshotStart = Math.max(0, ordered.length - frameLimit);
   const bins = new Map<string, ActiveBin>();
   const birthKeysByIndex: string[][] = [];
@@ -315,12 +355,12 @@ export function buildReplicaSnapshots(
     const candle = ordered[frameIndex];
     // Existing cohorts can be liquidated by this candle. Cohorts born on this
     // candle are added afterwards, so they can only be swept by a later hour.
-    sweepBins(bins, candle);
+    sweepBins(bins, candle, priceStepUsd);
     expireBirths(bins, birthKeysByIndex, frameIndex - cohortWindowHours);
-    addCandleCohorts(bins, birthKeysByIndex, candle, frameIndex);
+    addCandleCohorts(bins, birthKeysByIndex, candle, frameIndex, priceStepUsd);
     if (frameIndex < snapshotStart) continue;
 
-    const allZones = [...bins.values()].map(zoneFromBin);
+    const allZones = [...bins.values()].map((bin) => zoneFromBin(bin, priceStepUsd));
     const referencePrice = ohlc4(candle);
     const gap = detectReplicaGap(allZones, referencePrice);
     const zones = selectDisplayZones(allZones, referencePrice, gap);
@@ -351,7 +391,7 @@ export function buildReplicaSnapshots(
     previousZoneCounts = currentZoneCounts;
     snapshots.push({
       version: 2,
-      modelVersion: MODEL_VERSION,
+      modelVersion,
       effectiveAt: new Date(candle.timestampMs).toISOString(),
       observedAt,
       referencePrice: rounded(referencePrice, 4),
@@ -371,7 +411,8 @@ export function buildReplicaSnapshots(
 
 export async function fetchBinanceSpotCandles(
   sourceHours = COHORT_WINDOW_HOURS + FRAME_LIMIT + 24,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  symbol: ReplicaSymbol = BTC_CONFIG.symbol
 ): Promise<SpotCandle[]> {
   const startTime = Math.floor((nowMs - sourceHours * HOUR_MS) / HOUR_MS) * HOUR_MS;
   const candles: SpotCandle[] = [];
@@ -380,7 +421,7 @@ export async function fetchBinanceSpotCandles(
     const response = await axios.get(BINANCE_SPOT_URL, {
       timeout: 30_000,
       params: {
-        symbol: SYMBOL,
+        symbol,
         interval: '1h',
         startTime: cursor,
         endTime: nowMs,
@@ -414,6 +455,7 @@ export async function fetchBinanceSpotCandles(
 
 export class OpenLiquidityV2ReplicaCollector {
   private interval: NodeJS.Timeout | undefined;
+  private initialTimer: NodeJS.Timeout | undefined;
   private refreshPromise: Promise<void> | undefined;
   private snapshots: ReplicaSnapshot[] = [];
   private loaded = false;
@@ -423,8 +465,10 @@ export class OpenLiquidityV2ReplicaCollector {
   private sourceRows = 0;
   private payloadCache: { at: number; payload: any } | undefined;
 
+  constructor(private readonly config: ReplicaMarketConfig = BTC_CONFIG) {}
+
   private enabled(): boolean {
-    return enabled('OPEN_LIQUIDITY_V2_ENABLED', true);
+    return enabled(this.config.enabledEnv, true);
   }
 
   private pollMinutes(): number {
@@ -432,29 +476,37 @@ export class OpenLiquidityV2ReplicaCollector {
   }
 
   historyDirectory(): string {
-    const explicit = String(process.env.OPEN_LIQUIDITY_V2_HISTORY_DIR || '').trim();
+    const explicit = String(process.env[this.config.historyEnv] || '').trim();
     if (explicit) return explicit;
     const domDirectory = String(process.env.DECENTRALIZED_DOM_HISTORY_DIR || '').trim();
-    if (domDirectory) return path.join(path.dirname(domDirectory), 'open-liquidity-v2');
+    if (domDirectory) return path.join(path.dirname(domDirectory), this.config.historyDirectoryName);
     const renderDisk = path.join(path.parse(process.cwd()).root, 'app', 'data');
     const base = fs.existsSync(renderDisk) ? renderDisk : path.join(process.cwd(), 'data');
-    return path.join(base, 'open-liquidity-v2');
+    return path.join(base, this.config.historyDirectoryName);
   }
 
   private historyFile(): string {
-    return path.join(this.historyDirectory(), `${MODEL_VERSION}.json`);
+    return path.join(this.historyDirectory(), `${this.config.modelVersion}.json`);
   }
 
-  start(): void {
-    if (!this.enabled() || this.interval) return;
+  start(initialDelayMs = 0): void {
+    if (!this.enabled() || this.interval || this.initialTimer) return;
     this.loadHistory();
-    this.refresh().catch((error) => console.error('Initial Public Perp V2 replica refresh failed:', error));
-    this.interval = setInterval(() => {
-      this.refresh().catch((error) => console.error('Public Perp V2 replica refresh failed:', error));
-    }, this.pollMinutes() * 60_000);
+    const begin = () => {
+      this.initialTimer = undefined;
+      this.refresh().catch((error) => console.error(`Initial ${this.config.asset} Public Perp V2 replica refresh failed:`, error));
+      this.interval = setInterval(() => {
+        this.refresh().catch((error) => console.error(`${this.config.asset} Public Perp V2 replica refresh failed:`, error));
+      }, this.pollMinutes() * 60_000);
+    };
+    if (initialDelayMs > 0) {
+      this.initialTimer = setTimeout(begin, initialDelayMs);
+    } else {
+      begin();
+    }
     console.log('Public Perp V2 replica collector started:', {
-      market: MARKET,
-      modelVersion: MODEL_VERSION,
+      market: this.config.market,
+      modelVersion: this.config.modelVersion,
       pollMinutes: this.pollMinutes(),
       historyDirectory: this.historyDirectory(),
       readOnly: true
@@ -463,7 +515,9 @@ export class OpenLiquidityV2ReplicaCollector {
 
   stop(): void {
     if (this.interval) clearInterval(this.interval);
+    if (this.initialTimer) clearTimeout(this.initialTimer);
     this.interval = undefined;
+    this.initialTimer = undefined;
   }
 
   private loadHistory(): void {
@@ -475,7 +529,7 @@ export class OpenLiquidityV2ReplicaCollector {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (Array.isArray(parsed)) {
         this.snapshots = parsed
-          .filter((snapshot) => snapshot?.modelVersion === MODEL_VERSION && snapshot?.effectiveAt)
+          .filter((snapshot) => snapshot?.modelVersion === this.config.modelVersion && snapshot?.effectiveAt)
           .sort((a, b) => Date.parse(a.effectiveAt) - Date.parse(b.effectiveAt));
       }
     } catch (error) {
@@ -505,12 +559,20 @@ export class OpenLiquidityV2ReplicaCollector {
   private async refreshInternal(): Promise<void> {
     this.loadHistory();
     try {
-      const candles = await fetchBinanceSpotCandles();
+      const candles = await fetchBinanceSpotCandles(
+        COHORT_WINDOW_HOURS + FRAME_LIMIT + 24,
+        Date.now(),
+        this.config.symbol
+      );
       if (candles.length < COHORT_WINDOW_HOURS) {
         throw new Error(`Only ${candles.length} Binance Spot hours received; ${COHORT_WINDOW_HOURS} required.`);
       }
       this.sourceRows = candles.length;
-      const rebuilt = buildReplicaSnapshots(candles, { frameLimit: FRAME_LIMIT });
+      const rebuilt = buildReplicaSnapshots(candles, {
+        frameLimit: FRAME_LIMIT,
+        priceStepUsd: this.config.priceStepUsd,
+        modelVersion: this.config.modelVersion
+      });
       const byEffectiveAt = new Map(this.snapshots.map((snapshot) => [snapshot.effectiveAt, snapshot]));
       for (const snapshot of rebuilt) byEffectiveAt.set(snapshot.effectiveAt, snapshot);
       this.snapshots = [...byEffectiveAt.values()]
@@ -524,7 +586,7 @@ export class OpenLiquidityV2ReplicaCollector {
         snapshots: this.snapshots.length,
         from: this.snapshots[0]?.effectiveAt,
         to: this.snapshots[this.snapshots.length - 1]?.effectiveAt,
-        source: 'Binance Spot BTCUSDT 1H',
+        source: `Binance Spot ${this.config.symbol} 1H`,
         sourceRows: candles.length,
         cohortWindowHours: COHORT_WINDOW_HOURS
       });
@@ -539,10 +601,10 @@ export class OpenLiquidityV2ReplicaCollector {
     this.loadHistory();
     return {
       enabled: this.enabled(),
-      running: Boolean(this.interval),
+      running: Boolean(this.interval || this.initialTimer),
       readOnly: true,
-      market: MARKET,
-      modelVersion: MODEL_VERSION,
+      market: this.config.market,
+      modelVersion: this.config.modelVersion,
       pollMinutes: this.pollMinutes(),
       historyDirectory: this.historyDirectory(),
       observations: this.snapshots.length,
@@ -556,7 +618,7 @@ export class OpenLiquidityV2ReplicaCollector {
         completedDays: Math.floor(this.sourceRows / 24)
       },
       sources: [{
-        name: 'Binance Spot BTCUSDT 1H',
+        name: `Binance Spot ${this.config.symbol} 1H`,
         ok: this.sourceRows >= COHORT_WINDOW_HOURS,
         requiresApiKey: false,
         rows: this.sourceRows,
@@ -608,7 +670,7 @@ export class OpenLiquidityV2ReplicaCollector {
     const eventCount = zoneSeed.length + zoneDeltas.reduce((sum, deltas) => sum + deltas.length, 0);
     const payload = {
       version: 2,
-      modelVersion: MODEL_VERSION,
+      modelVersion: this.config.modelVersion,
       snapshotZones: true,
       compactZoneTimeline: true,
       zoneSeed,
@@ -616,16 +678,16 @@ export class OpenLiquidityV2ReplicaCollector {
       weightUnit: 'relative active cohort count',
       eventCount,
       source: {
-        name: 'Public Perp V2 Binance Spot replica',
-        market: MARKET,
-        url: '/open-liquidity/v2/status',
-        api: 'Binance Spot BTCUSDT public 1H klines; no API key',
+        name: `${this.config.asset}/USD Public Perp V2 Binance Spot replica`,
+        market: this.config.market,
+        url: `/open-liquidity/v2/status?market=${this.config.market}`,
+        api: `Binance Spot ${this.config.symbol} public 1H klines; no API key`,
         method:
-          'Each closed 1H Binance Spot candle creates six 3x, 5x and 10x long/short cohorts from OHLC4. Exact reconstructed multipliers are applied, prices are rounded to $100, later highs/lows remove crossed cohorts, and only the latest 8,760 birth hours remain active.',
+          `Each closed 1H Binance Spot candle creates six 3x, 5x and 10x long/short cohorts from OHLC4. Exact reconstructed multipliers are applied, prices are rounded to $${this.config.priceStepUsd}, later highs/lows remove crossed cohorts, and only the latest 8,760 birth hours remain active.`,
         params: [
-          `model=${MODEL_VERSION}`,
+          `model=${this.config.modelVersion}`,
           `cohortWindowHours=${COHORT_WINDOW_HOURS}`,
-          `priceStepUsd=${PRICE_STEP_USD}`,
+          `priceStepUsd=${this.config.priceStepUsd}`,
           `frames=${frames.length}`,
           `zones=${eventCount}`,
           'multipliers=L3 .75,S3 1.5,L5 .833,S5 1.244,L10 .913294,S10 1.104823'
@@ -644,7 +706,7 @@ export class OpenLiquidityV2ReplicaCollector {
         sourceAgreement: 1,
         requiredSourceAgreement: 1,
         gapMethod: 'nearest-active-cohort-edges',
-        priceStepUsd: PRICE_STEP_USD,
+        priceStepUsd: this.config.priceStepUsd,
         cohortWindowHours: COHORT_WINDOW_HOURS
       },
       status: this.getStatus(),
@@ -666,4 +728,5 @@ export class OpenLiquidityV2ReplicaCollector {
   }
 }
 
-export const openLiquidityV2ReplicaCollector = new OpenLiquidityV2ReplicaCollector();
+export const openLiquidityV2BtcCollector = new OpenLiquidityV2ReplicaCollector(BTC_CONFIG);
+export const openLiquidityV2EthCollector = new OpenLiquidityV2ReplicaCollector(ETH_CONFIG);

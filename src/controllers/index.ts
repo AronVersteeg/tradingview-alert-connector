@@ -7,8 +7,10 @@ import { validateAlert } from '../services';
 import { DexRegistry } from '../services/dexRegistry';
 import { decentralizedDomCollector } from '../services/decentralizedDomCollector';
 import { decentraderGapMonitor } from '../services/decentraderGapMonitor';
-import { getOpenLiquidityTimelapsePayload } from '../services/openLiquidityTimelapse';
-import { openLiquidityV2ReplicaCollector as openLiquidityV2Collector } from '../services/openLiquidityV2Replica';
+import {
+  openLiquidityV2BtcCollector,
+  openLiquidityV2EthCollector
+} from '../services/openLiquidityV2Replica';
 import { buildSnoekScout } from '../services/snoekScout';
 import { getSnoekCurrent } from '../services/snoekCurrent';
 import { getSnoekStructures } from '../services/snoekStructures';
@@ -124,7 +126,8 @@ initializeExchanges()
   .then(() => {
     decentraderGapMonitor.start();
     decentralizedDomCollector.start();
-    openLiquidityV2Collector.start();
+    openLiquidityV2BtcCollector.start();
+    openLiquidityV2EthCollector.start(30_000);
   })
   .catch((err) => {
     console.error("Exchange initialization failed:", err);
@@ -360,38 +363,36 @@ router.get('/research/dom-collector/history', async (req, res) => {
   }
 });
 
-router.get('/open-liquidity/liquidity-timelapse', async (req, res) => {
-  try {
-    const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(await getOpenLiquidityTimelapsePayload(market));
-  } catch (error) {
-    console.error('Open liquidity timelapse payload request failed:', error);
-    res.status(500).send({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-});
+function openLiquidityV2CollectorForMarket(market: string) {
+  if (market === 'BTC-USD') return openLiquidityV2BtcCollector;
+  if (market === 'ETH-USD') return openLiquidityV2EthCollector;
+  return undefined;
+}
 
-router.get('/open-liquidity/v2/status', async (_req, res) => {
+router.get('/open-liquidity/v2/status', async (req, res) => {
+  const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
+  const collector = openLiquidityV2CollectorForMarket(market);
+  if (!collector) {
+    return res.status(400).send({ ok: false, error: 'Open Liquidity V2 supports BTC-USD and ETH-USD.' });
+  }
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.send(openLiquidityV2Collector.getStatus());
+  res.send(collector.getStatus());
 });
 
 router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
   try {
     const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
-    if (market !== 'BTC-USD') {
+    const collector = openLiquidityV2CollectorForMarket(market);
+    if (!collector) {
       return res.status(400).send({
         ok: false,
-        error: 'Open Liquidity V2 currently supports BTC-USD only.'
+        error: 'Open Liquidity V2 supports BTC-USD and ETH-USD.'
       });
     }
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(await openLiquidityV2Collector.getPayload());
+    res.send(await collector.getPayload());
   } catch (error) {
     console.error('Open Liquidity V2 payload request failed:', error);
     res.status(500).send({

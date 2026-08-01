@@ -1293,21 +1293,6 @@
       </div>
     </section>
 
-    <section class="comparison" id="openStudySection">
-      <div class="comparison-header">
-        <h2 class="comparison-title">Public perp BTC/USD study</h2>
-        <div class="comparison-note">
-          Zelfde kaartlogica, brede publieke perp-data. Deze studie gebruikt geen Decentrader en is niet gekoppeld aan orderplaatsing.
-        </div>
-      </div>
-      <iframe
-        class="comparison-frame"
-        id="openStudyFrame"
-        title="Public perp BTC/USD liquidity study"
-        src="/decentrader/map?source=open&embedded=1"
-      ></iframe>
-    </section>
-
     <section class="comparison" id="openV2StudySection">
       <div class="comparison-header">
         <h2 class="comparison-title">Public perp BTC/USD V2</h2>
@@ -1323,6 +1308,21 @@
       ></iframe>
     </section>
 
+    <section class="comparison" id="openV2EthStudySection">
+      <div class="comparison-header">
+        <h2 class="comparison-title">Public perp ETH/USD V2</h2>
+        <div class="comparison-note">
+          Dezelfde causale Binance Spot-cohorten, gap-analyse en volledige replay voor ETH. Observe-only; niet gekoppeld aan alerts of orders.
+        </div>
+      </div>
+      <iframe
+        class="comparison-frame"
+        id="openV2EthStudyFrame"
+        title="Public perp ETH/USD liquidity study V2"
+        src="/decentrader/map?source=open-v2-eth&embedded=1"
+      ></iframe>
+    </section>
+
     <footer id="note"></footer>
   </main>
 
@@ -1330,20 +1330,19 @@
   <script>
     const queryParams = new URLSearchParams(window.location.search);
     const requestedSource = queryParams.get('source');
-    const activeSource = requestedSource === 'open-v2'
-      ? 'open-v2'
-      : requestedSource === 'open'
-        ? 'open'
+    const activeSource = requestedSource === 'open-v2-eth'
+      ? 'open-v2-eth'
+      : requestedSource === 'open-v2'
+        ? 'open-v2'
         : 'decentrader';
     const isOpenStudy = activeSource !== 'decentrader';
-    const isOpenV2 = activeSource === 'open-v2';
+    const isOpenV2 = activeSource === 'open-v2' || activeSource === 'open-v2-eth';
+    const openV2Asset = activeSource === 'open-v2-eth' ? 'ETH' : 'BTC';
+    const openV2Market = `${openV2Asset}-USD`;
     const isEmbedded = queryParams.get('embedded') === '1';
     const CLOUD_DECENTRADER_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/liquidity-timelapse'
       : '/decentrader/liquidity-timelapse';
-    const CLOUD_OPEN_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
-      ? 'https://arons-tradingview-alert-connector.onrender.com/open-liquidity/liquidity-timelapse'
-      : '/open-liquidity/liquidity-timelapse';
     const CLOUD_OPEN_V2_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/open-liquidity/v2/liquidity-timelapse'
       : '/open-liquidity/v2/liquidity-timelapse';
@@ -1377,10 +1376,10 @@
     const jumpTimeInput = document.getElementById('jumpTime');
     const jumpTimeButton = document.getElementById('jumpTimeButton');
     const pageTitle = document.getElementById('pageTitle');
-    const openStudySection = document.getElementById('openStudySection');
-    const openStudyFrame = document.getElementById('openStudyFrame');
     const openV2StudySection = document.getElementById('openV2StudySection');
     const openV2StudyFrame = document.getElementById('openV2StudyFrame');
+    const openV2EthStudySection = document.getElementById('openV2EthStudySection');
+    const openV2EthStudyFrame = document.getElementById('openV2EthStudyFrame');
     const meta = document.getElementById('meta');
     const note = document.getElementById('note');
     const gapWidth = document.getElementById('gapWidth');
@@ -1479,24 +1478,22 @@
 
     if (isEmbedded) {
       document.body.classList.add('is-embedded');
-      openStudySection?.remove();
       openV2StudySection?.remove();
+      openV2EthStudySection?.remove();
     }
 
     if (isOpenStudy) {
-      pageTitle.textContent = isOpenV2
-        ? 'BTC/USD Public Perp Liquidity V2'
-        : 'BTC/USD Public Perp Liquidity Study';
+      pageTitle.textContent = `${openV2Asset}/USD Public Perp Liquidity V2`;
       if (domObserverPanel) domObserverPanel.hidden = true;
     } else {
       pageTitle.textContent = 'BTC/USD Decentrader Liquidity Timelapse';
     }
 
-    if (openStudyFrame && ['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
-      openStudyFrame.src = 'https://arons-tradingview-alert-connector.onrender.com/decentrader/map?source=open&embedded=1';
-    }
     if (openV2StudyFrame && ['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
       openV2StudyFrame.src = 'https://arons-tradingview-alert-connector.onrender.com/decentrader/map?source=open-v2&embedded=1';
+    }
+    if (openV2EthStudyFrame && ['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
+      openV2EthStudyFrame.src = 'https://arons-tradingview-alert-connector.onrender.com/decentrader/map?source=open-v2-eth&embedded=1';
     }
 
     function money(value) {
@@ -1914,7 +1911,7 @@
             weightedUsd: zone.count,
             positionCount: zone.count,
             confidence: 1,
-            uncertaintyUsd: 50,
+            uncertaintyUsd: Number(payload.quality?.priceStepUsd || 100) / 2,
           };
           bars.push(bar);
           if (bar.first) firstSeen.push(bar);
@@ -2033,31 +2030,12 @@
       return result;
     }
 
-    function publicMajorThreshold(bars) {
-      if (activeSource !== 'open' || !bars?.length) return 0;
-      const maxCount = Math.max(1, ...bars.map((bar) => bar.count || 0));
-      return Math.max(10, Math.ceil(maxCount * 0.035));
-    }
-
-    function getGapBarsForSource(bars, frame) {
-      if (activeSource !== 'open' || !frame || !Number.isFinite(frame.price)) return bars;
-      return bars;
-    }
-
     function isPriceInsideGap(price, gap) {
       return Boolean(
         gap &&
         Number.isFinite(Number(price)) &&
         Number(price) > gap.left &&
         Number(price) < gap.right
-      );
-    }
-
-    function isContextInsideGap(bar, gap) {
-      return Boolean(
-        activeSource === 'open' &&
-        bar.contextOnly &&
-        isPriceInsideGap(bar.price, gap)
       );
     }
 
@@ -2069,20 +2047,9 @@
 
       const previousFrame = payload.frames[frameIndex - 1];
       const currentFrame = payload.frames[frameIndex];
-      const includeContextForGap = activeSource === 'open';
-      const previousGapBars = getGapBarsForSource(
-        getFrameEvents(frameIndex - 1, { mode: 'active', includeContext: includeContextForGap }).bars,
-        previousFrame
-      );
-      const includeContextForSignal = activeSource === 'open';
-      const previousSignalBars = getGapBarsForSource(
-        getFrameEvents(frameIndex - 1, { mode: 'active', includeContext: includeContextForSignal }).bars,
-        previousFrame
-      );
-      const currentSignalBars = getGapBarsForSource(
-        getFrameEvents(frameIndex, { mode: 'active', includeContext: includeContextForSignal }).bars,
-        currentFrame
-      );
+      const previousGapBars = getFrameEvents(frameIndex - 1, { mode: 'active' }).bars;
+      const previousSignalBars = getFrameEvents(frameIndex - 1, { mode: 'active' }).bars;
+      const currentSignalBars = getFrameEvents(frameIndex, { mode: 'active' }).bars;
       const previousGap = getVisualGapForBars(previousFrame, previousGapBars, xFor, xToPrice);
       if (!previousGap || !currentFrame || !Number.isFinite(currentFrame.price)) {
         activeDrawCache?.gapIntrusions?.set(frameIndex, null);
@@ -2397,11 +2364,7 @@
     function masterGapForFrame(frameIndex, xFor, xToPrice) {
       const frame = payload.frames[frameIndex];
       if (!frame) return null;
-      const includeContext = activeSource === 'open';
-      const bars = getGapBarsForSource(
-        getFrameEvents(frameIndex, { mode: 'active', includeContext }).bars,
-        frame
-      );
+      const bars = getFrameEvents(frameIndex, { mode: 'active' }).bars;
       return getVisualGapForBars(frame, bars, xFor, xToPrice);
     }
 
@@ -3243,15 +3206,8 @@
     }
 
     function liquidityAdditionsForFrame(index, split) {
-      const includeContext = activeSource === 'open';
-      const previousBars = getGapBarsForSource(
-        getFrameEvents(index - 1, { mode: 'active', includeContext }).bars,
-        payload.frames[index - 1]
-      );
-      const currentBars = getGapBarsForSource(
-        getFrameEvents(index, { mode: 'active', includeContext }).bars,
-        payload.frames[index]
-      );
+      const previousBars = getFrameEvents(index - 1, { mode: 'active' }).bars;
+      const currentBars = getFrameEvents(index, { mode: 'active' }).bars;
       const previousCounts = new Map(previousBars.map((bar) => [bar.key, bar.count || 0]));
       const additions = {
         longUnits: 0,
@@ -3295,7 +3251,6 @@
       };
       if (!payload || !frame || !split || frameIndex <= 0) return empty;
 
-      const includeContext = activeSource === 'open';
       const startIndex = Math.max(1, frameIndex - hours + 1);
       const stats = {
         ...empty,
@@ -3999,7 +3954,7 @@
       if (!previousFrame || !currentFrame) return [];
       if (!Number.isFinite(previousFrame.price) || !Number.isFinite(currentFrame.price)) return [];
 
-      const previous = getFrameEvents(frameIndex - 1, { mode: 'active', includeContext: activeSource === 'open' });
+      const previous = getFrameEvents(frameIndex - 1, { mode: 'active' });
       const previousGap = getVisualGapForBars(previousFrame, previous.bars, xFor, xToPrice);
       const previousZones = getTradeZones(previousFrame, previous.bars, previous.firstSeen, previousGap, minPrice, maxPrice);
       const hits = [];
@@ -4525,13 +4480,11 @@
       gapPrice.textContent = money(frame.price);
       gapRight.textContent = money(gap.right);
       const replicaGap = isOpenV2 && payload?.quality?.decentraderFormulaParity;
-      const gapPrefix = activeSource === 'open'
-        ? 'Raw public gap | '
-        : isOpenV2
-          ? replicaGap
-            ? 'Binance Spot replica | '
-            : `${gap.status === 'confirmed' ? 'Confirmed' : 'Candidate'} | confidence ${Math.round(Number(gap.confidence || 0) * 100)}% | `
-          : '';
+      const gapPrefix = isOpenV2
+        ? replicaGap
+          ? 'Binance Spot replica | '
+          : `${gap.status === 'confirmed' ? 'Confirmed' : 'Candidate'} | confidence ${Math.round(Number(gap.confidence || 0) * 100)}% | `
+        : '';
       const qualityText = isOpenV2
           ? replicaGap
             ? ` | relative cohorts ${Number(gap.leftEdge?.relativeCount || gap.leftEdge?.positionCount || 0)}/${Number(gap.rightEdge?.relativeCount || gap.rightEdge?.positionCount || 0)}`
@@ -4705,14 +4658,10 @@
       const visiblePrice = ensurePriceView();
       const minPrice = visiblePrice.min;
       const maxPrice = visiblePrice.max;
-      const includeContext = activeSource === 'open';
-      const { bars, firstSeen } = getFrameEvents(frameIndex, { includeContext });
+      const { bars, firstSeen } = getFrameEvents(frameIndex);
       const rawMonitorBars = getFrameEvents(frameIndex, { mode: 'active' }).bars;
-      const gapSourceBars = activeSource === 'open'
-        ? getFrameEvents(frameIndex, { mode: 'active', includeContext: true }).bars
-        : rawMonitorBars;
-      const monitorBars = getGapBarsForSource(gapSourceBars, frame);
-      const publicNoiseThreshold = publicMajorThreshold(gapSourceBars);
+      const gapSourceBars = rawMonitorBars;
+      const monitorBars = gapSourceBars;
       const visibleBars = bars.filter((bar) => bar.price >= minPrice && bar.price <= maxPrice);
       const css = getComputedStyle(document.documentElement);
       const newColor = css.getPropertyValue('--new').trim();
@@ -4781,7 +4730,7 @@
       const tradeRange = getTradeRange();
       const tradeZones = getTradeZones(frame, monitorBars, firstSeen, gap, tradeRange.min, tradeRange.max);
       const tpHits = getTpHits(frameIndex, xFor, xToPrice, tradeRange.min, tradeRange.max);
-      const drawableVisibleBars = visibleBars.filter((bar) => !isContextInsideGap(bar, gap));
+      const drawableVisibleBars = visibleBars;
       const maxCount = Math.max(1, ...drawableVisibleBars.map((bar) => bar.count));
       const intrusionColorByKey = new Map();
       if (intrusion?.entrants?.length && fertilityContext?.fertileCount > 0) {
@@ -4810,18 +4759,15 @@
         const barHeight = Math.max(2, (bar.count / maxCount) * area.height);
         const barWidth = Math.max(2, BAR_WIDTH);
         const crispX = Math.round(x - barWidth / 2);
-        const isPublicMinor = activeSource === 'open' && publicNoiseThreshold && bar.count < publicNoiseThreshold;
-        const isPublicContext = activeSource === 'open' && bar.contextOnly;
         const rsiIntrusionColor = intrusionColorByKey.get(bar.key);
         ctx.fillStyle = rsiIntrusionColor || colorForZone(bar.side, bar.leverage);
-        ctx.globalAlpha = rsiIntrusionColor ? 0.95 : isPublicContext ? 0.36 : isPublicMinor ? 0.2 : modeInput.value === 'new' ? 0.86 : 0.62;
+        ctx.globalAlpha = rsiIntrusionColor ? 0.95 : modeInput.value === 'new' ? 0.86 : 0.62;
         ctx.fillRect(crispX, Math.round(area.bottom - barHeight), barWidth, Math.round(barHeight));
       }
 
       ctx.globalAlpha = 1;
       for (const item of firstSeen) {
         if (item.price < minPrice || item.price > maxPrice) continue;
-        if (isContextInsideGap(item, gap)) continue;
         const x = xFor(item.price) + leverageOffset(item.leverage);
         ctx.strokeStyle = newColor;
         ctx.lineWidth = 4;
@@ -4906,7 +4852,7 @@
 
       ctx.fillStyle = '#ecf2f8';
       ctx.font = '600 15px Inter, system-ui, sans-serif';
-      const sourceName = payload.source?.name || (isOpenV2 ? 'Public perp V2' : activeSource === 'open' ? 'Public perp study' : 'Decentrader');
+      const sourceName = payload.source?.name || (isOpenV2 ? 'Public perp V2' : 'Decentrader');
       ctx.fillText(`${sourceName} | ${nlTime(frame.t)} NL | ${priceLevel(frame.price || 0)} | ${bars.length.toLocaleString('en-US')} zones`, area.left, 22);
 
       const sourceEventCount = Number(payload.eventCount ?? payload.events?.length ?? 0);
@@ -5011,12 +4957,9 @@
     }
 
     async function fetchCloudPayload() {
-      const dataUrl = isOpenV2
-        ? CLOUD_OPEN_V2_DATA_URL
-        : activeSource === 'open'
-          ? CLOUD_OPEN_DATA_URL
-          : CLOUD_DECENTRADER_DATA_URL;
-      const response = await fetch(`${dataUrl}?market=BTC-USD&ts=${Date.now()}`, { cache: 'no-store' });
+      const dataUrl = isOpenV2 ? CLOUD_OPEN_V2_DATA_URL : CLOUD_DECENTRADER_DATA_URL;
+      const market = isOpenV2 ? openV2Market : 'BTC-USD';
+      const response = await fetch(`${dataUrl}?market=${market}&ts=${Date.now()}`, { cache: 'no-store' });
       if (!response.ok) throw new Error(`Cloud data ${response.status}`);
       return { payload: await response.json(), source: 'cloud' };
     }
@@ -5098,7 +5041,7 @@
       frameInput.max = String(payload.frames.length - 1);
       frameInput.value = String(payload.frames.length - 1);
       syncJumpTimeBounds();
-      const sourceName = payload.source?.name || (isOpenV2 ? 'Public perp V2' : activeSource === 'open' ? 'Public perp study' : 'Decentrader');
+      const sourceName = payload.source?.name || (isOpenV2 ? 'Public perp V2' : 'Decentrader');
       const sourceEventCount = Number(payload.eventCount ?? payload.events?.length ?? 0);
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${sourceEventCount.toLocaleString('en-US')} zone events`;
       note.textContent = payload.source.note;

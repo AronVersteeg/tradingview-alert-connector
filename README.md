@@ -131,15 +131,17 @@ DECENTRALIZED_DOM_HISTORY_DIR=/app/data/decentralized-dom
 
 Raw status and replay-window data are available from `GET /research/dom-collector/status` and `GET /research/dom-collector/history?from=<ISO>&to=<ISO>`.
 
-The Public Perp V2 panel is a separate observe-only reconstruction of the Decentrader-style histogram. It uses free Binance Spot `BTCUSDT` 1H OHLC data. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. V2 persists observations and never imports or calls the Decentrader alert or execution path.
+The Public Perp V2 panels are separate observe-only reconstructions of the Decentrader-style histogram for BTC/USD and ETH/USD. They use free Binance Spot `BTCUSDT` and `ETHUSDT` 1H OHLC data. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC and $5 for ETH. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. V2 persists BTC and ETH observations independently and never imports or calls the Decentrader alert or execution path.
 
 ```text
 OPEN_LIQUIDITY_V2_ENABLED=true
+OPEN_LIQUIDITY_V2_ETH_ENABLED=true
 OPEN_LIQUIDITY_V2_POLL_MINUTES=60
 OPEN_LIQUIDITY_V2_HISTORY_DIR=/app/data/open-liquidity-v2
+OPEN_LIQUIDITY_V2_ETH_HISTORY_DIR=/app/data/open-liquidity-v2-eth
 ```
 
-The BTC replica intentionally fixes its price step at $100; the old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status are available from `GET /open-liquidity/v2/liquidity-timelapse` and `GET /open-liquidity/v2/status`. The collector can infer its persistent directory from `DECENTRALIZED_DOM_HISTORY_DIR`, so the explicit V2 path is optional when the existing Render disk is mounted at `/app/data`.
+The BTC replica fixes its price step at $100 and ETH at $5; the old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status are available from `GET /open-liquidity/v2/liquidity-timelapse?market=BTC-USD|ETH-USD` and `GET /open-liquidity/v2/status?market=BTC-USD|ETH-USD`. Both collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.
 
 ```text
 COINGLASS_WHALE_LEVELS_ENABLED=true

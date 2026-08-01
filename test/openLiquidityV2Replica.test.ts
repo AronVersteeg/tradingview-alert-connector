@@ -55,6 +55,18 @@ describe('Public Perp V2 Binance Spot replica', () => {
     expect(levels[5].rawPrice).toBeCloseTo(69_660.904822, 6);
   });
 
+  test('uses ETH-scale $5 bins without changing the cohort multipliers', () => {
+    const levels = cohortLevelsForOhlc4(3_500, 5);
+    expect(levels.map((level) => [level.side, level.leverage, level.price])).toEqual([
+      ['L', 3, 2_625],
+      ['S', 3, 5_250],
+      ['L', 5, 2_915],
+      ['S', 5, 4_355],
+      ['L', 10, 3_195],
+      ['S', 10, 3_865]
+    ]);
+  });
+
   test('does not let a birth candle liquidate its own newly-created cohorts', () => {
     const snapshots = buildReplicaSnapshots([
       candle(1, 60_000, 90_000, 30_000, 60_000)
