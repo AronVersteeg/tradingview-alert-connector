@@ -1724,13 +1724,33 @@
       if (!payload) return { min: 0, max: 1 };
       const min = payload.range.minPrice;
       const max = payload.range.maxPrice;
-      const padding = Math.max(500, (max - min) * 0.01);
+      const paddingFloor = isOpenV2 && openV2Asset === 'INJ'
+        ? Math.max(0.1, liquiditySourcePriceStep() * 10)
+        : 500;
+      const padding = Math.max(paddingFloor, (max - min) * 0.01);
       return { min: min - padding, max: max + padding };
+    }
+
+    function defaultPriceRange() {
+      const full = fullPriceRange();
+      if (!isOpenV2 || openV2Asset !== 'INJ') return full;
+
+      const selectedIndex = Number(frameInput?.value);
+      const frame = payload?.frames?.[Number.isFinite(selectedIndex) ? selectedIndex : payload.frames.length - 1];
+      const price = Number(frame?.price);
+      if (!Number.isFinite(price) || price <= 0) return full;
+
+      const min = Math.max(full.min, price * 0.35);
+      const max = Math.min(full.max, price * 1.8);
+      return max > min ? { min, max } : full;
     }
 
     function minZoomSpan() {
       const full = fullPriceRange();
-      return Math.max(500, (full.max - full.min) * 0.006);
+      const minimum = isOpenV2 && openV2Asset === 'INJ'
+        ? Math.max(0.25, liquiditySourcePriceStep() * 25)
+        : 500;
+      return Math.max(minimum, (full.max - full.min) * 0.006);
     }
 
     function clampPriceView(min, max) {
@@ -1751,13 +1771,13 @@
     }
 
     function ensurePriceView() {
-      if (!priceView) priceView = fullPriceRange();
+      if (!priceView) priceView = defaultPriceRange();
       priceView = clampPriceView(priceView.min, priceView.max);
       return priceView;
     }
 
     function resetPriceView() {
-      priceView = fullPriceRange();
+      priceView = defaultPriceRange();
       draw();
     }
 
