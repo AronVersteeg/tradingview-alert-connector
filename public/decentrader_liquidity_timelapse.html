@@ -1161,7 +1161,7 @@
               <thead>
                 <tr>
                   <th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th><th>DOM</th><th>Response</th><th>Sources</th><th>Ultimate</th>
-                  <th>Candle filter</th><th>Event price</th><th>Confirm price</th><th>Taker flow</th><th>Book pressure</th><th>CG friction</th><th>CG support</th>
+                  <th>Price / delta filter</th><th>Event price</th><th>Confirm price</th><th>Taker flow</th><th>Book pressure</th><th>CG friction</th><th>CG support</th>
                   <th>Alert price</th><th>Gap</th>
                   <th>Pre-1h price</th><th>Pre-1h flow</th><th>Pre-1h book</th>
                   <th>Pre-2h price</th><th>Pre-2h flow</th><th>Pre-2h book</th>
@@ -2899,9 +2899,25 @@
             ]
               .map((value) => Number.isFinite(Number(value)) ? compactUsd(value) : '-')
               .join(' -> ');
-            const candleStatus = study
-              ? `${study.candleReview?.intrusionColor || '-'} / ${study.candleReview?.nextColor || '-'} ${study.candleReview?.status || ''}`
+            const review = study?.candleReview;
+            const priceSequence = Array.isArray(review?.candleColors) && review.candleColors.length
+              ? review.candleColors.join(' / ')
+              : `${review?.intrusionColor || '-'} / ${review?.nextColor || '-'}`;
+            const deltaSequence = Array.isArray(review?.volumeDeltaColors) && review.volumeDeltaColors.length
+              ? review.volumeDeltaColors.join(' / ')
               : '-';
+            const deltaValues = Array.isArray(review?.volumeDeltaQuote) && review.volumeDeltaQuote.length
+              ? review.volumeDeltaQuote.map(domSignedUsd).join(' / ')
+              : '-';
+            const candleTimes = Array.isArray(review?.candleTimestamps) && review.candleTimestamps.length
+              ? review.candleTimestamps.map((timestamp) => delayNlTime(timestamp, true)).join(' / ')
+              : '-';
+            const candleStatus = study
+              ? `P ${priceSequence} | D ${deltaSequence} | ${review?.status || ''}`
+              : '-';
+            const candleAuditTitle = study
+              ? `Source: ${review?.source || '-'} | times: ${candleTimes} | price: ${priceSequence} | taker delta: ${deltaSequence} (${deltaValues})`
+              : '';
             const directionClass = (value) => Number(value) > 0
               ? 'dom-positive'
               : Number(value) < 0
@@ -2921,7 +2937,7 @@
               <td class="${responseClass}">${responseLabel}</td>
               <td>${sourceLabel}</td>
               <td class="${study?.hypothesisEntryValid ? 'dom-positive' : 'dom-negative'}">${study ? (study.hypothesisEntryValid ? 'VALID' : 'NO') : '-'}</td>
-              <td class="${study?.candleReview?.status === 'PASS' ? 'dom-positive' : 'dom-negative'}">${candleStatus}</td>
+              <td class="${study?.candleReview?.status === 'PASS' ? 'dom-positive' : 'dom-negative'}" title="${candleAuditTitle}">${candleStatus}</td>
               <td class="${directionClass(event.directionalPriceReturnPct)}">${metric(event.directionalPriceReturnPct, '%')}</td>
               <td class="${directionClass(confirmation.directionalPriceReturnPct)}">${metric(confirmation.directionalPriceReturnPct, '%')}</td>
               <td class="${directionClass(event.directionalTakerDeltaUsd)}">${domSignedUsd(event.directionalTakerDeltaUsd)}</td>

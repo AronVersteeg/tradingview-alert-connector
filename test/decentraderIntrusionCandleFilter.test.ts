@@ -116,4 +116,101 @@ describe('Decentrader intrusion candle filter', () => {
     expect(review.status).toBe('FAIL');
     expect(review.reason).toContain('at least 2');
   });
+
+  test('passes Binance Futures confirmation when both price candles and taker deltas match', () => {
+    const binanceCandles = [
+      {
+        startedAt: '2026-07-14T22:00:00.000Z',
+        open: '64000',
+        close: '64500',
+        source: 'binance-futures',
+        volumeDeltaQuote: 1_500_000
+      },
+      {
+        startedAt: '2026-07-14T23:00:00.000Z',
+        open: '64500',
+        close: '64900',
+        source: 'binance-futures',
+        volumeDeltaQuote: 750_000
+      }
+    ] as any;
+
+    const review = intrusionCandleReview(
+      rows,
+      leftEdgeAlert(),
+      true,
+      binanceCandles,
+      '2026-07-15T00:30:00.000Z',
+      true
+    );
+
+    expect(review.status).toBe('PASS');
+    expect(review.source).toBe('binance-futures');
+    expect(review.candleColors).toEqual(['green', 'green']);
+    expect(review.volumeDeltaColors).toEqual(['green', 'green']);
+    expect(review.volumeDeltaQuote).toEqual([1_500_000, 750_000]);
+  });
+
+  test('fails closed when a Binance taker delta opposes otherwise matching price candles', () => {
+    const binanceCandles = [
+      {
+        startedAt: '2026-07-14T22:00:00.000Z',
+        open: '64000',
+        close: '64500',
+        source: 'binance-futures',
+        volumeDeltaQuote: 1_500_000
+      },
+      {
+        startedAt: '2026-07-14T23:00:00.000Z',
+        open: '64500',
+        close: '64900',
+        source: 'binance-futures',
+        volumeDeltaQuote: -250_000
+      }
+    ] as any;
+
+    const review = intrusionCandleReview(
+      rows,
+      leftEdgeAlert(),
+      true,
+      binanceCandles,
+      '2026-07-15T00:30:00.000Z',
+      true
+    );
+
+    expect(review.status).toBe('FAIL');
+    expect(review.candleColors).toEqual(['green', 'green']);
+    expect(review.volumeDeltaColors).toEqual(['green', 'red']);
+    expect(review.firstVolumeDeltaMismatchTimestamp).toBe('2026-07-14T23:00:00.000Z');
+  });
+
+  test('keeps Binance review pending when taker delta data is incomplete', () => {
+    const binanceCandles = [
+      {
+        startedAt: '2026-07-14T22:00:00.000Z',
+        open: '64000',
+        close: '64500',
+        source: 'binance-futures',
+        volumeDeltaQuote: 1_500_000
+      },
+      {
+        startedAt: '2026-07-14T23:00:00.000Z',
+        open: '64500',
+        close: '64900',
+        source: 'binance-futures'
+      }
+    ] as any;
+
+    const review = intrusionCandleReview(
+      rows,
+      leftEdgeAlert(),
+      true,
+      binanceCandles,
+      '2026-07-15T00:30:00.000Z',
+      true
+    );
+
+    expect(review.status).toBe('PENDING');
+    expect(review.reason).toContain('taker-volume delta');
+  });
 });

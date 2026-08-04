@@ -196,6 +196,14 @@ export type IntrusionDomStudyRecord = {
     expectedColor: CandleColor;
     intrusionColor: CandleColor;
     nextColor: CandleColor;
+    source?: string;
+    candleColors?: CandleColor[];
+    candleTimestamps?: string[];
+    volumeDeltaEnabled?: boolean;
+    volumeDeltaColors?: CandleColor[];
+    volumeDeltaQuote?: number[];
+    firstMismatchTimestamp?: string;
+    firstVolumeDeltaMismatchTimestamp?: string;
   };
   dom: {
     pre1h?: IntrusionDomWindow;
@@ -617,7 +625,15 @@ function candleReviewFor(
     status,
     expectedColor: expected,
     intrusionColor: intrusion,
-    nextColor: next
+    nextColor: next,
+    source: supplied?.source,
+    candleColors: Array.isArray(supplied?.candleColors) ? supplied.candleColors : undefined,
+    candleTimestamps: Array.isArray(supplied?.candleTimestamps) ? supplied.candleTimestamps : undefined,
+    volumeDeltaEnabled: supplied?.volumeDeltaEnabled === true,
+    volumeDeltaColors: Array.isArray(supplied?.volumeDeltaColors) ? supplied.volumeDeltaColors : undefined,
+    volumeDeltaQuote: Array.isArray(supplied?.volumeDeltaQuote) ? supplied.volumeDeltaQuote : undefined,
+    firstMismatchTimestamp: supplied?.firstMismatchTimestamp,
+    firstVolumeDeltaMismatchTimestamp: supplied?.firstVolumeDeltaMismatchTimestamp
   };
 }
 
@@ -962,7 +978,12 @@ export function refreshIntrusionDomStudy(input: {
     record.alertPrice = finiteNumber(alert.price) || record.alertPrice;
     record.gap = alert.gap || alert.previousGap || record.gap;
     if (alert.entrants) alertEntrants.set(signature, alert.entrants);
-    record.candleReview = candleReviewFor(direction, record.timestamp, frames, alert.intrusionCandleReview);
+    record.candleReview = candleReviewFor(
+      direction,
+      record.timestamp,
+      frames,
+      alert.intrusionCandleReview || existing?.candleReview
+    );
     bySignature.set(signature, record);
     if (!existing) refreshSignatures.add(signature);
   }
@@ -992,11 +1013,20 @@ export function refreshIntrusionDomStudy(input: {
         refreshSignatures.add(signature);
       }
     }
-    record.candleReview = candleReviewFor(direction, record.timestamp, frames, record.filtered ? {
-      status: 'PASS',
-      intrusionColor: expectedColor(direction),
-      nextColor: expectedColor(direction)
-    } : undefined);
+    record.candleReview = candleReviewFor(
+      direction,
+      record.timestamp,
+      frames,
+      record.candleReview.status !== 'UNKNOWN'
+        ? record.candleReview
+        : record.filtered
+          ? {
+              status: 'PASS',
+              intrusionColor: expectedColor(direction),
+              nextColor: expectedColor(direction)
+            }
+          : undefined
+    );
     bySignature.set(signature, record);
     if (!existing) refreshSignatures.add(signature);
   }
@@ -1036,11 +1066,20 @@ export function refreshIntrusionDomStudy(input: {
     const reviewObservation = nearestObservation(observations, reviewAt);
     record.gap = record.gap || eventObservation?.gap || reviewObservation?.gap;
     record.alertPrice = record.alertPrice || frames.find((frame) => frame.t === record.timestamp)?.price || eventObservation?.currentPrice;
-    record.candleReview = candleReviewFor(record.direction, record.timestamp, frames, record.filtered ? {
-      status: 'PASS',
-      intrusionColor: expectedColor(record.direction),
-      nextColor: expectedColor(record.direction)
-    } : undefined);
+    record.candleReview = candleReviewFor(
+      record.direction,
+      record.timestamp,
+      frames,
+      record.candleReview.status !== 'UNKNOWN'
+        ? record.candleReview
+        : record.filtered
+          ? {
+              status: 'PASS',
+              intrusionColor: expectedColor(record.direction),
+              nextColor: expectedColor(record.direction)
+            }
+          : undefined
+    );
     record.mapContext = buildMapContext({
       record,
       frames,

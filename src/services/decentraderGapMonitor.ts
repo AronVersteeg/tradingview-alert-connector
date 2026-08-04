@@ -32,6 +32,7 @@ const COINGLASS_WS_HOST = 'wss.coinglass.com';
 const COINGLASS_WS_PATH = '/v2/ws';
 const COINGLASS_WHALE_URL = 'https://www.coinglass.com/large-orderbook-statistics';
 const DYDX_INDEXER_URL = 'https://indexer.dydx.trade/v4';
+const BINANCE_FUTURES_URL = 'https://fapi.binance.com';
 
 export type DecentraderRow = Record<string, any>;
 
@@ -78,20 +79,24 @@ export type IntrusionCandleReview = {
   intrusionColor: CandleColor;
   nextColor: CandleColor;
   candleColors?: CandleColor[];
+  volumeDeltaEnabled?: boolean;
+  volumeDeltaColors?: CandleColor[];
+  volumeDeltaQuote?: number[];
   candleTimestamps?: string[];
   closedCandlesChecked?: number;
   delayCutoffAt?: string;
   firstMismatchTimestamp?: string;
+  firstVolumeDeltaMismatchTimestamp?: string;
   intrusionTimestamp: string;
   nextTimestamp?: string;
-  source: 'dydx' | 'ohlc' | 'price-delta' | 'unknown';
+  source: 'binance-futures' | 'dydx' | 'ohlc' | 'price-delta' | 'unknown';
   reason: string;
 };
 
 type CandleOpenClose = {
   open: number;
   close: number;
-  source: 'dydx' | 'ohlc' | 'price-delta';
+  source: 'binance-futures' | 'dydx' | 'ohlc' | 'price-delta';
 };
 
 export type TradeZone = {
@@ -226,6 +231,8 @@ export type DydxRsiCandle = {
   resolution: string;
   open?: string;
   close: string;
+  source?: 'binance-futures' | 'dydx';
+  volumeDeltaQuote?: number;
 };
 
 type RsiPoint = {
@@ -427,6 +434,8 @@ type MonitorStatus = {
   coinGlassWhaleError?: string;
   delayHistoryRecords?: number;
   intrusionCandleFilterEnabled?: boolean;
+  intrusionCandleSource?: 'binance-futures' | 'dydx';
+  intrusionVolumeDeltaEnabled?: boolean;
   lastStartedAt?: string;
   lastFinishedAt?: string;
   lastError?: string;
@@ -557,6 +566,16 @@ function floorToStep(value: number, step: number): number {
 function money(value: number | undefined): string {
   if (!Number.isFinite(value)) return '-';
   return '$' + Math.round(value as number).toLocaleString('en-US');
+}
+
+function signedCompactUsd(value: number): string {
+  const absolute = Math.abs(value);
+  const scaled = absolute >= 1_000_000
+    ? `${(absolute / 1_000_000).toFixed(2)}M`
+    : absolute >= 1_000
+      ? `${(absolute / 1_000).toFixed(1)}K`
+      : absolute.toFixed(0);
+  return `${value > 0 ? '+' : value < 0 ? '-' : ''}$${scaled}`;
 }
 
 const coinGlassWhaleCache: {
@@ -1830,6 +1849,17 @@ function decentraderIntrusionCandleFilterEnabled(): boolean {
   return parseBool(process.env.DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED, false);
 }
 
+function decentraderIntrusionCandleSource(): 'binance-futures' | 'dydx' {
+  const configured = String(process.env.DECENTRADER_INTRUSION_CANDLE_SOURCE || 'binance-futures')
+    .trim()
+    .toLowerCase();
+  return configured === 'dydx' ? 'dydx' : 'binance-futures';
+}
+
+function decentraderIntrusionVolumeDeltaEnabled(): boolean {
+  return parseBool(process.env.DECENTRADER_INTRUSION_VOLUME_DELTA_ENABLED, true);
+}
+
 function decentraderIntrusionMaxExecutionDelayHours(): number {
   return envPositiveNumber('DECENTRADER_INTRUSION_MAX_EXECUTION_DELAY_HOURS', 8);
 }
@@ -1838,7 +1868,7 @@ function decentraderIntrusionMaxPriceDriftPct(): number {
   return envFraction('DECENTRADER_INTRUSION_MAX_PRICE_DRIFT_PCT', 0.04);
 }
 
-function dydxHourlyCandleForTimestamp(
+function intrusionHourlyCandleForTimestamp(
   candles: DydxRsiCandle[] | undefined,
   timestamp: string,
   offsetHours = 0
@@ -1850,35 +1880,36 @@ function dydxHourlyCandleForTimestamp(
   return candles.find((candle) => Date.parse(candle.startedAt) === targetMs);
 }
 
-function dydxOpenClose(candle: DydxRsiCandle | undefined): CandleOpenClose | undefined {
+function intrusionCandleOpenClose(candle: DydxRsiCandle | undefined): CandleOpenClose | undefined {
   if (!candle) return undefined;
   const open = parseNumber(candle.open);
   const close = parseNumber(candle.close);
   if (open === undefined || close === undefined) return undefined;
-  return { open, close, source: 'dydx' };
+  return { open, close, source: candle.source || 'dydx' };
 }
 
 export function intrusionCandleReview(
   rows: DecentraderRow[],
   alert: GapAlert,
   enabled = decentraderIntrusionCandleFilterEnabled(),
-  dydxCandles?: DydxRsiCandle[],
-  delayCutoffAt?: string
+  hourlyCandles?: DydxRsiCandle[],
+  delayCutoffAt?: string,
+  requireVolumeDelta = false
 ): IntrusionCandleReview {
   const direction = alertDirection(alert);
   const frameIndex =
     Number.isFinite(alert.frameIndex)
       ? alert.frameIndex
       : rows.findIndex((row) => String(row.timestamp || '') === alert.timestamp);
-  const dydxIntrusionCandle = dydxHourlyCandleForTimestamp(dydxCandles, alert.timestamp, 0);
-  const dydxNextCandle = dydxHourlyCandleForTimestamp(dydxCandles, alert.timestamp, 1);
-  const dydxIntrusionOpenClose = dydxOpenClose(dydxIntrusionCandle);
-  const dydxNextOpenClose = dydxOpenClose(dydxNextCandle);
-  const intrusionOpenClose = dydxIntrusionOpenClose || rowOpenClose(rows[frameIndex], rows[frameIndex - 1]);
-  const nextOpenClose = dydxNextOpenClose || rowOpenClose(rows[frameIndex + 1], rows[frameIndex]);
+  const intrusionCandle = intrusionHourlyCandleForTimestamp(hourlyCandles, alert.timestamp, 0);
+  const nextCandle = intrusionHourlyCandleForTimestamp(hourlyCandles, alert.timestamp, 1);
+  const authoritativeIntrusionOpenClose = intrusionCandleOpenClose(intrusionCandle);
+  const authoritativeNextOpenClose = intrusionCandleOpenClose(nextCandle);
+  const intrusionOpenClose = authoritativeIntrusionOpenClose || rowOpenClose(rows[frameIndex], rows[frameIndex - 1]);
+  const nextOpenClose = authoritativeNextOpenClose || rowOpenClose(rows[frameIndex + 1], rows[frameIndex]);
   const intrusionColor = candleColor(intrusionOpenClose);
   const nextColor = candleColor(nextOpenClose);
-  const nextTimestamp = dydxNextCandle?.startedAt || rows[frameIndex + 1]?.timestamp;
+  const nextTimestamp = nextCandle?.startedAt || rows[frameIndex + 1]?.timestamp;
   const source =
     intrusionOpenClose?.source || nextOpenClose?.source || 'unknown';
 
@@ -1913,7 +1944,7 @@ export function intrusionCandleReview(
   }
 
   const expectedColor: CandleColor = direction === 'long' ? 'green' : 'red';
-  if (!dydxCandles?.length) {
+  if (!hourlyCandles?.length) {
     return {
       enabled,
       status: 'PENDING',
@@ -1925,7 +1956,8 @@ export function intrusionCandleReview(
       intrusionTimestamp: alert.timestamp,
       nextTimestamp,
       source,
-      reason: 'Waiting for dYdX 1H candle data to confirm the intrusion.'
+      volumeDeltaEnabled: requireVolumeDelta,
+      reason: 'Waiting for authoritative 1H candle data to confirm the intrusion.'
     };
   }
 
@@ -1985,13 +2017,13 @@ export function intrusionCandleReview(
   }
 
   const candlesByStartedAt = new Map(
-    dydxCandles.map((candle) => [Date.parse(candle.startedAt), candle])
+    hourlyCandles.map((candle) => [Date.parse(candle.startedAt), candle])
   );
   const closedCandles: DydxRsiCandle[] = [];
   for (let offset = 0; offset < expectedClosedCandles; offset += 1) {
     const expectedStartedAt = intrusionStartMs + offset * hourMs;
     const candle = candlesByStartedAt.get(expectedStartedAt);
-    if (!candle || !dydxOpenClose(candle)) {
+    if (!candle || !intrusionCandleOpenClose(candle)) {
       return {
         enabled,
         status: 'PENDING',
@@ -2003,23 +2035,22 @@ export function intrusionCandleReview(
         delayCutoffAt,
         intrusionTimestamp: alert.timestamp,
         nextTimestamp,
-        source: 'dydx',
-        reason: `Waiting for complete dYdX 1H candle data for The Delay window (${closedCandles.length}/${expectedClosedCandles} available).`
+        source: hourlyCandles[0]?.source || 'dydx',
+        volumeDeltaEnabled: requireVolumeDelta,
+        reason: `Waiting for complete authoritative 1H candle data for The Delay window (${closedCandles.length}/${expectedClosedCandles} available).`
       };
     }
     closedCandles.push(candle);
   }
 
-  const candleColors = closedCandles.map((candle) => candleColor(dydxOpenClose(candle)));
+  const reviewSource = closedCandles[0]?.source || 'dydx';
+  const candleColors = closedCandles.map((candle) => candleColor(intrusionCandleOpenClose(candle)));
   const candleTimestamps = closedCandles.map((candle) => candle.startedAt);
-  const firstMismatchIndex = candleColors.findIndex((color) => color !== expectedColor);
-  const firstMismatchTimestamp =
-    firstMismatchIndex >= 0 ? candleTimestamps[firstMismatchIndex] : undefined;
-
-  if (firstMismatchIndex < 0) {
+  const volumeDeltaQuote = closedCandles.map((candle) => parseNumber(candle.volumeDeltaQuote));
+  if (requireVolumeDelta && volumeDeltaQuote.some((value) => value === undefined)) {
     return {
       enabled,
-      status: 'PASS',
+      status: 'PENDING',
       direction,
       expectedColor,
       intrusionColor: candleColors[0],
@@ -2030,8 +2061,43 @@ export function intrusionCandleReview(
       delayCutoffAt,
       intrusionTimestamp: alert.timestamp,
       nextTimestamp: candleTimestamps[1],
-      source: 'dydx',
-      reason: `All ${closedCandles.length} fully closed 1H candles in The Delay are ${expectedColor}.`
+      source: reviewSource,
+      volumeDeltaEnabled: true,
+      reason: 'Waiting for complete Binance taker-volume delta data for every closed candle in The Delay.'
+    };
+  }
+  const completeVolumeDeltaQuote = volumeDeltaQuote.filter((value): value is number => value !== undefined);
+  const volumeDeltaColors = requireVolumeDelta
+    ? completeVolumeDeltaQuote.map((value) => (value > 0 ? 'green' : value < 0 ? 'red' : 'flat')) as CandleColor[]
+    : undefined;
+  const firstMismatchIndex = candleColors.findIndex((color) => color !== expectedColor);
+  const firstMismatchTimestamp =
+    firstMismatchIndex >= 0 ? candleTimestamps[firstMismatchIndex] : undefined;
+  const firstVolumeDeltaMismatchIndex = volumeDeltaColors?.findIndex((color) => color !== expectedColor) ?? -1;
+  const firstVolumeDeltaMismatchTimestamp =
+    firstVolumeDeltaMismatchIndex >= 0 ? candleTimestamps[firstVolumeDeltaMismatchIndex] : undefined;
+
+  if (firstMismatchIndex < 0 && firstVolumeDeltaMismatchIndex < 0) {
+    return {
+      enabled,
+      status: 'PASS',
+      direction,
+      expectedColor,
+      intrusionColor: candleColors[0],
+      nextColor: candleColors[1],
+      candleColors,
+      volumeDeltaEnabled: requireVolumeDelta,
+      volumeDeltaColors,
+      volumeDeltaQuote: requireVolumeDelta ? completeVolumeDeltaQuote : undefined,
+      candleTimestamps,
+      closedCandlesChecked: closedCandles.length,
+      delayCutoffAt,
+      intrusionTimestamp: alert.timestamp,
+      nextTimestamp: candleTimestamps[1],
+      source: reviewSource,
+      reason: requireVolumeDelta
+        ? `All ${closedCandles.length} fully closed 1H candles and Binance taker-volume deltas in The Delay are ${expectedColor}.`
+        : `All ${closedCandles.length} fully closed 1H candles in The Delay are ${expectedColor}.`
     };
   }
 
@@ -2043,14 +2109,20 @@ export function intrusionCandleReview(
     intrusionColor: candleColors[0],
     nextColor: candleColors[1],
     candleColors,
+    volumeDeltaEnabled: requireVolumeDelta,
+    volumeDeltaColors,
+    volumeDeltaQuote: requireVolumeDelta ? completeVolumeDeltaQuote : undefined,
     candleTimestamps,
     closedCandlesChecked: closedCandles.length,
     delayCutoffAt,
     firstMismatchTimestamp,
+    firstVolumeDeltaMismatchTimestamp,
     intrusionTimestamp: alert.timestamp,
     nextTimestamp: candleTimestamps[1],
-    source: 'dydx',
-    reason: `Expected every closed candle in The Delay to be ${expectedColor}; got ${candleColors.join(' / ')}.`
+    source: reviewSource,
+    reason: firstMismatchIndex >= 0
+      ? `Expected every closed candle in The Delay to be ${expectedColor}; got ${candleColors.join(' / ')}.`
+      : `Expected every Binance taker-volume delta in The Delay to be ${expectedColor}; got ${volumeDeltaColors?.join(' / ')}.`
   };
 }
 
@@ -3139,10 +3211,63 @@ function decentraderIntrusionCandleMarket(): string {
 
 async function fetchDydxHourlyCandlesForIntrusionFilter(): Promise<DydxRsiCandle[] | undefined> {
   const market = decentraderIntrusionCandleMarket();
-  return fetchDydxRsiCandles(market, '1HOUR', 1000);
+  const candles = await fetchDydxRsiCandles(market, '1HOUR', 1000);
+  return candles.map((candle) => ({ ...candle, source: 'dydx' as const }));
 }
 
-function applyDydxHourlyCandleColorsToPayload(payload: any, candles: DydxRsiCandle[] | undefined): void {
+function decentraderIntrusionBinanceSymbol(): string {
+  return String(process.env.DECENTRADER_INTRUSION_BINANCE_SYMBOL || 'BTCUSDT')
+    .replace(/[^a-z0-9]/gi, '')
+    .toUpperCase();
+}
+
+async function fetchBinanceHourlyCandlesForIntrusionFilter(): Promise<DydxRsiCandle[]> {
+  const symbol = decentraderIntrusionBinanceSymbol();
+  const response = await axios.get(`${BINANCE_FUTURES_URL}/fapi/v1/klines`, {
+    timeout: 30000,
+    params: { symbol, interval: '1h', limit: 1000 }
+  });
+  if (!Array.isArray(response.data)) {
+    throw new Error('Binance Futures 1H kline response was not an array.');
+  }
+
+  return response.data
+    .map((kline: any[]): DydxRsiCandle | undefined => {
+      const startedAtMs = parseNumber(kline?.[0]);
+      const open = parseNumber(kline?.[1]);
+      const close = parseNumber(kline?.[4]);
+      const quoteVolume = parseNumber(kline?.[7]);
+      const takerBuyQuoteVolume = parseNumber(kline?.[10]);
+      if (
+        startedAtMs === undefined ||
+        open === undefined ||
+        close === undefined ||
+        quoteVolume === undefined ||
+        takerBuyQuoteVolume === undefined
+      ) {
+        return undefined;
+      }
+
+      return {
+        startedAt: new Date(startedAtMs).toISOString(),
+        resolution: '1HOUR',
+        open: String(open),
+        close: String(close),
+        source: 'binance-futures',
+        volumeDeltaQuote: 2 * takerBuyQuoteVolume - quoteVolume
+      };
+    })
+    .filter((candle: DydxRsiCandle | undefined): candle is DydxRsiCandle => candle !== undefined)
+    .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+}
+
+async function fetchHourlyCandlesForIntrusionFilter(): Promise<DydxRsiCandle[] | undefined> {
+  return decentraderIntrusionCandleSource() === 'dydx'
+    ? fetchDydxHourlyCandlesForIntrusionFilter()
+    : fetchBinanceHourlyCandlesForIntrusionFilter();
+}
+
+function applyIntrusionHourlyCandleColorsToPayload(payload: any, candles: DydxRsiCandle[] | undefined): void {
   if (!payload?.frames || !candles?.length) return;
   const byTime = new Map(candles.map((candle) => [Date.parse(candle.startedAt), candle]));
 
@@ -3150,12 +3275,20 @@ function applyDydxHourlyCandleColorsToPayload(payload: any, candles: DydxRsiCand
     const timestampMs = coinGlassFrameTimeMs(frame?.t);
     if (timestampMs === undefined) continue;
     const candle = byTime.get(timestampMs);
-    const openClose = dydxOpenClose(candle);
+    const openClose = intrusionCandleOpenClose(candle);
     if (!openClose) continue;
     frame.open = openClose.open;
     frame.close = openClose.close;
     frame.candleColor = candleColor(openClose);
-    frame.candleColorSource = 'dydx';
+    frame.candleColorSource = openClose.source;
+    frame.volumeDeltaQuote = candle?.volumeDeltaQuote;
+    frame.volumeDeltaColor = candle?.volumeDeltaQuote === undefined
+      ? undefined
+      : candle.volumeDeltaQuote > 0
+        ? 'green'
+        : candle.volumeDeltaQuote < 0
+          ? 'red'
+          : 'flat';
   }
 }
 
@@ -3628,7 +3761,12 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
     events,
     intrusionCandleFilter: {
       enabled: decentraderIntrusionCandleFilterEnabled(),
-      note: 'When enabled, one-sided gap intrusions require every fully closed dYdX 1H candle in The Delay to match the trade direction.'
+      source: decentraderIntrusionCandleSource(),
+      symbol: decentraderIntrusionCandleSource() === 'binance-futures'
+        ? decentraderIntrusionBinanceSymbol()
+        : decentraderIntrusionCandleMarket(),
+      volumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled(),
+      note: 'When enabled, one-sided gap intrusions require every fully closed authoritative 1H candle in The Delay to match the trade direction. Binance taker-volume delta must match as well when enabled.'
     },
     delayHistory: decentraderDelaySnapshot(),
     intrusionDomStudy: intrusionDomStudySnapshot(),
@@ -4732,6 +4870,18 @@ export function filteredAlertBody(alert: GapAlert, symbol: string, review: Intru
   const candleSequence = review.candleColors?.length
     ? review.candleColors.join(' / ')
     : `${review.intrusionColor} / ${review.nextColor}`;
+  const deltaSequence = review.volumeDeltaColors?.length
+    ? review.volumeDeltaColors.join(' / ')
+    : '-';
+  const deltaValues = review.volumeDeltaQuote?.length
+    ? review.volumeDeltaQuote.map(signedCompactUsd).join(' / ')
+    : '-';
+  const auditRows = review.candleTimestamps?.map((timestamp, index) => {
+    const priceColor = review.candleColors?.[index] || '-';
+    const deltaColor = review.volumeDeltaColors?.[index] || '-';
+    const deltaValue = review.volumeDeltaQuote?.[index];
+    return `- ${timestamp}: price ${priceColor} | taker delta ${deltaColor}${deltaValue === undefined ? '' : ` ${signedCompactUsd(deltaValue)}`}`;
+  }) || [];
   return [
     `FILTERED Decentrader ${symbol.toUpperCase()} liquidity gap alert`,
     '',
@@ -4740,11 +4890,14 @@ export function filteredAlertBody(alert: GapAlert, symbol: string, review: Intru
     `Direction: ${review.direction ? review.direction.toUpperCase() : 'UNKNOWN'}`,
     `Candle filter: ${review.status}`,
     `Closed candles checked: ${review.closedCandlesChecked || 0}`,
-    `Candle sequence: ${candleSequence}`,
+    `Price candle sequence: ${candleSequence}`,
+    `Taker delta sequence: ${deltaSequence}`,
+    `Taker delta quote: ${deltaValues}`,
     `Expected: all ${review.expectedColor || '-'}`,
     `Delay cutoff (SMTP): ${review.delayCutoffAt || '-'}`,
     `Source: ${review.source}`,
     `Reason: ${review.reason}`,
+    ...(auditRows.length ? ['', 'Delay audit:', ...auditRows] : []),
     '',
     alertBody(alert, symbol)
   ].join('\n');
@@ -4839,7 +4992,9 @@ export class DecentraderGapMonitor {
       ...this.status,
       hasTradeExecutor: true,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
-      intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled()
+      intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+      intrusionCandleSource: decentraderIntrusionCandleSource(),
+      intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled()
     };
   }
 
@@ -4853,6 +5008,8 @@ export class DecentraderGapMonitor {
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+      intrusionCandleSource: decentraderIntrusionCandleSource(),
+      intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined
     };
 
@@ -4914,6 +5071,8 @@ export class DecentraderGapMonitor {
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+      intrusionCandleSource: decentraderIntrusionCandleSource(),
+      intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined,
       tradeRiskPct: decentraderTradeRiskPct(),
       tradeRiskUsd: decentraderTradeRiskUsd(),
@@ -4961,6 +5120,8 @@ export class DecentraderGapMonitor {
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+      intrusionCandleSource: decentraderIntrusionCandleSource(),
+      intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined,
       running: true,
       lastStartedAt: nowNlIso(),
@@ -4971,9 +5132,12 @@ export class DecentraderGapMonitor {
       const rows = await fetchSnapshot(config.symbol);
       this.latestRows = rows;
       await refreshCoinGlassWhaleLevels('gap-check');
-      const intrusionCandleCandles = await fetchDydxHourlyCandlesForIntrusionFilter().catch((error) => {
-        console.warn('dYdX intrusion candle filter refresh failed; map will use Decentrader candle fallback and candle-filtered alerts will wait if enabled.', {
-          market: decentraderIntrusionCandleMarket(),
+      const intrusionCandleCandles = await fetchHourlyCandlesForIntrusionFilter().catch((error) => {
+        console.warn('Authoritative intrusion candle filter refresh failed; filtered alerts will remain pending if enabled.', {
+          source: decentraderIntrusionCandleSource(),
+          symbol: decentraderIntrusionCandleSource() === 'binance-futures'
+            ? decentraderIntrusionBinanceSymbol()
+            : decentraderIntrusionCandleMarket(),
           error: String(error?.message || error)
         });
         return undefined;
@@ -4981,7 +5145,7 @@ export class DecentraderGapMonitor {
       this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
       recordCoinGlassWhaleObservation(rows);
       this.latestTimelapsePayload.coinGlassWhaleLevels = coinglassWhaleSnapshot();
-      applyDydxHourlyCandleColorsToPayload(this.latestTimelapsePayload, intrusionCandleCandles);
+      applyIntrusionHourlyCandleColorsToPayload(this.latestTimelapsePayload, intrusionCandleCandles);
       const rsiStudy = await rsiStudyForRows(rows);
       this.latestTimelapsePayload.rsiStudy = rsiStudy;
       const state = readState(config.stateFile);
@@ -5252,9 +5416,14 @@ export class DecentraderGapMonitor {
           alert,
           intrusionCandleFilterEnabled,
           intrusionCandleCandles,
-          normalSmtpSentAt
+          normalSmtpSentAt,
+          decentraderIntrusionVolumeDeltaEnabled()
         );
         (alertSummary as any).intrusionCandleReview = candleReview;
+        const domStudyAlert = domStudyAlerts.find((candidate) => candidate.signature === signature);
+        if (domStudyAlert) {
+          (domStudyAlert as any).intrusionCandleReview = candleReview;
+        }
         result.intrusionCandleReviews.push({
           signature,
           timestamp: alert.timestamp,
