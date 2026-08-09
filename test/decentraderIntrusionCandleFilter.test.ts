@@ -1,4 +1,7 @@
-import { intrusionCandleReview } from '../src/services/decentraderGapMonitor';
+import {
+  binanceFuturesKlineToIntrusionCandle,
+  intrusionCandleReview
+} from '../src/services/decentraderGapMonitor';
 
 function leftEdgeAlert(timestamp = '2026-07-14 22:00:00') {
   return {
@@ -19,6 +22,30 @@ const rows = [
 ] as any;
 
 describe('Decentrader intrusion candle filter', () => {
+  test('converts Binance Futures quote volume into signed taker delta', () => {
+    const candle = binanceFuturesKlineToIntrusionCandle([
+      Date.parse('2026-05-01T00:00:00.000Z'),
+      '60000',
+      '61000',
+      '59500',
+      '60500',
+      '100',
+      0,
+      '12000000',
+      0,
+      0,
+      '7500000'
+    ]);
+
+    expect(candle).toMatchObject({
+      startedAt: '2026-05-01T00:00:00.000Z',
+      open: '60000',
+      close: '60500',
+      source: 'binance-futures',
+      volumeDeltaQuote: 3000000
+    });
+  });
+
   test('passes when every fully closed dYdX candle in The Delay has the expected color', () => {
     const dydxCandles = [
       { startedAt: '2026-07-14T22:00:00.000Z', open: '64000', close: '64500' },

@@ -2827,11 +2827,17 @@
         : Array.isArray(history?.recent)
           ? history.recent
           : [];
-      const studyRecords = Array.isArray(payload?.intrusionDomStudy?.history)
+      const domStudyRecords = Array.isArray(payload?.intrusionDomStudy?.history)
         ? payload.intrusionDomStudy.history
         : Array.isArray(payload?.intrusionDomStudy?.recent)
           ? payload.intrusionDomStudy.recent
-        : [];
+          : [];
+      const pairBenchmarkRecords = Array.isArray(payload?.intrusionBenchmarks?.history)
+        ? payload.intrusionBenchmarks.history
+        : Array.isArray(payload?.intrusionBenchmarks?.recent)
+          ? payload.intrusionBenchmarks.recent
+          : [];
+      const studyRecords = domStudyRecords.length ? domStudyRecords : pairBenchmarkRecords;
       const tableRecords = studyRecords.length ? studyRecords : delayRecords;
       delayHistoryLatestRows.innerHTML = tableRecords.length
         ? tableRecords.map((tableRecord) => {
@@ -2928,6 +2934,7 @@
               : '-';
             const alertTimestamp = study?.timestamp || record.intrusionTimestamp;
             const hasDelay = Number.isFinite(Number(record.delayMinutes));
+            const hasUltimateVerdict = typeof study?.hypothesisEntryValid === 'boolean';
             return `<tr>
               <td>${study?.filtered || record.emailType === 'filtered' ? 'FILTERED ' : ''}${study?.sideCounts || record.sideCounts || 'intrusion'}</td>
               <td>${delayNlTime(alertTimestamp, true)}</td>
@@ -2936,7 +2943,7 @@
               <td>${domLabel}</td>
               <td class="${responseClass}">${responseLabel}</td>
               <td>${sourceLabel}</td>
-              <td class="${study?.hypothesisEntryValid ? 'dom-positive' : 'dom-negative'}">${study ? (study.hypothesisEntryValid ? 'VALID' : 'NO') : '-'}</td>
+              <td class="${hasUltimateVerdict ? (study.hypothesisEntryValid ? 'dom-positive' : 'dom-negative') : ''}">${hasUltimateVerdict ? (study.hypothesisEntryValid ? 'VALID' : 'NO') : '-'}</td>
               <td class="${study?.candleReview?.status === 'PASS' ? 'dom-positive' : 'dom-negative'}" title="${candleAuditTitle}">${candleStatus}</td>
               <td class="${directionClass(event.directionalPriceReturnPct)}">${metric(event.directionalPriceReturnPct, '%')}</td>
               <td class="${directionClass(confirmation.directionalPriceReturnPct)}">${metric(confirmation.directionalPriceReturnPct, '%')}</td>

@@ -33,6 +33,9 @@ const COINGLASS_WS_PATH = '/v2/ws';
 const COINGLASS_WHALE_URL = 'https://www.coinglass.com/large-orderbook-statistics';
 const DYDX_INDEXER_URL = 'https://indexer.dydx.trade/v4';
 const BINANCE_FUTURES_URL = 'https://fapi.binance.com';
+const HOUR_MS = 60 * 60 * 1000;
+const BINANCE_KLINE_PAGE_SIZE = 1500;
+const binanceHourlyCandleCache = new Map<string, DydxRsiCandle[]>();
 
 export type DecentraderRow = Record<string, any>;
 
@@ -3221,50 +3224,107 @@ function decentraderIntrusionBinanceSymbol(): string {
     .toUpperCase();
 }
 
-async function fetchBinanceHourlyCandlesForIntrusionFilter(): Promise<DydxRsiCandle[]> {
-  const symbol = decentraderIntrusionBinanceSymbol();
-  const response = await axios.get(`${BINANCE_FUTURES_URL}/fapi/v1/klines`, {
-    timeout: 30000,
-    params: { symbol, interval: '1h', limit: 1000 }
-  });
-  if (!Array.isArray(response.data)) {
-    throw new Error('Binance Futures 1H kline response was not an array.');
+export function binanceFuturesKlineToIntrusionCandle(kline: any[]): DydxRsiCandle | undefined {
+  const startedAtMs = parseNumber(kline?.[0]);
+  const open = parseNumber(kline?.[1]);
+  const close = parseNumber(kline?.[4]);
+  const quoteVolume = parseNumber(kline?.[7]);
+  const takerBuyQuoteVolume = parseNumber(kline?.[10]);
+  if (
+    startedAtMs === undefined ||
+    open === undefined ||
+    close === undefined ||
+    quoteVolume === undefined ||
+    takerBuyQuoteVolume === undefined
+  ) {
+    return undefined;
   }
 
-  return response.data
-    .map((kline: any[]): DydxRsiCandle | undefined => {
-      const startedAtMs = parseNumber(kline?.[0]);
-      const open = parseNumber(kline?.[1]);
-      const close = parseNumber(kline?.[4]);
-      const quoteVolume = parseNumber(kline?.[7]);
-      const takerBuyQuoteVolume = parseNumber(kline?.[10]);
-      if (
-        startedAtMs === undefined ||
-        open === undefined ||
-        close === undefined ||
-        quoteVolume === undefined ||
-        takerBuyQuoteVolume === undefined
-      ) {
-        return undefined;
-      }
-
-      return {
-        startedAt: new Date(startedAtMs).toISOString(),
-        resolution: '1HOUR',
-        open: String(open),
-        close: String(close),
-        source: 'binance-futures',
-        volumeDeltaQuote: 2 * takerBuyQuoteVolume - quoteVolume
-      };
-    })
-    .filter((candle: DydxRsiCandle | undefined): candle is DydxRsiCandle => candle !== undefined)
-    .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+  return {
+    startedAt: new Date(startedAtMs).toISOString(),
+    resolution: '1HOUR',
+    open: String(open),
+    close: String(close),
+    source: 'binance-futures',
+    volumeDeltaQuote: 2 * takerBuyQuoteVolume - quoteVolume
+  };
 }
 
-async function fetchHourlyCandlesForIntrusionFilter(): Promise<DydxRsiCandle[] | undefined> {
+function utcTimestampMs(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value.includes('T') ? value : `${value.replace(' ', 'T')}Z`);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export async function fetchBinanceFuturesHourlyCandlesForSymbol(
+  rawSymbol: string,
+  fromTimestamp?: string
+): Promise<DydxRsiCandle[]> {
+  const symbol = String(rawSymbol || '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toUpperCase();
+  if (!symbol) throw new Error('Binance Futures intrusion candle symbol is empty.');
+
+  const requestedFromMs = utcTimestampMs(fromTimestamp) ?? Date.now() - 1000 * HOUR_MS;
+  const cached = binanceHourlyCandleCache.get(symbol) || [];
+  const cachedFirstMs = cached.length ? Date.parse(cached[0].startedAt) : undefined;
+  const cachedLastMs = cached.length ? Date.parse(cached[cached.length - 1].startedAt) : undefined;
+  const cacheCoversStart = cachedFirstMs !== undefined && cachedFirstMs <= requestedFromMs;
+  let fetchFromMs = cacheCoversStart && cachedLastMs !== undefined
+    ? Math.max(requestedFromMs, cachedLastMs - HOUR_MS)
+    : requestedFromMs;
+  const targetMs = Date.now();
+  const merged = new Map<number, DydxRsiCandle>();
+  for (const candle of cached) merged.set(Date.parse(candle.startedAt), candle);
+  let pagesFetched = 0;
+
+  for (let page = 0; page < 12 && fetchFromMs <= targetMs; page += 1) {
+    const response = await axios.get(`${BINANCE_FUTURES_URL}/fapi/v1/klines`, {
+      timeout: 30000,
+      params: {
+        symbol,
+        interval: '1h',
+        startTime: fetchFromMs,
+        endTime: targetMs,
+        limit: BINANCE_KLINE_PAGE_SIZE
+      }
+    });
+    if (!Array.isArray(response.data)) {
+      throw new Error('Binance Futures 1H kline response was not an array.');
+    }
+    pagesFetched += 1;
+
+    const pageCandles = response.data
+      .map((kline: any[]) => binanceFuturesKlineToIntrusionCandle(kline))
+      .filter((candle: DydxRsiCandle | undefined): candle is DydxRsiCandle => candle !== undefined)
+      .sort((a: DydxRsiCandle, b: DydxRsiCandle) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+    for (const candle of pageCandles) merged.set(Date.parse(candle.startedAt), candle);
+    if (!pageCandles.length || pageCandles.length < BINANCE_KLINE_PAGE_SIZE) break;
+    const nextFromMs = Date.parse(pageCandles[pageCandles.length - 1].startedAt) + HOUR_MS;
+    if (nextFromMs <= fetchFromMs) break;
+    fetchFromMs = nextFromMs;
+  }
+
+  const allCandles = [...merged.values()]
+    .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
+  binanceHourlyCandleCache.set(symbol, allCandles);
+  const requestedCandles = allCandles.filter((candle) => Date.parse(candle.startedAt) >= requestedFromMs);
+  console.log('Binance Futures intrusion candle history refreshed:', {
+    symbol,
+    requestedFrom: new Date(requestedFromMs).toISOString(),
+    from: requestedCandles[0]?.startedAt,
+    to: requestedCandles[requestedCandles.length - 1]?.startedAt,
+    candles: requestedCandles.length,
+    pagesFetched,
+    cached: cached.length
+  });
+  return requestedCandles;
+}
+
+async function fetchHourlyCandlesForIntrusionFilter(fromTimestamp?: string): Promise<DydxRsiCandle[] | undefined> {
   return decentraderIntrusionCandleSource() === 'dydx'
     ? fetchDydxHourlyCandlesForIntrusionFilter()
-    : fetchBinanceHourlyCandlesForIntrusionFilter();
+    : fetchBinanceFuturesHourlyCandlesForSymbol(decentraderIntrusionBinanceSymbol(), fromTimestamp);
 }
 
 function applyIntrusionHourlyCandleColorsToPayload(payload: any, candles: DydxRsiCandle[] | undefined): void {
@@ -5132,7 +5192,7 @@ export class DecentraderGapMonitor {
       const rows = await fetchSnapshot(config.symbol);
       this.latestRows = rows;
       await refreshCoinGlassWhaleLevels('gap-check');
-      const intrusionCandleCandles = await fetchHourlyCandlesForIntrusionFilter().catch((error) => {
+      const intrusionCandleCandles = await fetchHourlyCandlesForIntrusionFilter(rows[0]?.timestamp).catch((error) => {
         console.warn('Authoritative intrusion candle filter refresh failed; filtered alerts will remain pending if enabled.', {
           source: decentraderIntrusionCandleSource(),
           symbol: decentraderIntrusionCandleSource() === 'binance-futures'

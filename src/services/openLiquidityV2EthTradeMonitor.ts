@@ -23,7 +23,7 @@ import {
   buildDecentraderStopBreachFlatAlert,
   buildDirectionalPlan,
   buildFractalStop,
-  fetchDydxHourlyCandlesForMarket,
+  fetchBinanceFuturesHourlyCandlesForSymbol,
   filteredAlertBody,
   gapFibonacciConfluenceForZone,
   intrusionCandleReview,
@@ -647,7 +647,14 @@ export class OpenLiquidityV2EthTradeMonitor {
       lastResult: this.lastResult,
       lastTradeDecision: state.lastTradeDecision,
       managedPosition: state.managedPosition || null,
-      pendingAlerts: Object.keys(state.pendingAlerts || {}).length
+      pendingAlerts: Object.keys(state.pendingAlerts || {}).length,
+      intrusionCandleFilter: {
+        enabled: boolEnv('DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED', false),
+        source: 'binance-futures',
+        symbol: this.config.symbol,
+        volumeDeltaEnabled: boolEnv('DECENTRADER_INTRUSION_VOLUME_DELTA_ENABLED', true),
+        rule: 'all fully closed 1H Delay candles: price color and taker delta must match direction'
+      }
     };
   }
 
@@ -955,7 +962,7 @@ export class OpenLiquidityV2EthTradeMonitor {
           }
         }
 
-        let dydxCandles: any[] | undefined;
+        let intrusionCandles: any[] | undefined;
         const filterEnabled = boolEnv('DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED', false);
         for (const [signature, pending] of Object.entries(state.pendingAlerts)) {
           const currentFrameIndex = frames.findIndex((frame: any) => String(frame.t) === pending.alert.timestamp);
@@ -983,8 +990,20 @@ export class OpenLiquidityV2EthTradeMonitor {
             continue;
           }
           if (!pending.normalSmtpSentAt) continue;
-          if (!dydxCandles) dydxCandles = await fetchDydxHourlyCandlesForMarket(this.config.market);
-          const review = intrusionCandleReview(replicaRows(payload), alert, true, dydxCandles, pending.normalSmtpSentAt);
+          if (!intrusionCandles) {
+            intrusionCandles = await fetchBinanceFuturesHourlyCandlesForSymbol(
+              this.config.symbol,
+              String(frames[0]?.t || alert.timestamp)
+            );
+          }
+          const review = intrusionCandleReview(
+            replicaRows(payload),
+            alert,
+            true,
+            intrusionCandles,
+            pending.normalSmtpSentAt,
+            boolEnv('DECENTRADER_INTRUSION_VOLUME_DELTA_ENABLED', true)
+          );
           this.addBenchmark(state, alert, signature, { filtered: review.status === 'PASS', candleReview: review });
           if (review.status === 'PENDING') continue;
           if (review.status === 'PASS') {
