@@ -1023,6 +1023,7 @@
           <a class="map-nav-tab" id="pairTabBtc" href="/decentrader/map">BTC</a>
           <a class="map-nav-tab" id="pairTabEth" href="/decentrader/map?source=open-v2-eth">ETH</a>
           <a class="map-nav-tab" id="pairTabInj" href="/decentrader/map?source=open-v2-inj">INJ</a>
+          <a class="map-nav-tab" id="pairTabGold" href="/decentrader/map?source=open-v2-gold">Gold</a>
         </nav>
       </div>
       <nav class="map-source-tabs" id="btcSourceTabs" aria-label="BTC data source">
@@ -1128,6 +1129,11 @@
       <div class="gap-card">
         <div class="gap-label">Gap alert</div>
         <div class="gap-alert" id="gapAlert">No intrusions</div>
+      </div>
+      <div class="gap-card" id="goldBasisCard" hidden>
+        <div class="gap-label">XAU / PAXG confirmation</div>
+        <div class="gap-value" id="goldBasisValue">-</div>
+        <div class="gap-status" id="goldBasisStatus">Waiting for aligned futures candles</div>
       </div>
       <div class="gap-card rsi-study-card" id="rsiStudyCard">
         <div class="gap-label">4H/D RSI study</div>
@@ -1379,7 +1385,7 @@
   <script>
     const queryParams = new URLSearchParams(window.location.search);
     const requestedSource = queryParams.get('source');
-    const openV2Sources = new Set(['open-v2', 'open-v2-eth', 'open-v2-inj']);
+    const openV2Sources = new Set(['open-v2', 'open-v2-eth', 'open-v2-inj', 'open-v2-gold']);
     const activeSource = openV2Sources.has(requestedSource) ? requestedSource : 'decentrader';
     const isOpenStudy = activeSource !== 'decentrader';
     const isOpenV2 = openV2Sources.has(activeSource);
@@ -1387,9 +1393,11 @@
       ? 'ETH'
       : activeSource === 'open-v2-inj'
         ? 'INJ'
-        : 'BTC';
+        : activeSource === 'open-v2-gold'
+          ? 'GOLD'
+          : 'BTC';
     const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj';
-    const openV2Market = `${openV2Asset}-USD`;
+    const openV2Market = openV2Asset === 'GOLD' ? 'PAXG-USD' : `${openV2Asset}-USD`;
     const isEmbedded = queryParams.get('embedded') === '1';
     const CLOUD_DECENTRADER_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/liquidity-timelapse'
@@ -1430,6 +1438,7 @@
     const pairTabBtc = document.getElementById('pairTabBtc');
     const pairTabEth = document.getElementById('pairTabEth');
     const pairTabInj = document.getElementById('pairTabInj');
+    const pairTabGold = document.getElementById('pairTabGold');
     const btcSourceTabs = document.getElementById('btcSourceTabs');
     const sourceTabDecentrader = document.getElementById('sourceTabDecentrader');
     const sourceTabOpenV2 = document.getElementById('sourceTabOpenV2');
@@ -1442,6 +1451,9 @@
     const gapRight = document.getElementById('gapRight');
     const liveStatus = document.getElementById('liveStatus');
     const gapAlert = document.getElementById('gapAlert');
+    const goldBasisCard = document.getElementById('goldBasisCard');
+    const goldBasisValue = document.getElementById('goldBasisValue');
+    const goldBasisStatus = document.getElementById('goldBasisStatus');
     const whaleStudyPanel = document.getElementById('whaleStudyPanel');
     const whaleStudyStatus = document.getElementById('whaleStudyStatus');
     const whaleInsideValue = document.getElementById('whaleInsideValue');
@@ -1537,16 +1549,21 @@
     pairTabBtc?.classList.toggle('is-active', activePair === 'BTC');
     pairTabEth?.classList.toggle('is-active', activePair === 'ETH');
     pairTabInj?.classList.toggle('is-active', activePair === 'INJ');
+    pairTabGold?.classList.toggle('is-active', activePair === 'GOLD');
     pairTabBtc?.setAttribute('aria-current', activePair === 'BTC' ? 'page' : 'false');
     pairTabEth?.setAttribute('aria-current', activePair === 'ETH' ? 'page' : 'false');
     pairTabInj?.setAttribute('aria-current', activePair === 'INJ' ? 'page' : 'false');
+    pairTabGold?.setAttribute('aria-current', activePair === 'GOLD' ? 'page' : 'false');
     if (btcSourceTabs) btcSourceTabs.hidden = activePair !== 'BTC';
     sourceTabDecentrader?.classList.toggle('is-active', activeSource === 'decentrader');
     sourceTabOpenV2?.classList.toggle('is-active', activeSource === 'open-v2');
 
     if (isOpenStudy) {
-      pageTitle.textContent = `${openV2Asset}/USD Public Perp Liquidity V2`;
-      document.title = `${openV2Asset}/USD Public Perp Liquidity V2`;
+      const studyTitle = openV2Asset === 'GOLD'
+        ? 'Gold/USD XAU + PAXG Liquidity Research'
+        : `${openV2Asset}/USD Public Perp Liquidity V2`;
+      pageTitle.textContent = studyTitle;
+      document.title = studyTitle;
       if (domObserverPanel) domObserverPanel.hidden = true;
     } else {
       pageTitle.textContent = 'BTC/USD Decentrader Liquidity Timelapse';
@@ -1555,7 +1572,7 @@
 
     function money(value) {
       if (!Number.isFinite(Number(value))) return '-';
-      const decimals = openV2Asset === 'INJ' ? 2 : 0;
+      const decimals = openV2Asset === 'INJ' || openV2Asset === 'GOLD' ? 2 : 0;
       return '$' + Number(value).toLocaleString('en-US', {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals
@@ -1565,7 +1582,7 @@
     function priceLevel(value) {
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return '-';
-      const decimals = openV2Asset === 'INJ' ? 2 : 0;
+      const decimals = openV2Asset === 'INJ' || openV2Asset === 'GOLD' ? 2 : 0;
       return parsed.toLocaleString('nl-NL', {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals
@@ -3676,7 +3693,7 @@
       const configured = Number(payload?.quality?.priceStepUsd);
       if (Number.isFinite(configured) && configured > 0) return configured;
       if (isOpenV2 && openV2Asset === 'INJ') return 0.01;
-      return isOpenV2 && openV2Asset === 'ETH' ? 5 : 50;
+      return isOpenV2 && (openV2Asset === 'ETH' || openV2Asset === 'GOLD') ? 5 : 50;
     }
 
     function tradeClusterStep(span) {
@@ -3685,7 +3702,7 @@
         if (span > 5) return 0.05;
         return 0.01;
       }
-      if (isOpenV2 && openV2Asset === 'ETH') {
+      if (isOpenV2 && (openV2Asset === 'ETH' || openV2Asset === 'GOLD')) {
         if (span > 6000) return 100;
         if (span > 3000) return 50;
         if (span > 1200) return 25;
@@ -4512,8 +4529,39 @@
       return `held +${Math.max(0, reactionPct).toFixed(1)}%`;
     }
 
+    function updateGoldConfirmation(frame) {
+      if (!goldBasisCard) return;
+      goldBasisCard.hidden = openV2Asset !== 'GOLD';
+      if (openV2Asset !== 'GOLD') return;
+
+      const confirmation = frame?.goldConfirmation;
+      const summary = payload?.goldConfirmation;
+      if (!confirmation) {
+        goldBasisValue.textContent = '-';
+        goldBasisStatus.textContent = 'No aligned PAXGUSDT candle for this replay frame';
+        return;
+      }
+
+      const basisUsd = Number(confirmation.basisUsd);
+      const basisPct = Number(confirmation.basisPct);
+      const sign = basisUsd >= 0 ? '+' : '';
+      goldBasisValue.textContent = `${sign}${money(basisUsd)} (${sign}${basisPct.toFixed(3)}%)`;
+      goldBasisStatus.textContent = [
+        `XAU ${priceLevel(frame.price)}`,
+        `PAXG ${priceLevel(confirmation.price)}`,
+        confirmation.directionMatch ? '1H direction agrees' : '1H direction diverges',
+        Number.isFinite(Number(summary?.directionAgreementPct))
+          ? `${Number(summary.directionAgreementPct).toFixed(1)}% agreement / ${Number(summary.alignedHours || 0).toLocaleString('en-US')}h`
+          : ''
+      ].filter(Boolean).join(' | ');
+    }
+
     function updateWhaleStudy(frameIndex, frame, visualGap) {
       if (!whaleStudyPanel) return;
+      if (openV2Asset === 'GOLD') {
+        whaleStudyPanel.hidden = true;
+        return;
+      }
       whaleStudyPanel.hidden = false;
       const observation = getCoinGlassWhaleObservation(frame);
       if (!observation) {
@@ -4619,7 +4667,7 @@
       const replicaGap = isOpenV2 && payload?.quality?.decentraderFormulaParity;
       const gapPrefix = isOpenV2
         ? replicaGap
-          ? 'Binance Spot replica | '
+          ? `${openV2Asset === 'GOLD' ? 'Binance XAU Futures' : 'Binance Spot'} replica | `
           : `${gap.status === 'confirmed' ? 'Confirmed' : 'Candidate'} | confidence ${Math.round(Number(gap.confidence || 0) * 100)}% | `
         : '';
       const qualityText = isOpenV2
@@ -4996,6 +5044,7 @@
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${sourceEventCount.toLocaleString('en-US')} zone events`;
       syncJumpTimeInput(frame);
       updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview);
+      updateGoldConfirmation(frame);
       try {
         updateDelayHistory();
         updateIntrusionDomStudy();

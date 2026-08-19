@@ -3,6 +3,7 @@ import {
   cohortLevelsForOhlc4,
   detectReplicaGap,
   ReplicaLiquidityZone,
+  summarizeGoldConfirmation,
   SpotCandle
 } from '../src/services/openLiquidityV2Replica';
 
@@ -77,6 +78,37 @@ describe('Public Perp V2 Binance Spot replica', () => {
       ['L', 10, 4.57],
       ['S', 10, 5.52]
     ]);
+  });
+
+  test('uses Gold-scale $5 bins without changing the cohort multipliers', () => {
+    const levels = cohortLevelsForOhlc4(4_350, 5);
+    expect(levels.map((level) => [level.side, level.leverage, level.price])).toEqual([
+      ['L', 3, 3_265],
+      ['S', 3, 6_525],
+      ['L', 5, 3_625],
+      ['S', 5, 5_410],
+      ['L', 10, 3_975],
+      ['S', 10, 4_805]
+    ]);
+  });
+
+  test('summarizes aligned XAU and PAXG candle confirmation without mixing timestamps', () => {
+    const primary = [
+      candle(1, 4_300, 4_340, 4_290, 4_330),
+      candle(2, 4_330, 4_350, 4_310, 4_320),
+      candle(3, 4_320, 4_360, 4_315, 4_350)
+    ];
+    const confirmation = [
+      candle(1, 4_310, 4_350, 4_300, 4_340),
+      candle(3, 4_335, 4_350, 4_320, 4_325)
+    ];
+
+    const summary = summarizeGoldConfirmation(primary, confirmation);
+    expect(summary?.alignedHours).toBe(2);
+    expect(summary?.directionAgreementPct).toBe(50);
+    expect(summary?.latest.timestamp).toBe(new Date(3).toISOString());
+    expect(summary?.latest.directionMatch).toBe(false);
+    expect(summary?.latest.basisUsd).toBeCloseTo(-3.75, 4);
   });
 
   test('does not let a birth candle liquidate its own newly-created cohorts', () => {

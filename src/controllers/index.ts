@@ -17,6 +17,7 @@ import {
 import {
   openLiquidityV2BtcCollector,
   openLiquidityV2EthCollector,
+  openLiquidityV2GoldCollector,
   openLiquidityV2InjCollector
 } from '../services/openLiquidityV2Replica';
 import {
@@ -153,6 +154,7 @@ initializeExchanges()
     openLiquidityV2BtcCollector.start();
     openLiquidityV2EthCollector.start(30_000);
     openLiquidityV2InjCollector.start(60_000);
+    openLiquidityV2GoldCollector.start(135_000);
     coinGlassEthWhaleCollector.configureObservationProvider(async () => {
       const payload = await openLiquidityV2EthCollector.getPayload();
       const frame = payload.frames?.[payload.frames.length - 1];
@@ -414,6 +416,7 @@ function openLiquidityV2CollectorForMarket(market: string) {
   if (market === 'BTC-USD') return openLiquidityV2BtcCollector;
   if (market === 'ETH-USD') return openLiquidityV2EthCollector;
   if (market === 'INJ-USD') return openLiquidityV2InjCollector;
+  if (market === 'PAXG-USD') return openLiquidityV2GoldCollector;
   return undefined;
 }
 
@@ -429,15 +432,37 @@ function openLiquidityV2CoinGlassForMarket(market: string) {
   return undefined;
 }
 
+function emptyCoinGlassWhaleSnapshot() {
+  return {
+    enabled: false,
+    symbol: '',
+    minUsd: 0,
+    levels: [],
+    history: [],
+    observations: [],
+    fetchedAt: undefined,
+    error: undefined
+  };
+}
+
+function coinGlassWhaleSnapshotForMarket(market: string) {
+  const collector = openLiquidityV2CoinGlassForMarket(market);
+  if (collector) return collector.snapshot();
+  if (market === 'BTC-USD') return btcCoinGlassWhaleSnapshot();
+  return emptyCoinGlassWhaleSnapshot();
+}
+
 router.get('/open-liquidity/v2/status', async (req, res) => {
   const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
   const collector = openLiquidityV2CollectorForMarket(market);
   if (!collector) {
-    return res.status(400).send({ ok: false, error: 'Open Liquidity V2 supports BTC-USD, ETH-USD and INJ-USD.' });
+    return res.status(400).send({
+      ok: false,
+      error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD and PAXG-USD.'
+    });
   }
   const monitor = openLiquidityV2MonitorForMarket(market);
-  const coinGlassCollector = openLiquidityV2CoinGlassForMarket(market);
-  const coinGlass = coinGlassCollector?.snapshot() || btcCoinGlassWhaleSnapshot();
+  const coinGlass = coinGlassWhaleSnapshotForMarket(market);
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.send({
@@ -462,7 +487,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
     if (!collector) {
       return res.status(400).send({
         ok: false,
-        error: 'Open Liquidity V2 supports BTC-USD, ETH-USD and INJ-USD.'
+        error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD and PAXG-USD.'
       });
     }
     const payload = await collector.getPayload();
@@ -477,7 +502,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
         latestGap
       );
     }
-    const coinGlassWhaleLevels = coinGlassCollector?.snapshot() || btcCoinGlassWhaleSnapshot();
+    const coinGlassWhaleLevels = coinGlassWhaleSnapshotForMarket(market);
     const asset = market.split('-')[0];
     const configuredAssetMinUsd = Number(process.env[`COINGLASS_WHALE_${asset}_LEVEL_MIN_USD`]);
     const configuredMinUsd = market === 'BTC-USD'
@@ -504,7 +529,9 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
         : payload.source,
       coinGlassWhaleLevels,
       coinGlassTpConfluence: {
-        enabled: String(process.env.COINGLASS_TP_CONFLUENCE_ENABLED || 'true').toLowerCase() !== 'false',
+        enabled:
+          coinGlassWhaleLevels.enabled !== false &&
+          String(process.env.COINGLASS_TP_CONFLUENCE_ENABLED || 'true').toLowerCase() !== 'false',
         minUsd: Number.isFinite(configuredMinUsd) && configuredMinUsd > 0
           ? configuredMinUsd
           : coinGlassWhaleLevels.minUsd,

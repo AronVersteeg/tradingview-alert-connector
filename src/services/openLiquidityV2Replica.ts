@@ -4,6 +4,7 @@ import path from 'path';
 import axios from 'axios';
 
 const BINANCE_SPOT_URL = 'https://api.binance.com/api/v3/klines';
+const BINANCE_FUTURES_URL = 'https://fapi.binance.com/fapi/v1/klines';
 const HOUR_MS = 3_600_000;
 const COHORT_WINDOW_HOURS = 8_760;
 const FRAME_LIMIT = 500;
@@ -12,18 +13,22 @@ const FRAME_LIMIT = 500;
 const HISTORY_LIMIT = FRAME_LIMIT;
 const DISPLAY_ZONE_LIMIT = 150;
 
-type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD';
-type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT';
+type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD' | 'PAXG-USD';
+type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'XAUUSDT' | 'PAXGUSDT';
+type ReplicaVenue = 'spot' | 'futures';
 
 type ReplicaMarketConfig = {
   market: ReplicaMarket;
   symbol: ReplicaSymbol;
-  asset: 'BTC' | 'ETH' | 'INJ';
+  asset: 'BTC' | 'ETH' | 'INJ' | 'GOLD';
   modelVersion: string;
   priceStepUsd: number;
   historyDirectoryName: string;
   historyEnv: string;
   enabledEnv: string;
+  venue?: ReplicaVenue;
+  confirmationSymbol?: ReplicaSymbol;
+  minimumSourceHours?: number;
 };
 
 const BTC_CONFIG: ReplicaMarketConfig = {
@@ -57,6 +62,22 @@ const INJ_CONFIG: ReplicaMarketConfig = {
   historyDirectoryName: 'open-liquidity-v2-inj',
   historyEnv: 'OPEN_LIQUIDITY_V2_INJ_HISTORY_DIR',
   enabledEnv: 'OPEN_LIQUIDITY_V2_INJ_ENABLED'
+};
+
+const GOLD_CONFIG: ReplicaMarketConfig = {
+  market: 'PAXG-USD',
+  symbol: 'XAUUSDT',
+  asset: 'GOLD',
+  modelVersion: 'binance-futures-xau-liquidation-cohorts-v2.1',
+  priceStepUsd: 5,
+  historyDirectoryName: 'open-liquidity-v2-gold',
+  historyEnv: 'OPEN_LIQUIDITY_V2_GOLD_HISTORY_DIR',
+  enabledEnv: 'OPEN_LIQUIDITY_V2_GOLD_ENABLED',
+  venue: 'futures',
+  confirmationSymbol: 'PAXGUSDT',
+  // XAUUSDT started trading in December 2025, so a full 8,760-hour
+  // bootstrap cannot exist yet. The rolling model uses every available hour.
+  minimumSourceHours: 720
 };
 
 type Side = 'L' | 'S';
@@ -201,7 +222,11 @@ export function cohortLevelsForOhlc4(
   });
 }
 
-function zoneFromBin(bin: ActiveBin, priceStepUsd: number): ReplicaLiquidityZone {
+function zoneFromBin(
+  bin: ActiveBin,
+  priceStepUsd: number,
+  sourceLabel = 'binance-spot'
+): ReplicaLiquidityZone {
   const relativeCount = bin.cohorts.length;
   return {
     side: bin.side,
@@ -215,7 +240,7 @@ function zoneFromBin(bin: ActiveBin, priceStepUsd: number): ReplicaLiquidityZone
     confidence: 1,
     uncertaintyUsd: priceStepUsd / 2,
     sourceCount: 1,
-    sources: ['binance-spot']
+    sources: [sourceLabel]
   };
 }
 
@@ -348,6 +373,7 @@ export function buildReplicaSnapshots(
     frameLimit?: number;
     priceStepUsd?: number;
     modelVersion?: string;
+    sourceLabel?: string;
   } = {}
 ): ReplicaSnapshot[] {
   const ordered = candles
@@ -364,6 +390,7 @@ export function buildReplicaSnapshots(
   const frameLimit = boundedInteger(options.frameLimit, FRAME_LIMIT, 1, HISTORY_LIMIT);
   const priceStepUsd = Math.max(0.01, finite(options.priceStepUsd) || BTC_CONFIG.priceStepUsd);
   const modelVersion = options.modelVersion || BTC_CONFIG.modelVersion;
+  const sourceLabel = options.sourceLabel || 'binance-spot';
   const snapshotStart = Math.max(0, ordered.length - frameLimit);
   const bins = new Map<string, ActiveBin>();
   const birthKeysByIndex: string[][] = [];
@@ -379,7 +406,7 @@ export function buildReplicaSnapshots(
     addCandleCohorts(bins, birthKeysByIndex, candle, frameIndex, priceStepUsd);
     if (frameIndex < snapshotStart) continue;
 
-    const allZones = [...bins.values()].map((bin) => zoneFromBin(bin, priceStepUsd));
+    const allZones = [...bins.values()].map((bin) => zoneFromBin(bin, priceStepUsd, sourceLabel));
     const referencePrice = ohlc4(candle);
     const gap = detectReplicaGap(allZones, referencePrice);
     const zones = selectDisplayZones(allZones, referencePrice, gap);
@@ -419,7 +446,7 @@ export function buildReplicaSnapshots(
       high: rounded(candle.high, 4),
       low: rounded(candle.low, 4),
       sourceHours: Math.min(frameIndex + 1, cohortWindowHours),
-      availableSources: ['binance-spot'],
+      availableSources: [sourceLabel],
       activeCohortCount: allZones.reduce((sum, zone) => sum + zone.relativeCount, 0),
       zones,
       zoneSeed,
@@ -430,7 +457,8 @@ export function buildReplicaSnapshots(
   return snapshots;
 }
 
-export async function fetchBinanceSpotCandles(
+async function fetchBinanceCandles(
+  url: string,
   sourceHours = COHORT_WINDOW_HOURS + FRAME_LIMIT + 24,
   nowMs = Date.now(),
   symbol: ReplicaSymbol = BTC_CONFIG.symbol
@@ -439,7 +467,7 @@ export async function fetchBinanceSpotCandles(
   const candles: SpotCandle[] = [];
   let cursor = startTime;
   while (cursor < nowMs) {
-    const response = await axios.get(BINANCE_SPOT_URL, {
+    const response = await axios.get(url, {
       timeout: 30_000,
       params: {
         symbol,
@@ -474,6 +502,75 @@ export async function fetchBinanceSpotCandles(
     .sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
+export async function fetchBinanceSpotCandles(
+  sourceHours = COHORT_WINDOW_HOURS + FRAME_LIMIT + 24,
+  nowMs = Date.now(),
+  symbol: ReplicaSymbol = BTC_CONFIG.symbol
+): Promise<SpotCandle[]> {
+  return fetchBinanceCandles(BINANCE_SPOT_URL, sourceHours, nowMs, symbol);
+}
+
+export async function fetchBinanceFuturesCandles(
+  sourceHours = COHORT_WINDOW_HOURS + FRAME_LIMIT + 24,
+  nowMs = Date.now(),
+  symbol: ReplicaSymbol = GOLD_CONFIG.symbol
+): Promise<SpotCandle[]> {
+  return fetchBinanceCandles(BINANCE_FUTURES_URL, sourceHours, nowMs, symbol);
+}
+
+export type GoldConfirmationSummary = {
+  primarySymbol: 'XAUUSDT';
+  confirmationSymbol: 'PAXGUSDT';
+  alignedHours: number;
+  directionAgreementPct: number;
+  latest: {
+    timestamp: string;
+    xauPrice: number;
+    paxgPrice: number;
+    basisUsd: number;
+    basisPct: number;
+    directionMatch: boolean;
+  };
+};
+
+export function summarizeGoldConfirmation(
+  primaryCandles: SpotCandle[],
+  confirmationCandles: SpotCandle[]
+): GoldConfirmationSummary | undefined {
+  const confirmationByTime = new Map(
+    confirmationCandles.map((candle) => [candle.timestampMs, candle])
+  );
+  const aligned = primaryCandles
+    .map((primary) => ({ primary, confirmation: confirmationByTime.get(primary.timestampMs) }))
+    .filter((pair): pair is { primary: SpotCandle; confirmation: SpotCandle } => Boolean(pair.confirmation));
+  if (!aligned.length) return undefined;
+
+  const directionMatches = aligned.filter(({ primary, confirmation }) =>
+    Math.sign(primary.close - primary.open) === Math.sign(confirmation.close - confirmation.open)
+  ).length;
+  const latest = aligned[aligned.length - 1];
+  const xauPrice = ohlc4(latest.primary);
+  const paxgPrice = ohlc4(latest.confirmation);
+  const basisUsd = paxgPrice - xauPrice;
+
+  return {
+    primarySymbol: 'XAUUSDT',
+    confirmationSymbol: 'PAXGUSDT',
+    alignedHours: aligned.length,
+    directionAgreementPct: rounded((directionMatches / aligned.length) * 100, 1),
+    latest: {
+      timestamp: new Date(latest.primary.timestampMs).toISOString(),
+      xauPrice: rounded(xauPrice, 4),
+      paxgPrice: rounded(paxgPrice, 4),
+      basisUsd: rounded(basisUsd, 4),
+      basisPct: rounded((basisUsd / xauPrice) * 100, 4),
+      directionMatch:
+        Math.sign(latest.primary.close - latest.primary.open) ===
+        Math.sign(latest.confirmation.close - latest.confirmation.open)
+    }
+  };
+}
+
 export class OpenLiquidityV2ReplicaCollector {
   private interval: NodeJS.Timeout | undefined;
   private initialTimer: NodeJS.Timeout | undefined;
@@ -484,6 +581,10 @@ export class OpenLiquidityV2ReplicaCollector {
   private lastErrorAt: string | undefined;
   private lastError: string | undefined;
   private sourceRows = 0;
+  private confirmationRows = 0;
+  private confirmationError: string | undefined;
+  private confirmationCandles = new Map<number, SpotCandle>();
+  private goldConfirmation: GoldConfirmationSummary | undefined;
   private payloadCache: { at: number; payload: any } | undefined;
 
   constructor(private readonly config: ReplicaMarketConfig = BTC_CONFIG) {}
@@ -580,19 +681,50 @@ export class OpenLiquidityV2ReplicaCollector {
   private async refreshInternal(): Promise<void> {
     this.loadHistory();
     try {
-      const candles = await fetchBinanceSpotCandles(
-        COHORT_WINDOW_HOURS + FRAME_LIMIT + 24,
-        Date.now(),
-        this.config.symbol
-      );
-      if (candles.length < COHORT_WINDOW_HOURS) {
-        throw new Error(`Only ${candles.length} Binance Spot hours received; ${COHORT_WINDOW_HOURS} required.`);
+      const sourceHours = COHORT_WINDOW_HOURS + FRAME_LIMIT + 24;
+      const nowMs = Date.now();
+      const fetchPrimary = this.config.venue === 'futures'
+        ? fetchBinanceFuturesCandles
+        : fetchBinanceSpotCandles;
+      const confirmationPromise: Promise<SpotCandle[]> = this.config.confirmationSymbol
+        ? fetchBinanceFuturesCandles(sourceHours, nowMs, this.config.confirmationSymbol)
+            .catch((error) => {
+              this.confirmationError = error instanceof Error ? error.message : String(error);
+              console.warn(`${this.config.asset} confirmation feed refresh failed; primary map will continue:`, {
+                symbol: this.config.confirmationSymbol,
+                error: this.confirmationError
+              });
+              return [] as SpotCandle[];
+            })
+        : Promise.resolve([] as SpotCandle[]);
+      const [candles, confirmationCandles] = await Promise.all([
+        fetchPrimary(sourceHours, nowMs, this.config.symbol),
+        confirmationPromise
+      ]);
+      const minimumSourceHours = this.config.minimumSourceHours || COHORT_WINDOW_HOURS;
+      if (candles.length < minimumSourceHours) {
+        const venueName = this.config.venue === 'futures' ? 'Futures' : 'Spot';
+        throw new Error(
+          `Only ${candles.length} Binance ${venueName} hours received; ${minimumSourceHours} required.`
+        );
       }
       this.sourceRows = candles.length;
+      this.confirmationRows = confirmationCandles.length;
+      this.confirmationCandles = new Map(
+        confirmationCandles.map((candle) => [candle.timestampMs, candle])
+      );
+      this.goldConfirmation = this.config.asset === 'GOLD'
+        ? summarizeGoldConfirmation(candles, confirmationCandles)
+        : undefined;
+      if (confirmationCandles.length) this.confirmationError = undefined;
+      const sourceLabel = this.config.venue === 'futures'
+        ? `binance-futures-${this.config.symbol.toLowerCase()}`
+        : 'binance-spot';
       const rebuilt = buildReplicaSnapshots(candles, {
         frameLimit: FRAME_LIMIT,
         priceStepUsd: this.config.priceStepUsd,
-        modelVersion: this.config.modelVersion
+        modelVersion: this.config.modelVersion,
+        sourceLabel
       });
       const byEffectiveAt = new Map(this.snapshots.map((snapshot) => [snapshot.effectiveAt, snapshot]));
       for (const snapshot of rebuilt) byEffectiveAt.set(snapshot.effectiveAt, snapshot);
@@ -607,8 +739,10 @@ export class OpenLiquidityV2ReplicaCollector {
         snapshots: this.snapshots.length,
         from: this.snapshots[0]?.effectiveAt,
         to: this.snapshots[this.snapshots.length - 1]?.effectiveAt,
-        source: `Binance Spot ${this.config.symbol} 1H`,
+        source: `Binance ${this.config.venue === 'futures' ? 'Futures' : 'Spot'} ${this.config.symbol} 1H`,
         sourceRows: candles.length,
+        confirmationSymbol: this.config.confirmationSymbol,
+        confirmationRows: confirmationCandles.length,
         cohortWindowHours: COHORT_WINDOW_HOURS
       });
     } catch (error) {
@@ -620,6 +754,24 @@ export class OpenLiquidityV2ReplicaCollector {
 
   getStatus(): any {
     this.loadHistory();
+    const venueName = this.config.venue === 'futures' ? 'Futures' : 'Spot';
+    const minimumSourceHours = this.config.minimumSourceHours || COHORT_WINDOW_HOURS;
+    const sources = [{
+      name: `Binance ${venueName} ${this.config.symbol} 1H`,
+      ok: this.sourceRows >= minimumSourceHours,
+      requiresApiKey: false,
+      rows: this.sourceRows,
+      role: 'OHLC4 cohort creation and subsequent liquidation sweep source'
+    }];
+    if (this.config.confirmationSymbol) {
+      sources.push({
+        name: `Binance Futures ${this.config.confirmationSymbol} 1H`,
+        ok: this.confirmationRows > 0,
+        requiresApiKey: false,
+        rows: this.confirmationRows,
+        role: 'Independent tokenized-gold price and candle-direction confirmation source'
+      });
+    }
     return {
       enabled: this.enabled(),
       running: Boolean(this.interval || this.initialTimer),
@@ -638,13 +790,9 @@ export class OpenLiquidityV2ReplicaCollector {
         requestedDays: Math.ceil((COHORT_WINDOW_HOURS + FRAME_LIMIT) / 24),
         completedDays: Math.floor(this.sourceRows / 24)
       },
-      sources: [{
-        name: `Binance Spot ${this.config.symbol} 1H`,
-        ok: this.sourceRows >= COHORT_WINDOW_HOURS,
-        requiresApiKey: false,
-        rows: this.sourceRows,
-        role: 'OHLC4 cohort creation and subsequent liquidation sweep source'
-      }],
+      sources,
+      goldConfirmation: this.goldConfirmation,
+      confirmationError: this.confirmationError,
       lastSuccessAt: this.lastSuccessAt,
       lastErrorAt: this.lastErrorAt,
       lastError: this.lastError
@@ -658,6 +806,10 @@ export class OpenLiquidityV2ReplicaCollector {
       return this.payloadCache.payload;
     }
     const recent = this.snapshots.slice(-FRAME_LIMIT);
+    const venueName = this.config.venue === 'futures' ? 'Futures' : 'Spot';
+    const sourceKey = this.config.venue === 'futures'
+      ? `binance-futures-${this.config.symbol.toLowerCase()}-replica`
+      : 'binance-spot-replica';
     const zoneSeed = recent[0]?.zoneSeed || [];
     const zoneDeltas = recent.map((snapshot) => snapshot.zoneDeltas || []);
     const snapshots = recent.map((snapshot, index) => {
@@ -668,22 +820,45 @@ export class OpenLiquidityV2ReplicaCollector {
         zones: [],
         i: index,
         kind: index === recent.length - 1 ? 'live-observation' : 'historical-backfill',
-        source: 'binance-spot-replica',
+        source: sourceKey,
         positionCount: snapshot.activeCohortCount,
         acceptedPositionCount: snapshot.zones.length
       };
     });
-    const frames = snapshots.map((snapshot, index) => ({
-      i: index,
-      t: timestampForMs(Date.parse(snapshot.effectiveAt)),
-      startedAtMs: Date.parse(snapshot.effectiveAt),
-      price: snapshot.referencePrice,
-      open: snapshot.open,
-      close: snapshot.close,
-      low: snapshot.low,
-      high: snapshot.high,
-      snapshot: index
-    }));
+    const frames = snapshots.map((snapshot, index) => {
+      const timestampMs = Date.parse(snapshot.effectiveAt);
+      const confirmation = this.confirmationCandles.get(timestampMs);
+      const confirmationPrice = confirmation ? ohlc4(confirmation) : undefined;
+      return {
+        i: index,
+        t: timestampForMs(timestampMs),
+        startedAtMs: timestampMs,
+        price: snapshot.referencePrice,
+        open: snapshot.open,
+        close: snapshot.close,
+        low: snapshot.low,
+        high: snapshot.high,
+        snapshot: index,
+        ...(confirmation && confirmationPrice
+          ? {
+              goldConfirmation: {
+                symbol: this.config.confirmationSymbol,
+                price: rounded(confirmationPrice, 4),
+                open: rounded(confirmation.open, 4),
+                close: rounded(confirmation.close, 4),
+                basisUsd: rounded(confirmationPrice - snapshot.referencePrice, 4),
+                basisPct: rounded(
+                  ((confirmationPrice - snapshot.referencePrice) / snapshot.referencePrice) * 100,
+                  4
+                ),
+                directionMatch:
+                  Math.sign(snapshot.close - snapshot.open) ===
+                  Math.sign(confirmation.close - confirmation.open)
+              }
+            }
+          : {})
+      };
+    });
     const prices = [
       ...snapshots.map((snapshot) => snapshot.referencePrice),
       ...zoneSeed.map((zone) => zone[2]),
@@ -700,13 +875,22 @@ export class OpenLiquidityV2ReplicaCollector {
       zoneDeltas,
       weightUnit: 'relative active cohort count',
       eventCount,
+      goldConfirmation: this.goldConfirmation,
       source: {
-        name: `${this.config.asset}/USD Public Perp V2 Binance Spot replica`,
+        name: this.config.asset === 'GOLD'
+          ? 'Gold/USD Public Perp V2 XAU replica'
+          : `${this.config.asset}/USD Public Perp V2 Binance Spot replica`,
         market: this.config.market,
         url: `/open-liquidity/v2/status?market=${this.config.market}`,
-        api: `Binance Spot ${this.config.symbol} public 1H klines; no API key`,
+        api: [
+          `Binance ${venueName} ${this.config.symbol} public 1H klines`,
+          this.config.confirmationSymbol
+            ? `Binance Futures ${this.config.confirmationSymbol} confirmation`
+            : '',
+          'no API key'
+        ].filter(Boolean).join('; '),
         method:
-          `Each closed 1H Binance Spot candle creates six 3x, 5x and 10x long/short cohorts from OHLC4. Exact reconstructed multipliers are applied, prices are rounded to $${this.config.priceStepUsd}, later highs/lows remove crossed cohorts, and only the latest 8,760 birth hours remain active.`,
+          `Each closed 1H Binance ${venueName} ${this.config.symbol} candle creates six 3x, 5x and 10x long/short cohorts from OHLC4. Exact reconstructed multipliers are applied, prices are rounded to $${this.config.priceStepUsd}, later highs/lows remove crossed cohorts, and up to the latest 8,760 birth hours remain active.`,
         params: [
           `model=${this.config.modelVersion}`,
           `cohortWindowHours=${COHORT_WINDOW_HOURS}`,
@@ -717,7 +901,9 @@ export class OpenLiquidityV2ReplicaCollector {
         ],
         sourceStatuses: this.getStatus().sources,
         note:
-          'Observe-only Decentrader-compatible reconstruction. Histogram height is a relative count of still-active hourly cohorts, not USD volume, open interest or account inventory. Replay is causal: a cohort can only disappear on a later candle. This source never sends alerts and never places, sizes or manages dYdX orders.'
+          this.config.asset === 'GOLD'
+            ? 'Observe-only Gold reconstruction. XAUUSDT Futures drives the causal cohort map and PAXGUSDT independently confirms price basis and hourly direction. Histogram height is a relative count, not USD volume or account inventory. Gold sends no server-side alerts and places, sizes or manages no dYdX orders.'
+            : 'Observe-only Decentrader-compatible reconstruction. Histogram height is a relative count of still-active hourly cohorts, not USD volume, open interest or account inventory. Replay is causal: a cohort can only disappear on a later candle. This source never sends alerts and never places, sizes or manages dYdX orders.'
       },
       quality: {
         causalModel: true,
@@ -754,3 +940,4 @@ export class OpenLiquidityV2ReplicaCollector {
 export const openLiquidityV2BtcCollector = new OpenLiquidityV2ReplicaCollector(BTC_CONFIG);
 export const openLiquidityV2EthCollector = new OpenLiquidityV2ReplicaCollector(ETH_CONFIG);
 export const openLiquidityV2InjCollector = new OpenLiquidityV2ReplicaCollector(INJ_CONFIG);
+export const openLiquidityV2GoldCollector = new OpenLiquidityV2ReplicaCollector(GOLD_CONFIG);
