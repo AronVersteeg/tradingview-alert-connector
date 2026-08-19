@@ -170,14 +170,21 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
     }
   });
 
-  test('keeps the Gold intrusion and Delay monitor hard observe-only', () => {
+  test('requires explicit opt-in before the Gold monitor can trade PAXG-USD', () => {
     const previousAutoTrade = process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED;
-    process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED = 'true';
     try {
+      delete process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED;
       expect(openLiquidityV2GoldIntrusionMonitor.getStatus()).toMatchObject({
         market: 'PAXG-USD',
         autoTradeEnabled: false,
-        observeOnly: true,
+        observeOnly: false
+      });
+
+      process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED = 'true';
+      expect(openLiquidityV2GoldIntrusionMonitor.getStatus()).toMatchObject({
+        market: 'PAXG-USD',
+        autoTradeEnabled: true,
+        observeOnly: false,
         intrusionCandleFilter: {
           source: 'binance-futures',
           symbol: 'XAUUSDT'

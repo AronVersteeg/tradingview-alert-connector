@@ -119,6 +119,12 @@ function configureDecentraderTradeExecutor() {
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
+  openLiquidityV2GoldIntrusionMonitor.configureTradeExecutor({
+    getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    placeOrder: (alert: any) => client.placeOrder(alert),
+    syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
+    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+  });
 }
 
 async function initializeExchanges() {
@@ -528,7 +534,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
             ...payload.source,
             note:
               market === 'PAXG-USD'
-                ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. Gold remains hard observe-only and never places or manages dYdX orders.'
+                ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. When explicitly enabled, filtered Gold intrusions are independently managed on dYdX PAXG-USD with the shared risk, fractal SL and TP settings.'
                 : `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
           }
         : payload.source,

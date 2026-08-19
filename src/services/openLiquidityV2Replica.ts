@@ -902,7 +902,7 @@ export class OpenLiquidityV2ReplicaCollector {
         sourceStatuses: this.getStatus().sources,
         note:
           this.config.asset === 'GOLD'
-            ? 'Observe-only Gold reconstruction. XAUUSDT Futures drives the causal cohort map and PAXGUSDT independently confirms price basis and hourly direction. Histogram height is a relative count, not USD volume or account inventory. Gold sends no server-side alerts and places, sizes or manages no dYdX orders.'
+            ? 'Gold reconstruction. XAUUSDT Futures drives the causal cohort map and PAXGUSDT independently confirms price basis and hourly direction. Histogram height is a relative count, not USD volume or account inventory. Server-side intrusion monitoring and optional dYdX PAXG-USD execution are handled by the separate Gold trade monitor.'
             : 'Observe-only Decentrader-compatible reconstruction. Histogram height is a relative count of still-active hourly cohorts, not USD volume, open interest or account inventory. Replay is causal: a cohort can only disappear on a later candle. This source never sends alerts and never places, sizes or manages dYdX orders.'
       },
       quality: {

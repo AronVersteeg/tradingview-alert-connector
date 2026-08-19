@@ -109,7 +109,7 @@ const GOLD_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   symbol: 'XAUUSDT',
   asset: 'GOLD',
   priceStep: 1,
-  tradeCapable: false,
+  tradeCapable: true,
   enabledEnv: 'OPEN_LIQUIDITY_V2_GOLD_INTRUSION_MONITOR_ENABLED',
   autoTradeEnv: 'OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED',
   inheritDecentraderAutoTrade: false,
@@ -825,6 +825,11 @@ export class OpenLiquidityV2EthTradeMonitor {
       return;
     }
     const plan = await this.getTradePlan(account, alert);
+    const marketStatus = String(plan.marketInfo?.status || '').trim().toUpperCase();
+    if (marketStatus && marketStatus !== 'ACTIVE') {
+      result.tradeSkipped = `${this.config.market} is ${marketStatus}; no live order was submitted.`;
+      return;
+    }
     const oraclePrice = finite(plan.marketInfo?.oraclePrice) || finite(plan.price);
     const drift = Math.abs(oraclePrice - alert.price) / Math.max(1, alert.price);
     const maxDrift = fractionEnv('DECENTRADER_INTRUSION_MAX_PRICE_DRIFT_PCT', 0.04);

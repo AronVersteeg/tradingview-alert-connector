@@ -1397,7 +1397,7 @@
           ? 'GOLD'
           : 'BTC';
     const hasIntrusionHistory = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-gold';
-    const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj';
+    const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-gold';
     const openV2Market = openV2Asset === 'GOLD' ? 'PAXG-USD' : `${openV2Asset}-USD`;
     const isEmbedded = queryParams.get('embedded') === '1';
     const CLOUD_DECENTRADER_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
