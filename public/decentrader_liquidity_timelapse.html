@@ -2774,6 +2774,13 @@
         return;
       }
 
+      if (study.masterScannerEnabled === false) {
+        const dRsi = Number(getRsiContext(frameIndex)?.d1?.rsi);
+        rsiStudyValue.textContent = `D RSI ${Number.isFinite(dRsi) ? dRsi.toFixed(1) : '-'} | scanner off`;
+        rsiStudyStatus.textContent = 'Daily RSI master scanner disabled | RSI study remains available';
+        return;
+      }
+
       const dRsiText = Number.isFinite(Number(fertilityContext?.dRsi))
         ? Number(fertilityContext.dRsi).toFixed(1)
         : '-';

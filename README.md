@@ -190,7 +190,7 @@ COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS=336
 
 The ETH/INJ-specific variables are optional. Omitted history paths become `-eth` and `-inj` siblings beside `COINGLASS_WHALE_HISTORY_FILE`, keeping all assets on the same persistent disk without sharing records. The INJ public CoinGlass stream can be intermittent; a timeout preserves the last cached snapshot and never blocks alerts, sizing or protective orders.
 
-The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. The master scanner is Daily-only: when Daily RSI enters the configured master zone, the first configured number of future gap-intrusion histogram bars are armed as fertile. Those fertile slots stay armed even after Daily RSI leaves the zone; leaving the zone only sends a "Master RSI zone deactivated" notification for the RSI-zone state. Every master-scanner email includes the current state and next action so the zone state cannot be confused with the armed fertile scanner state. After the configured number of fertile histos has been used, or when price touches the armed clean-gap edge/TP1 edge first, the scanner is disarmed until Daily RSI touches the master zone again. This is visual research only until promoted into a trade filter.
+The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. The master scanner is Daily-only: when Daily RSI enters the configured master zone, the first configured number of future gap-intrusion histogram bars are armed as fertile. Those fertile slots stay armed even after Daily RSI leaves the zone; leaving the zone only sends a "Master RSI zone deactivated" notification for the RSI-zone state. Every master-scanner email includes the current state and next action so the zone state cannot be confused with the armed fertile scanner state. After the configured number of fertile histos has been used, or when price touches the armed clean-gap edge/TP1 edge first, the scanner is disarmed until Daily RSI touches the master zone again. Set `DECENTRADER_MASTER_RSI_SCANNER_ENABLED=false` to disable and reset only the Daily master scanner and its emails while retaining the RSI study data and normal intrusion flow.
 
 ```text
 DECENTRADER_RSI_STUDY_ENABLED=true
@@ -198,6 +198,7 @@ DECENTRADER_RSI_MARKET=BTC-USD
 DECENTRADER_RSI_PERIOD=14
 DECENTRADER_RSI_ZONE_LOW=45
 DECENTRADER_RSI_ZONE_HIGH=55
+DECENTRADER_MASTER_RSI_SCANNER_ENABLED=true
 DECENTRADER_MASTER_RSI_ZONE_LOW=48
 DECENTRADER_MASTER_RSI_ZONE_HIGH=52
 DECENTRADER_MASTER_RSI_MAX_INTRUSIONS=3

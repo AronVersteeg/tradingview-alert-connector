@@ -276,6 +276,7 @@ type RsiFrameContext = {
 
 type RsiStudyPayload = {
   enabled: boolean;
+  masterScannerEnabled: boolean;
   source: 'dydx';
   market: string;
   period: number;
@@ -3152,6 +3153,10 @@ function decentraderRsiStudyEnabled(): boolean {
   return parseBool(process.env.DECENTRADER_RSI_STUDY_ENABLED, true);
 }
 
+function decentraderMasterRsiScannerEnabled(): boolean {
+  return parseBool(process.env.DECENTRADER_MASTER_RSI_SCANNER_ENABLED, true);
+}
+
 function decentraderRsiPeriod(): number {
   return Math.max(2, Math.min(50, Math.floor(envPositiveNumber('DECENTRADER_RSI_PERIOD', 14))));
 }
@@ -3550,6 +3555,7 @@ async function buildRsiStudyPayload(rows: DecentraderRow[], market: string): Pro
 
   return {
     enabled: true,
+    masterScannerEnabled: decentraderMasterRsiScannerEnabled(),
     source: 'dydx',
     market,
     period,
@@ -5663,6 +5669,26 @@ export class DecentraderGapMonitor {
     result: any,
     smtpSettings: SmtpSettings | undefined
   ): Promise<void> {
+    if (!decentraderMasterRsiScannerEnabled()) {
+      state.masterScannerActive = false;
+      state.masterScannerActivatedAt = undefined;
+      state.masterScannerArmed = false;
+      state.masterScannerArmedAt = undefined;
+      state.masterScannerGapLeft = undefined;
+      state.masterScannerGapRight = undefined;
+      state.masterScannerFertileCount = 0;
+      state.masterScannerFertileSentSignatures = [];
+      result.masterScanner = {
+        enabled: false,
+        active: false,
+        armed: false,
+        fertileCount: 0,
+        reason: 'Daily RSI master scanner disabled by DECENTRADER_MASTER_RSI_SCANNER_ENABLED.'
+      };
+      result.masterScannerEventCount = 0;
+      return;
+    }
+
     if (!rsiStudy?.enabled || !rows.length) {
       result.masterScanner = { enabled: false, reason: 'RSI study unavailable.' };
       return;
