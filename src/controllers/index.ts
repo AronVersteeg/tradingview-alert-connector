@@ -22,6 +22,7 @@ import {
 } from '../services/openLiquidityV2Replica';
 import {
   openLiquidityV2EthTradeMonitor,
+  openLiquidityV2GoldIntrusionMonitor,
   openLiquidityV2InjTradeMonitor
 } from '../services/openLiquidityV2EthTradeMonitor';
 import { buildSnoekScout } from '../services/snoekScout';
@@ -177,6 +178,7 @@ initializeExchanges()
     coinGlassInjWhaleCollector.start(90_000);
     openLiquidityV2EthTradeMonitor.start(75_000);
     openLiquidityV2InjTradeMonitor.start(105_000);
+    openLiquidityV2GoldIntrusionMonitor.start(165_000);
   })
   .catch((err) => {
     console.error("Exchange initialization failed:", err);
@@ -423,6 +425,7 @@ function openLiquidityV2CollectorForMarket(market: string) {
 function openLiquidityV2MonitorForMarket(market: string) {
   if (market === 'ETH-USD') return openLiquidityV2EthTradeMonitor;
   if (market === 'INJ-USD') return openLiquidityV2InjTradeMonitor;
+  if (market === 'PAXG-USD') return openLiquidityV2GoldIntrusionMonitor;
   return undefined;
 }
 
@@ -524,7 +527,9 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
         ? {
             ...payload.source,
             note:
-              `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
+              market === 'PAXG-USD'
+                ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. Gold remains hard observe-only and never places or manages dYdX orders.'
+                : `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
           }
         : payload.source,
       coinGlassWhaleLevels,

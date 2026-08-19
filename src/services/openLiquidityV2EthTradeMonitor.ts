@@ -37,6 +37,7 @@ import {
   CompactReplicaZone,
   OpenLiquidityV2ReplicaCollector,
   openLiquidityV2EthCollector,
+  openLiquidityV2GoldCollector,
   openLiquidityV2InjCollector
 } from './openLiquidityV2Replica';
 
@@ -52,8 +53,9 @@ type WhaleSnapshotProvider = {
 export type OpenLiquidityV2TradeMonitorConfig = {
   market: string;
   symbol: string;
-  asset: 'ETH' | 'INJ';
+  asset: 'ETH' | 'INJ' | 'GOLD';
   priceStep: number;
+  tradeCapable: boolean;
   enabledEnv: string;
   autoTradeEnv: string;
   inheritDecentraderAutoTrade: boolean;
@@ -71,6 +73,7 @@ const ETH_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   symbol: SYMBOL,
   asset: 'ETH',
   priceStep: PRICE_STEP,
+  tradeCapable: true,
   enabledEnv: 'OPEN_LIQUIDITY_V2_ETH_INTRUSION_MONITOR_ENABLED',
   autoTradeEnv: 'OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED',
   inheritDecentraderAutoTrade: true,
@@ -88,6 +91,7 @@ const INJ_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   symbol: 'INJUSDT',
   asset: 'INJ',
   priceStep: 0.01,
+  tradeCapable: true,
   enabledEnv: 'OPEN_LIQUIDITY_V2_INJ_INTRUSION_MONITOR_ENABLED',
   autoTradeEnv: 'OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED',
   inheritDecentraderAutoTrade: false,
@@ -98,6 +102,23 @@ const INJ_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_INJ_MAX_DISTANCE_USD',
   coinGlassMaxDistanceUsd: 0.05,
   coinGlass: coinGlassInjWhaleCollector
+};
+
+const GOLD_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
+  market: 'PAXG-USD',
+  symbol: 'XAUUSDT',
+  asset: 'GOLD',
+  priceStep: 1,
+  tradeCapable: false,
+  enabledEnv: 'OPEN_LIQUIDITY_V2_GOLD_INTRUSION_MONITOR_ENABLED',
+  autoTradeEnv: 'OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED',
+  inheritDecentraderAutoTrade: false,
+  stateFileEnv: 'OPEN_LIQUIDITY_V2_GOLD_TRADE_STATE_FILE',
+  stateFileName: 'open-liquidity-v2-gold-intrusion-state.json',
+  strategyPrefix: 'open_liquidity_v2_gold',
+  coinGlassMinUsdEnv: 'COINGLASS_WHALE_GOLD_LEVEL_MIN_USD',
+  coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_GOLD_MAX_DISTANCE_USD',
+  coinGlassMaxDistanceUsd: 25
 };
 
 type PendingEthAlert = {
@@ -544,7 +565,7 @@ function rawAlertBody(alert: GapAlert, asset = 'ETH', symbol = 'ETHUSDT'): strin
     `New or expanded histos inside previous gap: ${sideCounts(alert)}`,
     ...bars,
     '',
-    `Source: Public Perp V2 ${asset} replica (Binance Spot causal liquidation cohorts).`
+    `Source: Public Perp V2 ${asset} replica (Binance ${asset === 'GOLD' ? 'Futures' : 'Spot'} causal liquidation cohorts).`
   ].join('\n');
 }
 
@@ -601,6 +622,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private autoTradeEnabled(): boolean {
+    if (!this.config.tradeCapable) return false;
     return boolEnv(
       this.config.autoTradeEnv,
       this.config.inheritDecentraderAutoTrade
@@ -627,6 +649,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       market: this.config.market,
       pollMinutes: this.pollMinutes(),
       autoTradeEnabled: this.autoTradeEnabled(),
+      observeOnly: !this.config.tradeCapable,
       stateFile: stateFile(this.config),
       inheritsDecentraderRiskAndOrderEnvs: true
     });
@@ -639,6 +662,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       running: this.running,
       market: this.config.market,
       autoTradeEnabled: this.autoTradeEnabled(),
+      observeOnly: !this.config.tradeCapable,
       hasTradeExecutor: Boolean(this.executor),
       pollMinutes: this.pollMinutes(),
       stateFile: stateFile(this.config),
@@ -1066,4 +1090,9 @@ export const openLiquidityV2EthTradeMonitor = new OpenLiquidityV2EthTradeMonitor
 export const openLiquidityV2InjTradeMonitor = new OpenLiquidityV2EthTradeMonitor(
   openLiquidityV2InjCollector,
   INJ_MONITOR_CONFIG
+);
+
+export const openLiquidityV2GoldIntrusionMonitor = new OpenLiquidityV2EthTradeMonitor(
+  openLiquidityV2GoldCollector,
+  GOLD_MONITOR_CONFIG
 );

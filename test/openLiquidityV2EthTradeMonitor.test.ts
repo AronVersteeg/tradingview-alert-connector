@@ -1,5 +1,6 @@
 import {
   buildReplicaTradeZones,
+  openLiquidityV2GoldIntrusionMonitor,
   openLiquidityV2InjTradeMonitor,
   reconstructReplicaIntrusions
 } from '../src/services/openLiquidityV2EthTradeMonitor';
@@ -166,6 +167,25 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
     } finally {
       if (previousAutoTrade === undefined) delete process.env.OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED;
       else process.env.OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED = previousAutoTrade;
+    }
+  });
+
+  test('keeps the Gold intrusion and Delay monitor hard observe-only', () => {
+    const previousAutoTrade = process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED;
+    process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED = 'true';
+    try {
+      expect(openLiquidityV2GoldIntrusionMonitor.getStatus()).toMatchObject({
+        market: 'PAXG-USD',
+        autoTradeEnabled: false,
+        observeOnly: true,
+        intrusionCandleFilter: {
+          source: 'binance-futures',
+          symbol: 'XAUUSDT'
+        }
+      });
+    } finally {
+      if (previousAutoTrade === undefined) delete process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED;
+      else process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED = previousAutoTrade;
     }
   });
 });

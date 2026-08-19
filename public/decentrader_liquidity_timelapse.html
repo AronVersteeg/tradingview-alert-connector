@@ -1396,6 +1396,7 @@
         : activeSource === 'open-v2-gold'
           ? 'GOLD'
           : 'BTC';
+    const hasIntrusionHistory = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-gold';
     const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj';
     const openV2Market = openV2Asset === 'GOLD' ? 'PAXG-USD' : `${openV2Asset}-USD`;
     const isEmbedded = queryParams.get('embedded') === '1';
@@ -2825,8 +2826,8 @@
 
     function updateDelayHistory() {
       if (!delayHistoryCard) return;
-      delayHistoryCard.hidden = !hasLiveTradePlan;
-      if (!hasLiveTradePlan) return;
+      delayHistoryCard.hidden = !hasIntrusionHistory;
+      if (!hasIntrusionHistory) return;
 
       const history = payload?.delayHistory;
       const totalRecords = Number(history?.totalRecords) || 0;
