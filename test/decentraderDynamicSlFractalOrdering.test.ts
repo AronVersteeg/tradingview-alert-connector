@@ -90,8 +90,8 @@ describe('dynamic SL fractal ordering', () => {
     });
 
     expect(stop.valid).toBe(true);
-    expect(stop.buffer).toBeCloseTo(0.11, 8);
-    expect(stop.price).toBeCloseTo(89.89, 8);
+    expect(stop.buffer).toBeCloseTo(0.09, 8);
+    expect(stop.price).toBeCloseTo(89.91, 8);
     expect(stop.adjustedToMinDistance).toBe(false);
   });
 });

@@ -4458,8 +4458,6 @@ export function buildFractalStop(
     entryPrice,
     options
   );
-  const buffer = entryPrice * decentraderSlBufferPct();
-
   if (!fractal) {
     return {
       source: 'missing-fractal',
@@ -4477,6 +4475,7 @@ export function buildFractalStop(
   }
 
   const wickGuard = wickGuardForFractal(rows, fractal, direction);
+  const buffer = wickGuard.price * decentraderSlBufferPct();
   let price = direction === 'long'
     ? wickGuard.price - buffer
     : wickGuard.price + buffer;
