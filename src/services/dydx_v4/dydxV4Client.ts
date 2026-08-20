@@ -3997,6 +3997,40 @@ export class DydxV4Client extends AbstractDexClient {
       );
     }
 
+    if (usesGoodTilTime) {
+      const marketInfo = await this.getMarketInfoBestEffort(market);
+      const clobPairId = Number(
+        marketInfo?.clobPairId ??
+        marketInfo?.clob_pair_id
+      );
+
+      if (!Number.isFinite(clobPairId)) {
+        throw new Error(
+          `Cannot cancel conditional/long-term order ${clientId} for ${market}: missing clobPairId.`
+        );
+      }
+
+      await this.submitDydxTransaction(
+        'Cancel stateful order',
+        () => (this.client as any).cancelRawOrder(
+          this.subaccount,
+          clientId,
+          orderFlags,
+          clobPairId,
+          0,
+          goodTilBlockTime
+        ),
+        {
+          market,
+          clientId,
+          orderFlags,
+          clobPairId,
+          goodTilBlockTime
+        }
+      );
+      return;
+    }
+
     await this.submitDydxTransaction(
       'Cancel order',
       () => (this.client as any).cancelOrder(
@@ -4004,8 +4038,8 @@ export class DydxV4Client extends AbstractDexClient {
         clientId,
         orderFlags,
         market,
-        usesGoodTilTime ? 0 : goodTilBlock,
-        usesGoodTilTime ? goodTilBlockTime : undefined
+        goodTilBlock,
+        undefined
       ),
       {
         market,

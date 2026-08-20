@@ -112,6 +112,48 @@ describe('dYdX v4 trailing stop synchronization', () => {
     );
   });
 
+  test('cancels a conditional order with its exact absolute expiry', async () => {
+    const client = new DydxV4Client() as any;
+    const expiry = Math.floor(Date.parse('2026-09-19T04:52:58.000Z') / 1000);
+    const cancelRawOrder = jest.fn().mockResolvedValue(undefined);
+    const cancelOrder = jest.fn();
+    client.client = { cancelRawOrder, cancelOrder };
+    client.subaccount = { address: 'dydx1test', subaccountNumber: 0 };
+    client.getMarketInfoBestEffort = jest.fn().mockResolvedValue({ clobPairId: '0' });
+
+    await client.cancelOrderByFlags('BTC-USD', 3129379048, 32, undefined, expiry);
+
+    expect(cancelRawOrder).toHaveBeenCalledWith(
+      client.subaccount,
+      3129379048,
+      32,
+      0,
+      0,
+      expiry
+    );
+    expect(cancelOrder).not.toHaveBeenCalled();
+  });
+
+  test('keeps the human-readable cancel route for short-term orders', async () => {
+    const client = new DydxV4Client() as any;
+    const cancelRawOrder = jest.fn();
+    const cancelOrder = jest.fn().mockResolvedValue(undefined);
+    client.client = { cancelRawOrder, cancelOrder };
+    client.subaccount = { address: 'dydx1test', subaccountNumber: 0 };
+
+    await client.cancelOrderByFlags('BTC-USD', 123, 0, 456, undefined);
+
+    expect(cancelOrder).toHaveBeenCalledWith(
+      client.subaccount,
+      123,
+      0,
+      'BTC-USD',
+      456,
+      undefined
+    );
+    expect(cancelRawOrder).not.toHaveBeenCalled();
+  });
+
   test('does not replace an exact managed stop when the indexer cannot see it', async () => {
     const client = new DydxV4Client() as any;
     client.getCurrentPosition = jest.fn().mockResolvedValue({ size: 0.001 });
