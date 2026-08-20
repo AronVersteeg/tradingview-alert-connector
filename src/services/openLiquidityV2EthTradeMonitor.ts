@@ -23,7 +23,9 @@ import {
   buildDecentraderStopBreachFlatAlert,
   buildDirectionalPlan,
   buildFractalStop,
+  dydxHourlyCandlesToFractalRows,
   fetchBinanceFuturesHourlyCandlesForSymbol,
+  fetchDydxHourlyCandlesForMarket,
   filteredAlertBody,
   gapFibonacciConfluenceForZone,
   intrusionCandleReview,
@@ -767,13 +769,21 @@ export class OpenLiquidityV2EthTradeMonitor {
     const marketInfo = account.markets?.[this.config.market] || account.markets?.[this.config.market.replace('-', '_')];
     if (!marketInfo) throw new Error(`No dYdX market info available for ${this.config.market}.`);
     const mode = String(process.env.DECENTRADER_TRADE_SIZING_MODE || 'growth').trim().toLowerCase();
-    const longPlan = buildDirectionalPlan('long', account, marketInfo, rows, frameIndex, gap, signalAlert, zones, finite(frame.price), mode);
-    const shortPlan = buildDirectionalPlan('short', account, marketInfo, rows, frameIndex, gap, signalAlert, zones, finite(frame.price), mode);
+    const fractalRows = dydxHourlyCandlesToFractalRows(
+      await fetchDydxHourlyCandlesForMarket(this.config.market)
+    );
+    const fractalFrameIndex = fractalRows.length - 1;
+    if (fractalFrameIndex < 4) {
+      throw new Error(`Not enough closed dYdX 1H candles available for ${this.config.market} fractal stops.`);
+    }
+    const longPlan = buildDirectionalPlan('long', account, marketInfo, fractalRows, fractalFrameIndex, gap, signalAlert, zones, finite(frame.price), mode);
+    const shortPlan = buildDirectionalPlan('short', account, marketInfo, fractalRows, fractalFrameIndex, gap, signalAlert, zones, finite(frame.price), mode);
     const activeDirection = mapDirectionFromAlert(signalAlert);
     return {
       ok: true,
       symbol: this.config.symbol,
       market: this.config.market,
+      fractalCandleSource: 'dydx-1h',
       timestamp: frame.t,
       timestampNl: nlTime(frame.t),
       price: finite(frame.price),
@@ -947,8 +957,9 @@ export class OpenLiquidityV2EthTradeMonitor {
       result.dynamicSlSync = { outcome: 'FLATTENED_AFTER_STOP_BREACH', currentPrice, stop: managed.currentStop };
       return;
     }
-    const payload = await this.collector.getPayload();
-    const rows = replicaRows(payload);
+    const rows = dydxHourlyCandlesToFractalRows(
+      await fetchDydxHourlyCandlesForMarket(this.config.market)
+    );
     const fractalDelay = Math.max(0, Math.min(10, Math.floor(numberEnv(
       'DECENTRADER_DYNAMIC_SL_FRACTAL_DELAY',
       numberEnv('DECENTRADER_TRAIL_FRACTAL_DELAY', 1)
@@ -957,14 +968,14 @@ export class OpenLiquidityV2EthTradeMonitor {
       afterFractalIndex: managed.currentStopFractalIndex,
       afterFractalTimestamp: managed.currentStopFractalTimestamp,
       fractalDelay,
+      enforceMinDistance: false,
       missingReason: `Waiting for ${fractalDelay + 1} confirmed newer ${this.config.asset} fractal(s).`
     });
     const candidateStop = finite(candidate.price);
     const correctSide = candidateStop > 0 && (direction === 'long' ? candidateStop < currentPrice : candidateStop > currentPrice);
-    const improvement = fractionEnv('DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT', 0.0025);
     const improves = direction === 'long'
-      ? candidateStop > managed.currentStop * (1 + improvement)
-      : candidateStop < managed.currentStop * (1 - improvement);
+      ? candidateStop > managed.currentStop
+      : candidateStop < managed.currentStop;
     if (!candidate.valid || !correctSide || !improves) {
       result.dynamicSlSync = { outcome: 'UNCHANGED', currentStop: managed.currentStop, candidateStop: candidateStop || null };
       return;

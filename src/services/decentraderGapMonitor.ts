@@ -233,6 +233,8 @@ export type DydxRsiCandle = {
   startedAt: string;
   resolution: string;
   open?: string;
+  high?: string;
+  low?: string;
   close: string;
   source?: 'binance-futures' | 'dydx';
   volumeDeltaQuote?: number;
@@ -403,6 +405,7 @@ export type FractalStopOptions = {
   afterFractalIndex?: number;
   afterFractalTimestamp?: string;
   fractalDelay?: number;
+  enforceMinDistance?: boolean;
   missingReason?: string;
 };
 
@@ -3601,6 +3604,36 @@ export async function fetchDydxHourlyCandlesForMarket(
   return fetchDydxRsiCandles(String(market).replace(/_/g, '-').toUpperCase(), '1HOUR', 1000);
 }
 
+export function dydxHourlyCandlesToFractalRows(
+  candles: DydxRsiCandle[] | undefined,
+  observedAtMs = Date.now()
+): DecentraderRow[] {
+  const rows: DecentraderRow[] = [];
+
+  for (const candle of candles || []) {
+    const startedAtMs = Date.parse(candle.startedAt);
+    if (!Number.isFinite(startedAtMs) || startedAtMs + HOUR_MS > observedAtMs) continue;
+
+    const open = parseNumber(candle.open);
+    const high = parseNumber(candle.high);
+    const low = parseNumber(candle.low);
+    const close = parseNumber(candle.close);
+    if (open === undefined || high === undefined || low === undefined || close === undefined) continue;
+
+    rows.push({
+      timestamp: candle.startedAt,
+      ohlc4: (open + high + low + close) / 4,
+      openRef: open,
+      closeRef: close,
+      highRef: high,
+      lowRef: low,
+      fractalCandleSource: 'dydx-1h'
+    });
+  }
+
+  return rows.sort((a, b) => utcTimestampMs(a.timestamp)! - utcTimestampMs(b.timestamp)!);
+}
+
 function rsiFrameBias(h4: RsiPoint | undefined, d1: RsiPoint | undefined): 'long' | 'short' | 'neutral' {
   const slopes = [h4?.slope, d1?.slope].filter((value): value is number => Number.isFinite(value));
   if (slopes.length < 2) return 'neutral';
@@ -4107,10 +4140,6 @@ function decentraderDynamicSlLiveUpdatesEnabled(): boolean {
   return parseBool(process.env.DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED, false);
 }
 
-function decentraderDynamicSlMinImprovementPct(): number {
-  return envFraction('DECENTRADER_DYNAMIC_SL_MIN_IMPROVEMENT_PCT', 0.0025);
-}
-
 function decentraderDynamicSlFractalDelay(): number {
   const parsed = Number(
     process.env.DECENTRADER_DYNAMIC_SL_FRACTAL_DELAY ||
@@ -4225,10 +4254,6 @@ function decentraderSlBufferPct(): number {
   return envFraction('DECENTRADER_SL_BUFFER_PCT', 0.001);
 }
 
-function decentraderSlRangeBufferMultiplier(): number {
-  return envPositiveNumber('DECENTRADER_SL_BUFFER_RANGE_MULTIPLIER', 0.25);
-}
-
 function decentraderSlMinDistancePct(): number {
   return envFraction('DECENTRADER_SL_MIN_DISTANCE_PCT', 0.0025);
 }
@@ -4239,32 +4264,6 @@ function decentraderSlMaxDistancePct(): number {
 
 function decentraderSkipTradeWithoutSl(): boolean {
   return parseBool(process.env.DECENTRADER_SKIP_TRADE_WITHOUT_SL, true);
-}
-
-function median(values: number[]): number | undefined {
-  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
-  if (!sorted.length) return undefined;
-
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2
-    ? sorted[mid]
-    : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-function medianHourlyRange(rows: DecentraderRow[], frameIndex: number, lookback: number): number | undefined {
-  const start = Math.max(1, frameIndex - lookback + 1);
-  const ranges: number[] = [];
-
-  for (let index = start; index <= frameIndex; index += 1) {
-    const current = parseNumber(rows[index]?.ohlc4);
-    const previous = parseNumber(rows[index - 1]?.ohlc4);
-
-    if (current !== undefined && previous !== undefined) {
-      ranges.push(Math.abs(current - previous));
-    }
-  }
-
-  return median(ranges);
 }
 
 function confirmedFractals(
@@ -4459,10 +4458,7 @@ export function buildFractalStop(
     entryPrice,
     options
   );
-  const rangeBuffer = (medianHourlyRange(rows, frameIndex, decentraderSlLookbackBars()) || 0) *
-    decentraderSlRangeBufferMultiplier();
-  const pctBuffer = entryPrice * decentraderSlBufferPct();
-  const buffer = Math.max(pctBuffer, rangeBuffer);
+  const buffer = entryPrice * decentraderSlBufferPct();
 
   if (!fractal) {
     return {
@@ -4488,7 +4484,7 @@ export function buildFractalStop(
   let riskPct = distance / Math.max(1, entryPrice);
   let adjustedToMinDistance = false;
 
-  if (riskPct < minDistancePct) {
+  if (options.enforceMinDistance !== false && riskPct < minDistancePct) {
     price = direction === 'long'
       ? entryPrice * (1 - minDistancePct)
       : entryPrice * (1 + minDistancePct);
@@ -6435,7 +6431,9 @@ export class DecentraderGapMonitor {
         numberOrZero(directionalPlan?.entryReference?.price) ||
         numberOrZero(plan?.marketInfo?.oraclePrice) ||
         numberOrZero(plan?.price);
-      const rows = this.latestRows || [];
+      const rows = dydxHourlyCandlesToFractalRows(
+        await fetchDydxHourlyCandlesForMarket(market)
+      );
       const frameIndex = rows.length - 1;
       const fractalDelay = decentraderDynamicSlFractalDelay();
 
@@ -6447,6 +6445,7 @@ export class DecentraderGapMonitor {
             afterFractalIndex: managedPosition.currentStopFractalIndex,
             afterFractalTimestamp: managedPosition.currentStopFractalTimestamp,
             fractalDelay,
+            enforceMinDistance: false,
             missingReason: `Waiting for ${fractalDelay + 1} confirmed newer fractal(s) after the current SL fractal before moving the trailing stop.`
           })
         : undefined;
@@ -6514,11 +6513,11 @@ export class DecentraderGapMonitor {
         return;
       }
 
-      const minImprovementPct = decentraderDynamicSlMinImprovementPct();
+      const minImprovementPct = 0;
       const improves =
         positionDirection === 'long'
-          ? candidateStop > managedPosition.currentStop * (1 + minImprovementPct)
-          : candidateStop < managedPosition.currentStop * (1 - minImprovementPct);
+          ? candidateStop > managedPosition.currentStop
+          : candidateStop < managedPosition.currentStop;
 
       if (
         !candidateStopDetails?.valid ||
@@ -7255,8 +7254,15 @@ export class DecentraderGapMonitor {
     const mode = String(process.env.DECENTRADER_TRADE_SIZING_MODE || 'growth')
       .trim()
       .toLowerCase();
-    const longPlan = buildDirectionalPlan('long', account, marketInfo, rows, frameIndex, gap, alert, zones, price, mode);
-    const shortPlan = buildDirectionalPlan('short', account, marketInfo, rows, frameIndex, gap, alert, zones, price, mode);
+    const fractalRows = dydxHourlyCandlesToFractalRows(
+      await fetchDydxHourlyCandlesForMarket(normalizedMarket)
+    );
+    const fractalFrameIndex = fractalRows.length - 1;
+    if (fractalFrameIndex < decentraderSlFractalWindow() * 2) {
+      throw new Error(`Not enough closed dYdX 1H candles available for ${normalizedMarket} fractal stops.`);
+    }
+    const longPlan = buildDirectionalPlan('long', account, marketInfo, fractalRows, fractalFrameIndex, gap, alert, zones, price, mode);
+    const shortPlan = buildDirectionalPlan('short', account, marketInfo, fractalRows, fractalFrameIndex, gap, alert, zones, price, mode);
     const activeDirection = simulatedDirection || mapDirectionFromAlert(alert);
     const activePlan = activeDirection === 'long' ? longPlan : activeDirection === 'short' ? shortPlan : null;
 
@@ -7264,6 +7270,7 @@ export class DecentraderGapMonitor {
       ok: true,
       symbol: config.symbol,
       market: normalizedMarket,
+      fractalCandleSource: 'dydx-1h',
       timestamp: String(frame.timestamp || ''),
       timestampNl: nlTime(frame.timestamp),
       price,
