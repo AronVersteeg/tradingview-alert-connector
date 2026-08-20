@@ -955,6 +955,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     ))));
     const candidate = buildFractalStop(rows, rows.length - 1, direction, currentPrice, {
       afterFractalIndex: managed.currentStopFractalIndex,
+      afterFractalTimestamp: managed.currentStopFractalTimestamp,
       fractalDelay,
       missingReason: `Waiting for ${fractalDelay + 1} confirmed newer ${this.config.asset} fractal(s).`
     });

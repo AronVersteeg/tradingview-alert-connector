@@ -393,6 +393,7 @@ type FractalStop = {
   valid: boolean;
   adjustedToMinDistance?: boolean;
   anchorFractalIndex?: number;
+  anchorFractalTimestamp?: string;
   newerFractalCount?: number;
   fractalDelay?: number;
   reason?: string;
@@ -400,6 +401,7 @@ type FractalStop = {
 
 export type FractalStopOptions = {
   afterFractalIndex?: number;
+  afterFractalTimestamp?: string;
   fractalDelay?: number;
   missingReason?: string;
 };
@@ -4321,13 +4323,27 @@ function latestValidFractal(
   options: FractalStopOptions = {}
 ): FractalLevel | undefined {
   const kind = direction === 'long' ? 'bottom' : 'top';
+  const anchorTimestampMs = utcTimestampMs(options.afterFractalTimestamp);
+  const isNewerThanAnchor = (fractal: FractalLevel): boolean => {
+    if (anchorTimestampMs !== undefined) {
+      const fractalTimestampMs = utcTimestampMs(fractal.timestamp);
+
+      if (fractalTimestampMs !== undefined) {
+        return fractalTimestampMs > anchorTimestampMs;
+      }
+    }
+
+    return options.afterFractalIndex === undefined ||
+      fractal.index > Number(options.afterFractalIndex);
+  };
   const selectLatest = (fractals: FractalLevel[]): FractalLevel | undefined => {
     const validFractals = fractals.filter((fractal) =>
       direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice
     );
-    const newerFractals = options.afterFractalIndex === undefined
+    const hasAnchor = anchorTimestampMs !== undefined || options.afterFractalIndex !== undefined;
+    const newerFractals = !hasAnchor
       ? validFractals
-      : validFractals.filter((fractal) => fractal.index > Number(options.afterFractalIndex));
+      : validFractals.filter(isNewerThanAnchor);
     const delay = Math.max(0, Math.floor(numberOrZero(options.fractalDelay)));
 
     if (!newerFractals.length || newerFractals.length <= delay) {
@@ -4368,9 +4384,11 @@ function newerValidFractalCount(
   frameIndex: number,
   direction: TradePlanDirection,
   entryPrice: number,
-  afterFractalIndex: number | undefined
+  options: FractalStopOptions
 ): number | undefined {
-  if (afterFractalIndex === undefined) return undefined;
+  const anchorTimestampMs = utcTimestampMs(options.afterFractalTimestamp);
+  const hasAnchor = anchorTimestampMs !== undefined || options.afterFractalIndex !== undefined;
+  if (!hasAnchor) return undefined;
 
   const kind = direction === 'long' ? 'bottom' : 'top';
   return confirmedFractals(
@@ -4380,10 +4398,15 @@ function newerValidFractalCount(
     decentraderSlFractalWindow(),
     decentraderSlLookbackBars()
   )
-    .filter((fractal) =>
-      fractal.index > afterFractalIndex &&
-      (direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice)
-    ).length;
+    .filter((fractal) => {
+      const fractalTimestampMs = utcTimestampMs(fractal.timestamp);
+      const isNewer = anchorTimestampMs !== undefined && fractalTimestampMs !== undefined
+        ? fractalTimestampMs > anchorTimestampMs
+        : fractal.index > Number(options.afterFractalIndex);
+
+      return isNewer &&
+        (direction === 'long' ? fractal.price < entryPrice : fractal.price > entryPrice);
+    }).length;
 }
 
 function wickGuardForFractal(
@@ -4434,7 +4457,7 @@ export function buildFractalStop(
     frameIndex,
     direction,
     entryPrice,
-    options.afterFractalIndex
+    options
   );
   const rangeBuffer = (medianHourlyRange(rows, frameIndex, decentraderSlLookbackBars()) || 0) *
     decentraderSlRangeBufferMultiplier();
@@ -4448,6 +4471,7 @@ export function buildFractalStop(
       maxDistancePct,
       valid: false,
       anchorFractalIndex: options.afterFractalIndex,
+      anchorFractalTimestamp: options.afterFractalTimestamp,
       newerFractalCount,
       fractalDelay: options.fractalDelay,
       reason: decentraderSkipTradeWithoutSl()
@@ -4488,6 +4512,7 @@ export function buildFractalStop(
       maxDistancePct,
       valid: false,
       anchorFractalIndex: options.afterFractalIndex,
+      anchorFractalTimestamp: options.afterFractalTimestamp,
       newerFractalCount,
       fractalDelay: options.fractalDelay,
       reason: `Fractal stop distance ${riskPct} is above maximum ${maxDistancePct}.`
@@ -4509,6 +4534,7 @@ export function buildFractalStop(
     valid: true,
     adjustedToMinDistance,
     anchorFractalIndex: options.afterFractalIndex,
+    anchorFractalTimestamp: options.afterFractalTimestamp,
     newerFractalCount,
     fractalDelay: options.fractalDelay,
     reason: adjustedToMinDistance
@@ -6413,24 +6439,18 @@ export class DecentraderGapMonitor {
       const frameIndex = rows.length - 1;
       const fractalDelay = decentraderDynamicSlFractalDelay();
 
-      if (managedPosition.currentStopFractalIndex === undefined) {
-        const anchorFractal = directionalPlan?.stop?.fractal;
-        if (anchorFractal && typeof anchorFractal.index === 'number') {
-          managedPosition.currentStopFractalIndex = anchorFractal.index;
-          managedPosition.currentStopFractalTimestamp = anchorFractal.timestamp;
-          managedPosition.currentStopFractalPrice = anchorFractal.price;
-          managedPosition.currentStopFractalSource = anchorFractal.source;
-        }
-      }
-
-      const delayedStop = rows.length && frameIndex >= 0 && currentPrice > 0
+      const hasStopFractalAnchor =
+        utcTimestampMs(managedPosition.currentStopFractalTimestamp) !== undefined ||
+        managedPosition.currentStopFractalIndex !== undefined;
+      const delayedStop = hasStopFractalAnchor && rows.length && frameIndex >= 0 && currentPrice > 0
         ? buildFractalStop(rows, frameIndex, positionDirection, currentPrice, {
             afterFractalIndex: managedPosition.currentStopFractalIndex,
+            afterFractalTimestamp: managedPosition.currentStopFractalTimestamp,
             fractalDelay,
             missingReason: `Waiting for ${fractalDelay + 1} confirmed newer fractal(s) after the current SL fractal before moving the trailing stop.`
           })
         : undefined;
-      const candidateStopDetails = managedPosition.currentStopFractalIndex === undefined
+      const candidateStopDetails = !hasStopFractalAnchor
         ? directionalPlan?.stop
         : delayedStop;
       const candidateStop = numberOrZero(candidateStopDetails?.price);
@@ -6519,6 +6539,7 @@ export class DecentraderGapMonitor {
             minImprovementPct,
             fractalDelay,
             currentStopFractalIndex: managedPosition.currentStopFractalIndex,
+            currentStopFractalTimestamp: managedPosition.currentStopFractalTimestamp,
             coverageSyncEnabled: false,
             stop: candidateStopDetails || null
           };
@@ -6550,6 +6571,7 @@ export class DecentraderGapMonitor {
           minImprovementPct,
           fractalDelay,
           currentStopFractalIndex: managedPosition.currentStopFractalIndex,
+          currentStopFractalTimestamp: managedPosition.currentStopFractalTimestamp,
           stop: candidateStopDetails || null
         };
 
@@ -6574,6 +6596,7 @@ export class DecentraderGapMonitor {
           timestampNl: plan.timestampNl,
           fractalDelay,
           currentStopFractalIndex: managedPosition.currentStopFractalIndex,
+          currentStopFractalTimestamp: managedPosition.currentStopFractalTimestamp,
           stop: candidateStopDetails
         };
 
@@ -6593,6 +6616,7 @@ export class DecentraderGapMonitor {
         timestampNl: plan.timestampNl,
         fractalDelay,
         previousStopFractalIndex: managedPosition.currentStopFractalIndex,
+        previousStopFractalTimestamp: managedPosition.currentStopFractalTimestamp,
         stop: candidateStopDetails
       };
 
