@@ -507,10 +507,136 @@ export type AlertState = {
     currentStopFractalTimestamp?: string;
     currentStopFractalPrice?: number;
     currentStopFractalSource?: 'highRef' | 'lowRef' | 'ohlc4';
+    takeProfits?: any[];
+    tp1Lifecycle?: ManagedTp1Lifecycle;
   };
   lastCheckedAt?: string;
   lastDataTimestamp?: string;
 };
+
+export type ManagedTp1Lifecycle = {
+  lockedLevel: Record<string, any>;
+  lockedAt: string;
+  initialPositionSize: number;
+  lastObservedPositionSize: number;
+  consumedAt?: string;
+};
+
+function takeProfitLabel(level: any): string {
+  return String(level?.label || level?.name || '').trim().toUpperCase();
+}
+
+function isTp1Level(level: any): boolean {
+  return /(?:^|\s)TP\s*1(?:\s|$)/i.test(takeProfitLabel(level));
+}
+
+function takeProfitLevelCopy(level: any): Record<string, any> {
+  return level && typeof level === 'object' ? { ...level } : {};
+}
+
+function tp1FromLevels(levels: any[]): Record<string, any> | undefined {
+  if (!Array.isArray(levels) || !levels.length) return undefined;
+  const labelled = levels.find((level) => isTp1Level(level));
+  if (labelled) return takeProfitLevelCopy(labelled);
+  const hasLabels = levels.some((level) => takeProfitLabel(level).length > 0);
+  return hasLabels ? undefined : takeProfitLevelCopy(levels[0]);
+}
+
+function levelsWithoutTp1(levels: any[]): Record<string, any>[] {
+  if (!Array.isArray(levels) || !levels.length) return [];
+  const labelledTp1 = levels.some((level) => isTp1Level(level));
+  const hasLabels = levels.some((level) => takeProfitLabel(level).length > 0);
+  return levels
+    .filter((level, index) => labelledTp1 ? !isTp1Level(level) : hasLabels || index !== 0)
+    .map(takeProfitLevelCopy);
+}
+
+function resizeTakeProfitLevels(levels: Record<string, any>[], targetSize: number): Record<string, any>[] {
+  if (!levels.length || targetSize <= 0) return [];
+  const weights = levels.map((level) => {
+    const explicitSize = Number(level.size);
+    if (Number.isFinite(explicitSize) && explicitSize > 0) return explicitSize;
+    const fraction = Number(level.size_fraction);
+    return Number.isFinite(fraction) && fraction > 0 ? fraction : 1;
+  });
+  const weightTotal = weights.reduce((total, value) => total + value, 0);
+
+  return levels.map((level, index) => ({
+    ...level,
+    size: targetSize * weights[index] / Math.max(weightTotal, Number.EPSILON)
+  }));
+}
+
+export function stabilizeManagedTakeProfits(
+  managedPosition: NonNullable<AlertState['managedPosition']>,
+  proposedLevels: any[],
+  currentPositionSize: number,
+  observedAt = nowNlIso(),
+  fallbackEntryLevels: any[] = []
+): {
+  takeProfits: Record<string, any>[];
+  lifecycle: ManagedTp1Lifecycle | undefined;
+  consumedNow: boolean;
+} {
+  const currentSize = Math.abs(Number(currentPositionSize) || 0);
+  const initialSize = Math.abs(Number(managedPosition.initialSize) || currentSize);
+  let lifecycle = managedPosition.tp1Lifecycle;
+
+  if (!lifecycle) {
+    const entryLevels = Array.isArray(managedPosition.takeProfits) && managedPosition.takeProfits.length
+      ? managedPosition.takeProfits
+      : Array.isArray(fallbackEntryLevels) && fallbackEntryLevels.length
+        ? fallbackEntryLevels
+        : proposedLevels;
+    const lockedLevel = tp1FromLevels(entryLevels);
+    if (lockedLevel && Number(lockedLevel.price) > 0) {
+      lifecycle = {
+        lockedLevel,
+        lockedAt: managedPosition.openedAt || observedAt,
+        initialPositionSize: initialSize,
+        lastObservedPositionSize: currentSize
+      };
+      managedPosition.tp1Lifecycle = lifecycle;
+    }
+  }
+
+  if (!lifecycle) {
+    return {
+      takeProfits: Array.isArray(proposedLevels) ? proposedLevels.map(takeProfitLevelCopy) : [],
+      lifecycle: undefined,
+      consumedNow: false
+    };
+  }
+
+  const comparisonSize = Math.max(initialSize, Math.abs(Number(lifecycle.initialPositionSize) || 0));
+  const reductionTolerance = Math.max(1e-10, comparisonSize * 1e-7);
+  const consumedNow = !lifecycle.consumedAt && currentSize < comparisonSize - reductionTolerance;
+  if (consumedNow) lifecycle.consumedAt = observedAt;
+  lifecycle.lastObservedPositionSize = currentSize;
+
+  const dynamicLevels = levelsWithoutTp1(proposedLevels);
+  if (lifecycle.consumedAt) {
+    return {
+      takeProfits: resizeTakeProfitLevels(dynamicLevels, currentSize),
+      lifecycle,
+      consumedNow
+    };
+  }
+
+  const lockedSize = Math.min(currentSize, Math.max(0, Number(lifecycle.lockedLevel.size) || 0));
+  const lockedLevel = {
+    ...lifecycle.lockedLevel,
+    size: lockedSize
+  };
+  const remainingSize = Math.max(0, currentSize - lockedSize);
+
+  return {
+    takeProfits: [lockedLevel, ...resizeTakeProfitLevels(dynamicLevels, remainingSize)]
+      .filter((level) => Number(level.size) > 0),
+    lifecycle,
+    consumedNow
+  };
+}
 
 function parseBool(value: string | undefined, fallback = false): boolean {
   if (value === undefined || value.trim() === '') return fallback;
@@ -6083,14 +6209,26 @@ export class DecentraderGapMonitor {
 
       const plan = await this.getTradePlan(account, market);
       const alert = buildDecentraderDynamicTpAlert(plan, position);
-      const takeProfits = (alert as any).take_profits || [];
+      const proposedTakeProfits = (alert as any).take_profits || [];
+      const stabilized = stabilizeManagedTakeProfits(
+        managedPosition,
+        proposedTakeProfits,
+        Math.abs(position.size),
+        nowNlIso(),
+        Array.isArray(state.lastTradeDecision?.takeProfits)
+          ? state.lastTradeDecision.takeProfits
+          : []
+      );
+      const takeProfits = stabilized.takeProfits;
+      (alert as any).take_profits = takeProfits;
 
       if (!takeProfits.length) {
         result.dynamicTpSync = {
           outcome: 'SKIPPED',
           reason: 'No placeable map-derived TP levels; existing TP orders were preserved.',
           market,
-          position
+          position,
+          tp1Lifecycle: stabilized.lifecycle || null
         };
         return;
       }
@@ -6102,7 +6240,9 @@ export class DecentraderGapMonitor {
         position,
         timestamp: plan.timestamp,
         timestampNl: plan.timestampNl,
-        takeProfits
+        takeProfits,
+        tp1Lifecycle: stabilized.lifecycle || null,
+        tp1ConsumedNow: stabilized.consumedNow
       };
       console.log('Decentrader dynamic TP sync:', result.dynamicTpSync);
     } catch (error) {
@@ -6944,8 +7084,17 @@ export class DecentraderGapMonitor {
         currentStopFractalPrice: typeof initialStopFractal?.price === 'number'
           ? initialStopFractal.price
           : undefined,
-        currentStopFractalSource: initialStopFractal?.source
+        currentStopFractalSource: initialStopFractal?.source,
+        takeProfits: Array.isArray((orderAlert as any).take_profits)
+          ? (orderAlert as any).take_profits.map(takeProfitLevelCopy)
+          : []
       };
+      stabilizeManagedTakeProfits(
+        state.managedPosition,
+        (orderAlert as any).take_profits || [],
+        Math.abs(observedEntryPosition.size),
+        state.lastTradeExecutedAt
+      );
       result.tradePlaced = true;
       result.tradeSkipped = null;
       this.recordTradeDecision(state, result, alert, signature, 'PLACED', 'dYdX order flow completed.', {

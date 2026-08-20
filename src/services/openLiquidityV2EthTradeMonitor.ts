@@ -31,6 +31,7 @@ import {
   nlTime,
   nowNlIso,
   sendEmailBestEffort,
+  stabilizeManagedTakeProfits,
   smtpSettingsFromEnv
 } from './decentraderGapMonitor';
 import {
@@ -860,8 +861,17 @@ export class OpenLiquidityV2EthTradeMonitor {
       currentStopFractalIndex: stop?.fractal?.index,
       currentStopFractalTimestamp: stop?.fractal?.timestamp,
       currentStopFractalPrice: stop?.fractal?.price,
-      currentStopFractalSource: stop?.fractal?.source
+      currentStopFractalSource: stop?.fractal?.source,
+      takeProfits: Array.isArray((orderAlert as any).take_profits)
+        ? (orderAlert as any).take_profits.map((level: any) => ({ ...level }))
+        : []
     };
+    stabilizeManagedTakeProfits(
+      state.managedPosition,
+      (orderAlert as any).take_profits || [],
+      Math.abs(finite(placedPosition.size)),
+      state.lastTradeExecutedAt
+    );
     state.lastTradeDecision = {
       at: nowNlIso(), outcome: 'PLACED', market: this.config.market, direction, signature,
       size: Math.abs(finite(placedPosition.size)), stop: finite(stop?.price),
@@ -900,8 +910,24 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (boolEnv('DECENTRADER_DYNAMIC_TP_ENABLED', true) && executor.syncTakeProfits) {
       const tpAlert = buildDecentraderDynamicTpAlert(plan, position);
       (tpAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_tps`;
-      if (((tpAlert as any).take_profits || []).length) {
+      const stabilized = stabilizeManagedTakeProfits(
+        managed,
+        (tpAlert as any).take_profits || [],
+        Math.abs(finite(position.size)),
+        nowNlIso(),
+        Array.isArray(state.lastTradeDecision?.takeProfits)
+          ? state.lastTradeDecision.takeProfits
+          : []
+      );
+      (tpAlert as any).take_profits = stabilized.takeProfits;
+      if (stabilized.takeProfits.length) {
         result.dynamicTpSync = await executor.syncTakeProfits(tpAlert);
+        result.dynamicTpSync = {
+          ...result.dynamicTpSync,
+          tp1Lifecycle: stabilized.lifecycle || null,
+          tp1ConsumedNow: stabilized.consumedNow,
+          takeProfits: stabilized.takeProfits
+        };
       }
     }
     if (!boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true) || !executor.syncTrailingStop || !managed.currentStop) return;
