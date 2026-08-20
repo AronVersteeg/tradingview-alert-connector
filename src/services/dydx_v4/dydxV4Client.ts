@@ -3678,7 +3678,8 @@ export class DydxV4Client extends AbstractDexClient {
       0
     );
 
-    return res.orders?.filter((order: any) => this.orderMarketMatches(order, market)) || [];
+    return this.getOrdersFromResponse(res)
+      .filter((order: any) => this.orderMarketMatches(order, market));
   }
 
   private async getOpenOrdersForMarket(market: string): Promise<any[]> {
@@ -3700,7 +3701,7 @@ export class DydxV4Client extends AbstractDexClient {
     const ordersById = new Map<string, any>();
 
     for (const response of responses) {
-      for (const order of response.orders || []) {
+      for (const order of this.getOrdersFromResponse(response)) {
         if (!this.orderMarketMatches(order, market) || !this.isVisibleOpenOrder(order)) {
           continue;
         }
@@ -3715,6 +3716,14 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     return Array.from(ordersById.values());
+  }
+
+  private getOrdersFromResponse(response: any): any[] {
+    if (Array.isArray(response)) return response;
+    if (Array.isArray(response?.orders)) return response.orders;
+    if (Array.isArray(response?.data)) return response.data;
+    if (Array.isArray(response?.data?.orders)) return response.data.orders;
+    return [];
   }
 
   private getProtectiveStopOrdersFromOrders(orders: any[]): any[] {

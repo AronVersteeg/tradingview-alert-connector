@@ -64,6 +64,23 @@ describe('dYdX v4 trailing stop synchronization', () => {
     expect(getSubaccountOrders.mock.calls.every((call: any[]) => call[6] === undefined)).toBe(true);
   });
 
+  test('loads active conditional orders from the current bare-array indexer response', async () => {
+    const client = new DydxV4Client() as any;
+    const getSubaccountOrders = jest.fn().mockImplementation(
+      (_address, _subaccount, _ticker, _tickerType, _side, status) =>
+        Promise.resolve(status === 'UNTRIGGERED'
+          ? [visibleStop(101), visibleStop(102)]
+          : [])
+    );
+    client.wallet = { address: 'dydx1test' };
+    client.indexer = { account: { getSubaccountOrders } };
+
+    const orders = await client.getOpenOrdersForMarket('BTC-USD');
+
+    expect(orders.map((order: any) => order.clientId)).toEqual([101, 102]);
+    expect(getSubaccountOrders).toHaveBeenCalledTimes(3);
+  });
+
   test('parses indexer ISO good-til time for conditional order cancellation', () => {
     const client = new DydxV4Client() as any;
     const iso = '2026-08-05T23:18:35.000Z';
