@@ -1,5 +1,6 @@
 import {
   AlertState,
+  buildDecentraderDynamicTpAlert,
   stabilizeManagedTakeProfits
 } from '../src/services/decentraderGapMonitor';
 
@@ -96,5 +97,75 @@ describe('managed TP1 lifecycle', () => {
 
     expect(result.lifecycle).toBeUndefined();
     expect(result.takeProfits.map((level) => level.price)).toEqual([125, 145]);
+  });
+
+  test('restores zero-sized TP candidates after TP1 was consumed and covers the full position', () => {
+    const managed = managedPosition([
+      { label: 'L TP1', price: 69950, size: 0.0005 },
+      { label: 'L TP2', price: 80000, size: 0.0003 }
+    ]);
+    managed.initialSize = 0.002;
+    stabilizeManagedTakeProfits(
+      managed,
+      managed.takeProfits || [],
+      0.002,
+      '2026-08-20T01:00:00.000Z',
+      [],
+      0.0001
+    );
+
+    const result = stabilizeManagedTakeProfits(
+      managed,
+      [
+        { label: 'L TP1', price: 69950, size: 0.0005 },
+        { label: 'L TP2', price: 80000, size: 0 },
+        { label: 'L TP3', price: 85950, size: 0 },
+        { label: 'L TP4', price: 95950, size: 0.0005 },
+        { label: 'L TP5', price: 99950, size: 0.0003 },
+        { label: 'L TP6', price: 119950, size: 0.0001 }
+      ],
+      0.0013,
+      '2026-08-20T02:00:00.000Z',
+      [],
+      0.0001
+    );
+
+    expect(result.consumedNow).toBe(true);
+    expect(result.takeProfits.map((level) => level.price)).toEqual([
+      80000, 85950, 95950, 99950, 119950
+    ]);
+    expect(result.takeProfits.every((level) => level.size >= 0.0001)).toBe(true);
+    expect(result.takeProfits.reduce((total, level) => total + level.size, 0)).toBeCloseTo(0.0013, 10);
+  });
+
+  test('keeps all map candidates available until lifecycle reallocation', () => {
+    const alert = buildDecentraderDynamicTpAlert({
+      market: 'BTC-USD',
+      price: 72000,
+      marketInfo: { oraclePrice: 72000, stepSize: 0.0001 },
+      plans: {
+        long: {
+          entryReference: { price: 72000 },
+          sizing: { minimumOrderSize: 0.0001 },
+          takeProfits: [
+            { label: 'L TP1', price: 73000, selectionScore: 600 },
+            { label: 'L TP2', price: 80000, selectionScore: 500 },
+            { label: 'L TP3', price: 85950, selectionScore: 400 },
+            { label: 'L TP4', price: 95950, selectionScore: 300 },
+            { label: 'L TP5', price: 99950, selectionScore: 200 },
+            { label: 'L TP6', price: 119950, selectionScore: 100 }
+          ]
+        }
+      }
+    }, {
+      market: 'BTC-USD',
+      side: 'LONG',
+      size: 0.0003,
+      entryPrice: 70000
+    });
+
+    const levels = (alert as any).take_profits;
+    expect(levels).toHaveLength(6);
+    expect(levels.some((level: any) => level.size === 0)).toBe(true);
   });
 });

@@ -910,6 +910,10 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (boolEnv('DECENTRADER_DYNAMIC_TP_ENABLED', true) && executor.syncTakeProfits) {
       const tpAlert = buildDecentraderDynamicTpAlert(plan, position);
       (tpAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_tps`;
+      const directionalPlan = plan?.plans?.[direction];
+      const minimumOrderSize =
+        finite(directionalPlan?.sizing?.minimumOrderSize) ||
+        finite(plan?.marketInfo?.stepSize);
       const stabilized = stabilizeManagedTakeProfits(
         managed,
         (tpAlert as any).take_profits || [],
@@ -917,7 +921,8 @@ export class OpenLiquidityV2EthTradeMonitor {
         nowNlIso(),
         Array.isArray(state.lastTradeDecision?.takeProfits)
           ? state.lastTradeDecision.takeProfits
-          : []
+          : [],
+        minimumOrderSize
       );
       (tpAlert as any).take_profits = stabilized.takeProfits;
       if (stabilized.takeProfits.length) {

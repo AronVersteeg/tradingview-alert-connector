@@ -551,15 +551,44 @@ function levelsWithoutTp1(levels: any[]): Record<string, any>[] {
     .map(takeProfitLevelCopy);
 }
 
-function resizeTakeProfitLevels(levels: Record<string, any>[], targetSize: number): Record<string, any>[] {
+function resizeTakeProfitLevels(
+  levels: Record<string, any>[],
+  targetSize: number,
+  stepSize = 0
+): Record<string, any>[] {
   if (!levels.length || targetSize <= 0) return [];
+  const hasSelectionScores = levels.some((level) =>
+    Number(level.zone_selection_score) > 0 || Number(level.zone_score) > 0
+  );
   const weights = levels.map((level) => {
+    if (hasSelectionScores) {
+      const score = Math.max(
+        1,
+        Number(level.zone_selection_score) || Number(level.zone_score) || 0
+      );
+      return Math.sqrt(score);
+    }
     const explicitSize = Number(level.size);
     if (Number.isFinite(explicitSize) && explicitSize > 0) return explicitSize;
     const fraction = Number(level.size_fraction);
     return Number.isFinite(fraction) && fraction > 0 ? fraction : 1;
   });
   const weightTotal = weights.reduce((total, value) => total + value, 0);
+
+  if (Number.isFinite(stepSize) && stepSize > 0) {
+    const sizes = allocateStepSizes(
+      targetSize,
+      stepSize,
+      weights,
+      levels.map((_level, index) => index)
+    );
+    return levels
+      .map((level, index) => ({
+        ...level,
+        size: sizes[index] || 0
+      }))
+      .filter((level) => Number(level.size) > 0);
+  }
 
   return levels.map((level, index) => ({
     ...level,
@@ -572,7 +601,8 @@ export function stabilizeManagedTakeProfits(
   proposedLevels: any[],
   currentPositionSize: number,
   observedAt = nowNlIso(),
-  fallbackEntryLevels: any[] = []
+  fallbackEntryLevels: any[] = [],
+  stepSize = 0
 ): {
   takeProfits: Record<string, any>[];
   lifecycle: ManagedTp1Lifecycle | undefined;
@@ -602,7 +632,11 @@ export function stabilizeManagedTakeProfits(
 
   if (!lifecycle) {
     return {
-      takeProfits: Array.isArray(proposedLevels) ? proposedLevels.map(takeProfitLevelCopy) : [],
+      takeProfits: resizeTakeProfitLevels(
+        Array.isArray(proposedLevels) ? proposedLevels.map(takeProfitLevelCopy) : [],
+        currentSize,
+        stepSize
+      ),
       lifecycle: undefined,
       consumedNow: false
     };
@@ -617,7 +651,7 @@ export function stabilizeManagedTakeProfits(
   const dynamicLevels = levelsWithoutTp1(proposedLevels);
   if (lifecycle.consumedAt) {
     return {
-      takeProfits: resizeTakeProfitLevels(dynamicLevels, currentSize),
+      takeProfits: resizeTakeProfitLevels(dynamicLevels, currentSize, stepSize),
       lifecycle,
       consumedNow
     };
@@ -631,7 +665,7 @@ export function stabilizeManagedTakeProfits(
   const remainingSize = Math.max(0, currentSize - lockedSize);
 
   return {
-    takeProfits: [lockedLevel, ...resizeTakeProfitLevels(dynamicLevels, remainingSize)]
+    takeProfits: [lockedLevel, ...resizeTakeProfitLevels(dynamicLevels, remainingSize, stepSize)]
       .filter((level) => Number(level.size) > 0),
     lifecycle,
     consumedNow
@@ -4848,8 +4882,7 @@ export function buildDecentraderDynamicTpAlert(plan: any, position: DydxOpenPosi
         zone_fib_tolerance: numberOrZero(tp.fibConfluence?.tolerance),
         zone_fib_proximity: numberOrZero(tp.fibConfluence?.proximity),
         distance: numberOrZero(tp.distance)
-      }))
-      .filter((tp: any) => tp.size > 0),
+      })),
     decentrader: {
       timestamp: plan.timestamp,
       timestampNl: plan.timestampNl,
@@ -6210,6 +6243,10 @@ export class DecentraderGapMonitor {
       const plan = await this.getTradePlan(account, market);
       const alert = buildDecentraderDynamicTpAlert(plan, position);
       const proposedTakeProfits = (alert as any).take_profits || [];
+      const directionalPlan = plan?.plans?.[positionDirection];
+      const minimumOrderSize =
+        numberOrZero(directionalPlan?.sizing?.minimumOrderSize) ||
+        numberOrZero(plan?.marketInfo?.stepSize);
       const stabilized = stabilizeManagedTakeProfits(
         managedPosition,
         proposedTakeProfits,
@@ -6217,7 +6254,8 @@ export class DecentraderGapMonitor {
         nowNlIso(),
         Array.isArray(state.lastTradeDecision?.takeProfits)
           ? state.lastTradeDecision.takeProfits
-          : []
+          : [],
+        minimumOrderSize
       );
       const takeProfits = stabilized.takeProfits;
       (alert as any).take_profits = takeProfits;
