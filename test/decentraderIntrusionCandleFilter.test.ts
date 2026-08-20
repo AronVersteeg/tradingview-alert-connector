@@ -126,9 +126,15 @@ describe('Decentrader intrusion candle filter', () => {
     expect(review.reason).toContain('accepted by SMTP');
   });
 
-  test('fails when SMTP arrives before two candles have closed', () => {
+  test('passes when the only fully closed candle and taker delta in The Delay match', () => {
     const dydxCandles = [
-      { startedAt: '2026-07-14T22:00:00.000Z', open: '64000', close: '64500' },
+      {
+        startedAt: '2026-07-14T22:00:00.000Z',
+        open: '64000',
+        close: '64500',
+        source: 'binance-futures',
+        volumeDeltaQuote: 1_500_000
+      },
       { startedAt: '2026-07-14T23:00:00.000Z', open: '64500', close: '64900' }
     ] as any;
 
@@ -137,11 +143,34 @@ describe('Decentrader intrusion candle filter', () => {
       leftEdgeAlert(),
       true,
       dydxCandles,
-      '2026-07-14T23:30:00.000Z'
+      '2026-07-14T23:30:00.000Z',
+      true
+    );
+
+    expect(review.status).toBe('PASS');
+    expect(review.closedCandlesChecked).toBe(1);
+    expect(review.candleColors).toEqual(['green']);
+    expect(review.volumeDeltaColors).toEqual(['green']);
+    expect(review.source).toBe('binance-futures');
+    expect(review.reason).toContain('All 1 fully closed 1H candles');
+  });
+
+  test('fails when The Delay contains no fully closed candles', () => {
+    const dydxCandles = [
+      { startedAt: '2026-07-14T22:00:00.000Z', open: '64000', close: '64500' }
+    ] as any;
+
+    const review = intrusionCandleReview(
+      rows,
+      leftEdgeAlert(),
+      true,
+      dydxCandles,
+      '2026-07-14T22:30:00.000Z'
     );
 
     expect(review.status).toBe('FAIL');
-    expect(review.reason).toContain('at least 2');
+    expect(review.closedCandlesChecked).toBe(0);
+    expect(review.reason).toContain('at least 1');
   });
 
   test('passes Binance Futures confirmation when both price candles and taker deltas match', () => {

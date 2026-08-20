@@ -2169,7 +2169,7 @@ export function intrusionCandleReview(
   const expectedClosedCandles = Math.floor(
     Math.max(0, (delayCutoffMs - intrusionStartMs) / hourMs) + 1e-9
   );
-  if (expectedClosedCandles < 2) {
+  if (expectedClosedCandles < 1) {
     return {
       enabled,
       status: 'FAIL',
@@ -2182,7 +2182,7 @@ export function intrusionCandleReview(
       intrusionTimestamp: alert.timestamp,
       nextTimestamp,
       source,
-      reason: `The Delay contained only ${expectedClosedCandles} fully closed 1H candle(s); at least 2 are required.`
+      reason: 'The Delay contained no fully closed 1H candles; at least 1 is required.'
     };
   }
 
