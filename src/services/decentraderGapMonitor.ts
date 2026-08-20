@@ -4564,8 +4564,7 @@ export function buildDirectionalPlan(
   const triggerPrice = gap ? (isLong ? gap.left : gap.right) : fallbackPrice;
   const marketPrice = marketInfo.oraclePrice || fallbackPrice;
   const tpZones = rawTpZones
-    .filter((zone) => isLong ? zone.price > marketPrice : zone.price < marketPrice)
-    .map((zone, index) => ({ ...zone, rank: index + 1 }));
+    .filter((zone) => isLong ? zone.price > marketPrice : zone.price < marketPrice);
   const stop = buildFractalStop(rows, frameIndex, direction, marketPrice);
   const stopPrice = stop.valid ? stop.price : undefined;
   const equity = numberOrZero(account.equity);

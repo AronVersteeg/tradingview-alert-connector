@@ -1,5 +1,6 @@
 import {
   AlertState,
+  buildDirectionalPlan,
   buildDecentraderDynamicTpAlert,
   stabilizeManagedTakeProfits
 } from '../src/services/decentraderGapMonitor';
@@ -16,6 +17,48 @@ function managedPosition(takeProfits?: any[]): NonNullable<AlertState['managedPo
 }
 
 describe('managed TP1 lifecycle', () => {
+  test('preserves map TP ranks when an already-crossed edge target is filtered out', () => {
+    const marketInfo = {
+      oraclePrice: 71834,
+      initialMarginFraction: 0.02,
+      maintenanceMarginFraction: 0.012,
+      stepSize: 0.0001,
+      status: 'ACTIVE'
+    };
+    const plan = buildDirectionalPlan(
+      'long',
+      {
+        equity: 140,
+        freeCollateral: 135,
+        openPositions: [],
+        markets: { 'BTC-USD': marketInfo },
+        updatedAt: '2026-08-20T09:00:00.000Z'
+      } as any,
+      marketInfo,
+      [],
+      0,
+      undefined,
+      undefined,
+      {
+        longTp: [
+          { direction: 'long', rank: 1, price: 71750, count: 1, score: 1, distance: 1951, leverages: [10], fresh: 0 },
+          { direction: 'long', rank: 2, price: 80000, count: 460, score: 460, distance: 10201, leverages: [5, 10], fresh: 0 },
+          { direction: 'long', rank: 3, price: 85950, count: 278, score: 278, distance: 16151, leverages: [3, 5, 10], fresh: 0 },
+          { direction: 'long', rank: 4, price: 95950, count: 364, score: 364, distance: 26151, leverages: [3, 5, 10], fresh: 0 }
+        ],
+        shortTp: []
+      },
+      69799,
+      'growth'
+    );
+
+    expect(plan.takeProfits.map((level: any) => [level.label, level.price])).toEqual([
+      ['L TP2', 80000],
+      ['L TP3', 85950],
+      ['L TP4', 95950]
+    ]);
+  });
+
   test('keeps entry TP1 fixed while TP2+ remain dynamic', () => {
     const managed = managedPosition([
       { label: 'L TP1', price: 110, size: 0.2 },
