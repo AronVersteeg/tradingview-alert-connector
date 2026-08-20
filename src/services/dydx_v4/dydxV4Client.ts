@@ -995,7 +995,6 @@ export class DydxV4Client extends AbstractDexClient {
       requestedLevels: levels
     });
 
-    await this.cancelSpecificOrders(market, existingTakeProfits);
     const visibleManagedClientIds = new Set(
       existingTakeProfits.map((order: any) => this.getOrderClientId(order))
     );
@@ -1010,10 +1009,66 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     const remainingTakeProfits = existingTakeProfits.length
-      ? await this.waitForTakeProfitsCleared(market)
+      ? await this.cancelTakeProfitsWithRetry(market, existingTakeProfits)
       : [];
 
     if (remainingTakeProfits.length) {
+      const recovery = this.matchTakeProfitOrderSubset(
+        remainingTakeProfits,
+        levels,
+        market,
+        marketInfo
+      );
+
+      if (!recovery.unmatchedOrders.length && recovery.matched.length) {
+        const positionAfterPartialCancel = await this.getCurrentPosition(market);
+        if (
+          Math.sign(positionAfterPartialCancel.size) !== Math.sign(position.size) ||
+          Math.abs(positionAfterPartialCancel.size - position.size) >= this.TOLERANCE
+        ) {
+          throw new Error(
+            `Dynamic TP recovery stopped for ${market}: position changed during TP replacement. Before=${position.size}, after=${positionAfterPartialCancel.size}.`
+          );
+        }
+
+        const adoptedTakeProfits = recovery.matched.map(({ order, level }) => ({
+          market,
+          side,
+          triggerPrice: this.getOrderTriggerPrice(order) ?? this.getOrderPrice(order) ?? level.price,
+          executionPrice: this.getOrderPrice(order) ?? level.price,
+          clientId: this.getOrderClientId(order),
+          size: this.getOrderSize(order) ?? level.size ?? 0,
+          source: 'EXPLICIT_TP' as const,
+          levelName: level.name,
+          updatedAt: Date.now(),
+          goodTilBlockTime: this.getOrderGoodTilBlockTime(order)
+        }));
+
+        this.setManagedTakeProfits(market, adoptedTakeProfits);
+
+        if (recovery.unmatchedLevels.length) {
+          await this.placeExplicitTakeProfitsAfterEntry(
+            market,
+            position.size,
+            {
+              ...(alert as any),
+              take_profits: recovery.unmatchedLevels
+            } as AlertObject,
+            recovery.unmatchedLevels
+          );
+        }
+
+        return {
+          outcome: 'RECOVERED',
+          reason: 'Adopted the matching TP order that remained visible and restored the missing map-derived TP levels.',
+          positionSize: position.size,
+          adoptedTakeProfitCount: recovery.matched.length,
+          restoredTakeProfitCount: recovery.unmatchedLevels.length,
+          takeProfitCount: levels.length,
+          levels
+        };
+      }
+
       throw new Error(
         `Dynamic TP sync stopped for ${market}: ${remainingTakeProfits.length} old TP order(s) remain visible after cancellation.`
       );
@@ -1064,6 +1119,26 @@ export class DydxV4Client extends AbstractDexClient {
       });
 
       if (!remainingTakeProfits.length) return [];
+    }
+
+    return remainingTakeProfits;
+  }
+
+  private async cancelTakeProfitsWithRetry(market: string, orders: any[]): Promise<any[]> {
+    let remainingTakeProfits = orders;
+    const cancellationAttempts = 2;
+
+    for (let attempt = 1; attempt <= cancellationAttempts; attempt += 1) {
+      await this.cancelSpecificOrders(market, remainingTakeProfits);
+      remainingTakeProfits = await this.waitForTakeProfitsCleared(market);
+
+      if (!remainingTakeProfits.length) return [];
+
+      console.warn(`Dynamic TP cancellation attempt ${attempt}/${cancellationAttempts} left orders visible.`, {
+        market,
+        remainingTakeProfitCount: remainingTakeProfits.length,
+        remainingTakeProfits: remainingTakeProfits.map((order: any) => this.summarizeOrder(order))
+      });
     }
 
     return remainingTakeProfits;
@@ -3804,6 +3879,53 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     return unmatchedOrders.length === 0;
+  }
+
+  private matchTakeProfitOrderSubset(
+    orders: any[],
+    levels: ExplicitTakeProfitLevel[],
+    market: string,
+    marketInfo?: any
+  ): {
+    matched: Array<{ order: any; level: ExplicitTakeProfitLevel }>;
+    unmatchedOrders: any[];
+    unmatchedLevels: ExplicitTakeProfitLevel[];
+  } {
+    const unmatchedLevels = [...levels];
+    const matched: Array<{ order: any; level: ExplicitTakeProfitLevel }> = [];
+    const unmatchedOrders: any[] = [];
+
+    for (const order of orders) {
+      const clientId = this.getOrderClientId(order);
+      const triggerPrice = this.getOrderTriggerPrice(order) ?? this.getOrderPrice(order);
+      const orderSize = this.getOrderSize(order);
+
+      if (!Number.isFinite(clientId) || triggerPrice === undefined || orderSize === undefined) {
+        unmatchedOrders.push(order);
+        continue;
+      }
+
+      const matchIndex = unmatchedLevels.findIndex((level) => {
+        const requestedSize = level.size ?? 0;
+        const sizeCheck = this.getCorrectionOrderSizeCheck(market, requestedSize, marketInfo);
+        const expectedSize = sizeCheck.roundedOrderSize ?? requestedSize;
+
+        return (
+          Math.abs(triggerPrice - level.price) / level.price < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT &&
+          Math.abs(orderSize - expectedSize) < this.TOLERANCE
+        );
+      });
+
+      if (matchIndex < 0) {
+        unmatchedOrders.push(order);
+        continue;
+      }
+
+      const [level] = unmatchedLevels.splice(matchIndex, 1);
+      matched.push({ order, level });
+    }
+
+    return { matched, unmatchedOrders, unmatchedLevels };
   }
 
   private managedTakeProfitsMatchLevels(
