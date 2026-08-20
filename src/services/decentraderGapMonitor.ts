@@ -512,6 +512,7 @@ export type AlertState = {
     currentStopFractalTimestamp?: string;
     currentStopFractalPrice?: number;
     currentStopFractalSource?: 'highRef' | 'lowRef' | 'ohlc4';
+    currentStopFractalCandleSource?: 'dydx-1h';
     takeProfits?: any[];
     tp1Lifecycle?: ManagedTp1Lifecycle;
   };
@@ -6435,10 +6436,20 @@ export class DecentraderGapMonitor {
       );
       const frameIndex = rows.length - 1;
       const fractalDelay = decentraderDynamicSlFractalDelay();
+      // Legacy positions were anchored to map rows; rebase once before resuming tighten-only moves.
+      const needsDydxFractalRebase =
+        managedPosition.currentStopFractalCandleSource !== 'dydx-1h';
 
       const hasStopFractalAnchor =
         utcTimestampMs(managedPosition.currentStopFractalTimestamp) !== undefined ||
         managedPosition.currentStopFractalIndex !== undefined;
+      const rebaseStop = needsDydxFractalRebase && rows.length && frameIndex >= 0 && currentPrice > 0
+        ? buildFractalStop(rows, frameIndex, positionDirection, currentPrice, {
+            fractalDelay,
+            enforceMinDistance: false,
+            missingReason: 'Waiting for a confirmed dYdX fractal before rebasing the legacy trailing stop.'
+          })
+        : undefined;
       const delayedStop = hasStopFractalAnchor && rows.length && frameIndex >= 0 && currentPrice > 0
         ? buildFractalStop(rows, frameIndex, positionDirection, currentPrice, {
             afterFractalIndex: managedPosition.currentStopFractalIndex,
@@ -6448,9 +6459,11 @@ export class DecentraderGapMonitor {
             missingReason: `Waiting for ${fractalDelay + 1} confirmed newer fractal(s) after the current SL fractal before moving the trailing stop.`
           })
         : undefined;
-      const candidateStopDetails = !hasStopFractalAnchor
-        ? directionalPlan?.stop
-        : delayedStop;
+      const candidateStopDetails = needsDydxFractalRebase
+        ? rebaseStop
+        : !hasStopFractalAnchor
+          ? directionalPlan?.stop
+          : delayedStop;
       const candidateStop = numberOrZero(candidateStopDetails?.price);
       const candidateStopOnCorrectSide =
         candidateStop > 0 &&
@@ -6513,10 +6526,11 @@ export class DecentraderGapMonitor {
       }
 
       const minImprovementPct = 0;
-      const improves =
+      const improves = needsDydxFractalRebase || (
         positionDirection === 'long'
           ? candidateStop > managedPosition.currentStop
-          : candidateStop < managedPosition.currentStop;
+          : candidateStop < managedPosition.currentStop
+      );
 
       if (
         !candidateStopDetails?.valid ||
@@ -6538,6 +6552,7 @@ export class DecentraderGapMonitor {
             fractalDelay,
             currentStopFractalIndex: managedPosition.currentStopFractalIndex,
             currentStopFractalTimestamp: managedPosition.currentStopFractalTimestamp,
+            needsDydxFractalRebase,
             coverageSyncEnabled: false,
             stop: candidateStopDetails || null
           };
@@ -6570,6 +6585,7 @@ export class DecentraderGapMonitor {
           fractalDelay,
           currentStopFractalIndex: managedPosition.currentStopFractalIndex,
           currentStopFractalTimestamp: managedPosition.currentStopFractalTimestamp,
+          needsDydxFractalRebase,
           stop: candidateStopDetails || null
         };
 
@@ -6595,6 +6611,7 @@ export class DecentraderGapMonitor {
           fractalDelay,
           currentStopFractalIndex: managedPosition.currentStopFractalIndex,
           currentStopFractalTimestamp: managedPosition.currentStopFractalTimestamp,
+          needsDydxFractalRebase,
           stop: candidateStopDetails
         };
 
@@ -6615,6 +6632,7 @@ export class DecentraderGapMonitor {
         fractalDelay,
         previousStopFractalIndex: managedPosition.currentStopFractalIndex,
         previousStopFractalTimestamp: managedPosition.currentStopFractalTimestamp,
+        needsDydxFractalRebase,
         stop: candidateStopDetails
       };
 
@@ -6626,6 +6644,7 @@ export class DecentraderGapMonitor {
           managedPosition.currentStopFractalTimestamp = candidateStopDetails.fractal.timestamp;
           managedPosition.currentStopFractalPrice = candidateStopDetails.fractal.price;
           managedPosition.currentStopFractalSource = candidateStopDetails.fractal.source;
+          managedPosition.currentStopFractalCandleSource = 'dydx-1h';
         }
       }
 
@@ -7144,6 +7163,7 @@ export class DecentraderGapMonitor {
           ? initialStopFractal.price
           : undefined,
         currentStopFractalSource: initialStopFractal?.source,
+        currentStopFractalCandleSource: 'dydx-1h',
         takeProfits: Array.isArray((orderAlert as any).take_profits)
           ? (orderAlert as any).take_profits.map(takeProfitLevelCopy)
           : []

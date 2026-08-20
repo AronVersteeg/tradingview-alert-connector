@@ -872,6 +872,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       currentStopFractalTimestamp: stop?.fractal?.timestamp,
       currentStopFractalPrice: stop?.fractal?.price,
       currentStopFractalSource: stop?.fractal?.source,
+      currentStopFractalCandleSource: 'dydx-1h',
       takeProfits: Array.isArray((orderAlert as any).take_profits)
         ? (orderAlert as any).take_profits.map((level: any) => ({ ...level }))
         : []
@@ -964,30 +965,54 @@ export class OpenLiquidityV2EthTradeMonitor {
       'DECENTRADER_DYNAMIC_SL_FRACTAL_DELAY',
       numberEnv('DECENTRADER_TRAIL_FRACTAL_DELAY', 1)
     ))));
-    const candidate = buildFractalStop(rows, rows.length - 1, direction, currentPrice, {
-      afterFractalIndex: managed.currentStopFractalIndex,
-      afterFractalTimestamp: managed.currentStopFractalTimestamp,
-      fractalDelay,
-      enforceMinDistance: false,
-      missingReason: `Waiting for ${fractalDelay + 1} confirmed newer ${this.config.asset} fractal(s).`
-    });
+    // Existing V2 positions may still carry a pre-dYdX fractal anchor.
+    const needsDydxFractalRebase = managed.currentStopFractalCandleSource !== 'dydx-1h';
+    const candidate = buildFractalStop(
+      rows,
+      rows.length - 1,
+      direction,
+      currentPrice,
+      needsDydxFractalRebase
+        ? {
+            fractalDelay,
+            enforceMinDistance: false,
+            missingReason: `Waiting for a confirmed dYdX fractal before rebasing the legacy ${this.config.asset} trailing stop.`
+          }
+        : {
+            afterFractalIndex: managed.currentStopFractalIndex,
+            afterFractalTimestamp: managed.currentStopFractalTimestamp,
+            fractalDelay,
+            enforceMinDistance: false,
+            missingReason: `Waiting for ${fractalDelay + 1} confirmed newer ${this.config.asset} fractal(s).`
+          }
+    );
     const candidateStop = finite(candidate.price);
     const correctSide = candidateStop > 0 && (direction === 'long' ? candidateStop < currentPrice : candidateStop > currentPrice);
-    const improves = direction === 'long'
+    const improves = needsDydxFractalRebase || (direction === 'long'
       ? candidateStop > managed.currentStop
-      : candidateStop < managed.currentStop;
+      : candidateStop < managed.currentStop);
     if (!candidate.valid || !correctSide || !improves) {
-      result.dynamicSlSync = { outcome: 'UNCHANGED', currentStop: managed.currentStop, candidateStop: candidateStop || null };
+      result.dynamicSlSync = {
+        outcome: 'UNCHANGED',
+        currentStop: managed.currentStop,
+        candidateStop: candidateStop || null,
+        needsDydxFractalRebase
+      };
       return;
     }
     if (!boolEnv('DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED', false)) {
-      result.dynamicSlSync = { outcome: 'READY', currentStop: managed.currentStop, candidateStop };
+      result.dynamicSlSync = {
+        outcome: 'READY',
+        currentStop: managed.currentStop,
+        candidateStop,
+        needsDydxFractalRebase
+      };
       return;
     }
     const slAlert = buildDecentraderDynamicSlAlert(plan, position, candidateStop, candidate);
     (slAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_sl`;
     const sync = await executor.syncTrailingStop(slAlert);
-    result.dynamicSlSync = sync;
+    result.dynamicSlSync = { ...sync, needsDydxFractalRebase };
     if (sync?.outcome === 'UPDATED' || sync?.outcome === 'UNCHANGED') {
       managed.currentStop = candidateStop;
       managed.currentStopUpdatedAt = nowNlIso();
@@ -995,6 +1020,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       managed.currentStopFractalTimestamp = candidate.fractal?.timestamp;
       managed.currentStopFractalPrice = candidate.fractal?.price;
       managed.currentStopFractalSource = candidate.fractal?.source;
+      managed.currentStopFractalCandleSource = 'dydx-1h';
     }
   }
 
