@@ -289,6 +289,10 @@ export class DydxV4Client extends AbstractDexClient {
     process.env.DYDX_V4_STOP_TRIGGER_MATCH_TOLERANCE_PCT ?? '0.002'
   );
 
+  private readonly TRAILING_STOP_TRIGGER_MATCH_TOLERANCE_PCT = Number(
+    process.env.DYDX_V4_TRAILING_STOP_TRIGGER_MATCH_TOLERANCE_PCT ?? '0.00001'
+  );
+
   private readonly MIN_TRAIL_IMPROVEMENT_PCT = Number(
     process.env.DYDX_V4_MIN_TRAIL_IMPROVEMENT_PCT ?? '0'
   );
@@ -584,7 +588,7 @@ export class DydxV4Client extends AbstractDexClient {
       managedStop &&
       String(managedStop.side).toUpperCase() === String(side).toUpperCase() &&
       managedStopMatchesPosition &&
-      Math.abs(managedStop.triggerPrice - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
+      Math.abs(managedStop.triggerPrice - trailStop) / trailStop < this.TRAILING_STOP_TRIGGER_MATCH_TOLERANCE_PCT
     );
 
     const executionPrice = this.getStopExecutionPrice(isLong, trailStop);
@@ -607,7 +611,7 @@ export class DydxV4Client extends AbstractDexClient {
 
       return (
         existingTrigger !== undefined &&
-        Math.abs(existingTrigger - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
+        Math.abs(existingTrigger - trailStop) / trailStop < this.TRAILING_STOP_TRIGGER_MATCH_TOLERANCE_PCT
       );
     });
     const visibleCoveredStop = matchingTriggerStops
@@ -763,7 +767,7 @@ export class DydxV4Client extends AbstractDexClient {
         const existingSize = this.getOrderSize(order);
         const triggerMatches =
           existingTrigger !== undefined &&
-          Math.abs(existingTrigger - trailStop) / trailStop < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT;
+          Math.abs(existingTrigger - trailStop) / trailStop < this.TRAILING_STOP_TRIGGER_MATCH_TOLERANCE_PCT;
         const sizeMatches =
           existingSize !== undefined &&
           Math.abs(existingSize - size) < this.TOLERANCE;
@@ -3973,7 +3977,7 @@ export class DydxV4Client extends AbstractDexClient {
 
       return (
         parsedTrigger !== undefined &&
-        Math.abs(parsedTrigger - triggerPrice) / triggerPrice < this.STOP_TRIGGER_MATCH_TOLERANCE_PCT
+        Math.abs(parsedTrigger - triggerPrice) / triggerPrice < this.TRAILING_STOP_TRIGGER_MATCH_TOLERANCE_PCT
       );
     });
   }

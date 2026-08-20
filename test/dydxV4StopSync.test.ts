@@ -218,4 +218,50 @@ describe('dYdX v4 trailing stop synchronization', () => {
       expect.stringContaining('cleaning up')
     );
   });
+
+  test('replaces a legacy wick stop when the new buffered trigger is 0.1% away', async () => {
+    const client = new DydxV4Client() as any;
+    const legacyTrigger = 71059.1436939;
+    const bufferedTrigger = 70988.94;
+    const legacyOrder = {
+      ...visibleStop(101),
+      triggerPrice: legacyTrigger,
+      size: '0.0013'
+    };
+    client.getCurrentPosition = jest.fn().mockResolvedValue({ size: 0.0013 });
+    client.getOpenOrdersForMarket = jest.fn().mockResolvedValue([legacyOrder]);
+    client.placeSafetyStopOrder = jest.fn().mockResolvedValue({
+      clientId: 202,
+      size: 0.0013,
+      goodTilBlockTime: 1900000000
+    });
+    client.waitForSafetyStopVisibleBestEffort = jest.fn().mockResolvedValue(true);
+    client.cancelSpecificOrders = jest.fn().mockResolvedValue(undefined);
+    client.cancelOtherProtectiveStopsBestEffort = jest.fn().mockResolvedValue([]);
+    client.cancelManagedStopBestEffort = jest.fn().mockResolvedValue(undefined);
+    client.saveManagedOrdersState = jest.fn();
+    client.managedStops.set('BTC-USD', {
+      ...managedStop,
+      triggerPrice: legacyTrigger,
+      size: 0.0013
+    });
+
+    const result = await client.syncTrailingStop({
+      ...alert,
+      size: 0.0013,
+      trail_stop: bufferedTrigger,
+      price: 72623
+    });
+
+    expect(result.outcome).toBe('UPDATED');
+    expect(client.placeSafetyStopOrder).toHaveBeenCalledWith(
+      'BTC-USD',
+      expect.anything(),
+      0.0013,
+      bufferedTrigger,
+      expect.any(Number)
+    );
+    expect(client.cancelSpecificOrders).toHaveBeenCalledWith('BTC-USD', [legacyOrder]);
+    expect(client.managedStops.get('BTC-USD').triggerPrice).toBe(bufferedTrigger);
+  });
 });
