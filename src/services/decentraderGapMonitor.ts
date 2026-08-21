@@ -4175,12 +4175,12 @@ function decentraderDynamicSlFractalDelay(): number {
   const parsed = Number(
     process.env.DECENTRADER_DYNAMIC_SL_FRACTAL_DELAY ||
     process.env.DECENTRADER_TRAIL_FRACTAL_DELAY ||
-    1
+    0
   );
 
   return Number.isFinite(parsed) && parsed >= 0
     ? Math.floor(clamp(parsed, 0, 10))
-    : 1;
+    : 0;
 }
 
 function decentraderTpFractions(takeProfits: any[]): number[] {
@@ -4324,7 +4324,13 @@ function confirmedFractals(
         break;
       }
 
-      if (kind === 'top' ? price <= neighborPrice : price >= neighborPrice) {
+      // Williams Fractals resolves an equal-price plateau to its newest
+      // candle. Equality is allowed against older candles, while newer
+      // candles must be strictly lower/higher so only one marker survives.
+      const invalid = offset < 0
+        ? (kind === 'top' ? price < neighborPrice : price > neighborPrice)
+        : (kind === 'top' ? price <= neighborPrice : price >= neighborPrice);
+      if (invalid) {
         confirmed = false;
         break;
       }

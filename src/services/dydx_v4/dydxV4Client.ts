@@ -792,6 +792,12 @@ export class DydxV4Client extends AbstractDexClient {
       cancelOldStopsAfterTrailSubmit: this.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT
     });
 
+    const releasedCapacityOrder = await this.releaseStatefulSlotForStopReplacement(
+      market,
+      openOrdersBefore,
+      oldStopOrders,
+      isLong
+    );
     const placedStop = await this.placeSafetyStopOrder(
       market,
       side,
@@ -874,8 +880,60 @@ export class DydxV4Client extends AbstractDexClient {
       previousManagedStop: managedStop || null,
       oldVisibleStopCount: oldStopOrders.length,
       remainingOldStopCount: remainingOldStops?.length ?? 0,
-      oldManagedStopCancelledBestEffort
+      oldManagedStopCancelledBestEffort,
+      releasedCapacityOrder: releasedCapacityOrder || null
     };
+  }
+
+  private async releaseStatefulSlotForStopReplacement(
+    market: string,
+    marketOrders: any[],
+    oldStopOrders: any[],
+    isLong: boolean
+  ): Promise<any | undefined> {
+    if (!this.initialized || !oldStopOrders.length) return undefined;
+
+    let capacity = await this.getStatefulOrderCapacity(market);
+    if (capacity.availableSlots > 0) return undefined;
+
+    const takeProfits = marketOrders
+      .filter((order: any) => this.isTakeProfitOrder(order))
+      .sort((a: any, b: any) => {
+        const aTrigger = this.getOrderTriggerPrice(a) ?? this.getOrderPrice(a) ?? 0;
+        const bTrigger = this.getOrderTriggerPrice(b) ?? this.getOrderPrice(b) ?? 0;
+        return isLong ? bTrigger - aTrigger : aTrigger - bTrigger;
+      });
+    const orderToRelease = takeProfits[0] ?? oldStopOrders[0];
+    const releasedType = takeProfits.length
+      ? 'FARTHEST_TAKE_PROFIT'
+      : 'STALE_PROTECTIVE_STOP';
+
+    console.warn('Stateful order capacity is full; releasing one order before protective stop replacement.', {
+      market,
+      capacity,
+      releasedType,
+      order: this.summarizeOrder(orderToRelease)
+    });
+    await this.cancelSpecificOrders(market, [orderToRelease]);
+
+    for (let poll = 1; poll <= this.SAFETY_STOP_VERIFY_POLLS; poll += 1) {
+      await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
+      capacity = await this.getStatefulOrderCapacity(market);
+      if (capacity.availableSlots > 0) {
+        return {
+          type: releasedType,
+          order: this.summarizeOrder(orderToRelease),
+          capacityAfterCancel: capacity,
+          restore: takeProfits.length
+            ? 'Dynamic TP sync restores this level on the next poll.'
+            : undefined
+        };
+      }
+    }
+
+    throw new Error(
+      `Unable to free a dYdX stateful order slot for ${market} protective stop replacement.`
+    );
   }
 
   private async syncTakeProfitsForMarket(market: string, alert: AlertObject): Promise<any> {

@@ -161,6 +161,30 @@ describe('dynamic SL fractal ordering', () => {
     });
   });
 
+  test('selects the newest candle on an equal-low Williams plateau', () => {
+    process.env.DECENTRADER_SL_FRACTAL_WINDOW = '2';
+    const lows = [70, 69, 68, 68, 69, 70];
+    const rows = lows.map((lowRef, hour) => ({
+      timestamp: `2026-08-21T${String(hour).padStart(2, '0')}:00:00.000Z`,
+      lowRef,
+      highRef: lowRef + 2,
+      ohlc4: lowRef + 1
+    }));
+
+    const stop = buildFractalStop(rows as any, rows.length - 1, 'long', 72, {
+      fractalDelay: 0,
+      enforceMinDistance: false
+    });
+
+    expect(stop.valid).toBe(true);
+    expect(stop.fractal).toMatchObject({
+      kind: 'bottom',
+      price: 68,
+      timestamp: '2026-08-21T03:00:00.000Z',
+      index: 3
+    });
+  });
+
   test('selects the latest confirmed Williams low from the live BTC sequence', () => {
     process.env.DECENTRADER_SL_FRACTAL_WINDOW = '2';
     const candles = [

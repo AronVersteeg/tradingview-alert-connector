@@ -1156,7 +1156,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     );
     const fractalDelay = Math.max(0, Math.min(10, Math.floor(numberEnv(
       'DECENTRADER_DYNAMIC_SL_FRACTAL_DELAY',
-      numberEnv('DECENTRADER_TRAIL_FRACTAL_DELAY', 1)
+      numberEnv('DECENTRADER_TRAIL_FRACTAL_DELAY', 0)
     ))));
     // Existing V2 positions may still carry a pre-dYdX or OHLC4 pivot anchor.
     const needsDydxFractalRebase =
@@ -1187,12 +1187,31 @@ export class OpenLiquidityV2EthTradeMonitor {
       ? candidateStop > managed.currentStop
       : candidateStop < managed.currentStop);
     if (!candidate.valid || !correctSide || !improves) {
+      const coverageSyncEnabled = boolEnv('DECENTRADER_DYNAMIC_SL_COVERAGE_SYNC_ENABLED', true);
+      if (!coverageSyncEnabled) {
+        result.dynamicSlSync = {
+          outcome: 'UNCHANGED',
+          currentStop: managed.currentStop,
+          candidateStop: candidateStop || null,
+          needsDydxFractalRebase,
+          fractalDelay,
+          coverageSyncEnabled: false
+        };
+        return;
+      }
+
+      const coverageAlert = buildDecentraderDynamicSlAlert(plan, position, managed.currentStop);
+      (coverageAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_sl_coverage`;
+      const coverageSync = await executor.syncTrailingStop(coverageAlert);
       result.dynamicSlSync = {
-        outcome: 'UNCHANGED',
+        ...coverageSync,
         currentStop: managed.currentStop,
         candidateStop: candidateStop || null,
-        needsDydxFractalRebase
+        needsDydxFractalRebase,
+        fractalDelay,
+        coverageSyncEnabled: true
       };
+      if (coverageSync?.outcome === 'UPDATED') managed.currentStopUpdatedAt = nowNlIso();
       return;
     }
     if (!boolEnv('DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED', false)) {

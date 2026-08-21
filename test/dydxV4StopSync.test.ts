@@ -264,4 +264,57 @@ describe('dYdX v4 trailing stop synchronization', () => {
     expect(client.cancelSpecificOrders).toHaveBeenCalledWith('BTC-USD', [legacyOrder]);
     expect(client.managedStops.get('BTC-USD').triggerPrice).toBe(bufferedTrigger);
   });
+
+  test('frees the farthest TP before replacing a stop when all stateful slots are occupied', async () => {
+    const client = new DydxV4Client() as any;
+    const staleStop = {
+      ...visibleStop(101),
+      triggerPrice: 61242,
+      size: '0.002'
+    };
+    const farthestTp = {
+      id: 'tp-far',
+      clientId: 303,
+      market: 'BTC-USD',
+      status: 'UNTRIGGERED',
+      type: 'TAKE_PROFIT',
+      side: 'SELL',
+      reduceOnly: true,
+      triggerPrice: 99950,
+      size: '0.0002',
+      goodTilBlockTime: 1900000000
+    };
+    client.initialized = true;
+    client.getCurrentPosition = jest.fn().mockResolvedValue({ size: 0.001 });
+    client.getOpenOrdersForMarket = jest.fn().mockResolvedValue([staleStop, farthestTp]);
+    client.getStatefulOrderCapacity = jest.fn()
+      .mockResolvedValueOnce({ limit: 20, openOrders: 20, marketOpenOrders: 2, availableSlots: 0 })
+      .mockResolvedValueOnce({ limit: 20, openOrders: 19, marketOpenOrders: 1, availableSlots: 1 });
+    client.sleep = jest.fn().mockResolvedValue(undefined);
+    client.placeSafetyStopOrder = jest.fn().mockResolvedValue({
+      clientId: 202,
+      size: 0.001,
+      goodTilBlockTime: 1900000000
+    });
+    client.waitForSafetyStopVisibleBestEffort = jest.fn().mockResolvedValue(true);
+    client.cancelSpecificOrders = jest.fn().mockResolvedValue(undefined);
+    client.cancelOtherProtectiveStopsBestEffort = jest.fn().mockResolvedValue([]);
+    client.cancelManagedStopBestEffort = jest.fn().mockResolvedValue(undefined);
+    client.saveManagedOrdersState = jest.fn();
+    client.managedStops.set('BTC-USD', { ...managedStop, size: 0.002 });
+
+    const result = await client.syncTrailingStop(alert);
+
+    expect(result.outcome).toBe('UPDATED');
+    expect(result.releasedCapacityOrder).toMatchObject({ type: 'FARTHEST_TAKE_PROFIT' });
+    expect(client.cancelSpecificOrders).toHaveBeenNthCalledWith(1, 'BTC-USD', [farthestTp]);
+    expect(client.placeSafetyStopOrder).toHaveBeenCalledWith(
+      'BTC-USD',
+      expect.anything(),
+      0.001,
+      61242,
+      expect.any(Number)
+    );
+    expect(client.cancelSpecificOrders).toHaveBeenNthCalledWith(2, 'BTC-USD', [staleStop]);
+  });
 });
