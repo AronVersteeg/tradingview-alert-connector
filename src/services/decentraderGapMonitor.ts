@@ -443,6 +443,7 @@ type MonitorStatus = {
   coinGlassWhaleError?: string;
   delayHistoryRecords?: number;
   intrusionCandleFilterEnabled?: boolean;
+  regularIntrusionEmailEnabled?: boolean;
   intrusionCandleSource?: 'binance-futures' | 'dydx';
   intrusionVolumeDeltaEnabled?: boolean;
   lastStartedAt?: string;
@@ -2019,6 +2020,10 @@ function decentraderIntrusionCandleFilterEnabled(): boolean {
   return parseBool(process.env.DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED, false);
 }
 
+export function decentraderRegularIntrusionEmailEnabled(): boolean {
+  return parseBool(process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED, false);
+}
+
 function decentraderIntrusionCandleSource(): 'binance-futures' | 'dydx' {
   const configured = String(process.env.DECENTRADER_INTRUSION_CANDLE_SOURCE || 'binance-futures')
     .trim()
@@ -2145,7 +2150,7 @@ export function intrusionCandleReview(
       intrusionTimestamp: alert.timestamp,
       nextTimestamp,
       source,
-      reason: 'Waiting for the normal intrusion email to be accepted by SMTP before fixing The Delay window.'
+      reason: 'Waiting for The Delay cutoff to be fixed before reviewing closed candles.'
     };
   }
 
@@ -5239,6 +5244,7 @@ export class DecentraderGapMonitor {
       hasTradeExecutor: true,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+      regularIntrusionEmailEnabled: decentraderRegularIntrusionEmailEnabled(),
       intrusionCandleSource: decentraderIntrusionCandleSource(),
       intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled()
     };
@@ -5397,6 +5403,7 @@ export class DecentraderGapMonitor {
       const state = readState(config.stateFile);
       const previousDataTimestamp = state.lastDataTimestamp;
       const intrusionCandleFilterEnabled = decentraderIntrusionCandleFilterEnabled();
+      const regularIntrusionEmailEnabled = decentraderRegularIntrusionEmailEnabled();
       const pendingCandleSignatures = new Set(
         intrusionCandleFilterEnabled ? state.pendingIntrusionCandleAlertSignatures || [] : []
       );
@@ -5472,6 +5479,7 @@ export class DecentraderGapMonitor {
         tradePlan: null,
         tradeDecision: null,
         intrusionCandleFilterEnabled,
+        regularIntrusionEmailEnabled,
         intrusionCandleReviews: [],
         dynamicSlSync: null,
         dynamicTpSync: null,
@@ -5625,7 +5633,7 @@ export class DecentraderGapMonitor {
           if (pendingCandleReview || emailDuplicate) {
             result.duplicate = true;
           }
-        } else if (smtpSettings) {
+        } else if (regularIntrusionEmailEnabled && smtpSettings) {
           const emailResult = await sendEmailBestEffort(
             smtpSettings,
             `${sideCounts(alert)} | ${alert.timestampNl}`,
@@ -5653,6 +5661,20 @@ export class DecentraderGapMonitor {
               error: emailResult.error
             });
           }
+        } else if (!regularIntrusionEmailEnabled && intrusionCandleFilterEnabled) {
+          // Preserve the original Delay boundary without delivering the raw
+          // intrusion email. The later FILTERED email remains the only mail.
+          normalSmtpSentAt = nowNlIso();
+          pendingCandleAlerts[signature] = {
+            ...pendingCandleAlerts[signature],
+            normalSmtpSentAt
+          };
+          console.log('Decentrader regular intrusion email suppressed; Delay cutoff fixed internally:', {
+            signature,
+            timestamp: alert.timestamp,
+            timestampNl: alert.timestampNl,
+            delayCutoffAt: normalSmtpSentAt
+          });
         } else if (pendingCandleReview || emailDuplicate) {
           result.duplicate = true;
         }

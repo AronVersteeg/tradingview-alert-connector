@@ -23,6 +23,7 @@ import {
   buildDecentraderStopBreachFlatAlert,
   buildDirectionalPlan,
   buildFractalStop,
+  decentraderRegularIntrusionEmailEnabled,
   dydxHourlyCandlesToFractalRows,
   fetchBinanceFuturesHourlyCandlesForSymbol,
   fetchDydxHourlyCandlesForMarket,
@@ -677,6 +678,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       pendingAlerts: Object.keys(state.pendingAlerts || {}).length,
       intrusionCandleFilter: {
         enabled: boolEnv('DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED', false),
+        regularEmailEnabled: decentraderRegularIntrusionEmailEnabled(),
         source: 'binance-futures',
         symbol: this.config.symbol,
         volumeDeltaEnabled: boolEnv('DECENTRADER_INTRUSION_VOLUME_DELTA_ENABLED', true),
@@ -1048,6 +1050,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         const reconstructed = reconstructReplicaIntrusions(payload, state.lastDataTimestamp);
         result.alerts = reconstructed.alerts;
         const smtp = smtpSettingsFromEnv();
+        const regularIntrusionEmailEnabled = decentraderRegularIntrusionEmailEnabled();
         state.pendingAlerts = state.pendingAlerts || {};
         const normalSent = new Set(state.normalSentSignatures || []);
         const filteredSent = new Set(state.filteredSentSignatures || []);
@@ -1068,7 +1071,7 @@ export class OpenLiquidityV2EthTradeMonitor {
             ? { ...pending.alert, frameIndex: currentFrameIndex }
             : pending.alert;
           pending.alert = alert;
-          if (!normalSent.has(signature) && smtp) {
+          if (!normalSent.has(signature) && regularIntrusionEmailEnabled && smtp) {
             const sent = await sendEmailBestEffort(
               smtp,
               `${this.config.asset} ${sideCounts(alert)} | ${alert.timestampNl}`,
@@ -1080,6 +1083,17 @@ export class OpenLiquidityV2EthTradeMonitor {
               this.addDelayRecord(state, alert, signature, 'normal', pending.normalSmtpSentAt);
               result.emailSentCount += 1;
             }
+          }
+          if (filterEnabled && !regularIntrusionEmailEnabled && !pending.normalSmtpSentAt) {
+            // Keep a stable Delay cutoff while suppressing the raw intrusion
+            // email. Only a passing FILTERED alert is delivered.
+            pending.normalSmtpSentAt = nowNlIso();
+            console.log(`${this.config.asset} V2 regular intrusion email suppressed; Delay cutoff fixed internally:`, {
+              signature,
+              timestamp: alert.timestamp,
+              timestampNl: alert.timestampNl,
+              delayCutoffAt: pending.normalSmtpSentAt
+            });
           }
           if (!filterEnabled) {
             await this.executeAlert(state, alert, signature, result);

@@ -1,5 +1,6 @@
 import {
   binanceFuturesKlineToIntrusionCandle,
+  decentraderRegularIntrusionEmailEnabled,
   intrusionCandleReview
 } from '../src/services/decentraderGapMonitor';
 
@@ -22,6 +23,22 @@ const rows = [
 ] as any;
 
 describe('Decentrader intrusion candle filter', () => {
+  test('suppresses regular intrusion emails by default but allows an explicit opt-in', () => {
+    const original = process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED;
+    try {
+      delete process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED;
+      expect(decentraderRegularIntrusionEmailEnabled()).toBe(false);
+      process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED = 'true';
+      expect(decentraderRegularIntrusionEmailEnabled()).toBe(true);
+    } finally {
+      if (original === undefined) {
+        delete process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED;
+      } else {
+        process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED = original;
+      }
+    }
+  });
+
   test('converts Binance Futures quote volume into signed taker delta', () => {
     const candle = binanceFuturesKlineToIntrusionCandle([
       Date.parse('2026-05-01T00:00:00.000Z'),
@@ -114,7 +131,7 @@ describe('Decentrader intrusion candle filter', () => {
     expect(review.candleColors).toEqual(['green', 'green']);
   });
 
-  test('keeps the review pending until the normal intrusion email has an SMTP timestamp', () => {
+  test('keeps the review pending until The Delay cutoff is fixed', () => {
     const dydxCandles = [
       { startedAt: '2026-07-14T22:00:00.000Z', open: '64000', close: '64500' },
       { startedAt: '2026-07-14T23:00:00.000Z', open: '64500', close: '64900' }
@@ -123,7 +140,7 @@ describe('Decentrader intrusion candle filter', () => {
     const review = intrusionCandleReview(rows, leftEdgeAlert(), true, dydxCandles);
 
     expect(review.status).toBe('PENDING');
-    expect(review.reason).toContain('accepted by SMTP');
+    expect(review.reason).toContain('Delay cutoff');
   });
 
   test('passes when the only fully closed candle and taker delta in The Delay match', () => {
