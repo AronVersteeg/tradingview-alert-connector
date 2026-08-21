@@ -105,30 +105,35 @@ function configureDecentraderTradeExecutor() {
 
   decentraderGapMonitor.configureTradeExecutor({
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any) => client.placeOrder(alert),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
   openLiquidityV2EthTradeMonitor.configureTradeExecutor({
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any) => client.placeOrder(alert),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
   openLiquidityV2InjTradeMonitor.configureTradeExecutor({
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any) => client.placeOrder(alert),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
   openLiquidityV2GoldIntrusionMonitor.configureTradeExecutor({
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any) => client.placeOrder(alert),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
   openLiquidityV2SilverIntrusionMonitor.configureTradeExecutor({
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any) => client.placeOrder(alert),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)

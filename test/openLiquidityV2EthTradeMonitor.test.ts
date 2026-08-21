@@ -1,5 +1,6 @@
 import {
   buildReplicaTradeZones,
+  capTakeProfitsForStatefulOrderCapacity,
   openLiquidityV2GoldIntrusionMonitor,
   openLiquidityV2InjTradeMonitor,
   openLiquidityV2SilverIntrusionMonitor,
@@ -18,6 +19,35 @@ function replicaGap(left: number, right: number) {
 }
 
 describe('ETH Public Perp V2 intrusion execution inputs', () => {
+  test('reserves one stateful-order slot for the stop and caps the TP ladder', () => {
+    const levels = Array.from({ length: 6 }, (_, index) => ({
+      label: `L TP${index + 1}`,
+      price: 70 + index
+    }));
+
+    expect(capTakeProfitsForStatefulOrderCapacity(levels, {
+      limit: 20,
+      openOrders: 18,
+      marketOpenOrders: 0
+    })).toMatchObject({
+      requested: 6,
+      allowed: 1,
+      reservedStopSlots: 1,
+      takeProfits: [{ label: 'L TP1', price: 70 }]
+    });
+
+    expect(capTakeProfitsForStatefulOrderCapacity(levels, {
+      limit: 20,
+      openOrders: 20,
+      marketOpenOrders: 2
+    })).toMatchObject({
+      requested: 6,
+      allowed: 1,
+      reservedStopSlots: 1,
+      takeProfits: [{ label: 'L TP1', price: 70 }]
+    });
+  });
+
   test('detects only a cohort increase inside the previous gap', () => {
     const payload = {
       frames: [

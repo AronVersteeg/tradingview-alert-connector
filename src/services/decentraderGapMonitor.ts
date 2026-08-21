@@ -414,6 +414,12 @@ export type FractalStopOptions = {
 
 export type DecentraderTradeExecutor = {
   getAccountSnapshot: (markets: string[]) => Promise<DydxSizingAccountSnapshot>;
+  getStatefulOrderCapacity?: (market: string) => Promise<{
+    limit: number;
+    openOrders: number;
+    marketOpenOrders: number;
+    availableSlots: number;
+  }>;
   placeOrder: (alert: AlertObject) => Promise<void>;
   syncTakeProfits?: (alert: AlertObject) => Promise<any>;
   syncTrailingStop?: (alert: AlertObject) => Promise<any>;

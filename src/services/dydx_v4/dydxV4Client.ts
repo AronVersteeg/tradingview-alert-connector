@@ -1128,6 +1128,34 @@ export class DydxV4Client extends AbstractDexClient {
     return remainingTakeProfits;
   }
 
+  async getStatefulOrderCapacity(market: string): Promise<{
+    limit: number;
+    openOrders: number;
+    marketOpenOrders: number;
+    availableSlots: number;
+  }> {
+    if (!this.initialized) {
+      throw new Error('dYdX v4 client is not initialized.');
+    }
+
+    const normalizedMarket = this.normalizeMarket(market);
+    const orders = await this.getOpenOrders();
+    const limit = Math.max(
+      1,
+      Math.floor(parseEnvPositiveNumber(process.env.DYDX_V4_STATEFUL_ORDER_LIMIT, 20))
+    );
+    const marketOpenOrders = orders.filter((order: any) =>
+      this.orderMarketMatches(order, normalizedMarket)
+    ).length;
+
+    return {
+      limit,
+      openOrders: orders.length,
+      marketOpenOrders,
+      availableSlots: Math.max(0, limit - orders.length)
+    };
+  }
+
   private async cancelTakeProfitsWithRetry(market: string, orders: any[]): Promise<any[]> {
     let remainingTakeProfits = orders;
     const cancellationAttempts = 2;
@@ -3248,16 +3276,27 @@ export class DydxV4Client extends AbstractDexClient {
     const entryReferencePrice = this.getSafetyStopReferencePrice(alert, position.entryPrice);
     const positionSize = Math.abs(position.size);
     const marketInfo = await this.getMarketInfoBestEffort(market);
+    const capacity = await this.getStatefulOrderCapacity(market);
+    const levelsToPlace = levels.slice(0, capacity.availableSlots);
+
+    if (levelsToPlace.length < levels.length) {
+      console.warn('Explicit TP ladder reduced because the dYdX stateful-order limit is nearly full.', {
+        market,
+        requestedTakeProfitCount: levels.length,
+        placedTakeProfitCount: levelsToPlace.length,
+        capacity
+      });
+    }
 
     console.log('Placing explicit take profits:', {
       market,
       direction: isLong ? 'LONG' : 'SHORT',
       entryReferencePrice,
       positionSize,
-      levels
+      levels: levelsToPlace
     });
 
-    for (const level of levels) {
+    for (const level of levelsToPlace) {
       const triggerPrice = level.price;
       const requestedSize = Number(
         (
@@ -3762,13 +3801,19 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   private async getOpenOrdersForMarket(market: string): Promise<any[]> {
+    return (await this.getOpenOrders()).filter((order: any) =>
+      this.orderMarketMatches(order, market)
+    );
+  }
+
+  private async getOpenOrders(): Promise<any[]> {
     const activeStatuses = ['UNTRIGGERED', 'OPEN', 'BEST_EFFORT_OPENED'];
     const responses = await Promise.all(
       activeStatuses.map((status) =>
         this.indexer.account.getSubaccountOrders(
           this.wallet.address,
           0,
-          market,
+          undefined,
           undefined,
           undefined,
           status as any,
@@ -3781,7 +3826,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     for (const response of responses) {
       for (const order of this.getOrdersFromResponse(response)) {
-        if (!this.orderMarketMatches(order, market) || !this.isVisibleOpenOrder(order)) {
+        if (!this.isVisibleOpenOrder(order)) {
           continue;
         }
 

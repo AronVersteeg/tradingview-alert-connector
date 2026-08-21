@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
+import { AlertObject } from '../types';
+
 import {
   coinGlassEthWhaleCollector,
   coinGlassInjWhaleCollector
@@ -235,6 +237,23 @@ function directionForPosition(position: DydxOpenPosition | undefined): TradePlan
   if (finite(position?.size) > 0) return 'long';
   if (finite(position?.size) < 0) return 'short';
   return undefined;
+}
+
+export function capTakeProfitsForStatefulOrderCapacity(
+  takeProfits: any[],
+  capacity: { limit: number; openOrders: number; marketOpenOrders: number }
+): { takeProfits: any[]; requested: number; allowed: number; reservedStopSlots: number } {
+  const requested = Array.isArray(takeProfits) ? takeProfits.length : 0;
+  const otherMarketOrders = Math.max(0, capacity.openOrders - capacity.marketOpenOrders);
+  const reservedStopSlots = 1;
+  const allowed = Math.max(0, capacity.limit - otherMarketOrders - reservedStopSlots);
+
+  return {
+    takeProfits: (takeProfits || []).slice(0, allowed),
+    requested,
+    allowed,
+    reservedStopSlots
+  };
 }
 
 function priceKey(price: number): string {
@@ -830,6 +849,92 @@ export class OpenLiquidityV2EthTradeMonitor {
     };
   }
 
+  private async applyStatefulOrderCapacity(orderAlert: AlertObject, result: any): Promise<void> {
+    if (!this.executor?.getStatefulOrderCapacity) return;
+
+    const capacity = await this.executor.getStatefulOrderCapacity(this.config.market);
+    const requestedLevels = Array.isArray((orderAlert as any).take_profits)
+      ? (orderAlert as any).take_profits
+      : [];
+    const capped = capTakeProfitsForStatefulOrderCapacity(requestedLevels, capacity);
+    const otherMarketOrders = Math.max(0, capacity.openOrders - capacity.marketOpenOrders);
+    const slotsForMarket = Math.max(0, capacity.limit - otherMarketOrders);
+
+    if (slotsForMarket < capped.reservedStopSlots) {
+      throw new Error(
+        `No dYdX stateful-order slot is available for the required ${this.config.market} protective stop. ` +
+        `Open=${capacity.openOrders}/${capacity.limit}, existing ${this.config.market} orders=${capacity.marketOpenOrders}.`
+      );
+    }
+
+    (orderAlert as any).take_profits = capped.takeProfits;
+    result.statefulOrderCapacity = {
+      ...capacity,
+      requestedTakeProfits: capped.requested,
+      allowedTakeProfits: capped.takeProfits.length,
+      reservedStopSlots: capped.reservedStopSlots
+    };
+
+    if (capped.takeProfits.length < capped.requested) {
+      console.warn(`${this.config.asset} V2 TP ladder reduced to fit the dYdX stateful-order limit:`, {
+        market: this.config.market,
+        ...result.statefulOrderCapacity
+      });
+    }
+  }
+
+  private registerManagedPosition(
+    state: EthMonitorState,
+    signature: string,
+    direction: TradePlanDirection,
+    position: DydxOpenPosition,
+    oraclePrice: number,
+    plan: any,
+    orderAlert: AlertObject,
+    outcome: 'PLACED' | 'ADOPTED' | 'RECOVERED_AFTER_PARTIAL_EXECUTION'
+  ): void {
+    const stop = plan.activePlan?.stop;
+    const registeredAt = nowNlIso();
+    const takeProfits = Array.isArray((orderAlert as any).take_profits)
+      ? (orderAlert as any).take_profits.map((level: any) => ({ ...level }))
+      : [];
+
+    state.lastTradeExecutedSignature = signature;
+    state.lastTradeExecutedAt = registeredAt;
+    state.managedPosition = {
+      market: this.config.market,
+      direction,
+      openedAt: registeredAt,
+      entrySignature: signature,
+      initialSize: Math.abs(finite(position.size)),
+      entryPrice: finite(position.entryPrice) || oraclePrice,
+      currentStop: finite(stop?.price),
+      currentStopUpdatedAt: registeredAt,
+      currentStopFractalIndex: stop?.fractal?.index,
+      currentStopFractalTimestamp: stop?.fractal?.timestamp,
+      currentStopFractalPrice: stop?.fractal?.price,
+      currentStopFractalSource: stop?.fractal?.source,
+      currentStopFractalCandleSource: 'dydx-1h',
+      takeProfits
+    };
+    stabilizeManagedTakeProfits(
+      state.managedPosition,
+      takeProfits,
+      Math.abs(finite(position.size)),
+      registeredAt
+    );
+    state.lastTradeDecision = {
+      at: registeredAt,
+      outcome,
+      market: this.config.market,
+      direction,
+      signature,
+      size: Math.abs(finite(position.size)),
+      stop: finite(stop?.price),
+      takeProfits
+    };
+  }
+
   private async executeAlert(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
     if (!this.autoTradeEnabled()) {
       result.tradeSkipped = `${this.config.asset} V2 auto-trading is disabled.`;
@@ -857,7 +962,32 @@ export class OpenLiquidityV2EthTradeMonitor {
     const account = await this.executor.getAccountSnapshot([this.config.market]);
     const openPosition = existingPosition(account, this.config.market);
     if (openPosition && directionForPosition(openPosition) === direction) {
-      result.tradeSkipped = `Existing ${this.config.market} ${direction} position detected; new intrusion skipped.`;
+      if (state.managedPosition) {
+        result.tradeSkipped = `Existing ${this.config.market} ${direction} position detected; new intrusion skipped.`;
+        return;
+      }
+
+      const recoveryPlan = await this.getTradePlan(account, alert);
+      const recoveryAlert = buildDecentraderOrderAlert(recoveryPlan, signature);
+      (recoveryAlert as any).strategy = this.config.strategyPrefix;
+      await this.applyStatefulOrderCapacity(recoveryAlert, result);
+      const recoveryOraclePrice = finite(recoveryPlan.marketInfo?.oraclePrice) || finite(recoveryPlan.price);
+      this.registerManagedPosition(
+        state,
+        signature,
+        direction,
+        openPosition,
+        recoveryOraclePrice,
+        recoveryPlan,
+        recoveryAlert,
+        'ADOPTED'
+      );
+      result.tradePlaced = true;
+      result.tradeRecovered = true;
+      result.tradePlan = recoveryPlan;
+      result.tradeDecision = state.lastTradeDecision;
+      await this.syncManagedOrders(state, result);
+      console.warn(`${this.config.asset} V2 adopted an existing matching position after an interrupted entry flow:`, state.lastTradeDecision);
       return;
     }
     const plan = await this.getTradePlan(account, alert);
@@ -875,44 +1005,42 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
     const orderAlert = buildDecentraderOrderAlert(plan, signature);
     (orderAlert as any).strategy = this.config.strategyPrefix;
-    await this.executor.placeOrder(orderAlert);
+    await this.applyStatefulOrderCapacity(orderAlert, result);
+    try {
+      await this.executor.placeOrder(orderAlert);
+    } catch (error) {
+      const partialSnapshot = await this.executor.getAccountSnapshot([this.config.market]);
+      const partialPosition = existingPosition(partialSnapshot, this.config.market);
+      if (!partialPosition || directionForPosition(partialPosition) !== direction) throw error;
+
+      this.registerManagedPosition(
+        state,
+        signature,
+        direction,
+        partialPosition,
+        oraclePrice,
+        plan,
+        orderAlert,
+        'RECOVERED_AFTER_PARTIAL_EXECUTION'
+      );
+      result.tradePlaced = true;
+      result.tradeRecovered = true;
+      result.tradeWarning = error instanceof Error ? error.message : String(error);
+      result.tradePlan = plan;
+      result.tradeDecision = state.lastTradeDecision;
+      await this.syncManagedOrders(state, result);
+      console.warn(`${this.config.asset} V2 recovered a position after partial dYdX order execution:`, {
+        decision: state.lastTradeDecision,
+        warning: result.tradeWarning
+      });
+      return;
+    }
     const after = await this.executor.getAccountSnapshot([this.config.market]);
     const placedPosition = existingPosition(after, this.config.market);
     if (!placedPosition || directionForPosition(placedPosition) !== direction) {
       throw new Error(`dYdX did not report the requested ${this.config.market} ${direction} position after execution.`);
     }
-    const stop = plan.activePlan?.stop;
-    state.lastTradeExecutedSignature = signature;
-    state.lastTradeExecutedAt = nowNlIso();
-    state.managedPosition = {
-      market: this.config.market,
-      direction,
-      openedAt: nowNlIso(),
-      entrySignature: signature,
-      initialSize: Math.abs(finite(placedPosition.size)),
-      entryPrice: finite(placedPosition.entryPrice) || oraclePrice,
-      currentStop: finite(stop?.price),
-      currentStopUpdatedAt: nowNlIso(),
-      currentStopFractalIndex: stop?.fractal?.index,
-      currentStopFractalTimestamp: stop?.fractal?.timestamp,
-      currentStopFractalPrice: stop?.fractal?.price,
-      currentStopFractalSource: stop?.fractal?.source,
-      currentStopFractalCandleSource: 'dydx-1h',
-      takeProfits: Array.isArray((orderAlert as any).take_profits)
-        ? (orderAlert as any).take_profits.map((level: any) => ({ ...level }))
-        : []
-    };
-    stabilizeManagedTakeProfits(
-      state.managedPosition,
-      (orderAlert as any).take_profits || [],
-      Math.abs(finite(placedPosition.size)),
-      state.lastTradeExecutedAt
-    );
-    state.lastTradeDecision = {
-      at: nowNlIso(), outcome: 'PLACED', market: this.config.market, direction, signature,
-      size: Math.abs(finite(placedPosition.size)), stop: finite(stop?.price),
-      takeProfits: (orderAlert as any).take_profits || []
-    };
+    this.registerManagedPosition(state, signature, direction, placedPosition, oraclePrice, plan, orderAlert, 'PLACED');
     result.tradePlaced = true;
     result.tradePlan = plan;
     result.tradeDecision = state.lastTradeDecision;
@@ -946,6 +1074,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (boolEnv('DECENTRADER_DYNAMIC_TP_ENABLED', true) && executor.syncTakeProfits) {
       const tpAlert = buildDecentraderDynamicTpAlert(plan, position);
       (tpAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_tps`;
+      await this.applyStatefulOrderCapacity(tpAlert, result);
       const directionalPlan = plan?.plans?.[direction];
       const minimumOrderSize =
         finite(directionalPlan?.sizing?.minimumOrderSize) ||
