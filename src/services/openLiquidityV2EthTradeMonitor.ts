@@ -1047,6 +1047,45 @@ export class OpenLiquidityV2EthTradeMonitor {
     console.log(`${this.config.asset} V2 filtered intrusion trade placed:`, state.lastTradeDecision);
   }
 
+  private async recoverUnmanagedFilteredPosition(state: EthMonitorState, payload: any, result: any): Promise<void> {
+    if (!this.executor || !this.autoTradeEnabled() || state.managedPosition) return;
+
+    const account = await this.executor.getAccountSnapshot([this.config.market]);
+    const position = existingPosition(account, this.config.market);
+    if (!position) return;
+
+    const positionDirection = directionForPosition(position);
+    const filteredSignatures = new Set(state.filteredSentSignatures || []);
+    if (!filteredSignatures.size) return;
+
+    const firstTimestamp = String(payload?.frames?.[0]?.t || '');
+    const historicalAlerts = reconstructReplicaIntrusions(payload, firstTimestamp).alerts;
+    const candidate = historicalAlerts
+      .slice()
+      .reverse()
+      .find((alert) => {
+        const signature = signatureForAlert(alert, this.config.market);
+        return filteredSignatures.has(signature) && mapDirectionFromAlert(alert) === positionDirection;
+      });
+    if (!candidate) return;
+
+    const signature = signatureForAlert(candidate, this.config.market);
+    const maxDelayHours = numberEnv('DECENTRADER_INTRUSION_MAX_EXECUTION_DELAY_HOURS', 8);
+    const ageHours = (Date.now() - timestampMs(candidate.timestamp)) / HOUR_MS;
+    if (ageHours > maxDelayHours) return;
+
+    await this.executeAlert(state, candidate, signature, result);
+    if (result.tradeRecovered) {
+      console.warn(`${this.config.asset} V2 recovered persisted filtered execution state:`, {
+        market: this.config.market,
+        signature,
+        direction: positionDirection,
+        positionSize: position.size,
+        ageHours
+      });
+    }
+  }
+
   private async syncManagedOrders(state: EthMonitorState, result: any): Promise<void> {
     const executor = this.executor;
     const managed = state.managedPosition;
@@ -1301,6 +1340,9 @@ export class OpenLiquidityV2EthTradeMonitor {
         state.normalSentSignatures = trimList([...normalSent]);
         state.filteredSentSignatures = trimList([...filteredSent]);
         state.lastDataTimestamp = latestTimestamp;
+      }
+      if (!state.managedPosition && !result.tradePlaced) {
+        await this.recoverUnmanagedFilteredPosition(state, payload, result);
       }
       // The managed entry flow already submits its initial SL and TPs. Waiting
       // until the next poll avoids resubmitting while the indexer catches up.
