@@ -967,8 +967,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       'DECENTRADER_DYNAMIC_SL_FRACTAL_DELAY',
       numberEnv('DECENTRADER_TRAIL_FRACTAL_DELAY', 1)
     ))));
-    // Existing V2 positions may still carry a pre-dYdX fractal anchor.
-    const needsDydxFractalRebase = managed.currentStopFractalCandleSource !== 'dydx-1h';
+    // Existing V2 positions may still carry a pre-dYdX or OHLC4 pivot anchor.
+    const needsDydxFractalRebase =
+      managed.currentStopFractalCandleSource !== 'dydx-1h' ||
+      managed.currentStopFractalSource === 'ohlc4';
     const candidate = buildFractalStop(
       rows,
       rows.length - 1,

@@ -4372,16 +4372,9 @@ function latestValidFractal(
     return validRefFractal;
   }
 
-  return selectLatest(
-    confirmedFractals(
-      rows,
-      frameIndex,
-      kind,
-      decentraderSlFractalWindow(),
-      decentraderSlLookbackBars(),
-      'ohlc4'
-    )
-  );
+  // A Williams fractal is defined by candle highs/lows. An OHLC4 pivot can
+  // occur without a swing low/high and must never move a protective stop.
+  return undefined;
 }
 
 function newerValidFractalCount(
@@ -6460,7 +6453,8 @@ export class DecentraderGapMonitor {
       const fractalDelay = decentraderDynamicSlFractalDelay();
       // Legacy positions were anchored to map rows; rebase once before resuming tighten-only moves.
       const needsDydxFractalRebase =
-        managedPosition.currentStopFractalCandleSource !== 'dydx-1h';
+        managedPosition.currentStopFractalCandleSource !== 'dydx-1h' ||
+        managedPosition.currentStopFractalSource === 'ohlc4';
 
       const hasStopFractalAnchor =
         utcTimestampMs(managedPosition.currentStopFractalTimestamp) !== undefined ||
