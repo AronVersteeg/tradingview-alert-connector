@@ -1024,6 +1024,7 @@
           <a class="map-nav-tab" id="pairTabEth" href="/decentrader/map?source=open-v2-eth">ETH</a>
           <a class="map-nav-tab" id="pairTabInj" href="/decentrader/map?source=open-v2-inj">INJ</a>
           <a class="map-nav-tab" id="pairTabGold" href="/decentrader/map?source=open-v2-gold">Gold</a>
+          <a class="map-nav-tab" id="pairTabSilver" href="/decentrader/map?source=open-v2-silver">Silver</a>
         </nav>
       </div>
       <nav class="map-source-tabs" id="btcSourceTabs" aria-label="BTC data source">
@@ -1385,7 +1386,7 @@
   <script>
     const queryParams = new URLSearchParams(window.location.search);
     const requestedSource = queryParams.get('source');
-    const openV2Sources = new Set(['open-v2', 'open-v2-eth', 'open-v2-inj', 'open-v2-gold']);
+    const openV2Sources = new Set(['open-v2', 'open-v2-eth', 'open-v2-inj', 'open-v2-gold', 'open-v2-silver']);
     const activeSource = openV2Sources.has(requestedSource) ? requestedSource : 'decentrader';
     const isOpenStudy = activeSource !== 'decentrader';
     const isOpenV2 = openV2Sources.has(activeSource);
@@ -1395,10 +1396,16 @@
         ? 'INJ'
         : activeSource === 'open-v2-gold'
           ? 'GOLD'
-          : 'BTC';
-    const hasIntrusionHistory = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-gold';
-    const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-gold';
-    const openV2Market = openV2Asset === 'GOLD' ? 'PAXG-USD' : `${openV2Asset}-USD`;
+          : activeSource === 'open-v2-silver'
+            ? 'SILVER'
+            : 'BTC';
+    const hasIntrusionHistory = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-gold' || activeSource === 'open-v2-silver';
+    const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-gold' || activeSource === 'open-v2-silver';
+    const openV2Market = openV2Asset === 'GOLD'
+      ? 'PAXG-USD'
+      : openV2Asset === 'SILVER'
+        ? 'XAG-USD'
+        : `${openV2Asset}-USD`;
     const isEmbedded = queryParams.get('embedded') === '1';
     const CLOUD_DECENTRADER_DATA_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/liquidity-timelapse'
@@ -1440,6 +1447,7 @@
     const pairTabEth = document.getElementById('pairTabEth');
     const pairTabInj = document.getElementById('pairTabInj');
     const pairTabGold = document.getElementById('pairTabGold');
+    const pairTabSilver = document.getElementById('pairTabSilver');
     const btcSourceTabs = document.getElementById('btcSourceTabs');
     const sourceTabDecentrader = document.getElementById('sourceTabDecentrader');
     const sourceTabOpenV2 = document.getElementById('sourceTabOpenV2');
@@ -1551,10 +1559,12 @@
     pairTabEth?.classList.toggle('is-active', activePair === 'ETH');
     pairTabInj?.classList.toggle('is-active', activePair === 'INJ');
     pairTabGold?.classList.toggle('is-active', activePair === 'GOLD');
+    pairTabSilver?.classList.toggle('is-active', activePair === 'SILVER');
     pairTabBtc?.setAttribute('aria-current', activePair === 'BTC' ? 'page' : 'false');
     pairTabEth?.setAttribute('aria-current', activePair === 'ETH' ? 'page' : 'false');
     pairTabInj?.setAttribute('aria-current', activePair === 'INJ' ? 'page' : 'false');
     pairTabGold?.setAttribute('aria-current', activePair === 'GOLD' ? 'page' : 'false');
+    pairTabSilver?.setAttribute('aria-current', activePair === 'SILVER' ? 'page' : 'false');
     if (btcSourceTabs) btcSourceTabs.hidden = activePair !== 'BTC';
     sourceTabDecentrader?.classList.toggle('is-active', activeSource === 'decentrader');
     sourceTabOpenV2?.classList.toggle('is-active', activeSource === 'open-v2');
@@ -1562,7 +1572,9 @@
     if (isOpenStudy) {
       const studyTitle = openV2Asset === 'GOLD'
         ? 'Gold/USD XAU + PAXG Liquidity Research'
-        : `${openV2Asset}/USD Public Perp Liquidity V2`;
+        : openV2Asset === 'SILVER'
+          ? 'Silver/USD XAG Liquidity Research'
+          : `${openV2Asset}/USD Public Perp Liquidity V2`;
       pageTitle.textContent = studyTitle;
       document.title = studyTitle;
       if (domObserverPanel) domObserverPanel.hidden = true;
@@ -1573,7 +1585,7 @@
 
     function money(value) {
       if (!Number.isFinite(Number(value))) return '-';
-      const decimals = openV2Asset === 'INJ' || openV2Asset === 'GOLD' ? 2 : 0;
+      const decimals = openV2Asset === 'INJ' || openV2Asset === 'GOLD' || openV2Asset === 'SILVER' ? 2 : 0;
       return '$' + Number(value).toLocaleString('en-US', {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals
@@ -1583,7 +1595,7 @@
     function priceLevel(value) {
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return '-';
-      const decimals = openV2Asset === 'INJ' || openV2Asset === 'GOLD' ? 2 : 0;
+      const decimals = openV2Asset === 'INJ' || openV2Asset === 'GOLD' || openV2Asset === 'SILVER' ? 2 : 0;
       return parsed.toLocaleString('nl-NL', {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals
@@ -3701,6 +3713,7 @@
       const configured = Number(payload?.quality?.priceStepUsd);
       if (Number.isFinite(configured) && configured > 0) return configured;
       if (isOpenV2 && openV2Asset === 'INJ') return 0.01;
+      if (isOpenV2 && openV2Asset === 'SILVER') return 0.1;
       return isOpenV2 && (openV2Asset === 'ETH' || openV2Asset === 'GOLD') ? 5 : 50;
     }
 
@@ -3710,6 +3723,7 @@
         if (span > 5) return 0.05;
         return 0.01;
       }
+      if (isOpenV2 && openV2Asset === 'SILVER') return 0.1;
       if (isOpenV2 && (openV2Asset === 'ETH' || openV2Asset === 'GOLD')) {
         if (span > 6000) return 100;
         if (span > 3000) return 50;
@@ -4675,7 +4689,7 @@
       const replicaGap = isOpenV2 && payload?.quality?.decentraderFormulaParity;
       const gapPrefix = isOpenV2
         ? replicaGap
-          ? `${openV2Asset === 'GOLD' ? 'Binance XAU Futures' : 'Binance Spot'} replica | `
+          ? `${openV2Asset === 'GOLD' ? 'Binance XAU Futures' : openV2Asset === 'SILVER' ? 'Binance XAG Futures' : 'Binance Spot'} replica | `
           : `${gap.status === 'confirmed' ? 'Confirmed' : 'Candidate'} | confidence ${Math.round(Number(gap.confidence || 0) * 100)}% | `
         : '';
       const qualityText = isOpenV2

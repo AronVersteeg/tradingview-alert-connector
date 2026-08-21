@@ -18,12 +18,14 @@ import {
   openLiquidityV2BtcCollector,
   openLiquidityV2EthCollector,
   openLiquidityV2GoldCollector,
-  openLiquidityV2InjCollector
+  openLiquidityV2InjCollector,
+  openLiquidityV2SilverCollector
 } from '../services/openLiquidityV2Replica';
 import {
   openLiquidityV2EthTradeMonitor,
   openLiquidityV2GoldIntrusionMonitor,
-  openLiquidityV2InjTradeMonitor
+  openLiquidityV2InjTradeMonitor,
+  openLiquidityV2SilverIntrusionMonitor
 } from '../services/openLiquidityV2EthTradeMonitor';
 import { buildSnoekScout } from '../services/snoekScout';
 import { getSnoekCurrent } from '../services/snoekCurrent';
@@ -125,6 +127,12 @@ function configureDecentraderTradeExecutor() {
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
+  openLiquidityV2SilverIntrusionMonitor.configureTradeExecutor({
+    getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    placeOrder: (alert: any) => client.placeOrder(alert),
+    syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
+    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+  });
 }
 
 async function initializeExchanges() {
@@ -162,6 +170,7 @@ initializeExchanges()
     openLiquidityV2EthCollector.start(30_000);
     openLiquidityV2InjCollector.start(60_000);
     openLiquidityV2GoldCollector.start(135_000);
+    openLiquidityV2SilverCollector.start(195_000);
     coinGlassEthWhaleCollector.configureObservationProvider(async () => {
       const payload = await openLiquidityV2EthCollector.getPayload();
       const frame = payload.frames?.[payload.frames.length - 1];
@@ -185,6 +194,7 @@ initializeExchanges()
     openLiquidityV2EthTradeMonitor.start(75_000);
     openLiquidityV2InjTradeMonitor.start(105_000);
     openLiquidityV2GoldIntrusionMonitor.start(165_000);
+    openLiquidityV2SilverIntrusionMonitor.start(225_000);
   })
   .catch((err) => {
     console.error("Exchange initialization failed:", err);
@@ -425,6 +435,7 @@ function openLiquidityV2CollectorForMarket(market: string) {
   if (market === 'ETH-USD') return openLiquidityV2EthCollector;
   if (market === 'INJ-USD') return openLiquidityV2InjCollector;
   if (market === 'PAXG-USD') return openLiquidityV2GoldCollector;
+  if (market === 'XAG-USD') return openLiquidityV2SilverCollector;
   return undefined;
 }
 
@@ -432,6 +443,7 @@ function openLiquidityV2MonitorForMarket(market: string) {
   if (market === 'ETH-USD') return openLiquidityV2EthTradeMonitor;
   if (market === 'INJ-USD') return openLiquidityV2InjTradeMonitor;
   if (market === 'PAXG-USD') return openLiquidityV2GoldIntrusionMonitor;
+  if (market === 'XAG-USD') return openLiquidityV2SilverIntrusionMonitor;
   return undefined;
 }
 
@@ -467,7 +479,7 @@ router.get('/open-liquidity/v2/status', async (req, res) => {
   if (!collector) {
     return res.status(400).send({
       ok: false,
-      error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD and PAXG-USD.'
+      error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, PAXG-USD and XAG-USD.'
     });
   }
   const monitor = openLiquidityV2MonitorForMarket(market);
@@ -496,7 +508,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
     if (!collector) {
       return res.status(400).send({
         ok: false,
-        error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD and PAXG-USD.'
+        error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, PAXG-USD and XAG-USD.'
       });
     }
     const payload = await collector.getPayload();
@@ -535,7 +547,9 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
             note:
               market === 'PAXG-USD'
                 ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. When explicitly enabled, filtered Gold intrusions are independently managed on dYdX PAXG-USD with the shared risk, fractal SL and TP settings.'
-                : `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
+                : market === 'XAG-USD'
+                  ? 'SILVER Public Perp V2 uses a causal Binance XAGUSDT Futures liquidation-cohort reconstruction. Filtered intrusions and SMTP Delay history use the shared candle and taker-delta rules; live execution is independently managed on dYdX XAG-USD with the shared dollar-risk, Williams-fractal SL and TP settings.'
+                  : `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
           }
         : payload.source,
       coinGlassWhaleLevels,
@@ -548,7 +562,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
           : coinGlassWhaleLevels.minUsd,
         maxDistanceUsd: Number.isFinite(configuredMaxDistanceUsd) && configuredMaxDistanceUsd > 0
           ? configuredMaxDistanceUsd
-          : market === 'ETH-USD' ? 15 : market === 'INJ-USD' ? 0.05 : 200,
+          : market === 'ETH-USD' ? 15 : market === 'INJ-USD' ? 0.05 : market === 'XAG-USD' ? 0.5 : 200,
         longDurationHours: Number.isFinite(configuredLongDurationHours) && configuredLongDurationHours > 0
           ? configuredLongDurationHours
           : 14 * 24

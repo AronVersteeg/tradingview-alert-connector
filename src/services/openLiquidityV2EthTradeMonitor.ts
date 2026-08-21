@@ -42,7 +42,8 @@ import {
   OpenLiquidityV2ReplicaCollector,
   openLiquidityV2EthCollector,
   openLiquidityV2GoldCollector,
-  openLiquidityV2InjCollector
+  openLiquidityV2InjCollector,
+  openLiquidityV2SilverCollector
 } from './openLiquidityV2Replica';
 
 const MARKET = 'ETH-USD';
@@ -57,7 +58,7 @@ type WhaleSnapshotProvider = {
 export type OpenLiquidityV2TradeMonitorConfig = {
   market: string;
   symbol: string;
-  asset: 'ETH' | 'INJ' | 'GOLD';
+  asset: 'ETH' | 'INJ' | 'GOLD' | 'SILVER';
   priceStep: number;
   tradeCapable: boolean;
   enabledEnv: string;
@@ -66,6 +67,7 @@ export type OpenLiquidityV2TradeMonitorConfig = {
   stateFileEnv: string;
   stateFileName: string;
   strategyPrefix: string;
+  edgeBufferEnv: string;
   coinGlassMinUsdEnv: string;
   coinGlassMaxDistanceEnv: string;
   coinGlassMaxDistanceUsd: number;
@@ -84,6 +86,7 @@ const ETH_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   stateFileEnv: 'OPEN_LIQUIDITY_V2_ETH_TRADE_STATE_FILE',
   stateFileName: 'open-liquidity-v2-eth-trade-state.json',
   strategyPrefix: 'open_liquidity_v2_eth',
+  edgeBufferEnv: 'DECENTRADER_TP1_EDGE_FRONT_RUN_USD',
   coinGlassMinUsdEnv: 'COINGLASS_WHALE_ETH_LEVEL_MIN_USD',
   coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_ETH_MAX_DISTANCE_USD',
   coinGlassMaxDistanceUsd: 15,
@@ -102,6 +105,7 @@ const INJ_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   stateFileEnv: 'OPEN_LIQUIDITY_V2_INJ_TRADE_STATE_FILE',
   stateFileName: 'open-liquidity-v2-inj-trade-state.json',
   strategyPrefix: 'open_liquidity_v2_inj',
+  edgeBufferEnv: 'OPEN_LIQUIDITY_V2_INJ_TP1_EDGE_FRONT_RUN_USD',
   coinGlassMinUsdEnv: 'COINGLASS_WHALE_INJ_LEVEL_MIN_USD',
   coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_INJ_MAX_DISTANCE_USD',
   coinGlassMaxDistanceUsd: 0.05,
@@ -120,9 +124,30 @@ const GOLD_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   stateFileEnv: 'OPEN_LIQUIDITY_V2_GOLD_TRADE_STATE_FILE',
   stateFileName: 'open-liquidity-v2-gold-intrusion-state.json',
   strategyPrefix: 'open_liquidity_v2_gold',
+  edgeBufferEnv: 'DECENTRADER_TP1_EDGE_FRONT_RUN_USD',
   coinGlassMinUsdEnv: 'COINGLASS_WHALE_GOLD_LEVEL_MIN_USD',
   coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_GOLD_MAX_DISTANCE_USD',
   coinGlassMaxDistanceUsd: 25
+};
+
+const SILVER_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
+  market: 'XAG-USD',
+  symbol: 'XAGUSDT',
+  asset: 'SILVER',
+  priceStep: 0.1,
+  tradeCapable: true,
+  enabledEnv: 'OPEN_LIQUIDITY_V2_SILVER_INTRUSION_MONITOR_ENABLED',
+  autoTradeEnv: 'OPEN_LIQUIDITY_V2_SILVER_AUTO_TRADE_ENABLED',
+  // Silver joins the live portfolio when the shared Decentrader switch is on,
+  // while retaining a dedicated per-market kill switch.
+  inheritDecentraderAutoTrade: true,
+  stateFileEnv: 'OPEN_LIQUIDITY_V2_SILVER_TRADE_STATE_FILE',
+  stateFileName: 'open-liquidity-v2-silver-intrusion-state.json',
+  strategyPrefix: 'open_liquidity_v2_silver',
+  edgeBufferEnv: 'OPEN_LIQUIDITY_V2_SILVER_TP1_EDGE_FRONT_RUN_USD',
+  coinGlassMinUsdEnv: 'COINGLASS_WHALE_SILVER_LEVEL_MIN_USD',
+  coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_SILVER_MAX_DISTANCE_USD',
+  coinGlassMaxDistanceUsd: 0.5
 };
 
 type PendingEthAlert = {
@@ -569,7 +594,7 @@ function rawAlertBody(alert: GapAlert, asset = 'ETH', symbol = 'ETHUSDT'): strin
     `New or expanded histos inside previous gap: ${sideCounts(alert)}`,
     ...bars,
     '',
-    `Source: Public Perp V2 ${asset} replica (Binance ${asset === 'GOLD' ? 'Futures' : 'Spot'} causal liquidation cohorts).`
+    `Source: Public Perp V2 ${asset} replica (Binance ${asset === 'GOLD' || asset === 'SILVER' ? 'Futures' : 'Spot'} causal liquidation cohorts).`
   ].join('\n');
 }
 
@@ -760,9 +785,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     const gap = normalizedGap(payload.gaps?.[frameIndex], finite(frame.price));
     const zones = buildReplicaTradeZones(bars, finite(frame.price), gap, {
       priceStep: this.config.priceStep,
-      edgeBufferEnv: this.config.asset === 'INJ'
-        ? 'OPEN_LIQUIDITY_V2_INJ_TP1_EDGE_FRONT_RUN_USD'
-        : 'DECENTRADER_TP1_EDGE_FRONT_RUN_USD',
+      edgeBufferEnv: this.config.edgeBufferEnv,
       coinGlass: this.config.coinGlass,
       coinGlassMinUsdEnv: this.config.coinGlassMinUsdEnv,
       coinGlassMaxDistanceEnv: this.config.coinGlassMaxDistanceEnv,
@@ -1185,4 +1208,8 @@ export const openLiquidityV2InjTradeMonitor = new OpenLiquidityV2EthTradeMonitor
 export const openLiquidityV2GoldIntrusionMonitor = new OpenLiquidityV2EthTradeMonitor(
   openLiquidityV2GoldCollector,
   GOLD_MONITOR_CONFIG
+);
+export const openLiquidityV2SilverIntrusionMonitor = new OpenLiquidityV2EthTradeMonitor(
+  openLiquidityV2SilverCollector,
+  SILVER_MONITOR_CONFIG
 );

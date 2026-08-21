@@ -2,6 +2,7 @@ import {
   buildReplicaTradeZones,
   openLiquidityV2GoldIntrusionMonitor,
   openLiquidityV2InjTradeMonitor,
+  openLiquidityV2SilverIntrusionMonitor,
   reconstructReplicaIntrusions
 } from '../src/services/openLiquidityV2EthTradeMonitor';
 import { Gap, LiquidityBar } from '../src/services/decentraderGapMonitor';
@@ -193,6 +194,64 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
     } finally {
       if (previousAutoTrade === undefined) delete process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED;
       else process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED = previousAutoTrade;
+    }
+  });
+
+  test('runs Silver on XAG-USD and inherits the shared live-trading switch', () => {
+    const previousShared = process.env.DECENTRADER_AUTO_TRADE_ENABLED;
+    const previousSilver = process.env.OPEN_LIQUIDITY_V2_SILVER_AUTO_TRADE_ENABLED;
+    const previousGlobalBuffer = process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD;
+    const previousSilverBuffer = process.env.OPEN_LIQUIDITY_V2_SILVER_TP1_EDGE_FRONT_RUN_USD;
+    try {
+      process.env.DECENTRADER_AUTO_TRADE_ENABLED = 'true';
+      delete process.env.OPEN_LIQUIDITY_V2_SILVER_AUTO_TRADE_ENABLED;
+      process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD = '50';
+      delete process.env.OPEN_LIQUIDITY_V2_SILVER_TP1_EDGE_FRONT_RUN_USD;
+      expect(openLiquidityV2SilverIntrusionMonitor.getStatus()).toMatchObject({
+        market: 'XAG-USD',
+        autoTradeEnabled: true,
+        observeOnly: false,
+        intrusionCandleFilter: {
+          source: 'binance-futures',
+          symbol: 'XAGUSDT'
+        }
+      });
+
+      const bar = (side: 'L' | 'S', price: number, count: number): LiquidityBar => ({
+        key: `${side}|10|${price}`,
+        side,
+        leverage: 10,
+        price,
+        count
+      });
+      const gap: Gap = {
+        left: 63.1,
+        right: 69.3,
+        width: 6.2,
+        price: 65,
+        leftEdge: bar('L', 63.1, 8),
+        rightEdge: bar('S', 69.3, 7),
+        leftToPrice: 1.9,
+        rightToPrice: 4.3
+      };
+      const zones = buildReplicaTradeZones([gap.leftEdge, gap.rightEdge], 65, gap, {
+        priceStep: 0.1,
+        edgeBufferEnv: 'OPEN_LIQUIDITY_V2_SILVER_TP1_EDGE_FRONT_RUN_USD'
+      });
+      expect(zones.longTp[0]).toMatchObject({ price: 69.2, edge: true, edgePrice: 69.3 });
+      expect(zones.shortTp[0]).toMatchObject({ price: 63.2, edge: true, edgePrice: 63.1 });
+
+      process.env.OPEN_LIQUIDITY_V2_SILVER_AUTO_TRADE_ENABLED = 'false';
+      expect(openLiquidityV2SilverIntrusionMonitor.getStatus().autoTradeEnabled).toBe(false);
+    } finally {
+      if (previousShared === undefined) delete process.env.DECENTRADER_AUTO_TRADE_ENABLED;
+      else process.env.DECENTRADER_AUTO_TRADE_ENABLED = previousShared;
+      if (previousSilver === undefined) delete process.env.OPEN_LIQUIDITY_V2_SILVER_AUTO_TRADE_ENABLED;
+      else process.env.OPEN_LIQUIDITY_V2_SILVER_AUTO_TRADE_ENABLED = previousSilver;
+      if (previousGlobalBuffer === undefined) delete process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD;
+      else process.env.DECENTRADER_TP1_EDGE_FRONT_RUN_USD = previousGlobalBuffer;
+      if (previousSilverBuffer === undefined) delete process.env.OPEN_LIQUIDITY_V2_SILVER_TP1_EDGE_FRONT_RUN_USD;
+      else process.env.OPEN_LIQUIDITY_V2_SILVER_TP1_EDGE_FRONT_RUN_USD = previousSilverBuffer;
     }
   });
 });

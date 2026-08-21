@@ -13,14 +13,14 @@ const FRAME_LIMIT = 500;
 const HISTORY_LIMIT = FRAME_LIMIT;
 const DISPLAY_ZONE_LIMIT = 150;
 
-type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD' | 'PAXG-USD';
-type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'XAUUSDT' | 'PAXGUSDT';
+type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD' | 'PAXG-USD' | 'XAG-USD';
+type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'XAUUSDT' | 'PAXGUSDT' | 'XAGUSDT';
 type ReplicaVenue = 'spot' | 'futures';
 
 type ReplicaMarketConfig = {
   market: ReplicaMarket;
   symbol: ReplicaSymbol;
-  asset: 'BTC' | 'ETH' | 'INJ' | 'GOLD';
+  asset: 'BTC' | 'ETH' | 'INJ' | 'GOLD' | 'SILVER';
   modelVersion: string;
   priceStepUsd: number;
   historyDirectoryName: string;
@@ -77,6 +77,21 @@ const GOLD_CONFIG: ReplicaMarketConfig = {
   confirmationSymbol: 'PAXGUSDT',
   // XAUUSDT started trading in December 2025, so a full 8,760-hour
   // bootstrap cannot exist yet. The rolling model uses every available hour.
+  minimumSourceHours: 720
+};
+
+const SILVER_CONFIG: ReplicaMarketConfig = {
+  market: 'XAG-USD',
+  symbol: 'XAGUSDT',
+  asset: 'SILVER',
+  modelVersion: 'binance-futures-xag-liquidation-cohorts-v2.1',
+  priceStepUsd: 0.1,
+  historyDirectoryName: 'open-liquidity-v2-silver',
+  historyEnv: 'OPEN_LIQUIDITY_V2_SILVER_HISTORY_DIR',
+  enabledEnv: 'OPEN_LIQUIDITY_V2_SILVER_ENABLED',
+  venue: 'futures',
+  // Binance XAGUSDT launched in January 2026. Use all available closed
+  // hourly candles while retaining the same rolling cohort mechanics.
   minimumSourceHours: 720
 };
 
@@ -879,7 +894,9 @@ export class OpenLiquidityV2ReplicaCollector {
       source: {
         name: this.config.asset === 'GOLD'
           ? 'Gold/USD Public Perp V2 XAU replica'
-          : `${this.config.asset}/USD Public Perp V2 Binance Spot replica`,
+          : this.config.asset === 'SILVER'
+            ? 'Silver/USD Public Perp V2 XAG replica'
+            : `${this.config.asset}/USD Public Perp V2 Binance Spot replica`,
         market: this.config.market,
         url: `/open-liquidity/v2/status?market=${this.config.market}`,
         api: [
@@ -903,7 +920,9 @@ export class OpenLiquidityV2ReplicaCollector {
         note:
           this.config.asset === 'GOLD'
             ? 'Gold reconstruction. XAUUSDT Futures drives the causal cohort map and PAXGUSDT independently confirms price basis and hourly direction. Histogram height is a relative count, not USD volume or account inventory. Server-side intrusion monitoring and optional dYdX PAXG-USD execution are handled by the separate Gold trade monitor.'
-            : 'Observe-only Decentrader-compatible reconstruction. Histogram height is a relative count of still-active hourly cohorts, not USD volume, open interest or account inventory. Replay is causal: a cohort can only disappear on a later candle. This source never sends alerts and never places, sizes or manages dYdX orders.'
+            : this.config.asset === 'SILVER'
+              ? 'Silver reconstruction. XAGUSDT Futures drives the causal cohort map. Histogram height is a relative count, not USD volume or account inventory. Server-side filtered-intrusion monitoring and dYdX XAG-USD execution are handled by the separate Silver trade monitor.'
+              : 'Observe-only Decentrader-compatible reconstruction. Histogram height is a relative count of still-active hourly cohorts, not USD volume, open interest or account inventory. Replay is causal: a cohort can only disappear on a later candle. This source never sends alerts and never places, sizes or manages dYdX orders.'
       },
       quality: {
         causalModel: true,
@@ -941,3 +960,4 @@ export const openLiquidityV2BtcCollector = new OpenLiquidityV2ReplicaCollector(B
 export const openLiquidityV2EthCollector = new OpenLiquidityV2ReplicaCollector(ETH_CONFIG);
 export const openLiquidityV2InjCollector = new OpenLiquidityV2ReplicaCollector(INJ_CONFIG);
 export const openLiquidityV2GoldCollector = new OpenLiquidityV2ReplicaCollector(GOLD_CONFIG);
+export const openLiquidityV2SilverCollector = new OpenLiquidityV2ReplicaCollector(SILVER_CONFIG);

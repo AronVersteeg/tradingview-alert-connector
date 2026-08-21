@@ -135,18 +135,22 @@ DECENTRALIZED_DOM_HISTORY_DIR=/app/data/decentralized-dom
 
 Raw status and replay-window data are available from `GET /research/dom-collector/status` and `GET /research/dom-collector/history?from=<ISO>&to=<ISO>`.
 
-The pair tabs expose separate reconstructions of the Decentrader-style histogram for BTC/USD, ETH/USD and INJ/USD without stacking maps vertically. BTC retains a compact Decentrader/Public V2 source selector. The V2 maps use free Binance Spot `BTCUSDT`, `ETHUSDT` and `INJUSDT` 1H OHLC data. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC, $5 for ETH and $0.01 for INJ. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. Every V2 map receives its matching CoinGlass whale-order snapshot and separate history store.
+The pair tabs expose separate reconstructions of the Decentrader-style histogram for BTC/USD, ETH/USD, INJ/USD, Gold and Silver without stacking maps vertically. BTC retains a compact Decentrader/Public V2 source selector. The crypto V2 maps use free Binance Spot `BTCUSDT`, `ETHUSDT` and `INJUSDT` 1H OHLC data; Gold and Silver use Binance Futures `XAUUSDT` and `XAGUSDT`. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC, $5 for ETH and Gold, $0.01 for INJ and $0.10 for Silver. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. Every V2 market has a separate persistent history store.
 
-BTC V2 remains observe-only. ETH, INJ and Gold V2 monitor new or expanded cohorts inside the previous clean gap, send asset-labelled raw and `FILTERED ETH`/`FILTERED INJ`/`FILTERED GOLD` emails, and can independently manage `ETH-USD`, `INJ-USD` and `PAXG-USD` dYdX positions alongside BTC. Gold uses Binance Futures `XAUUSDT` for the causal map and Delay candle/delta filter, with `PAXGUSDT` confirmation and dYdX `PAXG-USD` execution. The tradable pair monitors inherit the existing `DECENTRADER_*` Delay-filter, fixed USD/equity risk, fractal entry SL, dynamic trailing SL and dynamic TP settings. Their Delay confirmation now matches BTC exactly: authoritative Binance USD-M Futures 1H candle colors and signed taker quote-volume delta must agree for every fully closed candle in the SMTP window. TP1 uses the opposite gap edge; TP2+ uses the matching histogram with CoinGlass and Fibonacci confluence, with at most `DECENTRADER_TP_MAX_LEVELS` targets. Each monitor stores separate signatures and managed-position state, so pairs cannot suppress one another. INJ and Gold live execution are explicitly opt-in and never inherit the BTC auto-trade switch.
+BTC V2 remains observe-only. ETH, INJ, Gold and Silver V2 monitor new or expanded cohorts inside the previous clean gap, send asset-labelled `FILTERED ETH`/`FILTERED INJ`/`FILTERED GOLD`/`FILTERED SILVER` emails, and can independently manage `ETH-USD`, `INJ-USD`, `PAXG-USD` and `XAG-USD` dYdX positions alongside BTC. Gold uses Binance Futures `XAUUSDT` for the causal map and Delay candle/delta filter, with `PAXGUSDT` confirmation and dYdX `PAXG-USD` execution. Silver uses Binance Futures `XAGUSDT` with dYdX `XAG-USD` execution. The tradable pair monitors inherit the existing `DECENTRADER_*` Delay-filter, fixed USD/equity risk, Williams-fractal entry SL, dynamic trailing SL and dynamic TP settings. Their Delay confirmation matches BTC: authoritative Binance USD-M Futures 1H candle colors and signed taker quote-volume delta must agree for every fully closed candle in the SMTP window. TP1 uses the opposite gap edge; TP2+ uses the matching histogram with available CoinGlass and Fibonacci confluence, with at most `DECENTRADER_TP_MAX_LEVELS` targets. Each monitor stores separate signatures and managed-position state, so pairs cannot suppress one another. INJ and Gold live execution are explicitly opt-in; Silver inherits the shared BTC auto-trade switch and has a dedicated override.
 
 ```text
 OPEN_LIQUIDITY_V2_ENABLED=true
 OPEN_LIQUIDITY_V2_ETH_ENABLED=true
 OPEN_LIQUIDITY_V2_INJ_ENABLED=true
+OPEN_LIQUIDITY_V2_GOLD_ENABLED=true
+OPEN_LIQUIDITY_V2_SILVER_ENABLED=true
 OPEN_LIQUIDITY_V2_POLL_MINUTES=60
 OPEN_LIQUIDITY_V2_HISTORY_DIR=/app/data/open-liquidity-v2
 OPEN_LIQUIDITY_V2_ETH_HISTORY_DIR=/app/data/open-liquidity-v2-eth
 OPEN_LIQUIDITY_V2_INJ_HISTORY_DIR=/app/data/open-liquidity-v2-inj
+OPEN_LIQUIDITY_V2_GOLD_HISTORY_DIR=/app/data/open-liquidity-v2-gold
+OPEN_LIQUIDITY_V2_SILVER_HISTORY_DIR=/app/data/open-liquidity-v2-silver
 # Optional ETH-specific kill switches; when omitted, monitoring is on and
 # auto-trading inherits DECENTRADER_AUTO_TRADE_ENABLED.
 OPEN_LIQUIDITY_V2_ETH_INTRUSION_MONITOR_ENABLED=true
@@ -160,9 +164,15 @@ OPEN_LIQUIDITY_V2_GOLD_INTRUSION_MONITOR_ENABLED=true
 # Explicit live-order opt-in for dYdX PAXG-USD.
 OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED=false
 OPEN_LIQUIDITY_V2_GOLD_TRADE_STATE_FILE=/app/data/open-liquidity-v2-gold-intrusion-state.json
+OPEN_LIQUIDITY_V2_SILVER_INTRUSION_MONITOR_ENABLED=true
+# When omitted, Silver inherits DECENTRADER_AUTO_TRADE_ENABLED. Set false for
+# an independent Silver kill switch without stopping the other markets.
+OPEN_LIQUIDITY_V2_SILVER_AUTO_TRADE_ENABLED=true
+OPEN_LIQUIDITY_V2_SILVER_TRADE_STATE_FILE=/app/data/open-liquidity-v2-silver-intrusion-state.json
+OPEN_LIQUIDITY_V2_SILVER_TP1_EDGE_FRONT_RUN_USD=0.10
 ```
 
-The old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status accept `market=BTC-USD`, `ETH-USD` or `INJ-USD`. All collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.
+The old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status accept `market=BTC-USD`, `ETH-USD`, `INJ-USD`, `PAXG-USD` or `XAG-USD`. All collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.
 
 ```text
 COINGLASS_WHALE_LEVELS_ENABLED=true

@@ -92,6 +92,18 @@ describe('Public Perp V2 Binance Spot replica', () => {
     ]);
   });
 
+  test('uses Silver-scale $0.10 bins without changing the cohort multipliers', () => {
+    const levels = cohortLevelsForOhlc4(69.2, 0.1);
+    expect(levels.map((level) => [level.side, level.leverage, level.price])).toEqual([
+      ['L', 3, 51.9],
+      ['S', 3, 103.8],
+      ['L', 5, 57.6],
+      ['S', 5, 86.1],
+      ['L', 10, 63.2],
+      ['S', 10, 76.5]
+    ]);
+  });
+
   test('summarizes aligned XAU and PAXG candle confirmation without mixing timestamps', () => {
     const primary = [
       candle(1, 4_300, 4_340, 4_290, 4_330),
