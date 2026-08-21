@@ -128,6 +128,39 @@ describe('dynamic SL fractal ordering', () => {
     expect(stop.source).toBe('missing-fractal');
   });
 
+  test('matches dYdX orderbook candles and finds Williams lows in a thin market', () => {
+    process.env.DECENTRADER_SL_FRACTAL_WINDOW = '2';
+    const orderbookOpens = [68.4, 68.45, 68.25, 68.05, 68.35, 68.32, 68.5];
+    const orderbookCloses = [68.5, 68.2, 67.89, 68.1, 68.4, 68.3, 68.6];
+    const candles = orderbookCloses.map((close, hour) => ({
+      startedAt: `2026-08-20T${String(hour).padStart(2, '0')}:00:00.000Z`,
+      resolution: '1HOUR',
+      open: '67.94',
+      high: '67.94',
+      low: '67.94',
+      close: '67.94',
+      trades: 0,
+      orderbookMidPriceOpen: String(orderbookOpens[hour]),
+      orderbookMidPriceClose: String(close)
+    }));
+    const rows = dydxHourlyCandlesToFractalRows(
+      candles,
+      Date.parse('2026-08-20T08:00:00.000Z')
+    );
+    const stop = buildFractalStop(rows as any, rows.length - 1, 'long', 69, {
+      enforceMinDistance: false
+    });
+
+    expect(rows[2]).toMatchObject({ openRef: 68.25, closeRef: 67.89, lowRef: 67.89 });
+    expect(stop.valid).toBe(true);
+    expect(stop.fractal).toMatchObject({
+      kind: 'bottom',
+      price: 67.89,
+      timestamp: '2026-08-20T02:00:00.000Z',
+      source: 'lowRef'
+    });
+  });
+
   test('selects the latest confirmed Williams low from the live BTC sequence', () => {
     process.env.DECENTRADER_SL_FRACTAL_WINDOW = '2';
     const candles = [

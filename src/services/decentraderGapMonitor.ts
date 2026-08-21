@@ -236,6 +236,9 @@ export type DydxRsiCandle = {
   high?: string;
   low?: string;
   close: string;
+  trades?: number | string;
+  orderbookMidPriceOpen?: string;
+  orderbookMidPriceClose?: string;
   source?: 'binance-futures' | 'dydx';
   volumeDeltaQuote?: number;
 };
@@ -3620,11 +3623,27 @@ export function dydxHourlyCandlesToFractalRows(
     const startedAtMs = Date.parse(candle.startedAt);
     if (!Number.isFinite(startedAtMs) || startedAtMs + HOUR_MS > observedAtMs) continue;
 
-    const open = parseNumber(candle.open);
-    const high = parseNumber(candle.high);
-    const low = parseNumber(candle.low);
-    const close = parseNumber(candle.close);
-    if (open === undefined || high === undefined || low === undefined || close === undefined) continue;
+    const tradeOpen = parseNumber(candle.open);
+    const tradeHigh = parseNumber(candle.high);
+    const tradeLow = parseNumber(candle.low);
+    const tradeClose = parseNumber(candle.close);
+    if (tradeOpen === undefined || tradeHigh === undefined || tradeLow === undefined || tradeClose === undefined) continue;
+
+    // Match dYdX v4-web's chart mapping. Thin markets can have zero or one
+    // trade in an hour, while their visible candles still move with the book.
+    const trades = parseNumber(candle.trades) ?? 2;
+    const orderbookOpen = parseNumber(candle.orderbookMidPriceOpen);
+    const orderbookClose = parseNumber(candle.orderbookMidPriceClose);
+    const useOrderbook = trades <= 1 && orderbookOpen !== undefined && orderbookClose !== undefined;
+    const includeTradeExtremes = trades >= 1;
+    const open = useOrderbook ? orderbookOpen : tradeOpen;
+    const close = useOrderbook ? orderbookClose : tradeClose;
+    const high = useOrderbook
+      ? Math.max(orderbookOpen, orderbookClose, ...(includeTradeExtremes ? [tradeHigh] : []))
+      : tradeHigh;
+    const low = useOrderbook
+      ? Math.min(orderbookOpen, orderbookClose, ...(includeTradeExtremes ? [tradeLow] : []))
+      : tradeLow;
 
     rows.push({
       timestamp: candle.startedAt,
