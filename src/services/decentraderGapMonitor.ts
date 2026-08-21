@@ -525,6 +525,7 @@ export type AlertState = {
     currentStopFractalCandleSource?: 'dydx-1h';
     takeProfits?: any[];
     tp1Lifecycle?: ManagedTp1Lifecycle;
+    tpRatchetLifecycle?: ManagedTpRatchetLifecycle;
   };
   lastCheckedAt?: string;
   lastDataTimestamp?: string;
@@ -536,6 +537,25 @@ export type ManagedTp1Lifecycle = {
   initialPositionSize: number;
   lastObservedPositionSize: number;
   consumedAt?: string;
+};
+
+export type ManagedTpRatchetLifecycle = {
+  levels: Record<string, any>[];
+  initializedAt: string;
+  updatedAt: string;
+  targetSize: number;
+  stepSize: number;
+  retiredKeys: string[];
+  blockedMoveCount: number;
+  lastBlockedMoves?: Array<{
+    label: string;
+    currentPrice: number;
+    proposedPrice: number;
+  }>;
+};
+
+type ManagedTpRatchetContext = {
+  currentPrice?: number;
 };
 
 function takeProfitLabel(level: any): string {
@@ -612,16 +632,154 @@ function resizeTakeProfitLevels(
   }));
 }
 
+function takeProfitRank(level: any, fallbackIndex: number): number {
+  const match = takeProfitLabel(level).match(/TP\s*(\d+)/i);
+  return match ? Number(match[1]) : 100 + fallbackIndex;
+}
+
+function takeProfitKey(level: any, fallbackIndex: number): string {
+  const label = takeProfitLabel(level);
+  return label || `INDEX_${fallbackIndex}`;
+}
+
+function isTakeProfitAhead(
+  direction: TradePlanDirection,
+  levelPrice: number,
+  currentPrice?: number
+): boolean {
+  if (!(Number(currentPrice) > 0)) return true;
+  const tolerance = Math.max(1e-10, Number(currentPrice) * 1e-10);
+  return direction === 'long'
+    ? levelPrice > Number(currentPrice) + tolerance
+    : levelPrice < Number(currentPrice) - tolerance;
+}
+
+function ratchetManagedTakeProfitLevels(
+  managedPosition: NonNullable<AlertState['managedPosition']>,
+  proposedLevels: Record<string, any>[],
+  targetSize: number,
+  observedAt: string,
+  fallbackEntryLevels: any[],
+  stepSize: number,
+  context: ManagedTpRatchetContext
+): {
+  levels: Record<string, any>[];
+  lifecycle: ManagedTpRatchetLifecycle;
+} {
+  const previousLifecycle = managedPosition.tpRatchetLifecycle;
+  const entryLevels = Array.isArray(managedPosition.takeProfits) && managedPosition.takeProfits.length
+    ? managedPosition.takeProfits
+    : Array.isArray(fallbackEntryLevels) && fallbackEntryLevels.length
+      ? fallbackEntryLevels
+      : proposedLevels;
+  const previousLevels = (previousLifecycle
+    ? previousLifecycle.levels || []
+    : levelsWithoutTp1(entryLevels)
+  ).map(takeProfitLevelCopy);
+  const proposed = proposedLevels.map(takeProfitLevelCopy);
+  const proposedByKey = new Map<string, Record<string, any>>();
+  proposed.forEach((level, index) => proposedByKey.set(takeProfitKey(level, index), level));
+
+  const accepted: Record<string, any>[] = [];
+  const historicalKeys = new Set<string>();
+  const retiredKeys = new Set<string>(previousLifecycle?.retiredKeys || []);
+  const blockedMoves: ManagedTpRatchetLifecycle['lastBlockedMoves'] = [];
+
+  previousLevels.forEach((currentLevel, index) => {
+    const key = takeProfitKey(currentLevel, index);
+    historicalKeys.add(key);
+    const proposal = proposedByKey.get(key);
+    proposedByKey.delete(key);
+
+    const currentLevelPrice = Number(currentLevel.price);
+    if (!(currentLevelPrice > 0) || !isTakeProfitAhead(
+      managedPosition.direction,
+      currentLevelPrice,
+      context.currentPrice
+    )) {
+      retiredKeys.add(key);
+      return;
+    }
+
+    const proposedPrice = Number(proposal?.price);
+    if (!(proposedPrice > 0) || !isTakeProfitAhead(
+      managedPosition.direction,
+      proposedPrice,
+      context.currentPrice
+    )) {
+      accepted.push(currentLevel);
+      return;
+    }
+
+    const improves = managedPosition.direction === 'long'
+      ? proposedPrice < currentLevelPrice
+      : proposedPrice > currentLevelPrice;
+    const movesAway = managedPosition.direction === 'long'
+      ? proposedPrice > currentLevelPrice
+      : proposedPrice < currentLevelPrice;
+
+    if (improves) {
+      accepted.push(proposal as Record<string, any>);
+    } else {
+      accepted.push(currentLevel);
+      if (movesAway) {
+        blockedMoves.push({
+          label: takeProfitLabel(currentLevel) || key,
+          currentPrice: currentLevelPrice,
+          proposedPrice
+        });
+      }
+    }
+  });
+
+  proposed.forEach((level, index) => {
+    const key = takeProfitKey(level, index);
+    if (historicalKeys.has(key) || retiredKeys.has(key)) return;
+    const price = Number(level.price);
+    if (price > 0 && isTakeProfitAhead(managedPosition.direction, price, context.currentPrice)) {
+      accepted.push(level);
+    }
+  });
+
+  accepted.sort((a, b) => takeProfitRank(a, 0) - takeProfitRank(b, 0));
+  const previousPrices = previousLevels.map((level) => `${takeProfitLabel(level)}:${Number(level.price)}`);
+  const acceptedPrices = accepted.map((level) => `${takeProfitLabel(level)}:${Number(level.price)}`);
+  const priceStructureChanged = previousPrices.join('|') !== acceptedPrices.join('|');
+  const sizingChanged = !previousLifecycle ||
+    Math.abs(Number(previousLifecycle.targetSize) - targetSize) > 1e-10 ||
+    Math.abs(Number(previousLifecycle.stepSize) - stepSize) > 1e-10;
+  const levels = priceStructureChanged || sizingChanged
+    ? resizeTakeProfitLevels(accepted, targetSize, stepSize)
+    : accepted;
+  const lifecycle: ManagedTpRatchetLifecycle = {
+    levels: levels.map(takeProfitLevelCopy),
+    initializedAt: previousLifecycle?.initializedAt || managedPosition.openedAt || observedAt,
+    updatedAt: priceStructureChanged || sizingChanged
+      ? observedAt
+      : previousLifecycle?.updatedAt || observedAt,
+    targetSize,
+    stepSize,
+    retiredKeys: [...retiredKeys],
+    blockedMoveCount: Number(previousLifecycle?.blockedMoveCount || 0) + blockedMoves.length,
+    lastBlockedMoves: blockedMoves.length ? blockedMoves : undefined
+  };
+  managedPosition.tpRatchetLifecycle = lifecycle;
+
+  return { levels, lifecycle };
+}
+
 export function stabilizeManagedTakeProfits(
   managedPosition: NonNullable<AlertState['managedPosition']>,
   proposedLevels: any[],
   currentPositionSize: number,
   observedAt = nowNlIso(),
   fallbackEntryLevels: any[] = [],
-  stepSize = 0
+  stepSize = 0,
+  context: ManagedTpRatchetContext = {}
 ): {
   takeProfits: Record<string, any>[];
   lifecycle: ManagedTp1Lifecycle | undefined;
+  ratchetLifecycle: ManagedTpRatchetLifecycle;
   consumedNow: boolean;
 } {
   const currentSize = Math.abs(Number(currentPositionSize) || 0);
@@ -647,13 +805,19 @@ export function stabilizeManagedTakeProfits(
   }
 
   if (!lifecycle) {
+    const ratcheted = ratchetManagedTakeProfitLevels(
+      managedPosition,
+      Array.isArray(proposedLevels) ? proposedLevels.map(takeProfitLevelCopy) : [],
+      currentSize,
+      observedAt,
+      fallbackEntryLevels,
+      stepSize,
+      context
+    );
     return {
-      takeProfits: resizeTakeProfitLevels(
-        Array.isArray(proposedLevels) ? proposedLevels.map(takeProfitLevelCopy) : [],
-        currentSize,
-        stepSize
-      ),
+      takeProfits: ratcheted.levels,
       lifecycle: undefined,
+      ratchetLifecycle: ratcheted.lifecycle,
       consumedNow: false
     };
   }
@@ -666,9 +830,19 @@ export function stabilizeManagedTakeProfits(
 
   const dynamicLevels = levelsWithoutTp1(proposedLevels);
   if (lifecycle.consumedAt) {
+    const ratcheted = ratchetManagedTakeProfitLevels(
+      managedPosition,
+      dynamicLevels,
+      currentSize,
+      observedAt,
+      fallbackEntryLevels,
+      stepSize,
+      context
+    );
     return {
-      takeProfits: resizeTakeProfitLevels(dynamicLevels, currentSize, stepSize),
+      takeProfits: ratcheted.levels,
       lifecycle,
+      ratchetLifecycle: ratcheted.lifecycle,
       consumedNow
     };
   }
@@ -679,11 +853,21 @@ export function stabilizeManagedTakeProfits(
     size: lockedSize
   };
   const remainingSize = Math.max(0, currentSize - lockedSize);
+  const ratcheted = ratchetManagedTakeProfitLevels(
+    managedPosition,
+    dynamicLevels,
+    remainingSize,
+    observedAt,
+    fallbackEntryLevels,
+    stepSize,
+    context
+  );
 
   return {
-    takeProfits: [lockedLevel, ...resizeTakeProfitLevels(dynamicLevels, remainingSize, stepSize)]
+    takeProfits: [lockedLevel, ...ratcheted.levels]
       .filter((level) => Number(level.size) > 0),
     lifecycle,
+    ratchetLifecycle: ratcheted.lifecycle,
     consumedNow
   };
 }
@@ -6322,7 +6506,10 @@ export class DecentraderGapMonitor {
         Array.isArray(state.lastTradeDecision?.takeProfits)
           ? state.lastTradeDecision.takeProfits
           : [],
-        minimumOrderSize
+        minimumOrderSize,
+        {
+          currentPrice: numberOrZero(plan?.marketInfo?.oraclePrice) || numberOrZero(plan?.price)
+        }
       );
       const takeProfits = stabilized.takeProfits;
       (alert as any).take_profits = takeProfits;
@@ -6333,7 +6520,8 @@ export class DecentraderGapMonitor {
           reason: 'No placeable map-derived TP levels; existing TP orders were preserved.',
           market,
           position,
-          tp1Lifecycle: stabilized.lifecycle || null
+          tp1Lifecycle: stabilized.lifecycle || null,
+          tpRatchetLifecycle: stabilized.ratchetLifecycle
         };
         return;
       }
@@ -6347,6 +6535,7 @@ export class DecentraderGapMonitor {
         timestampNl: plan.timestampNl,
         takeProfits,
         tp1Lifecycle: stabilized.lifecycle || null,
+        tpRatchetLifecycle: stabilized.ratchetLifecycle,
         tp1ConsumedNow: stabilized.consumedNow
       };
       console.log('Decentrader dynamic TP sync:', result.dynamicTpSync);
@@ -7219,7 +7408,10 @@ export class DecentraderGapMonitor {
         state.managedPosition,
         (orderAlert as any).take_profits || [],
         Math.abs(observedEntryPosition.size),
-        state.lastTradeExecutedAt
+        state.lastTradeExecutedAt,
+        [],
+        0,
+        { currentPrice: observedEntryPosition.entryPrice }
       );
       result.tradePlaced = true;
       result.tradeSkipped = null;

@@ -921,7 +921,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       state.managedPosition,
       takeProfits,
       Math.abs(finite(position.size)),
-      registeredAt
+      registeredAt,
+      [],
+      0,
+      { currentPrice: finite(position.entryPrice) || oraclePrice }
     );
     state.lastTradeDecision = {
       at: registeredAt,
@@ -1126,7 +1129,8 @@ export class OpenLiquidityV2EthTradeMonitor {
         Array.isArray(state.lastTradeDecision?.takeProfits)
           ? state.lastTradeDecision.takeProfits
           : [],
-        minimumOrderSize
+        minimumOrderSize,
+        { currentPrice: finite(plan.marketInfo?.oraclePrice) || finite(plan.price) }
       );
       (tpAlert as any).take_profits = stabilized.takeProfits;
       if (stabilized.takeProfits.length) {
@@ -1134,6 +1138,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         result.dynamicTpSync = {
           ...result.dynamicTpSync,
           tp1Lifecycle: stabilized.lifecycle || null,
+          tpRatchetLifecycle: stabilized.ratchetLifecycle,
           tp1ConsumedNow: stabilized.consumedNow,
           takeProfits: stabilized.takeProfits
         };
