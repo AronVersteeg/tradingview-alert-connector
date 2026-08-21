@@ -419,6 +419,22 @@ export type DecentraderTradeExecutor = {
     openOrders: number;
     marketOpenOrders: number;
     availableSlots: number;
+    openPositionCount: number;
+    openPositionMarkets: string[];
+    allocationMarkets: string[];
+    totalReservedStopSlots: number;
+    marketReservedStopSlots: number;
+    marketTakeProfitLimit: number;
+    marketOrderLimit: number;
+    marketTakeProfitOrders: number;
+    marketProtectiveStops: number;
+    marketAvailableTakeProfitSlots: number;
+    allocations: Array<{
+      market: string;
+      reservedStopSlots: number;
+      takeProfitSlots: number;
+      orderSlots: number;
+    }>;
   }>;
   placeOrder: (alert: AlertObject) => Promise<void>;
   syncTakeProfits?: (alert: AlertObject) => Promise<any>;

@@ -7,6 +7,7 @@ import {
   reconstructReplicaIntrusions
 } from '../src/services/openLiquidityV2EthTradeMonitor';
 import { Gap, LiquidityBar } from '../src/services/decentraderGapMonitor';
+import { allocateStatefulOrderSlots } from '../src/services/dydx_v4/dydxV4Client';
 
 function replicaGap(left: number, right: number) {
   return {
@@ -19,6 +20,42 @@ function replicaGap(left: number, right: number) {
 }
 
 describe('ETH Public Perp V2 intrusion execution inputs', () => {
+  test('reserves one stop per five positions before evenly dividing TP slots', () => {
+    const allocations = allocateStatefulOrderSlots(
+      ['XAG-USD', 'BTC_USD', 'PAXG-USD', 'INJ-USD', 'ETH-USD'],
+      20
+    );
+
+    expect(allocations).toHaveLength(5);
+    expect(allocations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ market: 'BTC-USD', reservedStopSlots: 1, takeProfitSlots: 3, orderSlots: 4 }),
+      expect.objectContaining({ market: 'ETH-USD', reservedStopSlots: 1, takeProfitSlots: 3, orderSlots: 4 }),
+      expect.objectContaining({ market: 'INJ-USD', reservedStopSlots: 1, takeProfitSlots: 3, orderSlots: 4 }),
+      expect.objectContaining({ market: 'PAXG-USD', reservedStopSlots: 1, takeProfitSlots: 3, orderSlots: 4 }),
+      expect.objectContaining({ market: 'XAG-USD', reservedStopSlots: 1, takeProfitSlots: 3, orderSlots: 4 })
+    ]));
+  });
+
+  test('uses the account allocation instead of first-come-first-served capacity', () => {
+    const levels = Array.from({ length: 6 }, (_, index) => ({
+      label: `L TP${index + 1}`,
+      price: 70 + index
+    }));
+
+    expect(capTakeProfitsForStatefulOrderCapacity(levels, {
+      limit: 20,
+      openOrders: 20,
+      marketOpenOrders: 0,
+      marketTakeProfitLimit: 3,
+      marketReservedStopSlots: 1
+    })).toMatchObject({
+      requested: 6,
+      allowed: 3,
+      reservedStopSlots: 1,
+      takeProfits: levels.slice(0, 3)
+    });
+  });
+
   test('reserves one stateful-order slot for the stop and caps the TP ladder', () => {
     const levels = Array.from({ length: 6 }, (_, index) => ({
       label: `L TP${index + 1}`,

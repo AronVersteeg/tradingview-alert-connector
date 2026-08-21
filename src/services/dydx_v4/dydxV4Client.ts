@@ -70,6 +70,31 @@ type ExplicitTakeProfitLevel = {
   sizeFraction?: number;
 };
 
+export type StatefulMarketOrderAllocation = {
+  market: string;
+  reservedStopSlots: number;
+  takeProfitSlots: number;
+  orderSlots: number;
+};
+
+export type StatefulOrderCapacity = {
+  limit: number;
+  openOrders: number;
+  marketOpenOrders: number;
+  availableSlots: number;
+  openPositionCount: number;
+  openPositionMarkets: string[];
+  allocationMarkets: string[];
+  totalReservedStopSlots: number;
+  marketReservedStopSlots: number;
+  marketTakeProfitLimit: number;
+  marketOrderLimit: number;
+  marketTakeProfitOrders: number;
+  marketProtectiveStops: number;
+  marketAvailableTakeProfitSlots: number;
+  allocations: StatefulMarketOrderAllocation[];
+};
+
 type PlacedConditionalOrder = {
   clientId: number;
   size: number;
@@ -232,6 +257,36 @@ const parseEnvPositiveNumber = (value: unknown, fallback: number): number => {
     : fallback;
 };
 
+export function allocateStatefulOrderSlots(
+  markets: string[],
+  configuredLimit = 20
+): StatefulMarketOrderAllocation[] {
+  const limit = Math.max(1, Math.floor(Number(configuredLimit) || 20));
+  const normalizedMarkets = Array.from(new Set(
+    markets
+      .map((market) => String(market || '').replace(/_/g, '-').toUpperCase())
+      .filter(Boolean)
+  )).sort();
+
+  if (!normalizedMarkets.length) return [];
+
+  const totalReservedStopSlots = Math.min(limit, normalizedMarkets.length);
+  const takeProfitPool = Math.max(0, limit - totalReservedStopSlots);
+  const baseTakeProfitSlots = Math.floor(takeProfitPool / normalizedMarkets.length);
+  const remainder = takeProfitPool % normalizedMarkets.length;
+
+  return normalizedMarkets.map((market, index) => {
+    const reservedStopSlots = index < totalReservedStopSlots ? 1 : 0;
+    const takeProfitSlots = baseTakeProfitSlots + (index < remainder ? 1 : 0);
+    return {
+      market,
+      reservedStopSlots,
+      takeProfitSlots,
+      orderSlots: reservedStopSlots + takeProfitSlots
+    };
+  });
+}
+
 export class DydxV4Client extends AbstractDexClient {
   private wallet!: LocalWallet;
   private client!: CompositeClient;
@@ -240,6 +295,7 @@ export class DydxV4Client extends AbstractDexClient {
   private initialized = false;
 
   private txQueue: Promise<unknown> = Promise.resolve();
+  private statefulOrderQueue: Promise<unknown> = Promise.resolve();
   private readonly marketQueues = new Map<string, Promise<unknown>>();
 
   private readonly managedStops = new Map<string, ManagedStop>();
@@ -498,24 +554,24 @@ export class DydxV4Client extends AbstractDexClient {
   async placeOrder(alert: AlertObject): Promise<void> {
     const market = this.normalizeMarket((alert as any).market);
 
-    return this.withMarketQueue(market, () =>
-      this.placeOrderForMarket(market, alert)
+    return this.withStatefulOrderQueue(() =>
+      this.withMarketQueue(market, () => this.placeOrderForMarket(market, alert))
     );
   }
 
   async syncTakeProfits(alert: AlertObject): Promise<any> {
     const market = this.normalizeMarket((alert as any).market);
 
-    return this.withMarketQueue(market, () =>
-      this.syncTakeProfitsForMarket(market, alert)
+    return this.withStatefulOrderQueue(() =>
+      this.withMarketQueue(market, () => this.syncTakeProfitsForMarket(market, alert))
     );
   }
 
   async syncTrailingStop(alert: AlertObject): Promise<any> {
     const market = this.normalizeMarket((alert as any).market);
 
-    return this.withMarketQueue(market, () =>
-      this.syncTrailingStopForMarket(market, alert)
+    return this.withStatefulOrderQueue(() =>
+      this.withMarketQueue(market, () => this.syncTrailingStopForMarket(market, alert))
     );
   }
 
@@ -963,10 +1019,18 @@ export class DydxV4Client extends AbstractDexClient {
 
     const isLong = position.size > 0;
     const side = isLong ? OrderSide.SELL : OrderSide.BUY;
+    const capacity = await this.rebalanceStatefulOrderCapacity(market);
     const marketInfo = await this.getMarketInfoBestEffort(market);
     const currentPrice = this.getMarketInfoReferencePrice(marketInfo);
-    const levels = requestedLevels.filter((level) =>
+    const eligibleLevels = requestedLevels.filter((level) =>
       !currentPrice || (isLong ? level.price > currentPrice : level.price < currentPrice)
+    );
+    const levels = this.fitTakeProfitLevelsToCapacity(
+      eligibleLevels,
+      capacity.marketTakeProfitLimit,
+      Math.abs(position.size),
+      marketInfo,
+      market
     );
 
     if (!levels.length) {
@@ -977,8 +1041,8 @@ export class DydxV4Client extends AbstractDexClient {
     }
 
     const openOrders = await this.getOpenOrdersForMarket(market);
-    const existingTakeProfits = openOrders.filter((order: any) => this.isTakeProfitOrder(order));
-    const managedTakeProfits = this.managedTakeProfits.get(market) ?? [];
+    let existingTakeProfits = openOrders.filter((order: any) => this.isTakeProfitOrder(order));
+    let managedTakeProfits = this.managedTakeProfits.get(market) ?? [];
 
     if (this.takeProfitOrdersMatchLevels(existingTakeProfits, levels, market, marketInfo)) {
       const adoptedTakeProfits = existingTakeProfits
@@ -1017,34 +1081,54 @@ export class DydxV4Client extends AbstractDexClient {
       };
     }
 
-    if (!existingTakeProfits.length && this.managedTakeProfitsMatchLevels(managedTakeProfits, levels)) {
-      return {
-        outcome: 'UNCHANGED',
-        reason: 'Render-managed TP memory already matches the latest map-derived TP ladder; dYdX indexer did not expose the conditional order.',
-        positionSize: position.size,
-        takeProfitCount: managedTakeProfits.length,
-        visibility: 'MANAGED_MEMORY_ONLY'
-      };
+    if (!existingTakeProfits.length && managedTakeProfits.length) {
+      for (let poll = 1; poll <= Math.min(3, this.SAFETY_STOP_VERIFY_POLLS); poll += 1) {
+        await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
+        existingTakeProfits = (await this.getOpenOrdersForMarket(market))
+          .filter((order: any) => this.isTakeProfitOrder(order));
+        if (existingTakeProfits.length) break;
+      }
     }
 
     if (!existingTakeProfits.length && managedTakeProfits.length) {
-      return {
-        outcome: 'SKIPPED',
-        reason: 'Render-managed TP memory differs from the latest map ladder, but dYdX indexer did not expose the live conditional order; dynamic TP replacement skipped to avoid duplicates.',
-        positionSize: position.size,
-        managedTakeProfitCount: managedTakeProfits.length,
-        requestedTakeProfitCount: levels.length,
-        visibility: 'MANAGED_MEMORY_ONLY'
-      };
+      for (const managedTakeProfit of managedTakeProfits) {
+        await this.cancelManagedTakeProfitBestEffort(
+          market,
+          managedTakeProfit,
+          'Clearing Render-managed TP memory after repeated dYdX indexer checks confirmed no visible ladder.'
+        );
+      }
+      this.deleteManagedTakeProfits(market);
+      managedTakeProfits = [];
+      await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
+      existingTakeProfits = (await this.getOpenOrdersForMarket(market))
+        .filter((order: any) => this.isTakeProfitOrder(order));
     }
 
     if (!existingTakeProfits.length && !managedTakeProfits.length) {
+      await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
+      existingTakeProfits = (await this.getOpenOrdersForMarket(market))
+        .filter((order: any) => this.isTakeProfitOrder(order));
+    }
+
+    if (!existingTakeProfits.length && !managedTakeProfits.length) {
+      await this.placeExplicitTakeProfitsAfterEntry(
+        market,
+        position.size,
+        {
+          ...(alert as any),
+          take_profits: levels
+        } as AlertObject,
+        levels
+      );
       return {
-        outcome: 'SKIPPED',
-        reason: 'No visible or Render-managed TP orders were available to replace; dynamic TP sync skipped to avoid duplicate dYdX conditional orders.',
+        outcome: 'RESTORED',
+        reason: 'No live TP ladder was visible after verification; restored the fair-share map-derived ladder.',
         positionSize: position.size,
-        requestedTakeProfitCount: levels.length,
-        visibility: 'UNVERIFIED_INDEXER'
+        takeProfitCount: levels.length,
+        levels,
+        capacity,
+        visibility: 'VERIFIED_ABSENT'
       };
     }
 
@@ -1186,12 +1270,7 @@ export class DydxV4Client extends AbstractDexClient {
     return remainingTakeProfits;
   }
 
-  async getStatefulOrderCapacity(market: string): Promise<{
-    limit: number;
-    openOrders: number;
-    marketOpenOrders: number;
-    availableSlots: number;
-  }> {
+  async getStatefulOrderCapacity(market: string): Promise<StatefulOrderCapacity> {
     if (!this.initialized) {
       throw new Error('dYdX v4 client is not initialized.');
     }
@@ -1202,16 +1281,126 @@ export class DydxV4Client extends AbstractDexClient {
       1,
       Math.floor(parseEnvPositiveNumber(process.env.DYDX_V4_STATEFUL_ORDER_LIMIT, 20))
     );
-    const marketOpenOrders = orders.filter((order: any) =>
+    let openPositionMarkets: string[] = [];
+    try {
+      const account = await this.getAccountSnapshot([]);
+      openPositionMarkets = account.openPositions
+        .filter((position) => Math.abs(position.size) > this.TOLERANCE)
+        .map((position) => this.normalizeMarket(position.market));
+    } catch (error) {
+      console.warn('Could not read all open positions for stateful-order allocation; using active-order markets as fallback.', {
+        market: normalizedMarket,
+        error: this.serializeError(error)
+      });
+      openPositionMarkets = orders
+        .map((order: any) => this.normalizeMarket(order.market ?? order.ticker))
+        .filter(Boolean);
+    }
+
+    openPositionMarkets = Array.from(new Set(openPositionMarkets)).sort();
+    const allocationMarkets = Array.from(new Set([...openPositionMarkets, normalizedMarket])).sort();
+    const allocations = allocateStatefulOrderSlots(allocationMarkets, limit);
+    const marketAllocation = allocations.find((allocation) => allocation.market === normalizedMarket) ?? {
+      market: normalizedMarket,
+      reservedStopSlots: 0,
+      takeProfitSlots: 0,
+      orderSlots: 0
+    };
+    const marketOrders = orders.filter((order: any) =>
       this.orderMarketMatches(order, normalizedMarket)
+    );
+    const marketTakeProfitOrders = marketOrders.filter((order: any) =>
+      this.isTakeProfitOrder(order)
+    ).length;
+    const marketProtectiveStops = marketOrders.filter((order: any) =>
+      this.isProtectiveStopOrder(order)
     ).length;
 
     return {
       limit,
       openOrders: orders.length,
-      marketOpenOrders,
-      availableSlots: Math.max(0, limit - orders.length)
+      marketOpenOrders: marketOrders.length,
+      availableSlots: Math.max(0, limit - orders.length),
+      openPositionCount: openPositionMarkets.length,
+      openPositionMarkets,
+      allocationMarkets,
+      totalReservedStopSlots: allocations.reduce(
+        (total, allocation) => total + allocation.reservedStopSlots,
+        0
+      ),
+      marketReservedStopSlots: marketAllocation.reservedStopSlots,
+      marketTakeProfitLimit: marketAllocation.takeProfitSlots,
+      marketOrderLimit: marketAllocation.orderSlots,
+      marketTakeProfitOrders,
+      marketProtectiveStops,
+      marketAvailableTakeProfitSlots: Math.max(
+        0,
+        marketAllocation.takeProfitSlots - marketTakeProfitOrders
+      ),
+      allocations
     };
+  }
+
+  private async rebalanceStatefulOrderCapacity(market: string): Promise<StatefulOrderCapacity> {
+    let capacity = await this.getStatefulOrderCapacity(market);
+    const orders = await this.getOpenOrders();
+    const cancelledClientIdsByMarket = new Map<string, Set<number>>();
+
+    for (const allocation of capacity.allocations) {
+      const marketOrders = orders.filter((order: any) =>
+        this.orderMarketMatches(order, allocation.market)
+      );
+      const excess = Math.max(0, marketOrders.length - allocation.orderSlots);
+      if (!excess) continue;
+
+      const position = await this.getCurrentPosition(allocation.market);
+      const isLong = position.size > 0;
+      const takeProfits = marketOrders
+        .filter((order: any) => this.isTakeProfitOrder(order))
+        .sort((a: any, b: any) => {
+          const aTrigger = this.getOrderTriggerPrice(a) ?? this.getOrderPrice(a) ?? 0;
+          const bTrigger = this.getOrderTriggerPrice(b) ?? this.getOrderPrice(b) ?? 0;
+          return isLong ? bTrigger - aTrigger : aTrigger - bTrigger;
+        });
+      const ordersToCancel = takeProfits.slice(0, excess);
+
+      if (!ordersToCancel.length) {
+        console.warn('Stateful-order allocation is over quota but has no TP orders that may be released safely.', {
+          allocation,
+          marketOpenOrders: marketOrders.length,
+          protectiveStops: marketOrders.filter((order: any) => this.isProtectiveStopOrder(order)).length
+        });
+        continue;
+      }
+
+      console.warn('Rebalancing dYdX stateful-order capacity by releasing farthest TP levels.', {
+        requestingMarket: market,
+        allocation,
+        marketOpenOrders: marketOrders.length,
+        releasedTakeProfits: ordersToCancel.map((order: any) => this.summarizeOrder(order))
+      });
+      await this.cancelSpecificOrders(allocation.market, ordersToCancel);
+
+      const cancelledClientIds = new Set(
+        ordersToCancel
+          .map((order: any) => this.getOrderClientId(order))
+          .filter((clientId: number) => Number.isFinite(clientId))
+      );
+      cancelledClientIdsByMarket.set(allocation.market, cancelledClientIds);
+      const remainingManaged = (this.managedTakeProfits.get(allocation.market) ?? [])
+        .filter((level) => !cancelledClientIds.has(level.clientId));
+      this.setManagedTakeProfits(allocation.market, remainingManaged);
+    }
+
+    if (cancelledClientIdsByMarket.size) {
+      for (let poll = 1; poll <= Math.min(3, this.SAFETY_STOP_VERIFY_POLLS); poll += 1) {
+        await this.sleep(this.SAFETY_STOP_VERIFY_DELAY_MS);
+        capacity = await this.getStatefulOrderCapacity(market);
+        if (capacity.availableSlots > 0) break;
+      }
+    }
+
+    return capacity;
   }
 
   private async cancelTakeProfitsWithRetry(market: string, orders: any[]): Promise<any[]> {
@@ -1305,6 +1494,8 @@ export class DydxV4Client extends AbstractDexClient {
       });
       return;
     }
+
+    await this.rebalanceStatefulOrderCapacity(market);
 
     const explicitTakeProfits = this.getExplicitTakeProfitLevels(alert);
     const skipStaticStop = this.shouldSkipStaticStop(alert);
@@ -3334,8 +3525,18 @@ export class DydxV4Client extends AbstractDexClient {
     const entryReferencePrice = this.getSafetyStopReferencePrice(alert, position.entryPrice);
     const positionSize = Math.abs(position.size);
     const marketInfo = await this.getMarketInfoBestEffort(market);
-    const capacity = await this.getStatefulOrderCapacity(market);
-    const levelsToPlace = levels.slice(0, capacity.availableSlots);
+    const capacity = await this.rebalanceStatefulOrderCapacity(market);
+    const allowedSlots = Math.min(
+      capacity.marketAvailableTakeProfitSlots,
+      capacity.availableSlots
+    );
+    const levelsToPlace = this.fitTakeProfitLevelsToCapacity(
+      levels,
+      allowedSlots,
+      positionSize,
+      marketInfo,
+      market
+    );
 
     if (levelsToPlace.length < levels.length) {
       console.warn('Explicit TP ladder reduced because the dYdX stateful-order limit is nearly full.', {
@@ -3439,6 +3640,72 @@ export class DydxV4Client extends AbstractDexClient {
         placedTakeProfit.clientId
       );
     }
+  }
+
+  private fitTakeProfitLevelsToCapacity(
+    levels: ExplicitTakeProfitLevel[],
+    takeProfitLimit: number,
+    positionSize: number,
+    marketInfo?: any,
+    market = ''
+  ): ExplicitTakeProfitLevel[] {
+    const allowed = Math.max(0, Math.floor(Number(takeProfitLimit) || 0));
+    if (!levels.length || !allowed || positionSize <= 0) return [];
+
+    let selected = levels.slice(0, allowed).map((level) => ({ ...level }));
+    const sizeCheck = this.getCorrectionOrderSizeCheck(market, positionSize, marketInfo);
+    const stepSize = sizeCheck.stepSize;
+    if (!stepSize || !Number.isFinite(stepSize) || stepSize <= 0) {
+      const weights = selected.map((level) =>
+        Number(level.size) > 0
+          ? Number(level.size)
+          : Number(level.sizeFraction) > 0
+            ? Number(level.sizeFraction)
+            : 1
+      );
+      const totalWeight = weights.reduce((total, weight) => total + weight, 0);
+      return selected.map((level, index) => ({
+        ...level,
+        size: positionSize * weights[index] / Math.max(totalWeight, Number.EPSILON)
+      }));
+    }
+
+    const totalSteps = Math.floor(positionSize / stepSize + 1e-9);
+    selected = selected.slice(0, Math.min(selected.length, totalSteps));
+    if (!selected.length) return [];
+
+    const weights = selected.map((level) =>
+      Number(level.size) > 0
+        ? Number(level.size)
+        : Number(level.sizeFraction) > 0
+          ? Number(level.sizeFraction)
+          : 1
+    );
+    const totalWeight = weights.reduce((total, weight) => total + weight, 0);
+    const allocatedSteps = selected.map(() => 1);
+    const remainingSteps = Math.max(0, totalSteps - selected.length);
+    const exactAdditionalSteps = weights.map((weight) =>
+      remainingSteps * weight / Math.max(totalWeight, Number.EPSILON)
+    );
+
+    exactAdditionalSteps.forEach((exact, index) => {
+      allocatedSteps[index] += Math.floor(exact);
+    });
+    let unallocatedSteps = totalSteps - allocatedSteps.reduce((total, value) => total + value, 0);
+    const remainderOrder = exactAdditionalSteps
+      .map((exact, index) => ({ index, remainder: exact - Math.floor(exact) }))
+      .sort((a, b) => b.remainder - a.remainder || a.index - b.index);
+    for (const item of remainderOrder) {
+      if (unallocatedSteps <= 0) break;
+      allocatedSteps[item.index] += 1;
+      unallocatedSteps -= 1;
+    }
+
+    const decimals = Math.max(0, (String(stepSize).split('.')[1] || '').length);
+    return selected.map((level, index) => ({
+      ...level,
+      size: Number((allocatedSteps[index] * stepSize).toFixed(decimals))
+    }));
   }
 
   private async placeTakeProfitMarketOrder(
@@ -5131,6 +5398,12 @@ export class DydxV4Client extends AbstractDexClient {
       }
     });
 
+    return run;
+  }
+
+  private async withStatefulOrderQueue<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.statefulOrderQueue.then(fn, fn);
+    this.statefulOrderQueue = run.catch(() => undefined);
     return run;
   }
 

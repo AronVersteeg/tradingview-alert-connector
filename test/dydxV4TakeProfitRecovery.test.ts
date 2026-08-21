@@ -100,6 +100,11 @@ describe('dYdX v4 take-profit replacement recovery', () => {
       minOrderSize: '0.0001'
     });
     client.getMarketInfoReferencePrice = jest.fn().mockReturnValue(71900);
+    client.rebalanceStatefulOrderCapacity = jest.fn().mockResolvedValue({
+      marketTakeProfitLimit: 6,
+      marketAvailableTakeProfitSlots: 6,
+      availableSlots: 6
+    });
     client.getOpenOrdersForMarket = jest.fn().mockResolvedValue([remainingOrder]);
     client.cancelTakeProfitsWithRetry = jest.fn().mockResolvedValue([remainingOrder]);
     client.setManagedTakeProfits = jest.fn();
@@ -128,5 +133,77 @@ describe('dYdX v4 take-profit replacement recovery', () => {
         expect.objectContaining({ name: 'L TP3', price: 99950 })
       ])
     );
+  });
+
+  test('restores a missing live TP ladder instead of trusting stale managed memory', async () => {
+    const client = new DydxV4Client() as any;
+    const levels = [
+      { name: 'L TP1', price: 80000, size: 0.0005 },
+      { name: 'L TP2', price: 95950, size: 0.0005 },
+      { name: 'L TP3', price: 99950, size: 0.0003 }
+    ];
+
+    client.getCurrentPosition = jest.fn().mockResolvedValue({ size: 0.0013 });
+    client.getTargetSize = jest.fn().mockReturnValue(0.0013);
+    client.getExplicitTakeProfitLevels = jest.fn().mockReturnValue(levels);
+    client.rebalanceStatefulOrderCapacity = jest.fn().mockResolvedValue({
+      marketTakeProfitLimit: 3,
+      marketAvailableTakeProfitSlots: 3,
+      availableSlots: 3
+    });
+    client.getMarketInfoBestEffort = jest.fn().mockResolvedValue({
+      oraclePrice: '71900',
+      stepSize: '0.0001',
+      minOrderSize: '0.0001'
+    });
+    client.getMarketInfoReferencePrice = jest.fn().mockReturnValue(71900);
+    client.getOpenOrdersForMarket = jest.fn().mockResolvedValue([]);
+    client.sleep = jest.fn().mockResolvedValue(undefined);
+    client.managedTakeProfits.set('BTC-USD', [{
+      market: 'BTC-USD',
+      side: 'SELL',
+      triggerPrice: 80000,
+      executionPrice: 79200,
+      clientId: 501,
+      size: 0.0005,
+      source: 'EXPLICIT_TP',
+      levelName: 'L TP1',
+      updatedAt: Date.now(),
+      goodTilBlockTime: 1900000000
+    }]);
+    client.cancelManagedTakeProfitBestEffort = jest.fn().mockResolvedValue(undefined);
+    client.placeExplicitTakeProfitsAfterEntry = jest.fn().mockResolvedValue(undefined);
+
+    const result = await client.syncTakeProfitsForMarket('BTC-USD', {
+      market: 'BTC-USD',
+      desired_position: 'LONG',
+      size: 0.0013,
+      take_profits: levels
+    });
+
+    expect(result.outcome).toBe('RESTORED');
+    expect(result.takeProfitCount).toBe(3);
+    expect(client.cancelManagedTakeProfitBestEffort).toHaveBeenCalledTimes(1);
+    expect(client.placeExplicitTakeProfitsAfterEntry).toHaveBeenCalledTimes(1);
+  });
+
+  test('resizes a capped ladder to cover the complete remaining position', () => {
+    const client = new DydxV4Client() as any;
+    const levels = Array.from({ length: 6 }, (_, index) => ({
+      name: `L TP${index + 1}`,
+      price: 80000 + index * 5000,
+      size: index === 0 ? 0.0005 : 0.0002
+    }));
+
+    const fitted = client.fitTakeProfitLevelsToCapacity(
+      levels,
+      3,
+      0.0013,
+      { stepSize: '0.0001', minOrderSize: '0.0001' },
+      'BTC-USD'
+    );
+
+    expect(fitted).toHaveLength(3);
+    expect(fitted.reduce((total: number, level: any) => total + level.size, 0)).toBeCloseTo(0.0013, 8);
   });
 });

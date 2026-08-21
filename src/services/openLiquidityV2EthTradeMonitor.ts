@@ -241,12 +241,22 @@ function directionForPosition(position: DydxOpenPosition | undefined): TradePlan
 
 export function capTakeProfitsForStatefulOrderCapacity(
   takeProfits: any[],
-  capacity: { limit: number; openOrders: number; marketOpenOrders: number }
+  capacity: {
+    limit: number;
+    openOrders: number;
+    marketOpenOrders: number;
+    marketTakeProfitLimit?: number;
+    marketReservedStopSlots?: number;
+  }
 ): { takeProfits: any[]; requested: number; allowed: number; reservedStopSlots: number } {
   const requested = Array.isArray(takeProfits) ? takeProfits.length : 0;
   const otherMarketOrders = Math.max(0, capacity.openOrders - capacity.marketOpenOrders);
-  const reservedStopSlots = 1;
-  const allowed = Math.max(0, capacity.limit - otherMarketOrders - reservedStopSlots);
+  const reservedStopSlots = Number.isFinite(capacity.marketReservedStopSlots)
+    ? Math.max(0, Number(capacity.marketReservedStopSlots))
+    : 1;
+  const allowed = Number.isFinite(capacity.marketTakeProfitLimit)
+    ? Math.max(0, Math.floor(Number(capacity.marketTakeProfitLimit)))
+    : Math.max(0, capacity.limit - otherMarketOrders - reservedStopSlots);
 
   return {
     takeProfits: (takeProfits || []).slice(0, allowed),
@@ -858,7 +868,9 @@ export class OpenLiquidityV2EthTradeMonitor {
       : [];
     const capped = capTakeProfitsForStatefulOrderCapacity(requestedLevels, capacity);
     const otherMarketOrders = Math.max(0, capacity.openOrders - capacity.marketOpenOrders);
-    const slotsForMarket = Math.max(0, capacity.limit - otherMarketOrders);
+    const slotsForMarket = Number.isFinite(capacity.marketOrderLimit)
+      ? Math.max(0, Number(capacity.marketOrderLimit))
+      : Math.max(0, capacity.limit - otherMarketOrders);
 
     if (slotsForMarket < capped.reservedStopSlots) {
       throw new Error(
