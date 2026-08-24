@@ -7,6 +7,11 @@ import {
   coinGlassEthWhaleCollector,
   coinGlassInjWhaleCollector
 } from './coinGlassEthWhaleCollector';
+import { decentralizedDomCollectorForMarket } from './decentralizedDomCollector';
+import {
+  IntrusionImpulseQuality,
+  evaluateIntrusionImpulseQuality
+} from './intrusionImpulseQuality';
 import {
   AlertState,
   DecentraderRow,
@@ -176,6 +181,7 @@ type EthBenchmarkRecord = {
   direction: TradePlanDirection | 'mixed';
   filtered: boolean;
   candleReview?: any;
+  impulseQuality?: IntrusionImpulseQuality;
   coinGlass: any;
   tradeOutcome?: string;
   observedAt: string;
@@ -786,6 +792,7 @@ export class OpenLiquidityV2EthTradeMonitor {
 
   private addBenchmark(state: EthMonitorState, alert: GapAlert, signature: string, details: Partial<EthBenchmarkRecord>): void {
     const existing = (state.benchmarkRecords || []).findIndex((record) => record.signature === signature);
+    const existingRecord = existing >= 0 ? (state.benchmarkRecords || [])[existing] : undefined;
     const base: EthBenchmarkRecord = {
       signature,
       timestamp: alert.timestamp,
@@ -793,7 +800,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       sideCounts: sideCounts(alert),
       direction: mapDirectionFromAlert(alert) || 'mixed',
       filtered: false,
-      coinGlass: coinGlassBenchmark(alert, this.config.coinGlass),
+      coinGlass: existingRecord?.coinGlass || coinGlassBenchmark(alert, this.config.coinGlass),
       observedAt: nowNlIso(),
       ...details
     };
@@ -801,6 +808,28 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (existing >= 0) records[existing] = { ...records[existing], ...base };
     else records.push(base);
     state.benchmarkRecords = records.slice(-500);
+  }
+
+  private impulseQuality(
+    alert: GapAlert,
+    review: any,
+    coinGlass: any
+  ): IntrusionImpulseQuality {
+    const collector = decentralizedDomCollectorForMarket(this.config.market);
+    const from = new Date(timestampMs(alert.timestamp)).toISOString();
+    const to = String(review?.delayCutoffAt || nowNlIso());
+    const domRecords = collector
+      ? collector.getHistory({ from, to, maxPoints: 5_000 }).records
+      : [];
+    return evaluateIntrusionImpulseQuality({
+      direction: mapDirectionFromAlert(alert),
+      alertTimestamp: alert.timestamp,
+      gapWidth: alert.previousGap?.width,
+      review,
+      domRecords,
+      coinGlass,
+      evaluatedAt: to
+    });
   }
 
   async getTradePlan(account: DydxSizingAccountSnapshot, signalAlert?: GapAlert): Promise<any> {
@@ -1345,13 +1374,21 @@ export class OpenLiquidityV2EthTradeMonitor {
             pending.normalSmtpSentAt,
             boolEnv('DECENTRADER_INTRUSION_VOLUME_DELTA_ENABLED', true)
           );
-          this.addBenchmark(state, alert, signature, { filtered: review.status === 'PASS', candleReview: review });
+          const storedBenchmark = (state.benchmarkRecords || []).find((record) => record.signature === signature);
+          const causalCoinGlass = storedBenchmark?.coinGlass || coinGlassBenchmark(alert, this.config.coinGlass);
+          const impulseQuality = this.impulseQuality(alert, review, causalCoinGlass);
+          this.addBenchmark(state, alert, signature, {
+            filtered: review.status === 'PASS',
+            candleReview: review,
+            coinGlass: causalCoinGlass,
+            impulseQuality
+          });
           if (review.status === 'PENDING') continue;
           if (review.status === 'PASS') {
             if (!filteredSent.has(signature) && smtp) {
               const sent = await sendEmailBestEffort(
                 smtp,
-                `FILTERED ${this.config.asset} ${sideCounts(alert)} | ${alert.timestampNl}`,
+                `FILTERED ${this.config.asset} ${sideCounts(alert)} | ${impulseQuality.label} | ${alert.timestampNl}`,
                 filteredAlertBody(alert, this.config.symbol, review).replace(
                   /^FILTERED Decentrader/,
                   `FILTERED ${this.config.asset} Public Perp V2`
@@ -1368,6 +1405,8 @@ export class OpenLiquidityV2EthTradeMonitor {
             this.addBenchmark(state, alert, signature, {
               filtered: true,
               candleReview: review,
+              coinGlass: causalCoinGlass,
+              impulseQuality,
               tradeOutcome: result.tradePlaced ? 'PLACED' : result.tradeSkipped || 'SKIPPED'
             });
           }

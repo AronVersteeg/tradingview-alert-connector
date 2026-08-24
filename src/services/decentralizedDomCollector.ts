@@ -59,7 +59,7 @@ export type DomMinuteRecord = {
   version: 1;
   bucketStart: string;
   bucketEnd: string;
-  market: 'BTC-USD';
+  market: string;
   venues: Partial<Record<VenueName, DomVenueMinute>>;
   crossVenue: {
     availableVenues: number;
@@ -102,7 +102,7 @@ type CollectorStatus = {
   enabled: boolean;
   running: boolean;
   readOnly: true;
-  market: 'BTC-USD';
+  market: string;
   pollSeconds: number;
   bucketSeconds: number;
   sources: Array<{
@@ -128,7 +128,13 @@ type CollectorStatus = {
 };
 
 const DEPTH_BANDS_BPS = [5, 10, 25, 50, 100];
-const MARKET = 'BTC-USD' as const;
+type DomCollectorConfig = {
+  market: string;
+  hyperliquidCoin?: string;
+  historySubdirectory?: string;
+};
+
+const DEFAULT_MARKET = 'BTC-USD';
 const DEFAULT_DYDX_HTTP_URL = 'https://indexer.dydx.trade';
 const DEFAULT_HYPERLIQUID_HTTP_URL = 'https://api.hyperliquid.xyz/info';
 
@@ -367,7 +373,8 @@ function finalizeVenue(accumulator: VenueAccumulator): DomVenueMinute | undefine
 export function buildDomMinuteRecord(
   bucketStartMs: number,
   bucketSeconds: number,
-  venueAccumulators: Partial<Record<VenueName, VenueAccumulator>>
+  venueAccumulators: Partial<Record<VenueName, VenueAccumulator>>,
+  market = DEFAULT_MARKET
 ): DomMinuteRecord {
   const venues: Partial<Record<VenueName, DomVenueMinute>> = {};
   for (const venue of ['dydx', 'hyperliquid'] as VenueName[]) {
@@ -388,7 +395,7 @@ export function buildDomMinuteRecord(
     version: 1,
     bucketStart: new Date(bucketStartMs).toISOString(),
     bucketEnd: new Date(bucketStartMs + bucketSeconds * 1000).toISOString(),
-    market: MARKET,
+    market,
     venues,
     crossVenue: {
       availableVenues: available.length,
@@ -453,16 +460,30 @@ export class DecentralizedDomCollector {
   private previousBooks: Partial<Record<VenueName, { bids: DomLevel[]; asks: DomLevel[] }>> = {};
   private seenTradeIds: Partial<Record<VenueName, Set<string>>> = {};
   private initializedTrades: Partial<Record<VenueName, boolean>> = {};
-  private sourceStatus: CollectorStatus['sources'] = [
-    { venue: 'dydx', public: true, requiresApiKey: false, tradeStreamConnected: false },
-    { venue: 'hyperliquid', public: true, requiresApiKey: false, tradeStreamConnected: false }
-  ];
+  private sourceStatus: CollectorStatus['sources'];
   private tradeSockets: Partial<Record<VenueName, any>> = {};
   private tradeSocketHeartbeats: Partial<Record<VenueName, NodeJS.Timeout>> = {};
   private tradeSocketReconnects: Partial<Record<VenueName, NodeJS.Timeout>> = {};
   private streamedTrades: Partial<Record<VenueName, DomTrade[]>> = {};
   private latestRecord: DomMinuteRecord | undefined;
   private storedRecords = 0;
+
+  constructor(private readonly config: DomCollectorConfig = { market: DEFAULT_MARKET, hyperliquidCoin: 'BTC' }) {
+    this.sourceStatus = this.venues().map((venue) => ({
+      venue,
+      public: true,
+      requiresApiKey: false,
+      tradeStreamConnected: false
+    }));
+  }
+
+  private market(): string {
+    return String(this.config.market || DEFAULT_MARKET).replace(/_/g, '-').toUpperCase();
+  }
+
+  private venues(): VenueName[] {
+    return this.config.hyperliquidCoin ? ['dydx', 'hyperliquid'] : ['dydx'];
+  }
 
   private enabled(): boolean {
     return envEnabled('DECENTRALIZED_DOM_COLLECTOR_ENABLED', true);
@@ -493,7 +514,9 @@ export class DecentralizedDomCollector {
 
   historyDirectory(): string {
     const explicit = String(process.env.DECENTRALIZED_DOM_HISTORY_DIR || '').trim();
-    if (explicit) return explicit;
+    if (explicit) return this.config.historySubdirectory
+      ? path.join(explicit, this.config.historySubdirectory)
+      : explicit;
     const monitorStateFile = String(process.env.DECENTRADER_GAP_ALERT_STATE_FILE || '').trim();
     const renderDisk = path.join(path.parse(process.cwd()).root, 'app', 'data');
     const base = monitorStateFile
@@ -501,21 +524,21 @@ export class DecentralizedDomCollector {
       : fs.existsSync(renderDisk)
         ? renderDisk
         : path.join(process.cwd(), 'data');
-    return path.join(base, 'decentralized-dom');
+    const root = path.join(base, 'decentralized-dom');
+    return this.config.historySubdirectory ? path.join(root, this.config.historySubdirectory) : root;
   }
 
   start(): void {
     if (!this.enabled() || this.interval) return;
     fs.mkdirSync(this.historyDirectory(), { recursive: true });
     this.pruneHistory();
-    this.connectTradeStream('dydx');
-    this.connectTradeStream('hyperliquid');
+    for (const venue of this.venues()) this.connectTradeStream(venue);
     this.poll().catch((error) => console.error('Initial decentralized DOM collection failed:', error));
     this.interval = setInterval(() => {
       this.poll().catch((error) => console.error('Decentralized DOM collection failed:', error));
     }, this.pollSeconds() * 1000);
     console.log('Decentralized DOM collector started:', {
-      market: MARKET,
+      market: this.market(),
       sources: this.sourceStatus.map((source) => source.venue),
       pollSeconds: this.pollSeconds(),
       bucketSeconds: this.bucketSeconds(),
@@ -527,7 +550,7 @@ export class DecentralizedDomCollector {
   stop(): void {
     if (this.interval) clearInterval(this.interval);
     this.interval = undefined;
-    for (const venue of ['dydx', 'hyperliquid'] as VenueName[]) {
+    for (const venue of this.venues()) {
       if (this.tradeSocketHeartbeats[venue]) clearInterval(this.tradeSocketHeartbeats[venue]);
       if (this.tradeSocketReconnects[venue]) clearTimeout(this.tradeSocketReconnects[venue]);
       this.tradeSockets[venue]?.close();
@@ -543,8 +566,8 @@ export class DecentralizedDomCollector {
     const observedAt = Date.now();
     const baseUrl = this.dydxHttpUrl();
     const [book, trades] = await Promise.all([
-      axios.get(`${baseUrl}/v4/orderbooks/perpetualMarket/BTC-USD`, { timeout: 12_000 }),
-      axios.get(`${baseUrl}/v4/trades/perpetualMarket/BTC-USD?limit=100`, { timeout: 12_000 })
+      axios.get(`${baseUrl}/v4/orderbooks/perpetualMarket/${this.market()}`, { timeout: 12_000 }),
+      axios.get(`${baseUrl}/v4/trades/perpetualMarket/${this.market()}?limit=100`, { timeout: 12_000 })
     ]);
     const snapshot = normalizeDydxSnapshot(book.data, trades.data, observedAt);
     snapshot.trades.push(...this.drainStreamedTrades('dydx'));
@@ -553,20 +576,22 @@ export class DecentralizedDomCollector {
 
   private async fetchHyperliquid(): Promise<VenueSnapshot> {
     const observedAt = Date.now();
+    const coin = String(this.config.hyperliquidCoin || '').trim().toUpperCase();
+    if (!coin) throw new Error(`Hyperliquid collection is not configured for ${this.market()}.`);
     const [fineBook, depthBook, trades] = await Promise.all([
       axios.post(
         this.hyperliquidHttpUrl(),
-        { type: 'l2Book', coin: 'BTC', nSigFigs: 5 },
+        { type: 'l2Book', coin, nSigFigs: 5 },
         { timeout: 12_000, headers: { 'Content-Type': 'application/json' } }
       ),
       axios.post(
         this.hyperliquidHttpUrl(),
-        { type: 'l2Book', coin: 'BTC', nSigFigs: 4 },
+        { type: 'l2Book', coin, nSigFigs: 4 },
         { timeout: 12_000, headers: { 'Content-Type': 'application/json' } }
       ),
       axios.post(
         this.hyperliquidHttpUrl(),
-        { type: 'recentTrades', coin: 'BTC' },
+        { type: 'recentTrades', coin },
         { timeout: 12_000, headers: { 'Content-Type': 'application/json' } }
       )
     ]);
@@ -592,8 +617,8 @@ export class DecentralizedDomCollector {
       source.tradeStreamConnected = true;
       source.lastError = undefined;
       const subscription = venue === 'dydx'
-        ? { type: 'subscribe', channel: 'v4_trades', id: MARKET, batched: false }
-        : { method: 'subscribe', subscription: { type: 'trades', coin: 'BTC' } };
+        ? { type: 'subscribe', channel: 'v4_trades', id: this.market(), batched: false }
+        : { method: 'subscribe', subscription: { type: 'trades', coin: this.config.hyperliquidCoin } };
       socket.send(JSON.stringify(subscription));
       if (this.tradeSocketHeartbeats[venue]) clearInterval(this.tradeSocketHeartbeats[venue]);
       this.tradeSocketHeartbeats[venue] = setInterval(() => {
@@ -668,14 +693,15 @@ export class DecentralizedDomCollector {
     }
     if (this.bucketStartMs === undefined) {
       this.bucketStartMs = nextBucketStart;
-      this.accumulators = {
-        dydx: createVenueAccumulator(),
-        hyperliquid: createVenueAccumulator()
-      };
+      this.accumulators = Object.fromEntries(
+        this.venues().map((venue) => [venue, createVenueAccumulator()])
+      );
     }
 
-    const results = await Promise.allSettled([this.fetchDydx(), this.fetchHyperliquid()]);
-    const venues: VenueName[] = ['dydx', 'hyperliquid'];
+    const venues = this.venues();
+    const results = await Promise.allSettled(
+      venues.map((venue) => venue === 'dydx' ? this.fetchDydx() : this.fetchHyperliquid())
+    );
     results.forEach((result, index) => {
       const venue = venues[index];
       const sourceStatus = this.sourceStatus.find((source) => source.venue === venue)!;
@@ -726,7 +752,12 @@ export class DecentralizedDomCollector {
 
   private flushBucket(): void {
     if (this.bucketStartMs === undefined) return;
-    const record = buildDomMinuteRecord(this.bucketStartMs, this.bucketSeconds(), this.accumulators);
+    const record = buildDomMinuteRecord(
+      this.bucketStartMs,
+      this.bucketSeconds(),
+      this.accumulators,
+      this.market()
+    );
     if (record.crossVenue.availableVenues > 0) {
       const file = path.join(
         this.historyDirectory(),
@@ -739,15 +770,19 @@ export class DecentralizedDomCollector {
     }
     const bucketMs = this.bucketSeconds() * 1000;
     this.bucketStartMs = Math.floor(Date.now() / bucketMs) * bucketMs;
-    this.accumulators = {
-      dydx: createVenueAccumulator(),
-      hyperliquid: createVenueAccumulator()
-    };
+    this.accumulators = Object.fromEntries(
+      this.venues().map((venue) => [venue, createVenueAccumulator()])
+    );
   }
 
   private currentRecord(): DomMinuteRecord | undefined {
     if (this.bucketStartMs === undefined) return undefined;
-    return buildDomMinuteRecord(this.bucketStartMs, this.bucketSeconds(), this.accumulators);
+    return buildDomMinuteRecord(
+      this.bucketStartMs,
+      this.bucketSeconds(),
+      this.accumulators,
+      this.market()
+    );
   }
 
   getStatus(): CollectorStatus {
@@ -755,7 +790,7 @@ export class DecentralizedDomCollector {
       enabled: this.enabled(),
       running: Boolean(this.interval),
       readOnly: true,
-      market: MARKET,
+      market: this.market(),
       pollSeconds: this.pollSeconds(),
       bucketSeconds: this.bucketSeconds(),
       sources: this.sourceStatus,
@@ -791,7 +826,7 @@ export class DecentralizedDomCollector {
   getHistory(input: { from?: string; to?: string; maxPoints?: number }): {
     ok: true;
     readOnly: true;
-    market: 'BTC-USD';
+    market: string;
     from: string;
     to: string;
     records: DomMinuteRecord[];
@@ -832,7 +867,7 @@ export class DecentralizedDomCollector {
     return {
       ok: true,
       readOnly: true,
-      market: MARKET,
+      market: this.market(),
       from: new Date(safeFrom).toISOString(),
       to: new Date(safeTo).toISOString(),
       records: sampled,
@@ -877,4 +912,19 @@ export class DecentralizedDomCollector {
   }
 }
 
-export const decentralizedDomCollector = new DecentralizedDomCollector();
+export const decentralizedDomCollector = new DecentralizedDomCollector({
+  market: 'BTC-USD',
+  hyperliquidCoin: 'BTC'
+});
+
+export const decentralizedDomCollectorsByMarket: Record<string, DecentralizedDomCollector> = {
+  'BTC-USD': decentralizedDomCollector,
+  'ETH-USD': new DecentralizedDomCollector({ market: 'ETH-USD', hyperliquidCoin: 'ETH', historySubdirectory: 'eth-usd' }),
+  'INJ-USD': new DecentralizedDomCollector({ market: 'INJ-USD', hyperliquidCoin: 'INJ', historySubdirectory: 'inj-usd' }),
+  'PAXG-USD': new DecentralizedDomCollector({ market: 'PAXG-USD', historySubdirectory: 'paxg-usd' }),
+  'XAG-USD': new DecentralizedDomCollector({ market: 'XAG-USD', historySubdirectory: 'xag-usd' })
+};
+
+export function decentralizedDomCollectorForMarket(market: string): DecentralizedDomCollector | undefined {
+  return decentralizedDomCollectorsByMarket[String(market || '').replace(/_/g, '-').toUpperCase()];
+}

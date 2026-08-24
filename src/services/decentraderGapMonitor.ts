@@ -22,6 +22,10 @@ import {
   refreshIntrusionDomStudy
 } from './decentraderIntrusionDomStudy';
 import { decentralizedDomCollector } from './decentralizedDomCollector';
+import {
+  IntrusionImpulseQuality,
+  evaluateIntrusionImpulseQuality
+} from './intrusionImpulseQuality';
 import tls from 'tls';
 import zlib from 'zlib';
 import { AlertObject } from '../types';
@@ -85,6 +89,9 @@ export type IntrusionCandleReview = {
   volumeDeltaEnabled?: boolean;
   volumeDeltaColors?: CandleColor[];
   volumeDeltaQuote?: number[];
+  candleOpens?: number[];
+  candleCloses?: number[];
+  quoteVolume?: number[];
   candleTimestamps?: string[];
   closedCandlesChecked?: number;
   delayCutoffAt?: string;
@@ -241,6 +248,7 @@ export type DydxRsiCandle = {
   orderbookMidPriceClose?: string;
   source?: 'binance-futures' | 'dydx';
   volumeDeltaQuote?: number;
+  quoteVolume?: number;
 };
 
 type RsiPoint = {
@@ -1899,6 +1907,22 @@ export function btcCoinGlassWhaleSnapshot(): CoinGlassWhaleSnapshot {
   return coinglassWhaleSnapshot();
 }
 
+function impulseQualityCoinGlass(
+  levels: DelayCoinGlassLevel[],
+  fetchedAt?: string
+): { source: string; buyUsd: number; sellUsd: number; fetchedAt?: string } {
+  return {
+    source: 'Binance_BTCUSDT',
+    buyUsd: levels
+      .filter((level) => level.side === 'buy')
+      .reduce((sum, level) => sum + level.volumeUsd, 0),
+    sellUsd: levels
+      .filter((level) => level.side === 'sell')
+      .reduce((sum, level) => sum + level.volumeUsd, 0),
+    fetchedAt
+  };
+}
+
 function recordDelayHistoryBestEffort(
   alert: GapAlert,
   signature: string,
@@ -2430,6 +2454,9 @@ export function intrusionCandleReview(
   const reviewSource = closedCandles[0]?.source || 'dydx';
   const candleColors = closedCandles.map((candle) => candleColor(intrusionCandleOpenClose(candle)));
   const candleTimestamps = closedCandles.map((candle) => candle.startedAt);
+  const candleOpens = closedCandles.map((candle) => parseNumber(candle.open));
+  const candleCloses = closedCandles.map((candle) => parseNumber(candle.close));
+  const quoteVolume = closedCandles.map((candle) => parseNumber(candle.quoteVolume));
   const volumeDeltaQuote = closedCandles.map((candle) => parseNumber(candle.volumeDeltaQuote));
   if (requireVolumeDelta && volumeDeltaQuote.some((value) => value === undefined)) {
     return {
@@ -2441,6 +2468,9 @@ export function intrusionCandleReview(
       nextColor: candleColors[1],
       candleColors,
       candleTimestamps,
+      candleOpens: candleOpens.filter((value): value is number => value !== undefined),
+      candleCloses: candleCloses.filter((value): value is number => value !== undefined),
+      quoteVolume: quoteVolume.filter((value): value is number => value !== undefined),
       closedCandlesChecked: closedCandles.length,
       delayCutoffAt,
       intrusionTimestamp: alert.timestamp,
@@ -2473,6 +2503,9 @@ export function intrusionCandleReview(
       volumeDeltaEnabled: requireVolumeDelta,
       volumeDeltaColors,
       volumeDeltaQuote: requireVolumeDelta ? completeVolumeDeltaQuote : undefined,
+      candleOpens: candleOpens.filter((value): value is number => value !== undefined),
+      candleCloses: candleCloses.filter((value): value is number => value !== undefined),
+      quoteVolume: quoteVolume.filter((value): value is number => value !== undefined),
       candleTimestamps,
       closedCandlesChecked: closedCandles.length,
       delayCutoffAt,
@@ -2496,6 +2529,9 @@ export function intrusionCandleReview(
     volumeDeltaEnabled: requireVolumeDelta,
     volumeDeltaColors,
     volumeDeltaQuote: requireVolumeDelta ? completeVolumeDeltaQuote : undefined,
+    candleOpens: candleOpens.filter((value): value is number => value !== undefined),
+    candleCloses: candleCloses.filter((value): value is number => value !== undefined),
+    quoteVolume: quoteVolume.filter((value): value is number => value !== undefined),
     candleTimestamps,
     closedCandlesChecked: closedCandles.length,
     delayCutoffAt,
@@ -3631,6 +3667,7 @@ export function binanceFuturesKlineToIntrusionCandle(kline: any[]): DydxRsiCandl
     open: String(open),
     close: String(close),
     source: 'binance-futures',
+    quoteVolume,
     volumeDeltaQuote: 2 * takerBuyQuoteVolume - quoteVolume
   };
 }
@@ -5911,16 +5948,35 @@ export class DecentraderGapMonitor {
           normalSmtpSentAt,
           decentraderIntrusionVolumeDeltaEnabled()
         );
+        const impulseQuality: IntrusionImpulseQuality = evaluateIntrusionImpulseQuality({
+          direction: mapDirectionFromAlert(alert),
+          alertTimestamp: alert.timestamp,
+          gapWidth: alert.previousGap?.width,
+          review: candleReview,
+          domRecords: decentralizedDomCollector.getHistory({
+            from: `${alert.timestamp.replace(' ', 'T')}Z`,
+            to: candleReview.delayCutoffAt || nowNlIso(),
+            maxPoints: 5_000
+          }).records,
+          coinGlass: impulseQualityCoinGlass(
+            initialCoinGlassGapLevels,
+            signalFirstObservedAt
+          ),
+          evaluatedAt: candleReview.delayCutoffAt || nowNlIso()
+        });
         (alertSummary as any).intrusionCandleReview = candleReview;
+        (alertSummary as any).impulseQuality = impulseQuality;
         const domStudyAlert = domStudyAlerts.find((candidate) => candidate.signature === signature);
         if (domStudyAlert) {
           (domStudyAlert as any).intrusionCandleReview = candleReview;
+          (domStudyAlert as any).impulseQuality = impulseQuality;
         }
         result.intrusionCandleReviews.push({
           signature,
           timestamp: alert.timestamp,
           timestampNl: alert.timestampNl,
           sideCounts: sideCounts(alert),
+          impulseQuality,
           ...candleReview
         });
         result.alert = alertSummary;
@@ -5959,7 +6015,7 @@ export class DecentraderGapMonitor {
           if (filteredSignature !== state.lastFilteredAlertSentSignature) {
             const filteredEmailResult = await sendEmailBestEffort(
               smtpSettings,
-              `FILTERED BTC ${sideCounts(alert)} | ${alert.timestampNl}`,
+              `FILTERED BTC ${sideCounts(alert)} | ${impulseQuality.label} | ${alert.timestampNl}`,
               filteredAlertBody(alert, config.symbol, candleReview)
             );
 

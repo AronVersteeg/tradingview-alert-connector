@@ -6,6 +6,7 @@ import {
   DomMinuteRecord
 } from './decentralizedDomCollector';
 import { DecentraderDelayRecord } from './decentraderDelayHistory';
+import type { IntrusionImpulseQuality } from './intrusionImpulseQuality';
 
 type Direction = 'long' | 'short';
 type CandleColor = 'green' | 'red' | 'flat' | 'unknown';
@@ -70,6 +71,7 @@ type StudyAlert = {
     sideOfPrice?: 'left' | 'right' | 'price';
   }>;
   intrusionCandleReview?: any;
+  impulseQuality?: IntrusionImpulseQuality;
 };
 
 type CoinGlassObservation = {
@@ -205,6 +207,7 @@ export type IntrusionDomStudyRecord = {
     firstMismatchTimestamp?: string;
     firstVolumeDeltaMismatchTimestamp?: string;
   };
+  impulseQuality?: IntrusionImpulseQuality;
   dom: {
     pre1h?: IntrusionDomWindow;
     pre2h?: IntrusionDomWindow;
@@ -984,6 +987,7 @@ export function refreshIntrusionDomStudy(input: {
       frames,
       alert.intrusionCandleReview || existing?.candleReview
     );
+    record.impulseQuality = alert.impulseQuality || record.impulseQuality;
     bySignature.set(signature, record);
     if (!existing) refreshSignatures.add(signature);
   }
@@ -1233,6 +1237,7 @@ export function intrusionDomStudySnapshot(): any {
       normalEmailSentAt: record.normalEmailSentAt,
       filteredEmailSentAt: record.filteredEmailSentAt,
       candleReview: record.candleReview,
+      impulseQuality: record.impulseQuality,
       pre1h: record.dom.pre1h,
       pre2h: record.dom.pre2h,
       pre4h: record.dom.pre4h,

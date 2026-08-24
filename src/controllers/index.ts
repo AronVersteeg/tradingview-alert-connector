@@ -5,7 +5,10 @@ import zlib from 'zlib';
 import express, { Router } from 'express';
 import { validateAlert } from '../services';
 import { DexRegistry } from '../services/dexRegistry';
-import { decentralizedDomCollector } from '../services/decentralizedDomCollector';
+import {
+  decentralizedDomCollectorForMarket,
+  decentralizedDomCollectorsByMarket
+} from '../services/decentralizedDomCollector';
 import {
   btcCoinGlassWhaleSnapshot,
   decentraderGapMonitor
@@ -170,7 +173,9 @@ async function initializeExchanges() {
 initializeExchanges()
   .then(() => {
     decentraderGapMonitor.start();
-    decentralizedDomCollector.start();
+    for (const collector of new Set(Object.values(decentralizedDomCollectorsByMarket))) {
+      collector.start();
+    }
     openLiquidityV2BtcCollector.start();
     openLiquidityV2EthCollector.start(30_000);
     openLiquidityV2InjCollector.start(60_000);
@@ -411,17 +416,23 @@ router.get('/decentrader/liquidity-timelapse', async (req, res) => {
   }
 });
 
-router.get('/research/dom-collector/status', async (_req, res) => {
+router.get('/research/dom-collector/status', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.send(decentralizedDomCollector.getStatus());
+  const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
+  const collector = decentralizedDomCollectorForMarket(market);
+  if (!collector) return res.status(400).send({ ok: false, error: `Unsupported DOM market: ${market}` });
+  res.send(collector.getStatus());
 });
 
 router.get('/research/dom-collector/history', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.send(decentralizedDomCollector.getHistory({
+    const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
+    const collector = decentralizedDomCollectorForMarket(market);
+    if (!collector) return res.status(400).send({ ok: false, error: `Unsupported DOM market: ${market}` });
+    res.send(collector.getHistory({
       from: typeof req.query.from === 'string' ? req.query.from : undefined,
       to: typeof req.query.to === 'string' ? req.query.to : undefined,
       maxPoints: Number(req.query.maxPoints || 720)

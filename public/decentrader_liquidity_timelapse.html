@@ -1167,7 +1167,7 @@
             <table class="delay-history-table delay-history-latest" aria-label="All SMTP intrusion delay observations">
               <thead>
                 <tr>
-                  <th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th><th>DOM</th><th>Response</th><th>Sources</th><th>Ultimate</th>
+                  <th>Latest alerts</th><th>Alert time</th><th>Mail time</th><th>Delay</th><th>DOM</th><th>Response</th><th>Sources</th><th>Ultimate</th><th>IQ at SMTP</th>
                   <th>Price / delta filter</th><th>Event price</th><th>Confirm price</th><th>Taker flow</th><th>Book pressure</th><th>CG friction</th><th>CG support</th>
                   <th>Alert price</th><th>Gap</th>
                   <th>Pre-1h price</th><th>Pre-1h flow</th><th>Pre-1h book</th>
@@ -1181,7 +1181,7 @@
                 </tr>
               </thead>
               <tbody id="delayHistoryLatestRows">
-                <tr><td colspan="49">No intrusion history recorded yet</td></tr>
+                <tr><td colspan="50">No intrusion history recorded yet</td></tr>
               </tbody>
             </table>
           </div>
@@ -2972,6 +2972,15 @@
             const alertTimestamp = study?.timestamp || record.intrusionTimestamp;
             const hasDelay = Number.isFinite(Number(record.delayMinutes));
             const hasUltimateVerdict = typeof study?.hypothesisEntryValid === 'boolean';
+            const impulseQuality = study?.impulseQuality;
+            const impulseQualityClass = impulseQuality?.label === 'IQ STRONG'
+              ? 'dom-positive'
+              : impulseQuality?.label === 'IQ WEAK'
+                ? 'dom-negative'
+                : '';
+            const impulseQualityTitle = impulseQuality
+              ? `${Number(impulseQuality.score) || 0}/${Number(impulseQuality.availableSignals) || 0} signals | cutoff ${impulseQuality.dataCutoffAt || '-'} | ${(impulseQuality.reasons || []).join(' ')}`
+              : '';
             return `<tr>
               <td>${study?.filtered || record.emailType === 'filtered' ? 'FILTERED ' : ''}${study?.sideCounts || record.sideCounts || 'intrusion'}</td>
               <td>${delayNlTime(alertTimestamp, true)}</td>
@@ -2981,6 +2990,7 @@
               <td class="${responseClass}">${responseLabel}</td>
               <td>${sourceLabel}</td>
               <td class="${hasUltimateVerdict ? (study.hypothesisEntryValid ? 'dom-positive' : 'dom-negative') : ''}">${hasUltimateVerdict ? (study.hypothesisEntryValid ? 'VALID' : 'NO') : '-'}</td>
+              <td class="${impulseQualityClass}" title="${impulseQualityTitle}">${impulseQuality?.label || '-'}</td>
               <td class="${study?.candleReview?.status === 'PASS' ? 'dom-positive' : 'dom-negative'}" title="${candleAuditTitle}">${candleStatus}</td>
               <td class="${directionClass(event.directionalPriceReturnPct)}">${metric(event.directionalPriceReturnPct, '%')}</td>
               <td class="${directionClass(confirmation.directionalPriceReturnPct)}">${metric(confirmation.directionalPriceReturnPct, '%')}</td>
@@ -3024,7 +3034,7 @@
               <td>${Number(event.coverageMinutes) || 0}/${Number(confirmation.coverageMinutes) || 0}/${Number(delayWindow.coverageMinutes) || 0}m</td>
             </tr>`;
           }).join('')
-        : '<tr><td colspan="49">No intrusion history recorded yet</td></tr>';
+        : '<tr><td colspan="50">No intrusion history recorded yet</td></tr>';
 
       delayHistoryStatus.textContent = tableRecords.length
         ? `${tableRecords.length} reconstructed intrusion${tableRecords.length === 1 ? '' : 's'} | ${totalRecords} sent mail${totalRecords === 1 ? '' : 's'} | pre-context uses only data available before each alert`
