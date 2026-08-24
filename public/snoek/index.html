@@ -187,6 +187,62 @@
       font-size: 20px;
     }
 
+    .pressure-value.is-favorable {
+      color: #67e6b7;
+    }
+
+    .pressure-check {
+      margin-left: 4px;
+      color: #67e6b7;
+    }
+
+    .collapsible-panel > summary,
+    .subsection-details > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .collapsible-panel > summary::-webkit-details-marker,
+    .subsection-details > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .collapsible-panel > summary::after,
+    .subsection-details > summary::after {
+      color: var(--muted);
+      content: '+';
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .collapsible-panel[open] > summary::after,
+    .subsection-details[open] > summary::after {
+      content: '\2212';
+    }
+
+    .subsection-details {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0e1a2d;
+    }
+
+    .subsection-details > summary {
+      min-height: 44px;
+      padding: 10px 12px;
+      color: var(--ink);
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .subsection-details > .cards {
+      padding: 0 12px 12px;
+    }
+
     .map-wrap {
       position: relative;
       height: clamp(560px, 72vh, 760px);
@@ -645,6 +701,7 @@
           </div>
           <div class="panel-body">
             <form id="scout-form">
+              <input name="pressureHpa" type="hidden" value="">
               <label>
                 Doel
                 <select name="target">
@@ -699,14 +756,14 @@
           </div>
         </section>
 
-        <section class="panel">
-          <div class="panel-header">
+        <details class="panel collapsible-panel">
+          <summary class="panel-header">
             <h2>Databronnen</h2>
-          </div>
+          </summary>
           <div class="panel-body">
             <div id="sources" class="table"></div>
           </div>
-        </section>
+        </details>
       </aside>
 
       <section class="stack">
@@ -733,11 +790,11 @@
                   <label class="layer-toggle"><input id="layer-topo" type="checkbox" checked> Kadaster BRT/TOP10NL</label>
                   <label class="layer-toggle"><input id="layer-satellite" type="checkbox" checked> PDOK luchtfoto</label>
                   <label class="layer-toggle"><input id="layer-bathymetry" type="checkbox"><span class="layer-swatch bathymetry-swatch"></span> RWS bodemhoogte 1 m (NAP)</label>
-                  <label class="layer-toggle"><input id="layer-current" type="checkbox" checked><span class="layer-swatch current-swatch"></span> RWS stroming: kracht + richting</label>
-                  <label class="layer-toggle"><input id="layer-practice" type="checkbox" checked><span class="layer-swatch practice-swatch"></span> Lokale praktijkspots</label>
-                  <label class="layer-toggle"><input id="layer-hotspots" type="checkbox" checked><span class="layer-swatch hotspot-swatch"></span> Weloverwogen snoekspots</label>
+                  <label class="layer-toggle"><input id="layer-current" type="checkbox"><span class="layer-swatch current-swatch"></span> RWS stroming: kracht + richting</label>
+                  <label class="layer-toggle"><input id="layer-practice" type="checkbox"><span class="layer-swatch practice-swatch"></span> Lokale praktijkspots</label>
+                  <label class="layer-toggle"><input id="layer-hotspots" type="checkbox"><span class="layer-swatch hotspot-swatch"></span> Weloverwogen snoekspots</label>
                   <span class="layer-section-title">PDOK IMWA - 18 exacte lagen</span>
-                  <label class="layer-toggle"><input data-layer-filter="brug" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ffd166"></span> Brug</label>
+                  <label class="layer-toggle"><input data-layer-filter="brug" type="checkbox"><span class="layer-swatch" style="--swatch:#ffd166"></span> Brug</label>
                   <label class="layer-toggle"><input data-layer-filter="coupure" type="checkbox"><span class="layer-swatch" style="--swatch:#f4a261"></span> Coupure</label>
                   <label class="layer-toggle"><input data-layer-filter="sluis" type="checkbox" checked><span class="layer-swatch" style="--swatch:#b388ff"></span> Sluis</label>
                   <label class="layer-toggle"><input data-layer-filter="verbeterinstallatie" type="checkbox"><span class="layer-swatch" style="--swatch:#e76f51"></span> Verbeterinstallatie</label>
@@ -764,18 +821,21 @@
                 <button id="zoom-reset" type="button">Hele gebied</button>
               </div>
             </div>
-            <div id="feature-list" class="cards" style="margin-top: 12px;"></div>
+            <details class="subsection-details">
+              <summary>Kaartdetails en geselecteerde spots</summary>
+              <div id="feature-list" class="cards"></div>
+            </details>
           </div>
         </section>
 
-        <section class="panel">
-          <div class="panel-header">
+        <details class="panel collapsible-panel">
+          <summary class="panel-header">
             <h2>Community reviews</h2>
-          </div>
+          </summary>
           <div class="panel-body">
             <div id="reviews" class="cards"></div>
           </div>
-        </section>
+        </details>
       </section>
     </section>
   </main>
@@ -1126,6 +1186,13 @@
 
     function renderScore(data) {
       const input = data.input;
+      const pressureHpa = Number(input.pressureHpa);
+      const hasPressure = input.pressureHpa !== null && input.pressureHpa !== '' && Number.isFinite(pressureHpa);
+      const favorablePressure = hasPressure && pressureHpa >= 1013 && pressureHpa <= 1020;
+      const pressureValue = hasPressure ? `${esc(pressureHpa)} hPa` : 'Onbekend';
+      const pressureCheck = favorablePressure
+        ? '<span class="pressure-check" title="Gunstige luchtdruk: 1013-1020 hPa" aria-label="Gunstige luchtdruk">&#10003;</span>'
+        : '';
       result.innerHTML = `
         <div class="score-grid">
           <div class="dial" style="--score:${data.score}">${data.score}</div>
@@ -1142,7 +1209,7 @@
         </div>
         <div class="mini-grid" style="margin-top: 14px;">
           <div class="mini-card"><span class="muted">Weer</span><strong>${esc(input.temperatureC)} C</strong><span class="muted">${esc(input.cloudCoverPct)}% bewolkt</span></div>
-          <div class="mini-card"><span class="muted">Luchtdruk</span><strong>${esc(input.pressureTrend)}</strong><span class="muted">Open-Meteo of handmatig</span></div>
+          <div class="mini-card"><span class="muted">Luchtdruk</span><strong class="pressure-value${favorablePressure ? ' is-favorable' : ''}">${pressureValue}${pressureCheck}</strong><span class="muted">${esc(input.pressureTrend)} · Open-Meteo</span></div>
           <div class="mini-card"><span class="muted">Maan/zon</span><strong>${esc(data.activityWindows[0].times[1])}</strong><span class="muted">grote tijd</span></div>
         </div>
         <div class="cards" style="margin-top: 14px;">
@@ -1474,6 +1541,7 @@
         setField('temperatureC', data.weather.temperatureC);
         setField('windBft', data.weather.windBft);
         setField('cloudCoverPct', data.weather.cloudCoverPct);
+        setField('pressureHpa', data.weather.pressureHpa);
         setField('pressureTrend', data.weather.pressureTrend);
         setField('rain', data.weather.rain);
         setField('timeOfDay', data.weather.timeOfDay);

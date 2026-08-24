@@ -9,6 +9,7 @@ export type SnoekScoutInput = {
   temperatureC?: number | string;
   windBft?: number | string;
   cloudCoverPct?: number | string;
+  pressureHpa?: number | string | null;
   pressureTrend?: PressureTrend;
   rain?: RainState;
   timeOfDay?: TimeOfDay;
@@ -375,6 +376,12 @@ function toNumber(value: number | string | undefined, fallback: number): number 
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function toOptionalNumber(value: number | string | null | undefined): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -390,6 +397,7 @@ function normalizeInput(input: SnoekScoutInput) {
     temperatureC: toNumber(input.temperatureC, 20),
     windBft: toNumber(input.windBft, 3),
     cloudCoverPct: clamp(toNumber(input.cloudCoverPct, 70), 0, 100),
+    pressureHpa: toOptionalNumber(input.pressureHpa),
     pressureTrend: normalizeEnum(input.pressureTrend, ['falling', 'steady', 'rising'], 'steady'),
     rain: normalizeEnum(input.rain, ['none', 'light', 'heavy'], 'none'),
     timeOfDay: normalizeEnum(input.timeOfDay, ['morning', 'midday', 'evening', 'night'], 'evening')
