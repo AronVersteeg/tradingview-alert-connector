@@ -637,6 +637,14 @@ function trimList(values: string[] | undefined, max = 500): string[] {
   return [...new Set(values || [])].slice(-max);
 }
 
+function intrusionHistoryMaxRecords(): number {
+  return positiveIntegerEnv('OPEN_LIQUIDITY_V2_INTRUSION_HISTORY_MAX_RECORDS', 10_000, 500, 50_000);
+}
+
+function intrusionHistoryPayloadMaxRecords(): number {
+  return positiveIntegerEnv('OPEN_LIQUIDITY_V2_INTRUSION_HISTORY_PAYLOAD_MAX_RECORDS', 1_000, 100, 5_000);
+}
+
 function stateFile(config: OpenLiquidityV2TradeMonitorConfig = ETH_MONITOR_CONFIG): string {
   const explicit = String(process.env[config.stateFileEnv] || '').trim();
   if (explicit) return explicit;
@@ -749,13 +757,16 @@ export class OpenLiquidityV2EthTradeMonitor {
 
   snapshot(): any {
     const state = readState(this.config);
-    const records = (state.delayRecords || []).slice(-300).reverse();
+    const payloadMaxRecords = intrusionHistoryPayloadMaxRecords();
+    const storedDelayRecords = state.delayRecords || [];
+    const storedBenchmarkRecords = state.benchmarkRecords || [];
+    const records = storedDelayRecords.slice(-payloadMaxRecords).reverse();
     const completed = records.map((record) => record.completedCandles1h);
     const average = completed.length ? completed.reduce((sum, value) => sum + value, 0) / completed.length : 0;
     return {
       status: this.getStatus(),
       delayHistory: {
-        totalRecords: records.length,
+        totalRecords: storedDelayRecords.length,
         records,
         recent: records.slice(0, 12),
         stats: {
@@ -768,9 +779,9 @@ export class OpenLiquidityV2EthTradeMonitor {
         }
       },
       intrusionBenchmarks: {
-        totalRecords: (state.benchmarkRecords || []).length,
-        history: (state.benchmarkRecords || []).slice().reverse(),
-        recent: (state.benchmarkRecords || []).slice(-12).reverse()
+        totalRecords: storedBenchmarkRecords.length,
+        history: storedBenchmarkRecords.slice(-payloadMaxRecords).reverse(),
+        recent: storedBenchmarkRecords.slice(-12).reverse()
       },
       tradePlan: this.lastResult?.tradePlan || null
     };
@@ -787,7 +798,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       delayMinutes,
       completedCandles1h: Math.floor(delayMinutes / 60 + 1e-9)
     };
-    state.delayRecords = [...(state.delayRecords || []), record].slice(-500);
+    state.delayRecords = [...(state.delayRecords || []), record].slice(-intrusionHistoryMaxRecords());
   }
 
   private addBenchmark(state: EthMonitorState, alert: GapAlert, signature: string, details: Partial<EthBenchmarkRecord>): void {
@@ -807,7 +818,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     const records = [...(state.benchmarkRecords || [])];
     if (existing >= 0) records[existing] = { ...records[existing], ...base };
     else records.push(base);
-    state.benchmarkRecords = records.slice(-500);
+    state.benchmarkRecords = records.slice(-intrusionHistoryMaxRecords());
   }
 
   private impulseQuality(
