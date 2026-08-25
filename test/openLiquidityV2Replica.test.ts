@@ -80,6 +80,18 @@ describe('Public Perp V2 Binance Spot replica', () => {
     ]);
   });
 
+  test('uses SOL-scale $0.10 bins without changing the cohort multipliers', () => {
+    const levels = cohortLevelsForOhlc4(150, 0.1);
+    expect(levels.map((level) => [level.side, level.leverage, level.price])).toEqual([
+      ['L', 3, 112.5],
+      ['S', 3, 225],
+      ['L', 5, 125],
+      ['S', 5, 186.6],
+      ['L', 10, 137],
+      ['S', 10, 165.7]
+    ]);
+  });
+
   test('uses Gold-scale $5 bins without changing the cohort multipliers', () => {
     const levels = cohortLevelsForOhlc4(4_350, 5);
     expect(levels.map((level) => [level.side, level.leverage, level.price])).toEqual([

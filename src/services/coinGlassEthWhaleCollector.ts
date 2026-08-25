@@ -11,7 +11,7 @@ import {
 } from './decentraderGapMonitor';
 
 type CoinGlassWhaleCollectorConfig = {
-  asset: 'ETH' | 'INJ';
+  asset: 'ETH' | 'INJ' | 'SOL';
   defaultSymbol: string;
   defaultMinUsd: number;
   defaultStrongUsd: number;
@@ -32,6 +32,14 @@ const INJ_CONFIG: CoinGlassWhaleCollectorConfig = {
   defaultMinUsd: 250_000,
   defaultStrongUsd: 1_000_000,
   historySuffix: 'inj'
+};
+
+const SOL_CONFIG: CoinGlassWhaleCollectorConfig = {
+  asset: 'SOL',
+  defaultSymbol: 'Binance_SOLUSDT',
+  defaultMinUsd: 1_000_000,
+  defaultStrongUsd: 5_000_000,
+  historySuffix: 'sol'
 };
 
 type ObservationContext = {
@@ -368,3 +376,4 @@ export class CoinGlassEthWhaleCollector {
 
 export const coinGlassEthWhaleCollector = new CoinGlassEthWhaleCollector();
 export const coinGlassInjWhaleCollector = new CoinGlassEthWhaleCollector(INJ_CONFIG);
+export const coinGlassSolWhaleCollector = new CoinGlassEthWhaleCollector(SOL_CONFIG);

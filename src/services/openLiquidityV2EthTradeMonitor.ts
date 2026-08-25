@@ -5,7 +5,8 @@ import { AlertObject } from '../types';
 
 import {
   coinGlassEthWhaleCollector,
-  coinGlassInjWhaleCollector
+  coinGlassInjWhaleCollector,
+  coinGlassSolWhaleCollector
 } from './coinGlassEthWhaleCollector';
 import { decentralizedDomCollectorForMarket } from './decentralizedDomCollector';
 import {
@@ -50,6 +51,7 @@ import {
   openLiquidityV2EthCollector,
   openLiquidityV2GoldCollector,
   openLiquidityV2InjCollector,
+  openLiquidityV2SolCollector,
   openLiquidityV2SilverCollector
 } from './openLiquidityV2Replica';
 
@@ -65,7 +67,7 @@ type WhaleSnapshotProvider = {
 export type OpenLiquidityV2TradeMonitorConfig = {
   market: string;
   symbol: string;
-  asset: 'ETH' | 'INJ' | 'GOLD' | 'SILVER';
+  asset: 'ETH' | 'INJ' | 'SOL' | 'GOLD' | 'SILVER';
   priceStep: number;
   tradeCapable: boolean;
   enabledEnv: string;
@@ -117,6 +119,25 @@ const INJ_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_INJ_MAX_DISTANCE_USD',
   coinGlassMaxDistanceUsd: 0.05,
   coinGlass: coinGlassInjWhaleCollector
+};
+
+const SOL_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
+  market: 'SOL-USD',
+  symbol: 'SOLUSDT',
+  asset: 'SOL',
+  priceStep: 0.1,
+  tradeCapable: true,
+  enabledEnv: 'OPEN_LIQUIDITY_V2_SOL_INTRUSION_MONITOR_ENABLED',
+  autoTradeEnv: 'OPEN_LIQUIDITY_V2_SOL_AUTO_TRADE_ENABLED',
+  inheritDecentraderAutoTrade: false,
+  stateFileEnv: 'OPEN_LIQUIDITY_V2_SOL_TRADE_STATE_FILE',
+  stateFileName: 'open-liquidity-v2-sol-trade-state.json',
+  strategyPrefix: 'open_liquidity_v2_sol',
+  edgeBufferEnv: 'OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD',
+  coinGlassMinUsdEnv: 'COINGLASS_WHALE_SOL_LEVEL_MIN_USD',
+  coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_SOL_MAX_DISTANCE_USD',
+  coinGlassMaxDistanceUsd: 1,
+  coinGlass: coinGlassSolWhaleCollector
 };
 
 const GOLD_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
@@ -1460,6 +1481,11 @@ export const openLiquidityV2EthTradeMonitor = new OpenLiquidityV2EthTradeMonitor
 export const openLiquidityV2InjTradeMonitor = new OpenLiquidityV2EthTradeMonitor(
   openLiquidityV2InjCollector,
   INJ_MONITOR_CONFIG
+);
+
+export const openLiquidityV2SolTradeMonitor = new OpenLiquidityV2EthTradeMonitor(
+  openLiquidityV2SolCollector,
+  SOL_MONITOR_CONFIG
 );
 
 export const openLiquidityV2GoldIntrusionMonitor = new OpenLiquidityV2EthTradeMonitor(

@@ -3,6 +3,7 @@ import {
   capTakeProfitsForStatefulOrderCapacity,
   openLiquidityV2GoldIntrusionMonitor,
   openLiquidityV2InjTradeMonitor,
+  openLiquidityV2SolTradeMonitor,
   openLiquidityV2SilverIntrusionMonitor,
   reconstructReplicaIntrusions
 } from '../src/services/openLiquidityV2EthTradeMonitor';
@@ -34,6 +35,23 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
       expect.objectContaining({ market: 'PAXG-USD', reservedStopSlots: 1, takeProfitSlots: 3, orderSlots: 4 }),
       expect.objectContaining({ market: 'XAG-USD', reservedStopSlots: 1, takeProfitSlots: 3, orderSlots: 4 })
     ]));
+  });
+
+  test('keeps a stop and at least two TP slots per market with all six pairs open', () => {
+    const allocations = allocateStatefulOrderSlots(
+      ['SOL-USD', 'XAG-USD', 'BTC-USD', 'PAXG-USD', 'INJ-USD', 'ETH-USD'],
+      20
+    );
+
+    expect(allocations).toHaveLength(6);
+    expect(allocations.reduce((total, allocation) => total + allocation.orderSlots, 0)).toBe(20);
+    expect(allocations.every((allocation) => allocation.reservedStopSlots === 1)).toBe(true);
+    expect(allocations.every((allocation) => allocation.takeProfitSlots >= 2)).toBe(true);
+    expect(allocations.find((allocation) => allocation.market === 'SOL-USD')).toMatchObject({
+      reservedStopSlots: 1,
+      takeProfitSlots: 2,
+      orderSlots: 3
+    });
   });
 
   test('uses the account allocation instead of first-come-first-served capacity', () => {
@@ -261,6 +279,56 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
     } finally {
       if (previousAutoTrade === undefined) delete process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED;
       else process.env.OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED = previousAutoTrade;
+    }
+  });
+
+  test('runs SOL on SOL-USD with an independent live-trading opt-in', () => {
+    const previousAutoTrade = process.env.OPEN_LIQUIDITY_V2_SOL_AUTO_TRADE_ENABLED;
+    const previousBuffer = process.env.OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD;
+    try {
+      delete process.env.OPEN_LIQUIDITY_V2_SOL_AUTO_TRADE_ENABLED;
+      process.env.OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD = '0.1';
+      expect(openLiquidityV2SolTradeMonitor.getStatus()).toMatchObject({
+        market: 'SOL-USD',
+        autoTradeEnabled: false,
+        observeOnly: false,
+        intrusionCandleFilter: {
+          source: 'binance-futures',
+          symbol: 'SOLUSDT'
+        }
+      });
+
+      const bar = (side: 'L' | 'S', price: number, count: number): LiquidityBar => ({
+        key: `${side}|10|${price}`,
+        side,
+        leverage: 10,
+        price,
+        count
+      });
+      const gap: Gap = {
+        left: 140,
+        right: 160,
+        width: 20,
+        price: 150,
+        leftEdge: bar('L', 140, 8),
+        rightEdge: bar('S', 160, 7),
+        leftToPrice: 10,
+        rightToPrice: 10
+      };
+      const zones = buildReplicaTradeZones([gap.leftEdge, gap.rightEdge], 150, gap, {
+        priceStep: 0.1,
+        edgeBufferEnv: 'OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD'
+      });
+      expect(zones.longTp[0]).toMatchObject({ price: 159.9, edge: true, edgePrice: 160 });
+      expect(zones.shortTp[0]).toMatchObject({ price: 140.1, edge: true, edgePrice: 140 });
+
+      process.env.OPEN_LIQUIDITY_V2_SOL_AUTO_TRADE_ENABLED = 'true';
+      expect(openLiquidityV2SolTradeMonitor.getStatus().autoTradeEnabled).toBe(true);
+    } finally {
+      if (previousAutoTrade === undefined) delete process.env.OPEN_LIQUIDITY_V2_SOL_AUTO_TRADE_ENABLED;
+      else process.env.OPEN_LIQUIDITY_V2_SOL_AUTO_TRADE_ENABLED = previousAutoTrade;
+      if (previousBuffer === undefined) delete process.env.OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD;
+      else process.env.OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD = previousBuffer;
     }
   });
 

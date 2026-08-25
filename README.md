@@ -135,20 +135,22 @@ DECENTRALIZED_DOM_HISTORY_DIR=/app/data/decentralized-dom
 
 Raw status and replay-window data are available from `GET /research/dom-collector/status` and `GET /research/dom-collector/history?from=<ISO>&to=<ISO>`.
 
-The pair tabs expose separate reconstructions of the Decentrader-style histogram for BTC/USD, ETH/USD, INJ/USD, Gold and Silver without stacking maps vertically. BTC retains a compact Decentrader/Public V2 source selector. The crypto V2 maps use free Binance Spot `BTCUSDT`, `ETHUSDT` and `INJUSDT` 1H OHLC data; Gold and Silver use Binance Futures `XAUUSDT` and `XAGUSDT`. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC, $5 for ETH and Gold, $0.01 for INJ and $0.10 for Silver. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. Every V2 market has a separate persistent history store.
+The pair tabs expose separate reconstructions of the Decentrader-style histogram for BTC/USD, ETH/USD, INJ/USD, SOL/USD, Gold and Silver without stacking maps vertically. BTC retains a compact Decentrader/Public V2 source selector. The crypto V2 maps use free Binance Spot `BTCUSDT`, `ETHUSDT`, `INJUSDT` and `SOLUSDT` 1H OHLC data; Gold and Silver use Binance Futures `XAUUSDT` and `XAGUSDT`. Every closed hour creates six 3x, 5x and 10x long/short cohorts from OHLC4 with the reconstructed fixed multipliers, rounded to $100 for BTC, $5 for ETH and Gold, $0.01 for INJ and $0.10 for SOL and Silver. Later candle lows/highs remove crossed cohorts and only the latest 8,760 birth hours remain active. Histogram height is therefore a relative count of still-active hourly cohorts, not USD volume, open interest or exact account inventory. Replay is causal and never uses later candles to alter an earlier frame. The gap is the empty corridor between the nearest active rounded levels below and above price. Every V2 market has a separate persistent history store.
 
-BTC V2 remains observe-only. ETH, INJ, Gold and Silver V2 monitor new or expanded cohorts inside the previous clean gap, send asset-labelled `FILTERED ETH`/`FILTERED INJ`/`FILTERED GOLD`/`FILTERED SILVER` emails, and can independently manage `ETH-USD`, `INJ-USD`, `PAXG-USD` and `XAG-USD` dYdX positions alongside BTC. Gold uses Binance Futures `XAUUSDT` for the causal map and Delay candle/delta filter, with `PAXGUSDT` confirmation and dYdX `PAXG-USD` execution. Silver uses Binance Futures `XAGUSDT` with dYdX `XAG-USD` execution. The tradable pair monitors inherit the existing `DECENTRADER_*` Delay-filter, fixed USD/equity risk, Williams-fractal entry SL, dynamic trailing SL and dynamic TP settings. Their Delay confirmation matches BTC: authoritative Binance USD-M Futures 1H candle colors and signed taker quote-volume delta must agree for every fully closed candle in the SMTP window. TP1 uses the opposite gap edge; TP2+ uses the matching histogram with available CoinGlass and Fibonacci confluence, with at most `DECENTRADER_TP_MAX_LEVELS` targets. Each monitor stores separate signatures and managed-position state, so pairs cannot suppress one another. INJ and Gold live execution are explicitly opt-in; Silver inherits the shared BTC auto-trade switch and has a dedicated override.
+BTC V2 remains observe-only. ETH, INJ, SOL, Gold and Silver V2 monitor new or expanded cohorts inside the previous clean gap, send asset-labelled `FILTERED ETH`/`FILTERED INJ`/`FILTERED SOL`/`FILTERED GOLD`/`FILTERED SILVER` emails, and can independently manage `ETH-USD`, `INJ-USD`, `SOL-USD`, `PAXG-USD` and `XAG-USD` dYdX positions alongside BTC. SOL uses Binance Spot `SOLUSDT` for the causal map, Binance Futures `SOLUSDT` for Delay candle/delta confirmation and dYdX `SOL-USD` for execution. Gold uses Binance Futures `XAUUSDT` for the causal map and Delay candle/delta filter, with `PAXGUSDT` confirmation and dYdX `PAXG-USD` execution. Silver uses Binance Futures `XAGUSDT` with dYdX `XAG-USD` execution. The tradable pair monitors inherit the existing `DECENTRADER_*` Delay-filter, fixed USD/equity risk, Williams-fractal entry SL, dynamic trailing SL and dynamic TP settings. Their Delay confirmation matches BTC: authoritative Binance USD-M Futures 1H candle colors and signed taker quote-volume delta must agree for every fully closed candle in the SMTP window. TP1 uses the opposite gap edge; TP2+ uses the matching histogram with available CoinGlass and Fibonacci confluence, with at most `DECENTRADER_TP_MAX_LEVELS` targets. Each monitor stores separate signatures and managed-position state, so pairs cannot suppress one another. INJ, SOL and Gold live execution are explicitly opt-in; Silver inherits the shared BTC auto-trade switch and has a dedicated override.
 
 ```text
 OPEN_LIQUIDITY_V2_ENABLED=true
 OPEN_LIQUIDITY_V2_ETH_ENABLED=true
 OPEN_LIQUIDITY_V2_INJ_ENABLED=true
+OPEN_LIQUIDITY_V2_SOL_ENABLED=true
 OPEN_LIQUIDITY_V2_GOLD_ENABLED=true
 OPEN_LIQUIDITY_V2_SILVER_ENABLED=true
 OPEN_LIQUIDITY_V2_POLL_MINUTES=60
 OPEN_LIQUIDITY_V2_HISTORY_DIR=/app/data/open-liquidity-v2
 OPEN_LIQUIDITY_V2_ETH_HISTORY_DIR=/app/data/open-liquidity-v2-eth
 OPEN_LIQUIDITY_V2_INJ_HISTORY_DIR=/app/data/open-liquidity-v2-inj
+OPEN_LIQUIDITY_V2_SOL_HISTORY_DIR=/app/data/open-liquidity-v2-sol
 OPEN_LIQUIDITY_V2_GOLD_HISTORY_DIR=/app/data/open-liquidity-v2-gold
 OPEN_LIQUIDITY_V2_SILVER_HISTORY_DIR=/app/data/open-liquidity-v2-silver
 # Optional ETH-specific kill switches; when omitted, monitoring is on and
@@ -160,6 +162,11 @@ OPEN_LIQUIDITY_V2_INJ_INTRUSION_MONITOR_ENABLED=true
 # Explicit live-order opt-in for the new market.
 OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED=false
 OPEN_LIQUIDITY_V2_INJ_TRADE_STATE_FILE=/app/data/open-liquidity-v2-inj-trade-state.json
+OPEN_LIQUIDITY_V2_SOL_INTRUSION_MONITOR_ENABLED=true
+# Explicit live-order opt-in for dYdX SOL-USD.
+OPEN_LIQUIDITY_V2_SOL_AUTO_TRADE_ENABLED=false
+OPEN_LIQUIDITY_V2_SOL_TRADE_STATE_FILE=/app/data/open-liquidity-v2-sol-trade-state.json
+OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD=0.10
 OPEN_LIQUIDITY_V2_GOLD_INTRUSION_MONITOR_ENABLED=true
 # Explicit live-order opt-in for dYdX PAXG-USD.
 OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED=false
@@ -172,7 +179,7 @@ OPEN_LIQUIDITY_V2_SILVER_TRADE_STATE_FILE=/app/data/open-liquidity-v2-silver-int
 OPEN_LIQUIDITY_V2_SILVER_TP1_EDGE_FRONT_RUN_USD=0.10
 ```
 
-The old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status accept `market=BTC-USD`, `ETH-USD`, `INJ-USD`, `PAXG-USD` or `XAG-USD`. All collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.
+The old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status accept `market=BTC-USD`, `ETH-USD`, `INJ-USD`, `SOL-USD`, `PAXG-USD` or `XAG-USD`. All collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.
 
 ```text
 COINGLASS_WHALE_LEVELS_ENABLED=true
@@ -195,15 +202,21 @@ COINGLASS_WHALE_INJ_SYMBOL=Binance_INJUSDT
 COINGLASS_WHALE_INJ_LEVEL_MIN_USD=250000
 COINGLASS_WHALE_INJ_LEVEL_STRONG_USD=1000000
 COINGLASS_WHALE_INJ_HISTORY_FILE=/app/data/coinglass-whale-history-inj.json
+COINGLASS_WHALE_SOL_ENABLED=true
+COINGLASS_WHALE_SOL_SYMBOL=Binance_SOLUSDT
+COINGLASS_WHALE_SOL_LEVEL_MIN_USD=1000000
+COINGLASS_WHALE_SOL_LEVEL_STRONG_USD=5000000
+COINGLASS_WHALE_SOL_HISTORY_FILE=/app/data/coinglass-whale-history-sol.json
 COINGLASS_TP_CONFLUENCE_ENABLED=true
 COINGLASS_TP_CONFLUENCE_MIN_USD=10000000
 COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD=200
 COINGLASS_TP_CONFLUENCE_ETH_MAX_DISTANCE_USD=15
 COINGLASS_TP_CONFLUENCE_INJ_MAX_DISTANCE_USD=0.05
+COINGLASS_TP_CONFLUENCE_SOL_MAX_DISTANCE_USD=1
 COINGLASS_TP_CONFLUENCE_LONG_DURATION_HOURS=336
 ```
 
-The ETH/INJ-specific variables are optional. Omitted history paths become `-eth` and `-inj` siblings beside `COINGLASS_WHALE_HISTORY_FILE`, keeping all assets on the same persistent disk without sharing records. The INJ public CoinGlass stream can be intermittent; a timeout preserves the last cached snapshot and never blocks alerts, sizing or protective orders.
+The ETH/INJ/SOL-specific variables are optional. Omitted history paths become `-eth`, `-inj` and `-sol` siblings beside `COINGLASS_WHALE_HISTORY_FILE`, keeping all assets on the same persistent disk without sharing records. A CoinGlass timeout preserves the last cached snapshot and never blocks alerts, sizing or protective orders.
 
 The map also includes an experimental dYdX RSI study layer for gap intrusions. It fetches 4H and 1D BTC-USD candles from the dYdX indexer, calculates RSI locally, and annotates replay frames when RSI14 is near the configured 50-zone or freshly crosses 50. The master scanner is Daily-only: when Daily RSI enters the configured master zone, the first configured number of future gap-intrusion histogram bars are armed as fertile. Those fertile slots stay armed even after Daily RSI leaves the zone; leaving the zone only sends a "Master RSI zone deactivated" notification for the RSI-zone state. Every master-scanner email includes the current state and next action so the zone state cannot be confused with the armed fertile scanner state. After the configured number of fertile histos has been used, or when price touches the armed clean-gap edge/TP1 edge first, the scanner is disarmed until Daily RSI touches the master zone again. Set `DECENTRADER_MASTER_RSI_SCANNER_ENABLED=false` to disable and reset only the Daily master scanner and its emails while retaining the RSI study data and normal intrusion flow.
 
