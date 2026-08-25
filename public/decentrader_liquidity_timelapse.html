@@ -1024,6 +1024,7 @@
           <a class="map-nav-tab" id="pairTabEth" href="/decentrader/map?source=open-v2-eth">ETH</a>
           <a class="map-nav-tab" id="pairTabInj" href="/decentrader/map?source=open-v2-inj">INJ</a>
           <a class="map-nav-tab" id="pairTabSol" href="/decentrader/map?source=open-v2-sol">SOL</a>
+          <a class="map-nav-tab" id="pairTabZec" href="/decentrader/map?source=open-v2-zec">ZEC</a>
           <a class="map-nav-tab" id="pairTabGold" href="/decentrader/map?source=open-v2-gold">Gold</a>
           <a class="map-nav-tab" id="pairTabSilver" href="/decentrader/map?source=open-v2-silver">Silver</a>
         </nav>
@@ -1387,7 +1388,7 @@
   <script>
     const queryParams = new URLSearchParams(window.location.search);
     const requestedSource = queryParams.get('source');
-    const openV2Sources = new Set(['open-v2', 'open-v2-eth', 'open-v2-inj', 'open-v2-sol', 'open-v2-gold', 'open-v2-silver']);
+    const openV2Sources = new Set(['open-v2', 'open-v2-eth', 'open-v2-inj', 'open-v2-sol', 'open-v2-zec', 'open-v2-gold', 'open-v2-silver']);
     const activeSource = openV2Sources.has(requestedSource) ? requestedSource : 'decentrader';
     const isOpenStudy = activeSource !== 'decentrader';
     const isOpenV2 = openV2Sources.has(activeSource);
@@ -1397,13 +1398,15 @@
         ? 'INJ'
         : activeSource === 'open-v2-sol'
           ? 'SOL'
-          : activeSource === 'open-v2-gold'
-            ? 'GOLD'
-            : activeSource === 'open-v2-silver'
-              ? 'SILVER'
-              : 'BTC';
-    const hasIntrusionHistory = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-sol' || activeSource === 'open-v2-gold' || activeSource === 'open-v2-silver';
-    const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-sol' || activeSource === 'open-v2-gold' || activeSource === 'open-v2-silver';
+          : activeSource === 'open-v2-zec'
+            ? 'ZEC'
+            : activeSource === 'open-v2-gold'
+              ? 'GOLD'
+              : activeSource === 'open-v2-silver'
+                ? 'SILVER'
+                : 'BTC';
+    const hasIntrusionHistory = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-sol' || activeSource === 'open-v2-zec' || activeSource === 'open-v2-gold' || activeSource === 'open-v2-silver';
+    const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-sol' || activeSource === 'open-v2-zec' || activeSource === 'open-v2-gold' || activeSource === 'open-v2-silver';
     const openV2Market = openV2Asset === 'GOLD'
       ? 'PAXG-USD'
       : openV2Asset === 'SILVER'
@@ -1450,6 +1453,7 @@
     const pairTabEth = document.getElementById('pairTabEth');
     const pairTabInj = document.getElementById('pairTabInj');
     const pairTabSol = document.getElementById('pairTabSol');
+    const pairTabZec = document.getElementById('pairTabZec');
     const pairTabGold = document.getElementById('pairTabGold');
     const pairTabSilver = document.getElementById('pairTabSilver');
     const btcSourceTabs = document.getElementById('btcSourceTabs');
@@ -1563,12 +1567,14 @@
     pairTabEth?.classList.toggle('is-active', activePair === 'ETH');
     pairTabInj?.classList.toggle('is-active', activePair === 'INJ');
     pairTabSol?.classList.toggle('is-active', activePair === 'SOL');
+    pairTabZec?.classList.toggle('is-active', activePair === 'ZEC');
     pairTabGold?.classList.toggle('is-active', activePair === 'GOLD');
     pairTabSilver?.classList.toggle('is-active', activePair === 'SILVER');
     pairTabBtc?.setAttribute('aria-current', activePair === 'BTC' ? 'page' : 'false');
     pairTabEth?.setAttribute('aria-current', activePair === 'ETH' ? 'page' : 'false');
     pairTabInj?.setAttribute('aria-current', activePair === 'INJ' ? 'page' : 'false');
     pairTabSol?.setAttribute('aria-current', activePair === 'SOL' ? 'page' : 'false');
+    pairTabZec?.setAttribute('aria-current', activePair === 'ZEC' ? 'page' : 'false');
     pairTabGold?.setAttribute('aria-current', activePair === 'GOLD' ? 'page' : 'false');
     pairTabSilver?.setAttribute('aria-current', activePair === 'SILVER' ? 'page' : 'false');
     if (btcSourceTabs) btcSourceTabs.hidden = activePair !== 'BTC';
@@ -1591,7 +1597,7 @@
 
     function money(value) {
       if (!Number.isFinite(Number(value))) return '-';
-      const decimals = openV2Asset === 'INJ' || openV2Asset === 'SOL' || openV2Asset === 'GOLD' || openV2Asset === 'SILVER' ? 2 : 0;
+      const decimals = openV2Asset === 'INJ' || openV2Asset === 'SOL' || openV2Asset === 'ZEC' || openV2Asset === 'GOLD' || openV2Asset === 'SILVER' ? 2 : 0;
       return '$' + Number(value).toLocaleString('en-US', {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals
@@ -1601,7 +1607,7 @@
     function priceLevel(value) {
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return '-';
-      const decimals = openV2Asset === 'INJ' || openV2Asset === 'SOL' || openV2Asset === 'GOLD' || openV2Asset === 'SILVER' ? 2 : 0;
+      const decimals = openV2Asset === 'INJ' || openV2Asset === 'SOL' || openV2Asset === 'ZEC' || openV2Asset === 'GOLD' || openV2Asset === 'SILVER' ? 2 : 0;
       return parsed.toLocaleString('nl-NL', {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals
@@ -1760,7 +1766,7 @@
       if (!payload) return { min: 0, max: 1 };
       const min = payload.range.minPrice;
       const max = payload.range.maxPrice;
-      const paddingFloor = isOpenV2 && (openV2Asset === 'INJ' || openV2Asset === 'SOL')
+      const paddingFloor = isOpenV2 && (openV2Asset === 'INJ' || openV2Asset === 'SOL' || openV2Asset === 'ZEC')
         ? Math.max(0.1, liquiditySourcePriceStep() * 10)
         : 500;
       const padding = Math.max(paddingFloor, (max - min) * 0.01);
@@ -1769,7 +1775,7 @@
 
     function defaultPriceRange() {
       const full = fullPriceRange();
-      if (!isOpenV2 || (openV2Asset !== 'INJ' && openV2Asset !== 'SOL')) return full;
+      if (!isOpenV2 || (openV2Asset !== 'INJ' && openV2Asset !== 'SOL' && openV2Asset !== 'ZEC')) return full;
 
       const selectedIndex = Number(frameInput?.value);
       const frame = payload?.frames?.[Number.isFinite(selectedIndex) ? selectedIndex : payload.frames.length - 1];
@@ -1783,7 +1789,7 @@
 
     function minZoomSpan() {
       const full = fullPriceRange();
-      const minimum = isOpenV2 && (openV2Asset === 'INJ' || openV2Asset === 'SOL')
+      const minimum = isOpenV2 && (openV2Asset === 'INJ' || openV2Asset === 'SOL' || openV2Asset === 'ZEC')
         ? Math.max(0.25, liquiditySourcePriceStep() * 25)
         : 500;
       return Math.max(minimum, (full.max - full.min) * 0.006);
@@ -3730,6 +3736,7 @@
       if (Number.isFinite(configured) && configured > 0) return configured;
       if (isOpenV2 && openV2Asset === 'INJ') return 0.01;
       if (isOpenV2 && openV2Asset === 'SOL') return 0.1;
+      if (isOpenV2 && openV2Asset === 'ZEC') return 1;
       if (isOpenV2 && openV2Asset === 'SILVER') return 0.1;
       return isOpenV2 && (openV2Asset === 'ETH' || openV2Asset === 'GOLD') ? 5 : 50;
     }
@@ -3745,6 +3752,13 @@
         if (span > 200) return 2;
         if (span > 50) return 1;
         return 0.1;
+      }
+      if (isOpenV2 && openV2Asset === 'ZEC') {
+        if (span > 3000) return 50;
+        if (span > 1200) return 25;
+        if (span > 600) return 10;
+        if (span > 200) return 5;
+        return 1;
       }
       if (isOpenV2 && openV2Asset === 'SILVER') return 0.1;
       if (isOpenV2 && (openV2Asset === 'ETH' || openV2Asset === 'GOLD')) {

@@ -6,7 +6,8 @@ import { AlertObject } from '../types';
 import {
   coinGlassEthWhaleCollector,
   coinGlassInjWhaleCollector,
-  coinGlassSolWhaleCollector
+  coinGlassSolWhaleCollector,
+  coinGlassZecWhaleCollector
 } from './coinGlassEthWhaleCollector';
 import { decentralizedDomCollectorForMarket } from './decentralizedDomCollector';
 import {
@@ -52,7 +53,8 @@ import {
   openLiquidityV2GoldCollector,
   openLiquidityV2InjCollector,
   openLiquidityV2SolCollector,
-  openLiquidityV2SilverCollector
+  openLiquidityV2SilverCollector,
+  openLiquidityV2ZecCollector
 } from './openLiquidityV2Replica';
 
 const MARKET = 'ETH-USD';
@@ -67,7 +69,7 @@ type WhaleSnapshotProvider = {
 export type OpenLiquidityV2TradeMonitorConfig = {
   market: string;
   symbol: string;
-  asset: 'ETH' | 'INJ' | 'SOL' | 'GOLD' | 'SILVER';
+  asset: 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'GOLD' | 'SILVER';
   priceStep: number;
   tradeCapable: boolean;
   enabledEnv: string;
@@ -138,6 +140,25 @@ const SOL_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_SOL_MAX_DISTANCE_USD',
   coinGlassMaxDistanceUsd: 1,
   coinGlass: coinGlassSolWhaleCollector
+};
+
+const ZEC_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
+  market: 'ZEC-USD',
+  symbol: 'ZECUSDT',
+  asset: 'ZEC',
+  priceStep: 1,
+  tradeCapable: true,
+  enabledEnv: 'OPEN_LIQUIDITY_V2_ZEC_INTRUSION_MONITOR_ENABLED',
+  autoTradeEnv: 'OPEN_LIQUIDITY_V2_ZEC_AUTO_TRADE_ENABLED',
+  inheritDecentraderAutoTrade: false,
+  stateFileEnv: 'OPEN_LIQUIDITY_V2_ZEC_TRADE_STATE_FILE',
+  stateFileName: 'open-liquidity-v2-zec-trade-state.json',
+  strategyPrefix: 'open_liquidity_v2_zec',
+  edgeBufferEnv: 'OPEN_LIQUIDITY_V2_ZEC_TP1_EDGE_FRONT_RUN_USD',
+  coinGlassMinUsdEnv: 'COINGLASS_WHALE_ZEC_LEVEL_MIN_USD',
+  coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_ZEC_MAX_DISTANCE_USD',
+  coinGlassMaxDistanceUsd: 5,
+  coinGlass: coinGlassZecWhaleCollector
 };
 
 const GOLD_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
@@ -1486,6 +1507,11 @@ export const openLiquidityV2InjTradeMonitor = new OpenLiquidityV2EthTradeMonitor
 export const openLiquidityV2SolTradeMonitor = new OpenLiquidityV2EthTradeMonitor(
   openLiquidityV2SolCollector,
   SOL_MONITOR_CONFIG
+);
+
+export const openLiquidityV2ZecTradeMonitor = new OpenLiquidityV2EthTradeMonitor(
+  openLiquidityV2ZecCollector,
+  ZEC_MONITOR_CONFIG
 );
 
 export const openLiquidityV2GoldIntrusionMonitor = new OpenLiquidityV2EthTradeMonitor(

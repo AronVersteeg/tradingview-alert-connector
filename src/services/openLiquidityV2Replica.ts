@@ -13,14 +13,14 @@ const FRAME_LIMIT = 500;
 const HISTORY_LIMIT = FRAME_LIMIT;
 const DISPLAY_ZONE_LIMIT = 150;
 
-type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD' | 'SOL-USD' | 'PAXG-USD' | 'XAG-USD';
-type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'SOLUSDT' | 'XAUUSDT' | 'PAXGUSDT' | 'XAGUSDT';
+type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD' | 'SOL-USD' | 'ZEC-USD' | 'PAXG-USD' | 'XAG-USD';
+type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'SOLUSDT' | 'ZECUSDT' | 'XAUUSDT' | 'PAXGUSDT' | 'XAGUSDT';
 type ReplicaVenue = 'spot' | 'futures';
 
 type ReplicaMarketConfig = {
   market: ReplicaMarket;
   symbol: ReplicaSymbol;
-  asset: 'BTC' | 'ETH' | 'INJ' | 'SOL' | 'GOLD' | 'SILVER';
+  asset: 'BTC' | 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'GOLD' | 'SILVER';
   modelVersion: string;
   priceStepUsd: number;
   historyDirectoryName: string;
@@ -73,6 +73,17 @@ const SOL_CONFIG: ReplicaMarketConfig = {
   historyDirectoryName: 'open-liquidity-v2-sol',
   historyEnv: 'OPEN_LIQUIDITY_V2_SOL_HISTORY_DIR',
   enabledEnv: 'OPEN_LIQUIDITY_V2_SOL_ENABLED'
+};
+
+const ZEC_CONFIG: ReplicaMarketConfig = {
+  market: 'ZEC-USD',
+  symbol: 'ZECUSDT',
+  asset: 'ZEC',
+  modelVersion: 'binance-spot-zec-liquidation-cohorts-v2.1',
+  priceStepUsd: 1,
+  historyDirectoryName: 'open-liquidity-v2-zec',
+  historyEnv: 'OPEN_LIQUIDITY_V2_ZEC_HISTORY_DIR',
+  enabledEnv: 'OPEN_LIQUIDITY_V2_ZEC_ENABLED'
 };
 
 const GOLD_CONFIG: ReplicaMarketConfig = {
@@ -971,5 +982,6 @@ export const openLiquidityV2BtcCollector = new OpenLiquidityV2ReplicaCollector(B
 export const openLiquidityV2EthCollector = new OpenLiquidityV2ReplicaCollector(ETH_CONFIG);
 export const openLiquidityV2InjCollector = new OpenLiquidityV2ReplicaCollector(INJ_CONFIG);
 export const openLiquidityV2SolCollector = new OpenLiquidityV2ReplicaCollector(SOL_CONFIG);
+export const openLiquidityV2ZecCollector = new OpenLiquidityV2ReplicaCollector(ZEC_CONFIG);
 export const openLiquidityV2GoldCollector = new OpenLiquidityV2ReplicaCollector(GOLD_CONFIG);
 export const openLiquidityV2SilverCollector = new OpenLiquidityV2ReplicaCollector(SILVER_CONFIG);

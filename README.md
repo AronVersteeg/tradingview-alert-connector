@@ -144,6 +144,7 @@ OPEN_LIQUIDITY_V2_ENABLED=true
 OPEN_LIQUIDITY_V2_ETH_ENABLED=true
 OPEN_LIQUIDITY_V2_INJ_ENABLED=true
 OPEN_LIQUIDITY_V2_SOL_ENABLED=true
+OPEN_LIQUIDITY_V2_ZEC_ENABLED=true
 OPEN_LIQUIDITY_V2_GOLD_ENABLED=true
 OPEN_LIQUIDITY_V2_SILVER_ENABLED=true
 OPEN_LIQUIDITY_V2_POLL_MINUTES=60
@@ -151,6 +152,7 @@ OPEN_LIQUIDITY_V2_HISTORY_DIR=/app/data/open-liquidity-v2
 OPEN_LIQUIDITY_V2_ETH_HISTORY_DIR=/app/data/open-liquidity-v2-eth
 OPEN_LIQUIDITY_V2_INJ_HISTORY_DIR=/app/data/open-liquidity-v2-inj
 OPEN_LIQUIDITY_V2_SOL_HISTORY_DIR=/app/data/open-liquidity-v2-sol
+OPEN_LIQUIDITY_V2_ZEC_HISTORY_DIR=/app/data/open-liquidity-v2-zec
 OPEN_LIQUIDITY_V2_GOLD_HISTORY_DIR=/app/data/open-liquidity-v2-gold
 OPEN_LIQUIDITY_V2_SILVER_HISTORY_DIR=/app/data/open-liquidity-v2-silver
 # Optional ETH-specific kill switches; when omitted, monitoring is on and
@@ -167,6 +169,10 @@ OPEN_LIQUIDITY_V2_SOL_INTRUSION_MONITOR_ENABLED=true
 OPEN_LIQUIDITY_V2_SOL_AUTO_TRADE_ENABLED=false
 OPEN_LIQUIDITY_V2_SOL_TRADE_STATE_FILE=/app/data/open-liquidity-v2-sol-trade-state.json
 OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD=0.10
+OPEN_LIQUIDITY_V2_ZEC_INTRUSION_MONITOR_ENABLED=true
+# Explicit live-order opt-in for dYdX ZEC-USD.
+OPEN_LIQUIDITY_V2_ZEC_AUTO_TRADE_ENABLED=false
+OPEN_LIQUIDITY_V2_ZEC_TRADE_STATE_FILE=/app/data/open-liquidity-v2-zec-trade-state.json
 OPEN_LIQUIDITY_V2_GOLD_INTRUSION_MONITOR_ENABLED=true
 # Explicit live-order opt-in for dYdX PAXG-USD.
 OPEN_LIQUIDITY_V2_GOLD_AUTO_TRADE_ENABLED=false
@@ -179,7 +185,7 @@ OPEN_LIQUIDITY_V2_SILVER_TRADE_STATE_FILE=/app/data/open-liquidity-v2-silver-int
 OPEN_LIQUIDITY_V2_SILVER_TP1_EDGE_FRONT_RUN_USD=0.10
 ```
 
-The old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status accept `market=BTC-USD`, `ETH-USD`, `INJ-USD`, `SOL-USD`, `PAXG-USD` or `XAG-USD`. All collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.
+The old V2 price-step, minimum-cluster and gap-cleanliness variables are no longer used. The V2 payload and collector status accept `market=BTC-USD`, `ETH-USD`, `INJ-USD`, `SOL-USD`, `ZEC-USD`, `PAXG-USD` or `XAG-USD`. All collectors infer separate persistent directories from `DECENTRALIZED_DOM_HISTORY_DIR`, so explicit paths are optional when the existing Render disk is mounted at `/app/data`.
 
 ```text
 COINGLASS_WHALE_LEVELS_ENABLED=true

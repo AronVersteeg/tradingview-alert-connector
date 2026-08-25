@@ -922,6 +922,7 @@ export const decentralizedDomCollectorsByMarket: Record<string, DecentralizedDom
   'ETH-USD': new DecentralizedDomCollector({ market: 'ETH-USD', hyperliquidCoin: 'ETH', historySubdirectory: 'eth-usd' }),
   'INJ-USD': new DecentralizedDomCollector({ market: 'INJ-USD', hyperliquidCoin: 'INJ', historySubdirectory: 'inj-usd' }),
   'SOL-USD': new DecentralizedDomCollector({ market: 'SOL-USD', hyperliquidCoin: 'SOL', historySubdirectory: 'sol-usd' }),
+  'ZEC-USD': new DecentralizedDomCollector({ market: 'ZEC-USD', hyperliquidCoin: 'ZEC', historySubdirectory: 'zec-usd' }),
   'PAXG-USD': new DecentralizedDomCollector({ market: 'PAXG-USD', historySubdirectory: 'paxg-usd' }),
   'XAG-USD': new DecentralizedDomCollector({ market: 'XAG-USD', historySubdirectory: 'xag-usd' })
 };

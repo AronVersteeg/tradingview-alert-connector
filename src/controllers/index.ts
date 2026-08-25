@@ -16,7 +16,8 @@ import {
 import {
   coinGlassEthWhaleCollector,
   coinGlassInjWhaleCollector,
-  coinGlassSolWhaleCollector
+  coinGlassSolWhaleCollector,
+  coinGlassZecWhaleCollector
 } from '../services/coinGlassEthWhaleCollector';
 import {
   openLiquidityV2BtcCollector,
@@ -24,14 +25,16 @@ import {
   openLiquidityV2GoldCollector,
   openLiquidityV2InjCollector,
   openLiquidityV2SolCollector,
-  openLiquidityV2SilverCollector
+  openLiquidityV2SilverCollector,
+  openLiquidityV2ZecCollector
 } from '../services/openLiquidityV2Replica';
 import {
   openLiquidityV2EthTradeMonitor,
   openLiquidityV2GoldIntrusionMonitor,
   openLiquidityV2InjTradeMonitor,
   openLiquidityV2SolTradeMonitor,
-  openLiquidityV2SilverIntrusionMonitor
+  openLiquidityV2SilverIntrusionMonitor,
+  openLiquidityV2ZecTradeMonitor
 } from '../services/openLiquidityV2EthTradeMonitor';
 import { buildSnoekScout } from '../services/snoekScout';
 import { getSnoekCurrent } from '../services/snoekCurrent';
@@ -137,6 +140,13 @@ function configureDecentraderTradeExecutor() {
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
+  openLiquidityV2ZecTradeMonitor.configureTradeExecutor({
+    getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
+    placeOrder: (alert: any) => client.placeOrder(alert),
+    syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
+    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+  });
   openLiquidityV2GoldIntrusionMonitor.configureTradeExecutor({
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
@@ -192,6 +202,7 @@ initializeExchanges()
     openLiquidityV2SolCollector.start(120_000);
     openLiquidityV2GoldCollector.start(135_000);
     openLiquidityV2SilverCollector.start(195_000);
+    openLiquidityV2ZecCollector.start(285_000);
     coinGlassEthWhaleCollector.configureObservationProvider(async () => {
       const payload = await openLiquidityV2EthCollector.getPayload();
       const frame = payload.frames?.[payload.frames.length - 1];
@@ -222,11 +233,22 @@ initializeExchanges()
       };
     });
     coinGlassSolWhaleCollector.start(150_000);
+    coinGlassZecWhaleCollector.configureObservationProvider(async () => {
+      const payload = await openLiquidityV2ZecCollector.getPayload();
+      const frame = payload.frames?.[payload.frames.length - 1];
+      return {
+        frameTimestamp: frame?.t,
+        currentPrice: Number(frame?.price),
+        gap: payload.gaps?.[payload.gaps.length - 1]
+      };
+    });
+    coinGlassZecWhaleCollector.start(315_000);
     openLiquidityV2EthTradeMonitor.start(75_000);
     openLiquidityV2InjTradeMonitor.start(105_000);
     openLiquidityV2GoldIntrusionMonitor.start(165_000);
     openLiquidityV2SilverIntrusionMonitor.start(225_000);
     openLiquidityV2SolTradeMonitor.start(255_000);
+    openLiquidityV2ZecTradeMonitor.start(345_000);
   })
   .catch((err) => {
     console.error("Exchange initialization failed:", err);
@@ -473,6 +495,7 @@ function openLiquidityV2CollectorForMarket(market: string) {
   if (market === 'ETH-USD') return openLiquidityV2EthCollector;
   if (market === 'INJ-USD') return openLiquidityV2InjCollector;
   if (market === 'SOL-USD') return openLiquidityV2SolCollector;
+  if (market === 'ZEC-USD') return openLiquidityV2ZecCollector;
   if (market === 'PAXG-USD') return openLiquidityV2GoldCollector;
   if (market === 'XAG-USD') return openLiquidityV2SilverCollector;
   return undefined;
@@ -482,6 +505,7 @@ function openLiquidityV2MonitorForMarket(market: string) {
   if (market === 'ETH-USD') return openLiquidityV2EthTradeMonitor;
   if (market === 'INJ-USD') return openLiquidityV2InjTradeMonitor;
   if (market === 'SOL-USD') return openLiquidityV2SolTradeMonitor;
+  if (market === 'ZEC-USD') return openLiquidityV2ZecTradeMonitor;
   if (market === 'PAXG-USD') return openLiquidityV2GoldIntrusionMonitor;
   if (market === 'XAG-USD') return openLiquidityV2SilverIntrusionMonitor;
   return undefined;
@@ -491,6 +515,7 @@ function openLiquidityV2CoinGlassForMarket(market: string) {
   if (market === 'ETH-USD') return coinGlassEthWhaleCollector;
   if (market === 'INJ-USD') return coinGlassInjWhaleCollector;
   if (market === 'SOL-USD') return coinGlassSolWhaleCollector;
+  if (market === 'ZEC-USD') return coinGlassZecWhaleCollector;
   return undefined;
 }
 
@@ -520,7 +545,7 @@ router.get('/open-liquidity/v2/status', async (req, res) => {
   if (!collector) {
     return res.status(400).send({
       ok: false,
-      error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, PAXG-USD and XAG-USD.'
+      error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, PAXG-USD and XAG-USD.'
     });
   }
   const monitor = openLiquidityV2MonitorForMarket(market);
@@ -549,7 +574,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
     if (!collector) {
       return res.status(400).send({
         ok: false,
-        error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, PAXG-USD and XAG-USD.'
+        error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, PAXG-USD and XAG-USD.'
       });
     }
     const payload = await collector.getPayload();
@@ -603,7 +628,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
           : coinGlassWhaleLevels.minUsd,
         maxDistanceUsd: Number.isFinite(configuredMaxDistanceUsd) && configuredMaxDistanceUsd > 0
           ? configuredMaxDistanceUsd
-          : market === 'ETH-USD' ? 15 : market === 'INJ-USD' ? 0.05 : market === 'SOL-USD' ? 1 : market === 'XAG-USD' ? 0.5 : 200,
+          : market === 'ETH-USD' ? 15 : market === 'INJ-USD' ? 0.05 : market === 'SOL-USD' ? 1 : market === 'ZEC-USD' ? 5 : market === 'XAG-USD' ? 0.5 : 200,
         longDurationHours: Number.isFinite(configuredLongDurationHours) && configuredLongDurationHours > 0
           ? configuredLongDurationHours
           : 14 * 24

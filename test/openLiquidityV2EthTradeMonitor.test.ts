@@ -5,6 +5,7 @@ import {
   openLiquidityV2InjTradeMonitor,
   openLiquidityV2SolTradeMonitor,
   openLiquidityV2SilverIntrusionMonitor,
+  openLiquidityV2ZecTradeMonitor,
   reconstructReplicaIntrusions
 } from '../src/services/openLiquidityV2EthTradeMonitor';
 import { Gap, LiquidityBar } from '../src/services/decentraderGapMonitor';
@@ -51,6 +52,21 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
       reservedStopSlots: 1,
       takeProfitSlots: 2,
       orderSlots: 3
+    });
+  });
+
+  test('reserves a stop and distributes the remaining slots with all seven pairs open', () => {
+    const allocations = allocateStatefulOrderSlots(
+      ['ZEC-USD', 'SOL-USD', 'XAG-USD', 'BTC-USD', 'PAXG-USD', 'INJ-USD', 'ETH-USD'],
+      20
+    );
+
+    expect(allocations).toHaveLength(7);
+    expect(allocations.reduce((total, allocation) => total + allocation.orderSlots, 0)).toBe(20);
+    expect(allocations.every((allocation) => allocation.reservedStopSlots === 1)).toBe(true);
+    expect(allocations.every((allocation) => allocation.takeProfitSlots >= 1)).toBe(true);
+    expect(allocations.find((allocation) => allocation.market === 'ZEC-USD')).toMatchObject({
+      reservedStopSlots: 1
     });
   });
 
@@ -329,6 +345,28 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
       else process.env.OPEN_LIQUIDITY_V2_SOL_AUTO_TRADE_ENABLED = previousAutoTrade;
       if (previousBuffer === undefined) delete process.env.OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD;
       else process.env.OPEN_LIQUIDITY_V2_SOL_TP1_EDGE_FRONT_RUN_USD = previousBuffer;
+    }
+  });
+
+  test('runs ZEC on ZEC-USD with an independent live-trading opt-in', () => {
+    const previousAutoTrade = process.env.OPEN_LIQUIDITY_V2_ZEC_AUTO_TRADE_ENABLED;
+    try {
+      delete process.env.OPEN_LIQUIDITY_V2_ZEC_AUTO_TRADE_ENABLED;
+      expect(openLiquidityV2ZecTradeMonitor.getStatus()).toMatchObject({
+        market: 'ZEC-USD',
+        autoTradeEnabled: false,
+        observeOnly: false,
+        intrusionCandleFilter: {
+          source: 'binance-futures',
+          symbol: 'ZECUSDT'
+        }
+      });
+
+      process.env.OPEN_LIQUIDITY_V2_ZEC_AUTO_TRADE_ENABLED = 'true';
+      expect(openLiquidityV2ZecTradeMonitor.getStatus().autoTradeEnabled).toBe(true);
+    } finally {
+      if (previousAutoTrade === undefined) delete process.env.OPEN_LIQUIDITY_V2_ZEC_AUTO_TRADE_ENABLED;
+      else process.env.OPEN_LIQUIDITY_V2_ZEC_AUTO_TRADE_ENABLED = previousAutoTrade;
     }
   });
 
