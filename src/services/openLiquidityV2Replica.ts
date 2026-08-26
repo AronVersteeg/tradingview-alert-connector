@@ -12,6 +12,27 @@ const FRAME_LIMIT = 500;
 // more rendered snapshots only inflates Render memory without adding coverage.
 const HISTORY_LIMIT = FRAME_LIMIT;
 const DISPLAY_ZONE_LIMIT = 150;
+const PAYLOAD_CACHE_TTL_MS = 60_000;
+
+// Replica rebuilds temporarily hold source candles, the old replay and the new
+// replay in memory. Serialize the seven markets so those peaks cannot overlap.
+let replicaRefreshQueue: Promise<void> = Promise.resolve();
+
+function enqueueReplicaRefresh<T>(work: () => Promise<T>): Promise<T> {
+  const run = replicaRefreshQueue.then(work, work);
+  replicaRefreshQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+function memoryUsageMb(): { rss: number; heapUsed: number; heapTotal: number } {
+  const usage = process.memoryUsage();
+  const mb = (bytes: number) => Math.round((bytes / 1024 / 1024) * 10) / 10;
+  return {
+    rss: mb(usage.rss),
+    heapUsed: mb(usage.heapUsed),
+    heapTotal: mb(usage.heapTotal)
+  };
+}
 
 type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD' | 'SOL-USD' | 'ZEC-USD' | 'PAXG-USD' | 'XAG-USD';
 type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'SOLUSDT' | 'ZECUSDT' | 'XAUUSDT' | 'PAXGUSDT' | 'XAGUSDT';
@@ -623,6 +644,7 @@ export class OpenLiquidityV2ReplicaCollector {
   private confirmationCandles = new Map<number, SpotCandle>();
   private goldConfirmation: GoldConfirmationSummary | undefined;
   private payloadCache: { at: number; payload: any } | undefined;
+  private payloadCacheTimer: NodeJS.Timeout | undefined;
 
   constructor(private readonly config: ReplicaMarketConfig = BTC_CONFIG) {}
 
@@ -650,9 +672,9 @@ export class OpenLiquidityV2ReplicaCollector {
 
   start(initialDelayMs = 0): void {
     if (!this.enabled() || this.interval || this.initialTimer) return;
-    this.loadHistory();
     const begin = () => {
       this.initialTimer = undefined;
+      this.loadHistory();
       this.refresh().catch((error) => console.error(`Initial ${this.config.asset} Public Perp V2 replica refresh failed:`, error));
       this.interval = setInterval(() => {
         this.refresh().catch((error) => console.error(`${this.config.asset} Public Perp V2 replica refresh failed:`, error));
@@ -675,8 +697,11 @@ export class OpenLiquidityV2ReplicaCollector {
   stop(): void {
     if (this.interval) clearInterval(this.interval);
     if (this.initialTimer) clearTimeout(this.initialTimer);
+    if (this.payloadCacheTimer) clearTimeout(this.payloadCacheTimer);
     this.interval = undefined;
     this.initialTimer = undefined;
+    this.payloadCacheTimer = undefined;
+    this.payloadCache = undefined;
   }
 
   private loadHistory(): void {
@@ -689,7 +714,8 @@ export class OpenLiquidityV2ReplicaCollector {
       if (Array.isArray(parsed)) {
         this.snapshots = parsed
           .filter((snapshot) => snapshot?.modelVersion === this.config.modelVersion && snapshot?.effectiveAt)
-          .sort((a, b) => Date.parse(a.effectiveAt) - Date.parse(b.effectiveAt));
+          .sort((a, b) => Date.parse(a.effectiveAt) - Date.parse(b.effectiveAt))
+          .slice(-HISTORY_LIMIT);
       }
     } catch (error) {
       console.warn('Public Perp V2 replica history could not be read:', {
@@ -709,14 +735,22 @@ export class OpenLiquidityV2ReplicaCollector {
 
   async refresh(): Promise<void> {
     if (this.refreshPromise) return this.refreshPromise;
-    this.refreshPromise = this.refreshInternal().finally(() => {
+    this.refreshPromise = enqueueReplicaRefresh(() => this.refreshInternal()).finally(() => {
       this.refreshPromise = undefined;
     });
     return this.refreshPromise;
   }
 
+  private clearPayloadCache(): void {
+    if (this.payloadCacheTimer) clearTimeout(this.payloadCacheTimer);
+    this.payloadCacheTimer = undefined;
+    this.payloadCache = undefined;
+  }
+
   private async refreshInternal(): Promise<void> {
     this.loadHistory();
+    this.clearPayloadCache();
+    const memoryBefore = memoryUsageMb();
     try {
       const sourceHours = COHORT_WINDOW_HOURS + FRAME_LIMIT + 24;
       const nowMs = Date.now();
@@ -763,13 +797,10 @@ export class OpenLiquidityV2ReplicaCollector {
         modelVersion: this.config.modelVersion,
         sourceLabel
       });
-      const byEffectiveAt = new Map(this.snapshots.map((snapshot) => [snapshot.effectiveAt, snapshot]));
-      for (const snapshot of rebuilt) byEffectiveAt.set(snapshot.effectiveAt, snapshot);
-      this.snapshots = [...byEffectiveAt.values()]
-        .sort((a, b) => Date.parse(a.effectiveAt) - Date.parse(b.effectiveAt))
-        .slice(-HISTORY_LIMIT);
+      // A refresh rebuilds the complete replay window, so retaining and merging
+      // the previous object graph only doubles the temporary heap requirement.
+      this.snapshots = rebuilt.slice(-HISTORY_LIMIT);
       this.persistHistory();
-      this.payloadCache = undefined;
       this.lastSuccessAt = new Date().toISOString();
       this.lastError = undefined;
       console.log('Public Perp V2 replica refreshed:', {
@@ -780,7 +811,11 @@ export class OpenLiquidityV2ReplicaCollector {
         sourceRows: candles.length,
         confirmationSymbol: this.config.confirmationSymbol,
         confirmationRows: confirmationCandles.length,
-        cohortWindowHours: COHORT_WINDOW_HOURS
+        cohortWindowHours: COHORT_WINDOW_HOURS,
+        memoryMb: {
+          before: memoryBefore,
+          after: memoryUsageMb()
+        }
       });
     } catch (error) {
       this.lastErrorAt = new Date().toISOString();
@@ -973,7 +1008,13 @@ export class OpenLiquidityV2ReplicaCollector {
         ? latestInternalSnapshot.zones.slice().sort((a, b) => b.relativeCount - a.relativeCount).slice(0, 40)
         : []
     };
+    this.clearPayloadCache();
     this.payloadCache = { at: Date.now(), payload };
+    this.payloadCacheTimer = setTimeout(() => {
+      this.payloadCache = undefined;
+      this.payloadCacheTimer = undefined;
+    }, PAYLOAD_CACHE_TTL_MS);
+    this.payloadCacheTimer.unref?.();
     return payload;
   }
 }
