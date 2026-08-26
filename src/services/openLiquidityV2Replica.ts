@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import axios from 'axios';
+import { binanceGet } from './binanceHttp';
 
 const BINANCE_SPOT_URL = 'https://api.binance.com/api/v3/klines';
 const BINANCE_FUTURES_URL = 'https://fapi.binance.com/fapi/v1/klines';
@@ -17,6 +17,7 @@ const PAYLOAD_CACHE_TTL_MS = 60_000;
 // Replica rebuilds temporarily hold source candles, the old replay and the new
 // replay in memory. Serialize the seven markets so those peaks cannot overlap.
 let replicaRefreshQueue: Promise<void> = Promise.resolve();
+const binanceCandleCache = new Map<string, SpotCandle[]>();
 
 function enqueueReplicaRefresh<T>(work: () => Promise<T>): Promise<T> {
   const run = replicaRefreshQueue.then(work, work);
@@ -522,10 +523,18 @@ async function fetchBinanceCandles(
   symbol: ReplicaSymbol = BTC_CONFIG.symbol
 ): Promise<SpotCandle[]> {
   const startTime = Math.floor((nowMs - sourceHours * HOUR_MS) / HOUR_MS) * HOUR_MS;
-  const candles: SpotCandle[] = [];
-  let cursor = startTime;
+  const cacheKey = `${url}|${symbol}`;
+  const cached = (binanceCandleCache.get(cacheKey) || [])
+    .filter((candle) => candle.timestampMs >= startTime && candle.timestampMs <= nowMs);
+  const candles: SpotCandle[] = [...cached];
+  const cachedFirst = cached[0]?.timestampMs;
+  const cachedLast = cached[cached.length - 1]?.timestampMs;
+  const cacheCoversStart = cachedFirst !== undefined && cachedFirst <= startTime;
+  let cursor = cacheCoversStart && cachedLast !== undefined
+    ? Math.max(startTime, cachedLast - HOUR_MS)
+    : startTime;
   while (cursor < nowMs) {
-    const response = await axios.get(url, {
+    const response = await binanceGet(url, {
       timeout: 30_000,
       params: {
         symbol,
@@ -556,8 +565,10 @@ async function fetchBinanceCandles(
     cursor = nextCursor;
     if (response.data.length < 1_000) break;
   }
-  return [...new Map(candles.map((candle) => [candle.timestampMs, candle])).values()]
+  const merged = [...new Map(candles.map((candle) => [candle.timestampMs, candle])).values()]
     .sort((a, b) => a.timestampMs - b.timestampMs);
+  binanceCandleCache.set(cacheKey, merged);
+  return merged;
 }
 
 export async function fetchBinanceSpotCandles(

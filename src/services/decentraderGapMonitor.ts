@@ -8,6 +8,7 @@ import {
   selectDelayedNewest,
   selectEntryNotional
 } from './decentraderExecutionPolicy';
+import { binanceGet } from './binanceHttp';
 import {
   appendDecentraderDelayRecord,
   buildDecentraderDelayRecord,
@@ -3701,7 +3702,7 @@ export async function fetchBinanceFuturesHourlyCandlesForSymbol(
   let pagesFetched = 0;
 
   for (let page = 0; page < 12 && fetchFromMs <= targetMs; page += 1) {
-    const response = await axios.get(`${BINANCE_FUTURES_URL}/fapi/v1/klines`, {
+    const response = await binanceGet(`${BINANCE_FUTURES_URL}/fapi/v1/klines`, {
       timeout: 30000,
       params: {
         symbol,

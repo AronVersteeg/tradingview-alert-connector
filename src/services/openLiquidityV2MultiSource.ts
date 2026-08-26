@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import axios from 'axios';
+import { binanceGet } from './binanceHttp';
 
 const MARKET = 'BTC-USD' as const;
 const MODEL_VERSION = 'public-multi-venue-cohorts-v2.2';
@@ -178,11 +179,11 @@ async function fetchDydxCandles(): Promise<Candle[]> {
 
 async function fetchBinanceHours(): Promise<VenueHour[]> {
   const [candleResponse, oiResponse] = await Promise.all([
-    axios.get(`${BINANCE_URL}/fapi/v1/klines`, {
+    binanceGet(`${BINANCE_URL}/fapi/v1/klines`, {
       timeout: 30_000,
       params: { symbol: 'BTCUSDT', interval: '1h', limit: FRAME_LIMIT }
     }),
-    axios.get(`${BINANCE_URL}/futures/data/openInterestHist`, {
+    binanceGet(`${BINANCE_URL}/futures/data/openInterestHist`, {
       timeout: 30_000,
       params: { symbol: 'BTCUSDT', period: '1h', limit: FRAME_LIMIT }
     })
