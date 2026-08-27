@@ -44,13 +44,26 @@ describe('The List', () => {
       market: 'BTC-USD', symbol: 'BTCUSDT', asset: 'BTC',
       alertTimestamp: '2026-08-19 20:00:00', timestampNl: '19-08-2026 22:00 NL',
       direction: 'long', delayCutoffAt: '2026-08-19T22:32:57.517Z',
-      filteredStatus: 'PASS', impulseQuality, candleReview: { status: 'PASS' }
+      filteredStatus: 'PASS', impulseQuality, candleReview: {
+        status: 'PASS', closedCandlesChecked: 2,
+        candleTimestamps: ['2026-08-19T20:00:00.000Z', '2026-08-19T21:00:00.000Z'],
+        candleOpens: [100, 102], candleCloses: [102, 105],
+        quoteVolume: [1_000, 2_000], volumeDeltaQuote: [200, 600]
+      }
     });
 
     const record = intrusionTheListSnapshot().records
       .find((candidate) => candidate.key === 'BTC-USD|2026-08-19 20:00:00');
     expect(record?.userLabel).toBe('STRONG');
     expect(record?.automaticLabel).toBe('IQ STRONG');
-    expect(record?.candleReview).toEqual({ status: 'PASS' });
+    expect(record?.candleReview?.status).toBe('PASS');
+    expect(record?.binance).toMatchObject({
+      source: 'binance-futures', causal: true, closedCandles: 2,
+      totalQuoteVolume: 3_000, cumulativeTakerDeltaQuote: 800,
+      alignedTakerDeltaCandles: 2, takerDeltaPersistencePct: 100,
+      oiContractChangePct: -2.3, oiPriceRegime: 'POSITION_FLUSH_WITH_MOVE'
+    });
+    expect(record?.binance?.priceChangePct).toBeCloseTo(5);
+    expect(record?.binance?.directionalTakerDeltaRatio).toBeCloseTo(800 / 3_000);
   });
 });

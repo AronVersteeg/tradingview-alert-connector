@@ -5,6 +5,32 @@ import type { IntrusionImpulseQuality } from './intrusionImpulseQuality';
 
 export type IntrusionUserLabel = 'STRONG' | 'WEAK';
 
+export type BinanceDelayAnalytics = {
+  source: 'binance-futures';
+  causal: true;
+  symbol: string;
+  alertTimestamp: string;
+  delayCutoffAt?: string;
+  candleTimestamps: string[];
+  candleOpens: number[];
+  candleCloses: number[];
+  quoteVolume: number[];
+  takerDeltaQuote: number[];
+  closedCandles: number;
+  priceChangePct?: number;
+  directionalPriceChangePct?: number;
+  totalQuoteVolume: number;
+  cumulativeTakerDeltaQuote: number;
+  takerDeltaRatio?: number;
+  directionalTakerDeltaRatio?: number;
+  alignedTakerDeltaCandles: number;
+  takerDeltaPersistencePct?: number;
+  oiContractChangePct?: number;
+  oiUsdChangePct?: number;
+  oiSamples: number;
+  oiPriceRegime: 'POSITION_FLUSH_WITH_MOVE' | 'NEW_POSITION_BUILDUP' | 'OI_FLAT_OR_MIXED' | 'DATA_GAP';
+};
+
 export type IntrusionTheListRecord = {
   version: 1;
   key: string;
@@ -21,6 +47,7 @@ export type IntrusionTheListRecord = {
   automaticLabel: IntrusionImpulseQuality['label'];
   selectedMetric: 'OI_FLUSH_PCT';
   impulseQuality: IntrusionImpulseQuality;
+  binance?: BinanceDelayAnalytics;
   candleReview?: any;
   coinGlass?: any;
   observedAt: string;
@@ -39,6 +66,95 @@ type IntrusionTheListFile = {
 };
 
 const STRONG_THRESHOLD_PCT = -1.8;
+
+function finiteArray(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.map(Number).filter((item) => Number.isFinite(item))
+    : [];
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+export function buildBinanceDelayAnalytics(input: {
+  symbol: string;
+  alertTimestamp: string;
+  delayCutoffAt?: string;
+  direction?: 'long' | 'short';
+  candleReview?: any;
+  impulseQuality: IntrusionImpulseQuality;
+}): BinanceDelayAnalytics {
+  const candleTimestamps = stringArray(input.candleReview?.candleTimestamps);
+  const candleOpens = finiteArray(input.candleReview?.candleOpens);
+  const candleCloses = finiteArray(input.candleReview?.candleCloses);
+  const quoteVolume = finiteArray(input.candleReview?.quoteVolume);
+  const takerDeltaQuote = finiteArray(input.candleReview?.volumeDeltaQuote);
+  const closedCandles = Math.min(
+    Number(input.candleReview?.closedCandlesChecked) || Number.POSITIVE_INFINITY,
+    candleOpens.length,
+    candleCloses.length
+  );
+  const normalizedClosedCandles = Number.isFinite(closedCandles) ? closedCandles : 0;
+  const firstOpen = candleOpens[0];
+  const lastClose = candleCloses[normalizedClosedCandles - 1];
+  const priceChangePct = firstOpen > 0 && Number.isFinite(lastClose)
+    ? ((lastClose / firstOpen) - 1) * 100
+    : undefined;
+  const directionSign = input.direction === 'short' ? -1 : 1;
+  const directionalPriceChangePct = priceChangePct === undefined
+    ? undefined
+    : priceChangePct * directionSign;
+  const totalQuoteVolume = quoteVolume.reduce((sum, value) => sum + Math.abs(value), 0);
+  const cumulativeTakerDeltaQuote = takerDeltaQuote.reduce((sum, value) => sum + value, 0);
+  const takerDeltaRatio = totalQuoteVolume > 0
+    ? cumulativeTakerDeltaQuote / totalQuoteVolume
+    : undefined;
+  const directionalTakerDeltaRatio = takerDeltaRatio === undefined
+    ? undefined
+    : takerDeltaRatio * directionSign;
+  const alignedTakerDeltaCandles = takerDeltaQuote.filter((value) => value * directionSign > 0).length;
+  const takerDeltaPersistencePct = takerDeltaQuote.length
+    ? alignedTakerDeltaCandles / takerDeltaQuote.length * 100
+    : undefined;
+  const oiContractChangePct = input.impulseQuality.openInterest?.contractChangePct;
+  const oiUsdChangePct = input.impulseQuality.openInterest?.usdChangePct;
+  const oiSamples = input.impulseQuality.openInterest?.samples || 0;
+  const oiPriceRegime: BinanceDelayAnalytics['oiPriceRegime'] =
+    oiSamples < 2 || oiContractChangePct === undefined || directionalPriceChangePct === undefined
+      ? 'DATA_GAP'
+      : oiContractChangePct <= STRONG_THRESHOLD_PCT && directionalPriceChangePct > 0
+        ? 'POSITION_FLUSH_WITH_MOVE'
+        : oiContractChangePct > 0 && directionalPriceChangePct > 0
+          ? 'NEW_POSITION_BUILDUP'
+          : 'OI_FLAT_OR_MIXED';
+
+  return {
+    source: 'binance-futures',
+    causal: true,
+    symbol: input.symbol,
+    alertTimestamp: input.alertTimestamp,
+    delayCutoffAt: input.delayCutoffAt,
+    candleTimestamps,
+    candleOpens,
+    candleCloses,
+    quoteVolume,
+    takerDeltaQuote,
+    closedCandles: normalizedClosedCandles,
+    priceChangePct,
+    directionalPriceChangePct,
+    totalQuoteVolume,
+    cumulativeTakerDeltaQuote,
+    takerDeltaRatio,
+    directionalTakerDeltaRatio,
+    alignedTakerDeltaCandles,
+    takerDeltaPersistencePct,
+    oiContractChangePct,
+    oiUsdChangePct,
+    oiSamples,
+    oiPriceRegime
+  };
+}
 
 function filePath(): string {
   const configured = String(process.env.INTRUSION_THE_LIST_FILE || '').trim();
@@ -204,6 +320,14 @@ export function recordIntrusionTheList(input: Omit<IntrusionTheListRecord, 'vers
     userLabelNote: existing?.userLabelNote,
     automaticLabel: input.impulseQuality.label,
     selectedMetric: 'OI_FLUSH_PCT',
+    binance: buildBinanceDelayAnalytics({
+      symbol: input.symbol,
+      alertTimestamp: input.alertTimestamp,
+      delayCutoffAt: input.delayCutoffAt,
+      direction: input.direction,
+      candleReview: input.candleReview,
+      impulseQuality: input.impulseQuality
+    }),
     observedAt: existing?.observedAt || now,
     updatedAt: now
   };
