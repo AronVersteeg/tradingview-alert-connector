@@ -40,6 +40,7 @@ import { buildSnoekScout } from '../services/snoekScout';
 import { getSnoekCurrent } from '../services/snoekCurrent';
 import { getSnoekStructures } from '../services/snoekStructures';
 import { getSnoekWeather } from '../services/snoekWeather';
+import { intrusionTheListSnapshot } from '../services/intrusionTheList';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
 
@@ -483,6 +484,20 @@ router.get('/research/dom-collector/history', async (req, res) => {
     }));
   } catch (error) {
     console.error('Decentralized DOM collector history request failed:', error);
+    res.status(500).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.get('/research/intrusion-the-list', async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(intrusionTheListSnapshot());
+  } catch (error) {
+    console.error('The List snapshot request failed:', error);
     res.status(500).send({
       ok: false,
       error: error instanceof Error ? error.message : String(error)

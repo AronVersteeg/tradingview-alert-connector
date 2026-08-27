@@ -2991,7 +2991,7 @@
                 ? 'dom-negative'
                 : '';
             const impulseQualityTitle = impulseQuality
-              ? `${Number(impulseQuality.score) || 0}/${Number(impulseQuality.availableSignals) || 0} signals | cutoff ${impulseQuality.dataCutoffAt || '-'} | ${(impulseQuality.reasons || []).join(' ')}`
+              ? `${impulseQuality.selectedMetric || 'legacy IQ'} | threshold ${Number.isFinite(Number(impulseQuality.strongThresholdPct)) ? `${Number(impulseQuality.strongThresholdPct).toFixed(2)}%` : '-'} | cutoff ${impulseQuality.dataCutoffAt || '-'} | ${(impulseQuality.reasons || []).join(' ')}`
               : '';
             return `<tr>
               <td>${study?.filtered || record.emailType === 'filtered' ? 'FILTERED ' : ''}${study?.sideCounts || record.sideCounts || 'intrusion'}</td>
@@ -3002,7 +3002,7 @@
               <td class="${responseClass}">${responseLabel}</td>
               <td>${sourceLabel}</td>
               <td class="${hasUltimateVerdict ? (study.hypothesisEntryValid ? 'dom-positive' : 'dom-negative') : ''}">${hasUltimateVerdict ? (study.hypothesisEntryValid ? 'VALID' : 'NO') : '-'}</td>
-              <td class="${impulseQualityClass}" title="${impulseQualityTitle}">${impulseQuality?.label || '-'}</td>
+              <td class="${impulseQualityClass}" title="${impulseQualityTitle}">${impulseQuality?.headline || impulseQuality?.label || '-'}</td>
               <td class="${study?.candleReview?.status === 'PASS' ? 'dom-positive' : 'dom-negative'}" title="${candleAuditTitle}">${candleStatus}</td>
               <td class="${directionClass(event.directionalPriceReturnPct)}">${metric(event.directionalPriceReturnPct, '%')}</td>
               <td class="${directionClass(confirmation.directionalPriceReturnPct)}">${metric(confirmation.directionalPriceReturnPct, '%')}</td>

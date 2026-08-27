@@ -1,5 +1,6 @@
 import { DomMinuteRecord } from './decentralizedDomCollector';
 import { aggregateIntrusionDomWindow, IntrusionDomWindow } from './decentraderIntrusionDomStudy';
+import type { BinanceOpenInterestWindow } from './binanceOpenInterestHistory';
 
 type Direction = 'long' | 'short';
 
@@ -22,13 +23,16 @@ type CoinGlassInput = {
 export type IntrusionImpulseQualityLabel = 'IQ STRONG' | 'IQ MIXED' | 'IQ WEAK' | 'IQ DATA GAP';
 
 export type IntrusionImpulseQuality = {
-  version: 1;
+  version: 2;
   observeOnly: true;
   label: IntrusionImpulseQualityLabel;
+  headline: string;
   score: number;
   availableSignals: number;
   evaluatedAt: string;
   dataCutoffAt?: string;
+  selectedMetric: 'OI_FLUSH_PCT';
+  strongThresholdPct: number;
   reasons: string[];
   candle: {
     count: number;
@@ -48,7 +52,10 @@ export type IntrusionImpulseQuality = {
     directionalRatio?: number;
     fetchedAt?: string | null;
   };
+  openInterest?: BinanceOpenInterestWindow;
 };
+
+const OI_FLUSH_STRONG_THRESHOLD_PCT = -1.8;
 
 function finite(value: unknown): number | undefined {
   const parsed = Number(value);
@@ -72,6 +79,7 @@ export function evaluateIntrusionImpulseQuality(input: {
   review: CandleReviewInput;
   domRecords: DomMinuteRecord[];
   coinGlass?: CoinGlassInput;
+  openInterest?: BinanceOpenInterestWindow;
   evaluatedAt?: string;
 }): IntrusionImpulseQuality {
   const evaluatedAt = input.evaluatedAt || new Date().toISOString();
@@ -134,91 +142,44 @@ export function evaluateIntrusionImpulseQuality(input: {
     ? directionalSupportUsd / Math.max(1, opposingUsd)
     : undefined;
 
-  const reasons: string[] = [];
-  const checks: Array<{ available: boolean; passed: boolean; pass: string; fail: string }> = [
-    {
-      available: input.review.status !== undefined,
-      passed: input.review.status === 'PASS',
-      pass: 'Delay candle filter passed.',
-      fail: `Delay candle filter is ${input.review.status || 'unavailable'}.`
-    },
-    {
-      available: directionalReturnPct !== undefined,
-      passed: (directionalReturnPct || 0) >= 0.20,
-      pass: 'Directional candle displacement is material.',
-      fail: 'Directional candle displacement is limited.'
-    },
-    {
-      available: gapDisplacementRatio !== undefined,
-      passed: (gapDisplacementRatio || 0) >= 0.08,
-      pass: 'Delay displacement is meaningful relative to the gap.',
-      fail: 'Delay displacement is small relative to the gap.'
-    },
-    {
-      available: directionalDeltaRatio !== undefined,
-      passed: (directionalDeltaRatio || 0) >= 0.05,
-      pass: 'Net taker delta supports the intrusion direction.',
-      fail: 'Net taker delta support is weak.'
-    },
-    {
-      available: weakestDirectionalDeltaRatio !== undefined,
-      passed: (weakestDirectionalDeltaRatio || 0) >= 0.01,
-      pass: 'Every Delay candle has directional taker participation.',
-      fail: 'At least one Delay candle has weak taker participation.'
-    },
-    {
-      available: domWindow?.directionalTakerDeltaUsd !== undefined,
-      passed: (domWindow?.directionalTakerDeltaUsd || 0) > 0,
-      pass: 'Live DOM taker flow supports the direction.',
-      fail: 'Live DOM taker flow opposes the direction.'
-    },
-    {
-      available: domWindow?.directionalImbalance25Bps !== undefined || domWindow?.directionalBookPressureUsd !== undefined,
-      passed: (domWindow?.directionalImbalance25Bps || 0) > 0.02 || (domWindow?.directionalBookPressureUsd || 0) > 0,
-      pass: 'Live order-book pressure supports the direction.',
-      fail: 'Live order-book pressure does not confirm the direction.'
-    },
-    {
-      available: directionalCgRatio !== undefined,
-      passed: (directionalCgRatio || 0) >= 1.05,
-      pass: 'CoinGlass gap liquidity supports the direction.',
-      fail: 'CoinGlass gap liquidity is neutral or opposing.'
-    }
-  ];
-  for (const check of checks) if (check.available) reasons.push(check.passed ? check.pass : check.fail);
-  const score = checks.filter((check) => check.available && check.passed).length;
-  const availableSignals = checks.filter((check) => check.available).length;
-  const hasCausalCoverage = Boolean(
-    direction &&
-    fromMs !== undefined &&
+  const oiChange = finite(input.openInterest?.contractChangePct);
+  const hasCausalOi = Boolean(
+    input.openInterest &&
+    input.openInterest.samples >= 2 &&
+    oiChange !== undefined &&
     cutoffMs !== undefined &&
-    completeCandleMetrics &&
-    domWindow &&
-    domWindow.coverageMinutes >= requiredCoverageMinutes
+    timestampMs(input.openInterest.to) !== undefined &&
+    (timestampMs(input.openInterest.to) || 0) <= cutoffMs
   );
-  const label: IntrusionImpulseQualityLabel = !hasCausalCoverage
+  const strong = hasCausalOi && (oiChange as number) <= OI_FLUSH_STRONG_THRESHOLD_PCT;
+  const label: IntrusionImpulseQualityLabel = !hasCausalOi
     ? 'IQ DATA GAP'
-    : score >= 6
-      ? 'IQ STRONG'
-      : score >= 4
-        ? 'IQ MIXED'
-        : 'IQ WEAK';
-
-  if (!hasCausalCoverage) {
-    if (!completeCandleMetrics) reasons.unshift('Complete causal candle volume metrics are not available.');
-    if (!domWindow || domWindow.coverageMinutes < requiredCoverageMinutes) {
-      reasons.unshift(`Causal DOM coverage is ${domWindow?.coverageMinutes || 0}/${requiredCoverageMinutes} required minutes.`);
-    }
-  }
+    : strong ? 'IQ STRONG' : 'IQ WEAK';
+  const headline = hasCausalOi
+    ? `${label} OI ${(oiChange as number).toFixed(2)}%`
+    : 'IQ DATA GAP OI';
+  const reasons = hasCausalOi
+    ? [
+        `Contract OI changed ${(oiChange as number).toFixed(2)}% inside The Delay.`,
+        strong
+          ? `The provisional strong flush threshold of ${OI_FLUSH_STRONG_THRESHOLD_PCT.toFixed(2)}% was reached.`
+          : `The provisional strong flush threshold of ${OI_FLUSH_STRONG_THRESHOLD_PCT.toFixed(2)}% was not reached.`
+      ]
+    : ['At least two causal Binance Futures Open Interest samples are required inside The Delay.'];
+  const score = strong ? 1 : 0;
+  const availableSignals = hasCausalOi ? 1 : 0;
 
   return {
-    version: 1,
+    version: 2,
     observeOnly: true,
     label,
+    headline,
     score,
     availableSignals,
     evaluatedAt,
     dataCutoffAt: input.review.delayCutoffAt,
+    selectedMetric: 'OI_FLUSH_PCT',
+    strongThresholdPct: OI_FLUSH_STRONG_THRESHOLD_PCT,
     reasons,
     candle: {
       count: opens.length,
@@ -237,6 +198,7 @@ export function evaluateIntrusionImpulseQuality(input: {
       opposingUsd,
       directionalRatio: directionalCgRatio,
       fetchedAt: causalCoinGlass ? input.coinGlass?.fetchedAt : null
-    }
+    },
+    openInterest: input.openInterest
   };
 }

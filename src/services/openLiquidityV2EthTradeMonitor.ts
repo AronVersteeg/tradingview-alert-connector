@@ -14,6 +14,8 @@ import {
   IntrusionImpulseQuality,
   evaluateIntrusionImpulseQuality
 } from './intrusionImpulseQuality';
+import { observeBinanceOpenInterestWindow } from './binanceOpenInterestHistory';
+import { recordIntrusionTheList } from './intrusionTheList';
 import {
   AlertState,
   DecentraderRow,
@@ -863,17 +865,24 @@ export class OpenLiquidityV2EthTradeMonitor {
     state.benchmarkRecords = records.slice(-intrusionHistoryMaxRecords());
   }
 
-  private impulseQuality(
+  private async impulseQuality(
     alert: GapAlert,
     review: any,
     coinGlass: any
-  ): IntrusionImpulseQuality {
+  ): Promise<IntrusionImpulseQuality> {
     const collector = decentralizedDomCollectorForMarket(this.config.market);
     const from = new Date(timestampMs(alert.timestamp)).toISOString();
     const to = String(review?.delayCutoffAt || nowNlIso());
     const domRecords = collector
       ? collector.getHistory({ from, to, maxPoints: 5_000 }).records
       : [];
+    const openInterest = review?.status === 'PENDING'
+      ? undefined
+      : await observeBinanceOpenInterestWindow({
+          symbol: this.config.symbol,
+          from: alert.timestamp,
+          to
+        });
     return evaluateIntrusionImpulseQuality({
       direction: mapDirectionFromAlert(alert),
       alertTimestamp: alert.timestamp,
@@ -881,6 +890,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       review,
       domRecords,
       coinGlass,
+      openInterest,
       evaluatedAt: to
     });
   }
@@ -1429,7 +1439,29 @@ export class OpenLiquidityV2EthTradeMonitor {
           );
           const storedBenchmark = (state.benchmarkRecords || []).find((record) => record.signature === signature);
           const causalCoinGlass = storedBenchmark?.coinGlass || coinGlassBenchmark(alert, this.config.coinGlass);
-          const impulseQuality = this.impulseQuality(alert, review, causalCoinGlass);
+          const impulseQuality = await this.impulseQuality(alert, review, causalCoinGlass);
+          if (review.status !== 'PENDING') {
+            try {
+              recordIntrusionTheList({
+                market: this.config.market,
+                symbol: this.config.symbol,
+                asset: this.config.asset,
+                alertTimestamp: alert.timestamp,
+                timestampNl: alert.timestampNl,
+                direction: mapDirectionFromAlert(alert),
+                delayCutoffAt: String(review.delayCutoffAt || nowNlIso()),
+                filteredStatus: review.status,
+                impulseQuality,
+                candleReview: review,
+                coinGlass: causalCoinGlass
+              });
+            } catch (error) {
+              console.warn(`${this.config.asset} intrusion could not be persisted to The List.`, {
+                signature,
+                error: error instanceof Error ? error.message : String(error)
+              });
+            }
+          }
           this.addBenchmark(state, alert, signature, {
             filtered: review.status === 'PASS',
             candleReview: review,
@@ -1441,7 +1473,7 @@ export class OpenLiquidityV2EthTradeMonitor {
             if (!filteredSent.has(signature) && smtp) {
               const sent = await sendEmailBestEffort(
                 smtp,
-                `FILTERED ${this.config.asset} ${sideCounts(alert)} | ${impulseQuality.label} | ${alert.timestampNl}`,
+                `FILTERED ${this.config.asset} ${sideCounts(alert)} | ${impulseQuality.headline} | ${alert.timestampNl}`,
                 filteredAlertBody(alert, this.config.symbol, review).replace(
                   /^FILTERED Decentrader/,
                   `FILTERED ${this.config.asset} Public Perp V2`

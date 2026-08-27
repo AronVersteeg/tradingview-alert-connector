@@ -27,6 +27,8 @@ import {
   IntrusionImpulseQuality,
   evaluateIntrusionImpulseQuality
 } from './intrusionImpulseQuality';
+import { observeBinanceOpenInterestWindow } from './binanceOpenInterestHistory';
+import { recordIntrusionTheList } from './intrusionTheList';
 import tls from 'tls';
 import zlib from 'zlib';
 import { AlertObject } from '../types';
@@ -5949,6 +5951,18 @@ export class DecentraderGapMonitor {
           normalSmtpSentAt,
           decentraderIntrusionVolumeDeltaEnabled()
         );
+        const impulseQualityCutoff = candleReview.delayCutoffAt || nowNlIso();
+        const openInterest = candleReview.status === 'PENDING'
+          ? undefined
+          : await observeBinanceOpenInterestWindow({
+              symbol: 'BTCUSDT',
+              from: alert.timestamp,
+              to: impulseQualityCutoff
+            });
+        const causalCoinGlass = impulseQualityCoinGlass(
+          initialCoinGlassGapLevels,
+          signalFirstObservedAt
+        );
         const impulseQuality: IntrusionImpulseQuality = evaluateIntrusionImpulseQuality({
           direction: mapDirectionFromAlert(alert),
           alertTimestamp: alert.timestamp,
@@ -5959,12 +5973,32 @@ export class DecentraderGapMonitor {
             to: candleReview.delayCutoffAt || nowNlIso(),
             maxPoints: 5_000
           }).records,
-          coinGlass: impulseQualityCoinGlass(
-            initialCoinGlassGapLevels,
-            signalFirstObservedAt
-          ),
-          evaluatedAt: candleReview.delayCutoffAt || nowNlIso()
+          coinGlass: causalCoinGlass,
+          openInterest,
+          evaluatedAt: impulseQualityCutoff
         });
+        if (candleReview.status !== 'PENDING') {
+          try {
+            recordIntrusionTheList({
+              market: 'BTC-USD',
+              symbol: 'BTCUSDT',
+              asset: 'BTC',
+              alertTimestamp: alert.timestamp,
+              timestampNl: alert.timestampNl,
+              direction: mapDirectionFromAlert(alert),
+              delayCutoffAt: impulseQualityCutoff,
+              filteredStatus: candleReview.status,
+              impulseQuality,
+              candleReview,
+              coinGlass: causalCoinGlass
+            });
+          } catch (error) {
+            console.warn('BTC intrusion could not be persisted to The List.', {
+              signature,
+              error: error instanceof Error ? error.message : String(error)
+            });
+          }
+        }
         (alertSummary as any).intrusionCandleReview = candleReview;
         (alertSummary as any).impulseQuality = impulseQuality;
         const domStudyAlert = domStudyAlerts.find((candidate) => candidate.signature === signature);
@@ -6016,7 +6050,7 @@ export class DecentraderGapMonitor {
           if (filteredSignature !== state.lastFilteredAlertSentSignature) {
             const filteredEmailResult = await sendEmailBestEffort(
               smtpSettings,
-              `FILTERED BTC ${sideCounts(alert)} | ${impulseQuality.label} | ${alert.timestampNl}`,
+              `FILTERED BTC ${sideCounts(alert)} | ${impulseQuality.headline} | ${alert.timestampNl}`,
               filteredAlertBody(alert, config.symbol, candleReview)
             );
 
