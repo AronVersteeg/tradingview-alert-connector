@@ -321,6 +321,16 @@ export class DydxV4Client extends AbstractDexClient {
 
   private readonly POST_ORDER_SETTLE_MS = 2000;
 
+  private readonly ACCEPTED_ORDER_INDEXER_GRACE_POLLS = Math.max(
+    1,
+    Math.ceil(
+      parseEnvPositiveNumber(
+        process.env.DYDX_V4_ACCEPTED_ORDER_INDEXER_GRACE_SECONDS,
+        90
+      ) * 1000 / this.TARGET_POLL_DELAY_MS
+    )
+  );
+
   private readonly SAFETY_STOP_PCT = Number(
     process.env.DYDX_V4_STATIC_STOP_PCT ?? '0.003'
   );
@@ -2433,7 +2443,7 @@ export class DydxV4Client extends AbstractDexClient {
       );
       await this.sleep(this.POST_ORDER_SETTLE_MS);
 
-      const progress = await this.waitForTargetProgress(market, currentSize, targetSize);
+      let progress = await this.waitForTargetProgress(market, currentSize, targetSize);
 
       if (progress.kind === 'target') {
         console.log('Target reached after correction.', { market, targetSize });
@@ -2454,6 +2464,49 @@ export class DydxV4Client extends AbstractDexClient {
         );
       }
 
+      const accepted = this.isAcceptedBroadcastResult(placedOrder.submitResult);
+
+      if (accepted) {
+        console.warn('Correction IOC was accepted by dYdX; allowing extra indexer settlement time.', {
+          market,
+          side,
+          size,
+          clientId: placedOrder.clientId,
+          gracePolls: this.ACCEPTED_ORDER_INDEXER_GRACE_POLLS,
+          graceSeconds: this.ACCEPTED_ORDER_INDEXER_GRACE_POLLS * this.TARGET_POLL_DELAY_MS / 1000,
+          currentSize: progress.currentSize,
+          targetSize
+        });
+
+        progress = await this.waitForTargetProgress(
+          market,
+          currentSize,
+          targetSize,
+          this.ACCEPTED_ORDER_INDEXER_GRACE_POLLS,
+          'accepted-indexer-grace'
+        );
+
+        if (progress.kind === 'target') {
+          console.log('Target reached during accepted-order indexer grace.', { market, targetSize });
+          return;
+        }
+
+        if (progress.kind === 'progress') {
+          console.log('Accepted correction became visible during indexer grace.', {
+            market,
+            currentSize: progress.currentSize,
+            targetSize
+          });
+          continue;
+        }
+
+        if (progress.kind === 'flipped') {
+          throw new Error(
+            `Dangerous overshoot detected for ${market}. Current size flipped unexpectedly to ${progress.currentSize}`
+          );
+        }
+      }
+
       await this.logOrderDiagnostics(
         'Target correction made no visible progress.',
         market,
@@ -2467,8 +2520,12 @@ export class DydxV4Client extends AbstractDexClient {
         }
       );
 
-      if (this.isAcceptedBroadcastResult(placedOrder.submitResult)) {
-        console.warn('Correction IOC was accepted by dYdX but produced no visible fill before expiry.', {
+      if (accepted) {
+        throw new Error(
+          `Accepted dYdX correction for ${market} remained ambiguous after indexer grace; refusing to submit a duplicate correction.`
+        );
+      } else {
+        console.warn('Correction IOC was not accepted or produced no visible fill before expiry.', {
           market,
           side,
           size,
@@ -2510,6 +2567,16 @@ export class DydxV4Client extends AbstractDexClient {
       });
 
       try {
+        const finalSize = await this.getCurrentSize(market);
+        if (Math.abs(targetSize - finalSize) < this.TOLERANCE) {
+          console.warn('Target became visible before fail-safe flatten; preserving the requested position.', {
+            market,
+            targetSize,
+            currentSize: finalSize
+          });
+          return true;
+        }
+
         await this.cancelOpenOrders(market);
         await this.clearManagedOrdersForFlatMarket(
           market,
@@ -2539,12 +2606,14 @@ export class DydxV4Client extends AbstractDexClient {
   private async waitForTargetProgress(
     market: string,
     initialSize: number,
-    targetSize: number
+    targetSize: number,
+    maxPolls = this.TARGET_PROGRESS_POLLS,
+    phase = 'normal'
   ): Promise<ProgressResult> {
     let lastSeen = initialSize;
     const initialDistance = Math.abs(targetSize - initialSize);
 
-    for (let i = 1; i <= this.TARGET_PROGRESS_POLLS; i++) {
+    for (let i = 1; i <= maxPolls; i++) {
       await this.sleep(this.TARGET_POLL_DELAY_MS);
 
       const currentSize = await this.getCurrentSize(market);
@@ -2554,8 +2623,9 @@ export class DydxV4Client extends AbstractDexClient {
 
       console.log('Target poll:', {
         market,
+        phase,
         poll: i,
-        maxPolls: this.TARGET_PROGRESS_POLLS,
+        maxPolls,
         initialSize,
         currentSize,
         targetSize

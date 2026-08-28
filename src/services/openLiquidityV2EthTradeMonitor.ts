@@ -1016,6 +1016,8 @@ export class OpenLiquidityV2EthTradeMonitor {
 
     state.lastTradeExecutedSignature = signature;
     state.lastTradeExecutedAt = registeredAt;
+    state.lastTradeAttemptedSignature = signature;
+    state.lastTradeAttemptedAt = registeredAt;
     state.managedPosition = {
       market: this.config.market,
       direction,
@@ -1108,6 +1110,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       console.warn(`${this.config.asset} V2 adopted an existing matching position after an interrupted entry flow:`, state.lastTradeDecision);
       return;
     }
+    if (state.lastTradeAttemptedSignature === signature) {
+      result.tradeSkipped = `${this.config.asset} V2 live execution was already attempted for this intrusion; duplicate re-entry blocked.`;
+      return;
+    }
     const plan = await this.getTradePlan(account, alert);
     const marketStatus = String(plan.marketInfo?.status || '').trim().toUpperCase();
     if (marketStatus && marketStatus !== 'ACTIVE') {
@@ -1124,11 +1130,12 @@ export class OpenLiquidityV2EthTradeMonitor {
     const orderAlert = buildDecentraderOrderAlert(plan, signature);
     (orderAlert as any).strategy = this.config.strategyPrefix;
     await this.applyStatefulOrderCapacity(orderAlert, result);
+    state.lastTradeAttemptedSignature = signature;
+    state.lastTradeAttemptedAt = nowNlIso();
     try {
       await this.executor.placeOrder(orderAlert);
     } catch (error) {
-      const partialSnapshot = await this.executor.getAccountSnapshot([this.config.market]);
-      const partialPosition = existingPosition(partialSnapshot, this.config.market);
+      const partialPosition = await this.waitForExpectedPosition(direction);
       if (!partialPosition || directionForPosition(partialPosition) !== direction) throw error;
 
       this.registerManagedPosition(
@@ -1153,8 +1160,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       });
       return;
     }
-    const after = await this.executor.getAccountSnapshot([this.config.market]);
-    const placedPosition = existingPosition(after, this.config.market);
+    const placedPosition = await this.waitForExpectedPosition(direction);
     if (!placedPosition || directionForPosition(placedPosition) !== direction) {
       throw new Error(`dYdX did not report the requested ${this.config.market} ${direction} position after execution.`);
     }
@@ -1163,6 +1169,28 @@ export class OpenLiquidityV2EthTradeMonitor {
     result.tradePlan = plan;
     result.tradeDecision = state.lastTradeDecision;
     console.log(`${this.config.asset} V2 filtered intrusion trade placed:`, state.lastTradeDecision);
+  }
+
+  private async waitForExpectedPosition(direction: TradePlanDirection): Promise<DydxOpenPosition | undefined> {
+    if (!this.executor) return undefined;
+
+    const timeoutSeconds = positiveIntegerEnv(
+      'DYDX_V4_ENTRY_CONFIRMATION_TIMEOUT_SECONDS',
+      90,
+      5,
+      300
+    );
+    const pollMs = 2_000;
+    const deadline = Date.now() + timeoutSeconds * 1_000;
+
+    do {
+      const snapshot = await this.executor.getAccountSnapshot([this.config.market]);
+      const position = existingPosition(snapshot, this.config.market);
+      if (position && directionForPosition(position) === direction) return position;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    } while (Date.now() < deadline);
+
+    return undefined;
   }
 
   private async recoverUnmanagedFilteredPosition(state: EthMonitorState, payload: any, result: any): Promise<void> {

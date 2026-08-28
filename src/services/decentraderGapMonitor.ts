@@ -542,6 +542,8 @@ export type AlertState = {
   masterScannerFertileSentSignatures?: string[];
   lastTradeExecutedSignature?: string;
   lastTradeExecutedAt?: string;
+  lastTradeAttemptedSignature?: string;
+  lastTradeAttemptedAt?: string;
   lastTradeExecutionError?: string;
   lastTradeDecision?: any;
   managedPosition?: {

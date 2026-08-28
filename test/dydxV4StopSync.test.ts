@@ -317,4 +317,82 @@ describe('dYdX v4 trailing stop synchronization', () => {
     );
     expect(client.cancelSpecificOrders).toHaveBeenNthCalledWith(2, 'BTC-USD', [staleStop]);
   });
+
+  test('waits for an accepted correction to appear in the indexer without submitting it twice', async () => {
+    const client = new DydxV4Client() as any;
+    client.TARGET_PROGRESS_POLLS = 1;
+    client.ACCEPTED_ORDER_INDEXER_GRACE_POLLS = 3;
+    client.POST_ORDER_SETTLE_MS = 0;
+    client.sleep = jest.fn().mockResolvedValue(undefined);
+    client.getCurrentSize = jest.fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(-74.4);
+    client.placeCorrectionOrder = jest.fn().mockResolvedValue({
+      market: 'INJ-USD',
+      side: 'SELL',
+      size: 74.4,
+      price: 5.163,
+      priceSource: 'test',
+      slippagePct: 0.03,
+      usedFallbackWorstPrice: false,
+      goodTilBlockBuffer: 20,
+      clientId: 123,
+      reduceOnly: false,
+      submittedAt: Date.now(),
+      submitResult: { code: 0 }
+    });
+
+    await client.reachTargetPositionSafely('INJ-USD', -74.4, 5.163);
+
+    expect(client.placeCorrectionOrder).toHaveBeenCalledTimes(1);
+    expect(client.getCurrentSize).toHaveBeenCalledTimes(4);
+  });
+
+  test('refuses a duplicate correction while an accepted order remains indexer-ambiguous', async () => {
+    const client = new DydxV4Client() as any;
+    client.TARGET_PROGRESS_POLLS = 1;
+    client.ACCEPTED_ORDER_INDEXER_GRACE_POLLS = 2;
+    client.POST_ORDER_SETTLE_MS = 0;
+    client.sleep = jest.fn().mockResolvedValue(undefined);
+    client.getCurrentSize = jest.fn().mockResolvedValue(0);
+    client.logOrderDiagnostics = jest.fn().mockResolvedValue(undefined);
+    client.placeCorrectionOrder = jest.fn().mockResolvedValue({
+      market: 'INJ-USD',
+      side: 'SELL',
+      size: 74.4,
+      price: 5.163,
+      priceSource: 'test',
+      slippagePct: 0.03,
+      usedFallbackWorstPrice: false,
+      goodTilBlockBuffer: 20,
+      clientId: 123,
+      reduceOnly: false,
+      submittedAt: Date.now(),
+      submitResult: { code: 0 }
+    });
+
+    await expect(
+      client.reachTargetPositionSafely('INJ-USD', -74.4, 5.163)
+    ).rejects.toThrow('remained ambiguous after indexer grace');
+
+    expect(client.placeCorrectionOrder).toHaveBeenCalledTimes(1);
+  });
+
+  test('preserves a target that becomes visible immediately before fail-safe flattening', async () => {
+    const client = new DydxV4Client() as any;
+    client.reachTargetPositionSafely = jest.fn().mockRejectedValue(new Error('indexer lag'));
+    client.getCurrentSize = jest.fn().mockResolvedValue(-74.4);
+    client.cancelOpenOrders = jest.fn().mockResolvedValue(undefined);
+    client.clearManagedOrdersForFlatMarket = jest.fn().mockResolvedValue(undefined);
+    client.flattenPositionSafely = jest.fn().mockResolvedValue(undefined);
+
+    const reached = await client.reachTargetPositionOrFailsafeFlat('INJ-USD', -74.4, 5.163);
+
+    expect(reached).toBe(true);
+    expect(client.cancelOpenOrders).not.toHaveBeenCalled();
+    expect(client.clearManagedOrdersForFlatMarket).not.toHaveBeenCalled();
+    expect(client.flattenPositionSafely).not.toHaveBeenCalled();
+  });
 });
