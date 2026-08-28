@@ -25,10 +25,17 @@ import {
 import { decentralizedDomCollector } from './decentralizedDomCollector';
 import {
   IntrusionImpulseQuality,
-  evaluateIntrusionImpulseQuality
+  evaluateIntrusionImpulseQuality,
+  intrusionIqTradeDecision,
+  intrusionIqTradeFilterEnabled
 } from './intrusionImpulseQuality';
 import { observeBinanceOpenInterestWindow } from './binanceOpenInterestHistory';
 import { recordIntrusionTheList } from './intrusionTheList';
+import {
+  IntrusionForwardHurdle,
+  evaluateIntrusionForwardHurdle,
+  forwardHurdleBody
+} from './intrusionForwardHurdle';
 import tls from 'tls';
 import zlib from 'zlib';
 import { AlertObject } from '../types';
@@ -479,6 +486,7 @@ type MonitorStatus = {
   coinGlassWhaleError?: string;
   delayHistoryRecords?: number;
   intrusionCandleFilterEnabled?: boolean;
+  intrusionIqTradeFilterEnabled?: boolean;
   regularIntrusionEmailEnabled?: boolean;
   intrusionCandleSource?: 'binance-futures' | 'dydx';
   intrusionVolumeDeltaEnabled?: boolean;
@@ -5508,6 +5516,7 @@ export class DecentraderGapMonitor {
       hasTradeExecutor: true,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+      intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       regularIntrusionEmailEnabled: decentraderRegularIntrusionEmailEnabled(),
       intrusionCandleSource: decentraderIntrusionCandleSource(),
       intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled()
@@ -5524,6 +5533,7 @@ export class DecentraderGapMonitor {
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+      intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       intrusionCandleSource: decentraderIntrusionCandleSource(),
       intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined
@@ -5587,6 +5597,7 @@ export class DecentraderGapMonitor {
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+      intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       intrusionCandleSource: decentraderIntrusionCandleSource(),
       intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined,
@@ -5636,6 +5647,7 @@ export class DecentraderGapMonitor {
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
+      intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       intrusionCandleSource: decentraderIntrusionCandleSource(),
       intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined,
@@ -5977,6 +5989,24 @@ export class DecentraderGapMonitor {
           openInterest,
           evaluatedAt: impulseQualityCutoff
         });
+        const impulseTradeGate = intrusionIqTradeDecision(
+          impulseQuality,
+          candleReview.enabled && candleReview.status === 'PASS'
+        );
+        let forwardHurdle: IntrusionForwardHurdle | undefined;
+        if (candleReview.status !== 'PENDING') {
+          const closedPrices = Array.isArray(candleReview.candleCloses)
+            ? candleReview.candleCloses.map(Number).filter(Number.isFinite)
+            : [];
+          forwardHurdle = await evaluateIntrusionForwardHurdle({
+            symbol: 'BTCUSDT',
+            direction: mapDirectionFromAlert(alert),
+            referencePrice: closedPrices[closedPrices.length - 1] || Number(alert.price),
+            review: candleReview,
+            coinGlassSnapshot: btcCoinGlassWhaleSnapshot(),
+            dataCutoffAt: impulseQualityCutoff
+          });
+        }
         if (candleReview.status !== 'PENDING') {
           try {
             recordIntrusionTheList({
@@ -5989,6 +6019,7 @@ export class DecentraderGapMonitor {
               delayCutoffAt: impulseQualityCutoff,
               filteredStatus: candleReview.status,
               impulseQuality,
+              forwardHurdle,
               candleReview,
               coinGlass: causalCoinGlass
             });
@@ -6001,10 +6032,14 @@ export class DecentraderGapMonitor {
         }
         (alertSummary as any).intrusionCandleReview = candleReview;
         (alertSummary as any).impulseQuality = impulseQuality;
+        (alertSummary as any).impulseTradeGate = impulseTradeGate;
+        (alertSummary as any).forwardHurdle = forwardHurdle;
         const domStudyAlert = domStudyAlerts.find((candidate) => candidate.signature === signature);
         if (domStudyAlert) {
           (domStudyAlert as any).intrusionCandleReview = candleReview;
           (domStudyAlert as any).impulseQuality = impulseQuality;
+          (domStudyAlert as any).impulseTradeGate = impulseTradeGate;
+          (domStudyAlert as any).forwardHurdle = forwardHurdle;
         }
         result.intrusionCandleReviews.push({
           signature,
@@ -6012,6 +6047,8 @@ export class DecentraderGapMonitor {
           timestampNl: alert.timestampNl,
           sideCounts: sideCounts(alert),
           impulseQuality,
+          impulseTradeGate,
+          forwardHurdle,
           ...candleReview
         });
         result.alert = alertSummary;
@@ -6050,8 +6087,8 @@ export class DecentraderGapMonitor {
           if (filteredSignature !== state.lastFilteredAlertSentSignature) {
             const filteredEmailResult = await sendEmailBestEffort(
               smtpSettings,
-              `FILTERED BTC ${sideCounts(alert)} | ${impulseQuality.headline} | ${alert.timestampNl}`,
-              filteredAlertBody(alert, config.symbol, candleReview)
+              `FILTERED BTC ${sideCounts(alert)} | ${forwardHurdle?.headline || 'HURDLE DATA GAP'} | ${impulseQuality.headline} | ${alert.timestampNl}`,
+              `${filteredAlertBody(alert, config.symbol, candleReview)}\n\nIQ trade gate: ${impulseTradeGate.allowed ? 'ALLOWED' : 'BLOCKED'} - ${impulseTradeGate.reason}\n\n${forwardHurdle ? forwardHurdleBody(forwardHurdle) : 'Forward hurdle scan unavailable.'}`
             );
 
             if (filteredEmailResult.sent) {
@@ -6071,6 +6108,27 @@ export class DecentraderGapMonitor {
               });
             }
           }
+        }
+
+        if (!impulseTradeGate.allowed) {
+          delete pendingCandleAlerts[signature];
+          result.tradeSkipped = impulseTradeGate.reason;
+          result.tradeDecision = {
+            at: nowNlIso(),
+            outcome: 'SKIPPED',
+            reason: impulseTradeGate.reason,
+            signature,
+            timestamp: alert.timestamp,
+            timestampNl: alert.timestampNl,
+            price: alert.price,
+            sideCounts: sideCounts(alert),
+            intrusionCandleReview: candleReview,
+            impulseQuality,
+            impulseTradeGate,
+            forwardHurdle
+          };
+          console.log('Decentrader IQ trade filter blocked entry:', result.tradeDecision);
+          continue;
         }
 
         await this.maybeExecuteTradeForAlert(alert, signature, state, result, {

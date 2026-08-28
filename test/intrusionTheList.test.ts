@@ -20,13 +20,13 @@ describe('The List', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test('starts with the five user-labeled reference cases', () => {
+  test('starts with the eight user-labeled reference cases', () => {
     const snapshot = intrusionTheListSnapshot();
     expect(snapshot.methodology.selectedMetric).toBe('OI_FLUSH_PCT');
     expect(snapshot.methodology.strongWhenContractChangePctLte).toBe(-1.8);
-    expect(snapshot.methodology.labeledSampleSize).toBe(5);
+    expect(snapshot.methodology.labeledSampleSize).toBe(8);
     expect(snapshot.records.filter((record) => record.userLabel === 'STRONG')).toHaveLength(2);
-    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(3);
+    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(6);
   });
 
   test('updates live diagnostics without overwriting a user label', () => {

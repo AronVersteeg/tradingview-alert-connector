@@ -22,6 +22,17 @@ type CoinGlassInput = {
 
 export type IntrusionImpulseQualityLabel = 'IQ STRONG' | 'IQ MIXED' | 'IQ WEAK' | 'IQ DATA GAP';
 
+export const INTRUSION_IQ_TRADE_FILTER_ENV = 'DECENTRADER_INTRUSION_IQ_FILTER_ENABLED';
+
+export type IntrusionIqTradeDecision = {
+  enabled: boolean;
+  allowed: boolean;
+  requiredLabel: 'IQ STRONG';
+  actualLabel: IntrusionImpulseQualityLabel;
+  filteredPass: boolean;
+  reason: string;
+};
+
 export type IntrusionImpulseQuality = {
   version: 2;
   observeOnly: true;
@@ -56,6 +67,43 @@ export type IntrusionImpulseQuality = {
 };
 
 const OI_FLUSH_STRONG_THRESHOLD_PCT = -1.8;
+
+export function intrusionIqTradeFilterEnabled(): boolean {
+  const raw = process.env[INTRUSION_IQ_TRADE_FILTER_ENV];
+  if (raw === undefined || raw.trim() === '') return true;
+  return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
+
+export function intrusionIqTradeDecision(
+  quality: Pick<IntrusionImpulseQuality, 'label'>,
+  filteredPass: boolean
+): IntrusionIqTradeDecision {
+  const enabled = intrusionIqTradeFilterEnabled();
+  if (!enabled) {
+    return {
+      enabled,
+      allowed: true,
+      requiredLabel: 'IQ STRONG',
+      actualLabel: quality.label,
+      filteredPass,
+      reason: `${INTRUSION_IQ_TRADE_FILTER_ENV}=false; IQ is observe-only.`
+    };
+  }
+
+  const allowed = filteredPass && quality.label === 'IQ STRONG';
+  return {
+    enabled,
+    allowed,
+    requiredLabel: 'IQ STRONG',
+    actualLabel: quality.label,
+    filteredPass,
+    reason: allowed
+      ? 'Filtered intrusion passed and IQ label is IQ STRONG.'
+      : !filteredPass
+        ? 'Trade blocked: an IQ-gated entry requires a passing FILTERED intrusion.'
+        : `Trade blocked: IQ STRONG is required; received ${quality.label}.`
+  };
+}
 
 function finite(value: unknown): number | undefined {
   const parsed = Number(value);

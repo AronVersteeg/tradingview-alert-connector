@@ -12,10 +12,18 @@ import {
 import { decentralizedDomCollectorForMarket } from './decentralizedDomCollector';
 import {
   IntrusionImpulseQuality,
-  evaluateIntrusionImpulseQuality
+  IntrusionIqTradeDecision,
+  evaluateIntrusionImpulseQuality,
+  intrusionIqTradeDecision,
+  intrusionIqTradeFilterEnabled
 } from './intrusionImpulseQuality';
 import { observeBinanceOpenInterestWindow } from './binanceOpenInterestHistory';
 import { recordIntrusionTheList } from './intrusionTheList';
+import {
+  IntrusionForwardHurdle,
+  evaluateIntrusionForwardHurdle,
+  forwardHurdleBody
+} from './intrusionForwardHurdle';
 import {
   AlertState,
   DecentraderRow,
@@ -226,6 +234,8 @@ type EthBenchmarkRecord = {
   filtered: boolean;
   candleReview?: any;
   impulseQuality?: IntrusionImpulseQuality;
+  impulseTradeGate?: IntrusionIqTradeDecision;
+  forwardHurdle?: IntrusionForwardHurdle;
   coinGlass: any;
   tradeOutcome?: string;
   observedAt: string;
@@ -778,6 +788,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       running: this.running,
       market: this.config.market,
       autoTradeEnabled: this.autoTradeEnabled(),
+      intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       observeOnly: !this.config.tradeCapable,
       hasTradeExecutor: Boolean(this.executor),
       pollMinutes: this.pollMinutes(),
@@ -1417,6 +1428,18 @@ export class OpenLiquidityV2EthTradeMonitor {
             });
           }
           if (!filterEnabled) {
+            if (intrusionIqTradeFilterEnabled()) {
+              result.tradeSkipped = 'Trade blocked: IQ-gated entries require DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED=true and a passing FILTERED IQ STRONG alert.';
+              console.log(`${this.config.asset} IQ trade filter blocked unfiltered entry:`, {
+                signature,
+                timestamp: alert.timestamp,
+                timestampNl: alert.timestampNl,
+                reason: result.tradeSkipped
+              });
+              delete state.pendingAlerts[signature];
+              this.addBenchmark(state, alert, signature, { tradeOutcome: result.tradeSkipped });
+              continue;
+            }
             await this.executeAlert(state, alert, signature, result);
             delete state.pendingAlerts[signature];
             this.addBenchmark(state, alert, signature, { tradeOutcome: result.tradePlaced ? 'PLACED' : result.tradeSkipped || 'SKIPPED' });
@@ -1440,6 +1463,21 @@ export class OpenLiquidityV2EthTradeMonitor {
           const storedBenchmark = (state.benchmarkRecords || []).find((record) => record.signature === signature);
           const causalCoinGlass = storedBenchmark?.coinGlass || coinGlassBenchmark(alert, this.config.coinGlass);
           const impulseQuality = await this.impulseQuality(alert, review, causalCoinGlass);
+          const impulseTradeGate = intrusionIqTradeDecision(impulseQuality, review.status === 'PASS');
+          let forwardHurdle: IntrusionForwardHurdle | undefined;
+          if (review.status !== 'PENDING') {
+            const closedPrices = Array.isArray(review.candleCloses)
+              ? review.candleCloses.map(Number).filter(Number.isFinite)
+              : [];
+            forwardHurdle = await evaluateIntrusionForwardHurdle({
+              symbol: this.config.symbol,
+              direction: mapDirectionFromAlert(alert),
+              referencePrice: closedPrices[closedPrices.length - 1] || Number(alert.price),
+              review,
+              coinGlassSnapshot: this.config.coinGlass?.snapshot(),
+              dataCutoffAt: String(review.delayCutoffAt || nowNlIso())
+            });
+          }
           if (review.status !== 'PENDING') {
             try {
               recordIntrusionTheList({
@@ -1452,6 +1490,7 @@ export class OpenLiquidityV2EthTradeMonitor {
                 delayCutoffAt: String(review.delayCutoffAt || nowNlIso()),
                 filteredStatus: review.status,
                 impulseQuality,
+                forwardHurdle,
                 candleReview: review,
                 coinGlass: causalCoinGlass
               });
@@ -1466,18 +1505,20 @@ export class OpenLiquidityV2EthTradeMonitor {
             filtered: review.status === 'PASS',
             candleReview: review,
             coinGlass: causalCoinGlass,
-            impulseQuality
+            impulseQuality,
+            impulseTradeGate,
+            forwardHurdle
           });
           if (review.status === 'PENDING') continue;
           if (review.status === 'PASS') {
             if (!filteredSent.has(signature) && smtp) {
               const sent = await sendEmailBestEffort(
                 smtp,
-                `FILTERED ${this.config.asset} ${sideCounts(alert)} | ${impulseQuality.headline} | ${alert.timestampNl}`,
-                filteredAlertBody(alert, this.config.symbol, review).replace(
+                `FILTERED ${this.config.asset} ${sideCounts(alert)} | ${forwardHurdle?.headline || 'HURDLE DATA GAP'} | ${impulseQuality.headline} | ${alert.timestampNl}`,
+                `${filteredAlertBody(alert, this.config.symbol, review).replace(
                   /^FILTERED Decentrader/,
                   `FILTERED ${this.config.asset} Public Perp V2`
-                )
+                )}\n\nIQ trade gate: ${impulseTradeGate.allowed ? 'ALLOWED' : 'BLOCKED'} - ${impulseTradeGate.reason}\n\n${forwardHurdle ? forwardHurdleBody(forwardHurdle) : 'Forward hurdle scan unavailable.'}`
               );
               if (sent.sent) {
                 const sentAt = nowNlIso();
@@ -1486,12 +1527,35 @@ export class OpenLiquidityV2EthTradeMonitor {
                 result.emailSentCount += 1;
               }
             }
+            if (!impulseTradeGate.allowed) {
+              result.tradeSkipped = impulseTradeGate.reason;
+              console.log(`${this.config.asset} IQ trade filter blocked entry:`, {
+                signature,
+                timestamp: alert.timestamp,
+                timestampNl: alert.timestampNl,
+                impulseQuality,
+                impulseTradeGate
+              });
+              this.addBenchmark(state, alert, signature, {
+                filtered: true,
+                candleReview: review,
+                coinGlass: causalCoinGlass,
+                impulseQuality,
+                impulseTradeGate,
+                forwardHurdle,
+                tradeOutcome: result.tradeSkipped
+              });
+              delete state.pendingAlerts[signature];
+              continue;
+            }
             await this.executeAlert(state, alert, signature, result);
             this.addBenchmark(state, alert, signature, {
               filtered: true,
               candleReview: review,
               coinGlass: causalCoinGlass,
               impulseQuality,
+              impulseTradeGate,
+              forwardHurdle,
               tradeOutcome: result.tradePlaced ? 'PLACED' : result.tradeSkipped || 'SKIPPED'
             });
           }

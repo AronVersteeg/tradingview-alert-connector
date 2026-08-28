@@ -7,6 +7,7 @@ import {
 } from './decentralizedDomCollector';
 import { DecentraderDelayRecord } from './decentraderDelayHistory';
 import type { IntrusionImpulseQuality } from './intrusionImpulseQuality';
+import type { IntrusionForwardHurdle } from './intrusionForwardHurdle';
 
 type Direction = 'long' | 'short';
 type CandleColor = 'green' | 'red' | 'flat' | 'unknown';
@@ -72,6 +73,7 @@ type StudyAlert = {
   }>;
   intrusionCandleReview?: any;
   impulseQuality?: IntrusionImpulseQuality;
+  forwardHurdle?: IntrusionForwardHurdle;
 };
 
 type CoinGlassObservation = {
@@ -208,6 +210,7 @@ export type IntrusionDomStudyRecord = {
     firstVolumeDeltaMismatchTimestamp?: string;
   };
   impulseQuality?: IntrusionImpulseQuality;
+  forwardHurdle?: IntrusionForwardHurdle;
   dom: {
     pre1h?: IntrusionDomWindow;
     pre2h?: IntrusionDomWindow;
@@ -988,6 +991,7 @@ export function refreshIntrusionDomStudy(input: {
       alert.intrusionCandleReview || existing?.candleReview
     );
     record.impulseQuality = alert.impulseQuality || record.impulseQuality;
+    record.forwardHurdle = alert.forwardHurdle || record.forwardHurdle;
     bySignature.set(signature, record);
     if (!existing) refreshSignatures.add(signature);
   }
@@ -1238,6 +1242,7 @@ export function intrusionDomStudySnapshot(): any {
       filteredEmailSentAt: record.filteredEmailSentAt,
       candleReview: record.candleReview,
       impulseQuality: record.impulseQuality,
+      forwardHurdle: record.forwardHurdle,
       pre1h: record.dom.pre1h,
       pre2h: record.dom.pre2h,
       pre4h: record.dom.pre4h,

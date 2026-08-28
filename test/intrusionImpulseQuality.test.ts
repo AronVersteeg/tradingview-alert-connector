@@ -1,5 +1,9 @@
 import { DomMinuteRecord, DomVenueMinute } from '../src/services/decentralizedDomCollector';
-import { evaluateIntrusionImpulseQuality } from '../src/services/intrusionImpulseQuality';
+import {
+  INTRUSION_IQ_TRADE_FILTER_ENV,
+  evaluateIntrusionImpulseQuality,
+  intrusionIqTradeDecision
+} from '../src/services/intrusionImpulseQuality';
 
 function venueMinute(mid: number): DomVenueMinute {
   return {
@@ -29,6 +33,13 @@ function minuteRecord(startMinute: number): DomMinuteRecord {
 }
 
 describe('intrusion impulse quality v2', () => {
+  const previousIqGate = process.env[INTRUSION_IQ_TRADE_FILTER_ENV];
+
+  afterEach(() => {
+    if (previousIqGate === undefined) delete process.env[INTRUSION_IQ_TRADE_FILTER_ENV];
+    else process.env[INTRUSION_IQ_TRADE_FILTER_ENV] = previousIqGate;
+  });
+
   const review = {
     status: 'PASS',
     delayCutoffAt: '2026-08-19T20:20:00.000Z',
@@ -99,5 +110,22 @@ describe('intrusion impulse quality v2', () => {
       }
     });
     expect(result.label).toBe('IQ DATA GAP');
+  });
+
+  test('allows only a passing filtered IQ STRONG alert when the gate is enabled', () => {
+    process.env[INTRUSION_IQ_TRADE_FILTER_ENV] = 'true';
+
+    expect(intrusionIqTradeDecision({ label: 'IQ STRONG' }, true).allowed).toBe(true);
+    expect(intrusionIqTradeDecision({ label: 'IQ WEAK' }, true).allowed).toBe(false);
+    expect(intrusionIqTradeDecision({ label: 'IQ DATA GAP' }, true).allowed).toBe(false);
+    expect(intrusionIqTradeDecision({ label: 'IQ STRONG' }, false).allowed).toBe(false);
+  });
+
+  test('keeps IQ observe-only when the gate is disabled', () => {
+    process.env[INTRUSION_IQ_TRADE_FILTER_ENV] = 'false';
+
+    const decision = intrusionIqTradeDecision({ label: 'IQ WEAK' }, true);
+    expect(decision.enabled).toBe(false);
+    expect(decision.allowed).toBe(true);
   });
 });

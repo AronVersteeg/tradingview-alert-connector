@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import type { IntrusionImpulseQuality } from './intrusionImpulseQuality';
+import type { IntrusionForwardHurdle } from './intrusionForwardHurdle';
 
 export type IntrusionUserLabel = 'STRONG' | 'WEAK';
 
@@ -47,6 +48,7 @@ export type IntrusionTheListRecord = {
   automaticLabel: IntrusionImpulseQuality['label'];
   selectedMetric: 'OI_FLUSH_PCT';
   impulseQuality: IntrusionImpulseQuality;
+  forwardHurdle?: IntrusionForwardHurdle;
   binance?: BinanceDelayAnalytics;
   candleReview?: any;
   coinGlass?: any;
@@ -259,6 +261,24 @@ const SEED_RECORDS: IntrusionTheListRecord[] = [
     market: 'ZEC-USD', symbol: 'ZECUSDT', asset: 'ZEC', timestamp: '2026-08-25 19:00:00',
     timestampNl: '25-08-2026 21:00 NL', cutoff: '2026-08-25T21:00:56.096Z', direction: 'short',
     userLabel: 'WEAK', contractChangePct: -1.3886, usdChangePct: -4.3645, samples: 25,
+    note: 'User-confirmed false impulse.'
+  }),
+  seedRecord({
+    market: 'SOL-USD', symbol: 'SOLUSDT', asset: 'SOL', timestamp: '2026-08-27 08:00:00',
+    timestampNl: '27-08-2026 10:00 NL', cutoff: '2026-08-27T09:52:24.813Z', direction: 'long',
+    userLabel: 'WEAK', contractChangePct: 2.92136, usdChangePct: 0, samples: 23,
+    note: 'User-confirmed false impulse.'
+  }),
+  seedRecord({
+    market: 'ETH-USD', symbol: 'ETHUSDT', asset: 'ETH', timestamp: '2026-08-27 09:00:00',
+    timestampNl: '27-08-2026 11:00 NL', cutoff: '2026-08-27T10:49:29.010Z', direction: 'long',
+    userLabel: 'WEAK', contractChangePct: -2.36159, usdChangePct: 0, samples: 22,
+    note: 'User-confirmed false impulse.'
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-08-28 09:00:00',
+    timestampNl: '28-08-2026 11:00 NL', cutoff: '2026-08-28T10:23:46.578Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 0.371768, usdChangePct: 0.479232, samples: 17,
     note: 'User-confirmed false impulse.'
   })
 ];
