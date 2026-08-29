@@ -20,13 +20,24 @@ describe('The List', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test('starts with the eight user-labeled reference cases', () => {
+  test('starts with the nine user-labeled reference cases', () => {
     const snapshot = intrusionTheListSnapshot();
     expect(snapshot.methodology.selectedMetric).toBe('OI_FLUSH_PCT');
     expect(snapshot.methodology.strongWhenContractChangePctLte).toBe(-1.8);
-    expect(snapshot.methodology.labeledSampleSize).toBe(8);
-    expect(snapshot.records.filter((record) => record.userLabel === 'STRONG')).toHaveLength(2);
+    expect(snapshot.methodology.labeledSampleSize).toBe(9);
+    expect(snapshot.records.filter((record) => record.userLabel === 'STRONG')).toHaveLength(3);
     expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(6);
+
+    const moderateStrong = snapshot.records
+      .find((record) => record.key === 'INJ-USD|2026-08-28 16:00:00');
+    expect(moderateStrong).toMatchObject({
+      automaticLabel: 'IQ STRONG',
+      userLabel: 'STRONG',
+      direction: 'short',
+      delayCutoffAt: '2026-08-28T17:47:52.761Z'
+    });
+    expect(moderateStrong?.impulseQuality.openInterest?.contractChangePct).toBeCloseTo(-1.846121, 6);
+    expect(moderateStrong?.userLabelNote).toContain('small profit');
   });
 
   test('updates live diagnostics without overwriting a user label', () => {

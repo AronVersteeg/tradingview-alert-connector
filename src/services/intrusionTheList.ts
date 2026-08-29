@@ -280,6 +280,12 @@ const SEED_RECORDS: IntrusionTheListRecord[] = [
     timestampNl: '28-08-2026 11:00 NL', cutoff: '2026-08-28T10:23:46.578Z', direction: 'short',
     userLabel: 'WEAK', contractChangePct: 0.371768, usdChangePct: 0.479232, samples: 17,
     note: 'User-confirmed false impulse.'
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-08-28 16:00:00',
+    timestampNl: '28-08-2026 18:00 NL', cutoff: '2026-08-28T17:47:52.761Z', direction: 'short',
+    userLabel: 'STRONG', contractChangePct: -1.846121, usdChangePct: -4.089121, samples: 22,
+    note: 'User-confirmed true impulse; strong but not extremely strong. Stopped out 29-08-2026 16:00 NL with a small profit.'
   })
 ];
 
