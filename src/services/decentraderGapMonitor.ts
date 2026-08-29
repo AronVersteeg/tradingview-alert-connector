@@ -36,6 +36,7 @@ import {
   evaluateIntrusionForwardHurdle,
   forwardHurdleBody
 } from './intrusionForwardHurdle';
+import { coinGlassRefreshWaitMs } from './coinGlassRefreshPolicy';
 import tls from 'tls';
 import zlib from 'zlib';
 import { AlertObject } from '../types';
@@ -238,6 +239,8 @@ export type CoinGlassWhaleSnapshot = {
   strongUsd: number;
   fetchedAt?: string;
   lastAttemptAt?: string;
+  consecutiveFailures?: number;
+  nextAttemptAt?: string;
   error?: string;
   levels: CoinGlassWhaleLevel[];
   history: CoinGlassWhaleHistoryLevel[];
@@ -984,13 +987,15 @@ const coinGlassWhaleCache: {
   levels: CoinGlassWhaleLevel[];
   fetchedAt?: number;
   lastAttemptAt?: number;
+  consecutiveFailures: number;
   error?: string;
   symbol?: string;
   interval?: string;
   minUsd?: number;
 } = {
   enabled: false,
-  levels: []
+  levels: [],
+  consecutiveFailures: 0
 };
 let coinGlassWhaleFetchPromise: Promise<CoinGlassWhaleLevel[]> | null = null;
 const rsiStudyCache: {
@@ -1042,6 +1047,30 @@ function coinglassWhalePollMs(): number {
   const parsed = Number(process.env.COINGLASS_WHALE_POLL_MINUTES || process.env.DECENTRADER_GAP_POLL_MINUTES || 10);
   const minutes = Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
   return Math.max(60_000, minutes * 60_000);
+}
+
+function coinglassWhaleFailureBackoffBaseMs(): number {
+  const parsed = Number(process.env.COINGLASS_WHALE_FAILURE_BACKOFF_SECONDS || 60);
+  const seconds = Number.isFinite(parsed) && parsed > 0 ? parsed : 60;
+  return Math.floor(clamp(seconds, 15, 600) * 1_000);
+}
+
+function coinglassWhaleFailureBackoffMaxMs(): number {
+  const parsed = Number(process.env.COINGLASS_WHALE_FAILURE_BACKOFF_MAX_MINUTES || 10);
+  const minutes = Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+  return Math.floor(clamp(minutes, 1, 60) * 60_000);
+}
+
+function coinglassWhaleRefreshWaitMs(now = Date.now()): number {
+  return coinGlassRefreshWaitMs({
+    now,
+    fetchedAt: coinGlassWhaleCache.fetchedAt,
+    lastAttemptAt: coinGlassWhaleCache.lastAttemptAt,
+    consecutiveFailures: coinGlassWhaleCache.consecutiveFailures,
+    pollMs: coinglassWhalePollMs(),
+    failureBackoffBaseMs: coinglassWhaleFailureBackoffBaseMs(),
+    failureBackoffMaxMs: coinglassWhaleFailureBackoffMaxMs()
+  });
 }
 
 function coinglassWhaleHistoryRetentionHours(): number {
@@ -1127,6 +1156,7 @@ function coinglassWhaleSnapshot(): CoinGlassWhaleSnapshot {
   const history = enabled
     ? readCoinGlassWhaleHistory()
     : { levels: [] as CoinGlassWhaleHistoryLevel[], observations: [] as CoinGlassWhaleObservation[] };
+  const refreshWaitMs = coinglassWhaleRefreshWaitMs();
   return {
     enabled,
     source: 'coinglass',
@@ -1140,6 +1170,10 @@ function coinglassWhaleSnapshot(): CoinGlassWhaleSnapshot {
       : undefined,
     lastAttemptAt: coinGlassWhaleCache.lastAttemptAt
       ? new Date(coinGlassWhaleCache.lastAttemptAt).toISOString()
+      : undefined,
+    consecutiveFailures: coinGlassWhaleCache.consecutiveFailures,
+    nextAttemptAt: refreshWaitMs > 0
+      ? new Date(Date.now() + refreshWaitMs).toISOString()
       : undefined,
     error: coinGlassWhaleCache.error,
     levels: enabled ? coinGlassWhaleCache.levels : [],
@@ -1627,7 +1661,7 @@ async function refreshCoinGlassWhaleLevels(reason: string): Promise<CoinGlassWha
     coinGlassWhaleCache.interval === interval &&
     coinGlassWhaleCache.minUsd === minUsd;
 
-  if (cacheMatches && coinGlassWhaleCache.fetchedAt && now - coinGlassWhaleCache.fetchedAt < coinglassWhalePollMs()) {
+  if (cacheMatches && coinglassWhaleRefreshWaitMs(now) > 0) {
     return coinGlassWhaleCache.levels;
   }
 
@@ -1638,6 +1672,7 @@ async function refreshCoinGlassWhaleLevels(reason: string): Promise<CoinGlassWha
   coinGlassWhaleCache.symbol = symbol;
   coinGlassWhaleCache.interval = interval;
   coinGlassWhaleCache.minUsd = minUsd;
+  if (!cacheMatches) coinGlassWhaleCache.consecutiveFailures = 0;
 
   const refreshPromise = fetchCoinGlassWhaleLevelsViaWebSocket(
     symbol,
@@ -1648,6 +1683,7 @@ async function refreshCoinGlassWhaleLevels(reason: string): Promise<CoinGlassWha
     .then((levels) => {
       coinGlassWhaleCache.levels = levels;
       coinGlassWhaleCache.fetchedAt = Date.now();
+      coinGlassWhaleCache.consecutiveFailures = 0;
       coinGlassWhaleCache.error = undefined;
       const history = mergeCoinGlassWhaleHistory(levels);
       console.log('CoinGlass whale levels refreshed:', {
@@ -1662,12 +1698,15 @@ async function refreshCoinGlassWhaleLevels(reason: string): Promise<CoinGlassWha
     })
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
+      coinGlassWhaleCache.consecutiveFailures += 1;
       coinGlassWhaleCache.error = message;
       console.warn('CoinGlass whale levels refresh failed; using cached levels if available.', {
         reason,
         symbol,
         interval,
         minUsd,
+        consecutiveFailures: coinGlassWhaleCache.consecutiveFailures,
+        retryInSeconds: Math.ceil(coinglassWhaleRefreshWaitMs() / 1_000),
         error: message
       });
       return coinGlassWhaleCache.levels;

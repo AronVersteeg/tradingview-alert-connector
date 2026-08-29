@@ -49,6 +49,10 @@ export type IntrusionForwardHurdle = {
   };
   coinGlass?: {
     fetchedAt?: string;
+    ageMinutes?: number;
+    maxAgeMinutes: number;
+    stale: boolean;
+    freshnessError?: string;
     levelsConsidered: number;
     nearest?: HurdleCandidate;
   };
@@ -209,11 +213,36 @@ function coinGlassCandidate(input: {
   referencePrice: number;
   direction: Direction;
   horizonPct: number;
+  observedAt: string;
 }): IntrusionForwardHurdle['coinGlass'] | undefined {
   const snapshot = input.snapshot;
-  if (!snapshot || !Array.isArray(snapshot.levels)) return undefined;
+  if (!snapshot || snapshot.enabled === false || !Array.isArray(snapshot.levels)) return undefined;
+  const maxAgeMinutes = numberEnv('INTRUSION_FORWARD_HURDLE_COINGLASS_MAX_AGE_MINUTES', 15, 1, 120);
+  const observedAtMs = Date.parse(input.observedAt);
+  const fetchedAtMs = Date.parse(String(snapshot.fetchedAt || ''));
+  const ageMinutes = Number.isFinite(observedAtMs) && Number.isFinite(fetchedAtMs)
+    ? (observedAtMs - fetchedAtMs) / 60_000
+    : undefined;
+  const freshnessError = ageMinutes === undefined
+    ? 'CoinGlass snapshot has no valid fetchedAt timestamp.'
+    : ageMinutes < -1
+      ? 'CoinGlass snapshot was fetched after the hurdle observation time.'
+      : ageMinutes > maxAgeMinutes
+        ? `CoinGlass snapshot is ${ageMinutes.toFixed(1)} minutes old; maximum is ${maxAgeMinutes.toFixed(1)} minutes.`
+        : undefined;
+  if (freshnessError) {
+    return {
+      fetchedAt: snapshot.fetchedAt,
+      ageMinutes,
+      maxAgeMinutes,
+      stale: true,
+      freshnessError,
+      levelsConsidered: 0
+    };
+  }
+
   const expectedSide = input.direction === 'long' ? 'sell' : 'buy';
-  const now = Date.now();
+  const now = observedAtMs;
   const candidates: HurdleCandidate[] = snapshot.levels
     .filter((level: any) => String(level?.side || '').toLowerCase() === expectedSide)
     .map((level: any) => {
@@ -245,6 +274,9 @@ function coinGlassCandidate(input: {
     .sort((left: HurdleCandidate, right: HurdleCandidate) => left.distancePct - right.distancePct);
   return {
     fetchedAt: snapshot.fetchedAt,
+    ageMinutes,
+    maxAgeMinutes,
+    stale: false,
     levelsConsidered: candidates.length,
     nearest: candidates[0]
   };
@@ -281,40 +313,43 @@ export function classifyForwardHurdle(input: {
     snapshot: input.coinGlassSnapshot,
     referencePrice: input.referencePrice,
     direction: input.direction,
-    horizonPct
+    horizonPct,
+    observedAt
   });
-  const candidates = [binance?.nearestMaterial, coinGlass?.nearest].filter(Boolean) as HurdleCandidate[];
+  const usableCoinGlass = coinGlass && !coinGlass.stale ? coinGlass : undefined;
+  const candidates = [binance?.nearestMaterial, usableCoinGlass?.nearest].filter(Boolean) as HurdleCandidate[];
   let firstHurdle = candidates.sort((left, right) => left.distancePct - right.distancePct)[0];
 
-  if (binance?.nearestMaterial && coinGlass?.nearest) {
-    const distanceBetweenPct = Math.abs(binance.nearestMaterial.price - coinGlass.nearest.price) / input.referencePrice * 100;
+  if (binance?.nearestMaterial && usableCoinGlass?.nearest) {
+    const distanceBetweenPct = Math.abs(binance.nearestMaterial.price - usableCoinGlass.nearest.price) / input.referencePrice * 100;
     if (distanceBetweenPct <= binPct) {
       firstHurdle = {
-        price: coinGlass.nearest.price,
-        distancePct: Math.min(binance.nearestMaterial.distancePct, coinGlass.nearest.distancePct),
-        side: coinGlass.nearest.side,
+        price: usableCoinGlass.nearest.price,
+        distancePct: Math.min(binance.nearestMaterial.distancePct, usableCoinGlass.nearest.distancePct),
+        side: usableCoinGlass.nearest.side,
         source: 'combined',
         binanceUsd: binance.nearestMaterial.binanceUsd,
-        coinGlassUsd: coinGlass.nearest.coinGlassUsd,
-        effectiveUsd: Math.max(binance.nearestMaterial.binanceUsd, coinGlass.nearest.coinGlassUsd),
-        persistenceHours: coinGlass.nearest.persistenceHours
+        coinGlassUsd: usableCoinGlass.nearest.coinGlassUsd,
+        effectiveUsd: Math.max(binance.nearestMaterial.binanceUsd, usableCoinGlass.nearest.coinGlassUsd),
+        persistenceHours: usableCoinGlass.nearest.persistenceHours
       };
     }
   }
 
-  const source: IntrusionForwardHurdle['source'] = binance && coinGlass
+  const source: IntrusionForwardHurdle['source'] = binance && usableCoinGlass
     ? 'binance-futures-depth+coinglass'
-    : binance ? 'binance-futures-depth' : coinGlass ? 'coinglass' : 'none';
+    : binance ? 'binance-futures-depth' : usableCoinGlass ? 'coinglass' : 'none';
   const status: IntrusionForwardHurdle['status'] = firstHurdle
     ? firstHurdle.distancePct <= closeDistancePct ? 'CLOSE' : 'AHEAD'
     : source === 'none' ? 'DATA_GAP' : 'CLEAR';
-  const headline = status === 'CLOSE'
+  const baseHeadline = status === 'CLOSE'
     ? `HURDLE CLOSE @${priceLabel(firstHurdle!.price)}`
     : status === 'AHEAD'
       ? `HURDLE @${priceLabel(firstHurdle!.price)}`
       : status === 'CLEAR'
         ? 'NO CLOSE HURDLE'
         : 'HURDLE DATA GAP';
+  const headline = coinGlass?.stale ? `${baseHeadline} | CG STALE` : baseHeadline;
 
   return {
     version: 1,
@@ -387,6 +422,11 @@ export async function evaluateIntrusionForwardHurdle(input: {
 
 export function forwardHurdleBody(hurdle: IntrusionForwardHurdle): string {
   const level = hurdle.firstHurdle;
+  const coinGlassFreshness = !hurdle.coinGlass
+    ? 'not configured'
+    : hurdle.coinGlass.stale
+      ? `STALE (${hurdle.coinGlass.freshnessError || 'snapshot rejected'})`
+      : `${hurdle.coinGlass.ageMinutes?.toFixed(1) || '0.0'} min old`;
   return [
     'Forward hurdle scan (observe-only)',
     `Result: ${hurdle.headline}`,
@@ -394,6 +434,7 @@ export function forwardHurdleBody(hurdle: IntrusionForwardHurdle): string {
     `First hurdle: ${level ? `${priceLabel(level.price)} (${level.distancePct.toFixed(2)}% ahead)` : '-'}`,
     `Visible Binance depth: ${level ? compactUsd(level.binanceUsd) : '-'}`,
     `CoinGlass wall: ${level ? compactUsd(level.coinGlassUsd) : '-'}`,
+    `CoinGlass freshness: ${coinGlassFreshness}`,
     `Directional Delay flow: ${compactUsd(hurdle.directionalDelayFlowUsd)}`,
     `Flow / hurdle: ${hurdle.flowToHurdleRatio === undefined ? '-' : `${hurdle.flowToHurdleRatio.toFixed(2)}x`}`,
     `Source: ${hurdle.source}`,

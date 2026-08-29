@@ -48,4 +48,49 @@ describe('intrusion forward hurdle scanner', () => {
     expect(result.directionalDelayFlowUsd).toBe(2_000);
     expect(result.flowToHurdleRatio).toBeCloseTo(0.4);
   });
+
+  test('rejects stale CoinGlass walls and keeps current Binance depth authoritative', () => {
+    const result = classifyForwardHurdle({
+      symbol: 'BTCUSDT',
+      direction: 'long',
+      referencePrice: 100,
+      review: { volumeDeltaQuote: [1_000] },
+      observedAt: '2026-08-28T12:00:00.000Z',
+      depthPayload: {
+        lastUpdateId: 456,
+        asks: []
+      },
+      coinGlassSnapshot: {
+        enabled: true,
+        fetchedAt: '2026-08-28T10:00:00.000Z',
+        minUsd: 1_000,
+        levels: [{ side: 'sell', price: 100.5, volumeUsd: 50_000 }]
+      }
+    });
+
+    expect(result.source).toBe('binance-futures-depth');
+    expect(result.status).toBe('CLEAR');
+    expect(result.headline).toBe('NO CLOSE HURDLE | CG STALE');
+    expect(result.coinGlass).toMatchObject({ stale: true, levelsConsidered: 0 });
+    expect(result.firstHurdle).toBeUndefined();
+  });
+
+  test('reports a data gap when stale CoinGlass is the only hurdle source', () => {
+    const result = classifyForwardHurdle({
+      symbol: 'ETHUSDT',
+      direction: 'short',
+      referencePrice: 100,
+      observedAt: '2026-08-28T12:00:00.000Z',
+      coinGlassSnapshot: {
+        enabled: true,
+        fetchedAt: '2026-08-28T11:00:00.000Z',
+        minUsd: 1_000,
+        levels: [{ side: 'buy', price: 99.5, volumeUsd: 50_000 }]
+      }
+    });
+
+    expect(result.status).toBe('DATA_GAP');
+    expect(result.source).toBe('none');
+    expect(result.headline).toBe('HURDLE DATA GAP | CG STALE');
+  });
 });

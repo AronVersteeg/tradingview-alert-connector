@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { coinGlassRefreshWaitMs } from './coinGlassRefreshPolicy';
 
 import {
   CoinGlassWhaleHistoryLevel,
@@ -96,6 +97,7 @@ export class CoinGlassEthWhaleCollector {
   private historyUpdatedAt: string | undefined;
   private fetchedAt: number | undefined;
   private lastAttemptAt: number | undefined;
+  private consecutiveFailures = 0;
   private error: string | undefined;
   private observationProvider: (() => Promise<ObservationContext>) | undefined;
 
@@ -153,6 +155,34 @@ export class CoinGlassEthWhaleCollector {
       numberEnv('COINGLASS_WHALE_POLL_MINUTES', 10)
     );
     return Math.max(60_000, Math.max(1, minutes) * 60_000);
+  }
+
+  private failureBackoffBaseMs(): number {
+    const seconds = numberEnv(
+      this.env('FAILURE_BACKOFF_SECONDS'),
+      numberEnv('COINGLASS_WHALE_FAILURE_BACKOFF_SECONDS', 60)
+    );
+    return Math.max(15_000, Math.min(600_000, seconds * 1_000));
+  }
+
+  private failureBackoffMaxMs(): number {
+    const minutes = numberEnv(
+      this.env('FAILURE_BACKOFF_MAX_MINUTES'),
+      numberEnv('COINGLASS_WHALE_FAILURE_BACKOFF_MAX_MINUTES', 10)
+    );
+    return Math.max(60_000, Math.min(3_600_000, minutes * 60_000));
+  }
+
+  private refreshWaitMs(now = Date.now()): number {
+    return coinGlassRefreshWaitMs({
+      now,
+      fetchedAt: undefined,
+      lastAttemptAt: this.lastAttemptAt,
+      consecutiveFailures: this.consecutiveFailures,
+      pollMs: 0,
+      failureBackoffBaseMs: this.failureBackoffBaseMs(),
+      failureBackoffMaxMs: this.failureBackoffMaxMs()
+    });
   }
 
   private retentionHours(): number {
@@ -272,6 +302,7 @@ export class CoinGlassEthWhaleCollector {
   async refresh(reason: string): Promise<void> {
     if (!this.enabled()) return;
     if (this.refreshPromise) return this.refreshPromise;
+    if (this.refreshWaitMs() > 0) return;
     this.refreshPromise = this.refreshInternal(reason).finally(() => {
       this.refreshPromise = undefined;
     });
@@ -289,6 +320,7 @@ export class CoinGlassEthWhaleCollector {
       );
       this.levels = levels;
       this.fetchedAt = Date.now();
+      this.consecutiveFailures = 0;
       this.error = undefined;
       this.mergeHistory(levels);
       if (this.observationProvider) {
@@ -311,10 +343,13 @@ export class CoinGlassEthWhaleCollector {
         history: this.history.length
       });
     } catch (error) {
+      this.consecutiveFailures += 1;
       this.error = error instanceof Error ? error.message : String(error);
       console.warn(`CoinGlass ${this.config.asset} whale levels refresh failed; using cached levels if available.`, {
         reason,
         symbol: this.symbol(),
+        consecutiveFailures: this.consecutiveFailures,
+        retryInSeconds: Math.ceil(this.refreshWaitMs() / 1_000),
         error: this.error
       });
     }
@@ -362,6 +397,7 @@ export class CoinGlassEthWhaleCollector {
 
   snapshot(): CoinGlassWhaleSnapshot {
     this.load();
+    const refreshWaitMs = this.refreshWaitMs();
     return {
       enabled: this.enabled(),
       source: 'coinglass',
@@ -372,6 +408,10 @@ export class CoinGlassEthWhaleCollector {
       strongUsd: this.strongUsd(),
       fetchedAt: this.fetchedAt ? new Date(this.fetchedAt).toISOString() : undefined,
       lastAttemptAt: this.lastAttemptAt ? new Date(this.lastAttemptAt).toISOString() : undefined,
+      consecutiveFailures: this.consecutiveFailures,
+      nextAttemptAt: refreshWaitMs > 0
+        ? new Date(Date.now() + refreshWaitMs).toISOString()
+        : undefined,
       error: this.error,
       levels: this.levels,
       history: this.history,
