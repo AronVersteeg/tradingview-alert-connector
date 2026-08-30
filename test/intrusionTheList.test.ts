@@ -20,13 +20,13 @@ describe('The List', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test('starts with the nine user-labeled reference cases', () => {
+  test('starts with the ten user-labeled reference cases', () => {
     const snapshot = intrusionTheListSnapshot();
     expect(snapshot.methodology.selectedMetric).toBe('OI_FLUSH_PCT');
     expect(snapshot.methodology.strongWhenContractChangePctLte).toBe(-1.8);
-    expect(snapshot.methodology.labeledSampleSize).toBe(9);
+    expect(snapshot.methodology.labeledSampleSize).toBe(10);
     expect(snapshot.records.filter((record) => record.userLabel === 'STRONG')).toHaveLength(3);
-    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(6);
+    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(7);
 
     const moderateStrong = snapshot.records
       .find((record) => record.key === 'INJ-USD|2026-08-28 16:00:00');
@@ -38,6 +38,44 @@ describe('The List', () => {
     });
     expect(moderateStrong?.impulseQuality.openInterest?.contractChangePct).toBeCloseTo(-1.846121, 6);
     expect(moderateStrong?.userLabelNote).toContain('small profit');
+  });
+
+  test('attaches the ZEC false outcome without replacing stored diagnostics or duplicating the case', () => {
+    const key = 'ZEC-USD|2026-08-29 14:00:00';
+    const seed = intrusionTheListSnapshot().records.find((record) => record.key === key)!;
+    expect(seed).toMatchObject({
+      automaticLabel: 'IQ WEAK', userLabel: 'WEAK', direction: 'long', filteredStatus: 'PASS',
+      timestampNl: '29-08-2026 16:00 NL', delayCutoffAt: '2026-08-29T15:04:21.006Z'
+    });
+    expect(seed.impulseQuality.openInterest).toMatchObject({
+      contractChangePct: 2.6769214175664358, usdChangePct: 6.241772732132067, samples: 13
+    });
+    const storedQuality = {
+      ...seed.impulseQuality,
+      openInterest: {
+        ...seed.impulseQuality.openInterest!,
+        fetchedAt: '2026-08-29T15:04:21.607Z',
+        startContractOpenInterest: 542249.089,
+        endContractOpenInterest: 556764.671
+      }
+    };
+    const candleReview = { status: 'PASS', candleColors: ['green'], volumeDeltaColors: ['green'] };
+    fs.writeFileSync(process.env.INTRUSION_THE_LIST_FILE!, JSON.stringify({ records: [{
+      ...seed, userLabel: undefined, userLabelNote: undefined,
+      impulseQuality: storedQuality, candleReview
+    }] }));
+
+    for (let read = 0; read < 2; read++) {
+      const snapshot = intrusionTheListSnapshot();
+      const matches = snapshot.records.filter((record) => record.key === key);
+      expect(matches).toHaveLength(1);
+      expect(matches[0].userLabel).toBe('WEAK');
+      expect(matches[0].userLabelNote).toContain('User-confirmed false impulse');
+      expect(matches[0].automaticLabel).toBe('IQ WEAK');
+      expect(matches[0].impulseQuality).toEqual(storedQuality);
+      expect(matches[0].candleReview).toEqual(candleReview);
+      expect(snapshot.methodology.labeledSampleSize).toBe(10);
+    }
   });
 
   test('updates live diagnostics without overwriting a user label', () => {

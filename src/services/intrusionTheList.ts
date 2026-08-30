@@ -286,6 +286,12 @@ const SEED_RECORDS: IntrusionTheListRecord[] = [
     timestampNl: '28-08-2026 18:00 NL', cutoff: '2026-08-28T17:47:52.761Z', direction: 'short',
     userLabel: 'STRONG', contractChangePct: -1.846121, usdChangePct: -4.089121, samples: 22,
     note: 'User-confirmed true impulse; strong but not extremely strong. Stopped out 29-08-2026 16:00 NL with a small profit.'
+  }),
+  seedRecord({
+    market: 'ZEC-USD', symbol: 'ZECUSDT', asset: 'ZEC', timestamp: '2026-08-29 14:00:00',
+    timestampNl: '29-08-2026 16:00 NL', cutoff: '2026-08-29T15:04:21.006Z', direction: 'long',
+    userLabel: 'WEAK', contractChangePct: 2.6769214175664358, usdChangePct: 6.241772732132067, samples: 13,
+    note: 'User-confirmed false impulse. Original stored Delay assessment: candle/delta PASS and IQ WEAK with rising contract OI.'
   })
 ];
 
