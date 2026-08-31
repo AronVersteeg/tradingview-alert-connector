@@ -20,13 +20,13 @@ describe('The List', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test('starts with the ten user-labeled reference cases', () => {
+  test('starts with the eleven user-labeled reference cases', () => {
     const snapshot = intrusionTheListSnapshot();
     expect(snapshot.methodology.selectedMetric).toBe('OI_FLUSH_PCT');
     expect(snapshot.methodology.strongWhenContractChangePctLte).toBe(-1.8);
-    expect(snapshot.methodology.labeledSampleSize).toBe(10);
+    expect(snapshot.methodology.labeledSampleSize).toBe(11);
     expect(snapshot.records.filter((record) => record.userLabel === 'STRONG')).toHaveLength(3);
-    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(7);
+    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(8);
 
     const moderateStrong = snapshot.records
       .find((record) => record.key === 'INJ-USD|2026-08-28 16:00:00');
@@ -38,6 +38,20 @@ describe('The List', () => {
     });
     expect(moderateStrong?.impulseQuality.openInterest?.contractChangePct).toBeCloseTo(-1.846121, 6);
     expect(moderateStrong?.userLabelNote).toContain('small profit');
+  });
+
+  test('records the August 30 ZEC false outcome separately from its original IQ assessment', () => {
+    const records = intrusionTheListSnapshot().records
+      .filter((record) => record.key === 'ZEC-USD|2026-08-30 12:00:00');
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      userLabel: 'WEAK', automaticLabel: 'IQ WEAK', direction: 'long', filteredStatus: 'PASS',
+      timestampNl: '30-08-2026 14:00 NL', delayCutoffAt: '2026-08-30T13:14:17.895Z'
+    });
+    expect(records[0].userLabelNote).toContain('User-confirmed false impulse');
+    expect(records[0].impulseQuality.openInterest).toMatchObject({
+      contractChangePct: 0.4456443352116146, usdChangePct: 1.3486931446338835, samples: 15
+    });
   });
 
   test('attaches the ZEC false outcome without replacing stored diagnostics or duplicating the case', () => {
@@ -74,7 +88,7 @@ describe('The List', () => {
       expect(matches[0].automaticLabel).toBe('IQ WEAK');
       expect(matches[0].impulseQuality).toEqual(storedQuality);
       expect(matches[0].candleReview).toEqual(candleReview);
-      expect(snapshot.methodology.labeledSampleSize).toBe(10);
+      expect(snapshot.methodology.labeledSampleSize).toBe(11);
     }
   });
 
