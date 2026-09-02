@@ -38,6 +38,7 @@ import {
 } from '../services/openLiquidityV2EthTradeMonitor';
 import { buildSnoekScout } from '../services/snoekScout';
 import { getSnoekCurrent } from '../services/snoekCurrent';
+import { getSnoekRijnland } from '../services/snoekRijnland';
 import { getSnoekStructures } from '../services/snoekStructures';
 import { getSnoekWeather } from '../services/snoekWeather';
 import { intrusionTheListSnapshot } from '../services/intrusionTheList';
@@ -332,6 +333,19 @@ router.get('/snoek/api/current', async (_req, res) => {
     res.send(await getSnoekCurrent());
   } catch (error) {
     console.error('Snoek current lookup failed:', error);
+    res.status(502).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.get('/snoek/api/rijnland', async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(await getSnoekRijnland());
+  } catch (error) {
+    console.error('Snoek Rijnland lookup failed:', error);
     res.status(502).send({
       ok: false,
       error: error instanceof Error ? error.message : String(error)
