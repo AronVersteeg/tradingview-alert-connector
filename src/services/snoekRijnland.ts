@@ -1,3 +1,5 @@
+import { getSnoekStructures, SnoekStructure } from './snoekStructures';
+
 export type RijnlandTemperatureReading = {
   depthM: number | null;
   temperatureC: number;
@@ -27,11 +29,14 @@ export type RijnlandPumpStatus = {
   lat: number;
   lon: number;
   active: boolean | null;
+  hasLiveStatus: boolean;
   status: string;
-  flowM3s: number;
-  flowSignedM3s: number;
-  flowDirection: 'afvoer' | 'aanvoer' | 'geen';
+  flowM3s: number | null;
+  flowSignedM3s: number | null;
+  flowDirection: 'afvoer' | 'aanvoer' | 'geen' | 'onbekend';
   featureIdentifier: string;
+  pdokId: string | null;
+  statusSource: 'rijnland-live' | 'pdok-only';
   chartUrl: string;
   currentNote: string;
   sourceUpdatedAt: string | null;
@@ -251,11 +256,14 @@ export function parseRijnlandPumpFeatures(features: ArcGisFeature[], updatedAt: 
       lat,
       lon,
       active,
+      hasLiveStatus: true,
       status,
       flowM3s: round(Math.abs(signedFlow), 3),
       flowSignedM3s: round(signedFlow, 3),
       flowDirection,
       featureIdentifier,
+      pdokId: null,
+      statusSource: 'rijnland-live',
       chartUrl: String(attributes.chartUrl || ''),
       currentNote: active === true
         ? 'Gemaal is actief: controleer de uitstroom, stroomnaad en luwte direct ernaast.'
@@ -268,15 +276,84 @@ export function parseRijnlandPumpFeatures(features: ArcGisFeature[], updatedAt: 
   return pumps.sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, 'nl'));
 }
 
+function normalizedCode(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+export function mergeRijnlandPumpCoverage(
+  livePumps: RijnlandPumpStatus[],
+  pdokStructures: SnoekStructure[]
+): RijnlandPumpStatus[] {
+  const liveByCode = new Map(
+    livePumps.map((pump) => [normalizedCode(pump.featureIdentifier), pump])
+  );
+  const matchedLiveIds = new Set<string>();
+  const merged = pdokStructures
+    .filter((structure) => structure.sourceLayer === 'gemaal')
+    .map((structure) => {
+      const sourceCode = String(structure.sourceCode || '').trim();
+      const live = sourceCode ? liveByCode.get(normalizedCode(sourceCode)) : undefined;
+      if (live) {
+        matchedLiveIds.add(live.id);
+        return {
+          ...live,
+          id: `rijnland-pump-pdok-${structure.id}`,
+          name: structure.name,
+          lat: structure.lat,
+          lon: structure.lon,
+          featureIdentifier: sourceCode,
+          pdokId: structure.id
+        };
+      }
+
+      return {
+        id: `rijnland-pump-pdok-${structure.id}`,
+        name: structure.name,
+        lat: structure.lat,
+        lon: structure.lon,
+        active: null,
+        hasLiveStatus: false,
+        status: 'onbekend',
+        flowM3s: null,
+        flowSignedM3s: null,
+        flowDirection: 'onbekend' as const,
+        featureIdentifier: sourceCode,
+        pdokId: structure.id,
+        statusSource: 'pdok-only' as const,
+        chartUrl: '',
+        currentNote: 'Dit gemaal staat in PDOK, maar de gekoppelde Rijnland-bron publiceert hiervoor geen actuele AAN/UIT-status.',
+        sourceUpdatedAt: null
+      };
+    });
+
+  livePumps.forEach((pump) => {
+    if (!matchedLiveIds.has(pump.id)) merged.push(pump);
+  });
+
+  return merged.sort((a, b) => {
+    const statusOrder = (item: RijnlandPumpStatus) => item.active === true ? 0 : item.active === false ? 1 : 2;
+    return statusOrder(a) - statusOrder(b) || a.name.localeCompare(b.name, 'nl');
+  });
+}
+
 export async function getSnoekRijnland(now = new Date()): Promise<SnoekRijnlandResult> {
   if (cache && cache.expiresAt > now.getTime()) return cache.result;
 
   const errors: string[] = [];
   let temperatureProfiles: RijnlandTemperatureProfile[] = [];
-  let pumps: RijnlandPumpStatus[] = [];
-  const [temperatureResult, pumpResult] = await Promise.allSettled([
+  let livePumps: RijnlandPumpStatus[] = [];
+  let pdokPumps: SnoekStructure[] = [];
+  const [temperatureResult, pumpResult, pdokResult] = await Promise.allSettled([
     fetchLayer(TEMPERATURE_LAYER),
-    fetchLayer(PUMP_STATUS_LAYER)
+    fetchLayer(PUMP_STATUS_LAYER),
+    getSnoekStructures({
+      west: 4.47,
+      south: 52.355,
+      east: 4.82,
+      north: 52.505,
+      layers: 'gemaal',
+      limit: 30
+    })
   ]);
 
   if (temperatureResult.status === 'fulfilled') {
@@ -285,10 +362,16 @@ export async function getSnoekRijnland(now = new Date()): Promise<SnoekRijnlandR
     errors.push(`Temperatuurlaag: ${temperatureResult.reason instanceof Error ? temperatureResult.reason.message : String(temperatureResult.reason)}`);
   }
   if (pumpResult.status === 'fulfilled') {
-    pumps = parseRijnlandPumpFeatures(pumpResult.value.features, pumpResult.value.updatedAt);
+    livePumps = parseRijnlandPumpFeatures(pumpResult.value.features, pumpResult.value.updatedAt);
   } else {
     errors.push(`Gemaalstatuslaag: ${pumpResult.reason instanceof Error ? pumpResult.reason.message : String(pumpResult.reason)}`);
   }
+  if (pdokResult.status === 'fulfilled') {
+    pdokPumps = pdokResult.value.structures;
+  } else {
+    errors.push(`PDOK gemaallaag: ${pdokResult.reason instanceof Error ? pdokResult.reason.message : String(pdokResult.reason)}`);
+  }
+  const pumps = pdokPumps.length ? mergeRijnlandPumpCoverage(livePumps, pdokPumps) : livePumps;
   if (!temperatureProfiles.length && !pumps.length) {
     throw new Error(errors.join(' | ') || 'Rijnland leverde geen meetpunten binnen het kaartgebied.');
   }
@@ -296,12 +379,12 @@ export async function getSnoekRijnland(now = new Date()): Promise<SnoekRijnlandR
   const result: SnoekRijnlandResult = {
     ok: true,
     source: 'rijnland-arcgis',
-    attribution: 'Actuele metingen: Hoogheemraadschap van Rijnland via ArcGIS Online en HydroNET.',
+    attribution: 'Gemaallocaties: PDOK Waterschappen Kunstwerken IMWA. Actuele status: Hoogheemraadschap van Rijnland via ArcGIS Online en HydroNET.',
     generatedAt: now.toISOString(),
     temperatureProfiles,
     pumps,
     errors,
-    coverageNote: 'Temperatuurpunten zijn gegroepeerd tot diepteprofielen. Gemaalstatus toont aan/uit en debietrichting; dit bewijst alleen pompstroming bij het kunstwerk.'
+    coverageNote: `Temperatuurpunten zijn gegroepeerd tot diepteprofielen. Alle ${pumps.length} PDOK-gemalen krijgen een statusmarker; ${pumps.filter((pump) => pump.hasLiveStatus).length} hebben een gekoppelde live AAN/UIT-status. Debiet bewijst alleen pompstroming bij het kunstwerk.`
   };
   cache = {
     expiresAt: now.getTime() + (errors.length ? ERROR_CACHE_MS : CACHE_MS),

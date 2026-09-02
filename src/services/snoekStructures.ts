@@ -30,6 +30,7 @@ export type SnoekStructure = {
   type: SnoekStructureType;
   source: 'pdok-imwa';
   sourceLayer: string;
+  sourceCode?: string;
   name: string;
   label: string;
   lat: number;
@@ -358,14 +359,16 @@ async function fetchPdokLayer(layer: typeof PDOK_TYPES[number], bbox: SnoekStruc
     const props = feature.properties || {};
     const score = scoreStructure(layer.type, props);
     const point = projectToMap(center.lon, center.lat, bbox);
-    const code = firstText(props.naam, props.code, props.nen3610id, feature.id);
-    const name = code ? `${layer.label} ${code}` : layer.label;
+    const sourceName = firstText(props.naam);
+    const sourceCode = firstText(props.code, props.nen3610id, feature.id);
+    const name = sourceName || (sourceCode ? `${layer.label} ${sourceCode}` : layer.label);
 
     return {
       id: `pdok-${layer.layer}-${feature.id || index}`,
       type: layer.type,
       source: 'pdok-imwa',
       sourceLayer: layer.layer,
+      sourceCode,
       name,
       label: layer.label,
       lat: center.lat,
@@ -527,6 +530,7 @@ export function buildScoutHotspots(structures: SnoekStructure[], limit: number):
         type,
         source: best.source,
         sourceLayer: best.sourceLayer,
+        sourceCode: best.sourceCode,
         name: community ? `${community.name} - ${best.label}` : `Snoekspot ${best.name}`,
         label: best.label,
         lat: best.lat,

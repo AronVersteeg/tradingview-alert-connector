@@ -1,7 +1,9 @@
 import {
+  mergeRijnlandPumpCoverage,
   parseRijnlandPumpFeatures,
   parseRijnlandTemperatureFeatures
 } from '../src/services/snoekRijnland';
+import { SnoekStructure } from '../src/services/snoekStructures';
 
 describe('Rijnland Snoek map data', () => {
   it('groups temperature readings into a sorted depth profile', () => {
@@ -98,5 +100,65 @@ describe('Rijnland Snoek map data', () => {
       flowDirection: 'afvoer'
     });
     expect(pumps[0].currentNote).toContain('uitstroom');
+  });
+
+  it('adds every PDOK pump and marks missing live status as unknown', () => {
+    const livePumps = parseRijnlandPumpFeatures([{
+      attributes: {
+        featureIdentifier: '464-036-00021',
+        name: 'Boezemgemaal Spaarndam',
+        value: 12.4,
+        classification: 'aan'
+      },
+      geometry: { x: 4.6742, y: 52.411 }
+    }]);
+    const pdokPumps: SnoekStructure[] = [
+      {
+        id: 'pdok-spaarndam',
+        type: 'pumping_station',
+        source: 'pdok-imwa',
+        sourceLayer: 'gemaal',
+        sourceCode: '464-036-00021',
+        name: 'Boezemgemaal Spaarndam',
+        label: 'Gemaal',
+        lat: 52.41101,
+        lon: 4.67427,
+        geometry: { type: 'Point', coordinates: [4.67427, 52.41101] },
+        x: 10,
+        y: 20,
+        score: 46,
+        reasons: []
+      },
+      {
+        id: 'pdok-zuidspaarndammer',
+        type: 'pumping_station',
+        source: 'pdok-imwa',
+        sourceLayer: 'gemaal',
+        sourceCode: '309-036-00024',
+        name: 'Gemaal Zuidspaarndammer',
+        label: 'Gemaal',
+        lat: 52.42101,
+        lon: 4.69328,
+        geometry: { type: 'Point', coordinates: [4.69328, 52.42101] },
+        x: 30,
+        y: 40,
+        score: 46,
+        reasons: []
+      }
+    ];
+
+    const pumps = mergeRijnlandPumpCoverage(livePumps, pdokPumps);
+    const spaarndam = pumps.find((pump) => pump.featureIdentifier === '464-036-00021');
+    const south = pumps.find((pump) => pump.featureIdentifier === '309-036-00024');
+
+    expect(pumps).toHaveLength(2);
+    expect(spaarndam).toMatchObject({ active: true, hasLiveStatus: true, lat: 52.41101 });
+    expect(south).toMatchObject({
+      name: 'Gemaal Zuidspaarndammer',
+      active: null,
+      hasLiveStatus: false,
+      flowM3s: null,
+      statusSource: 'pdok-only'
+    });
   });
 });

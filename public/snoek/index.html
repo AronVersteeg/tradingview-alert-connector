@@ -568,6 +568,16 @@
 
     .rijnland-pump-marker.is-active { background: #138a66; }
     .rijnland-pump-marker.is-inactive { background: #66758b; }
+    .rijnland-pump-marker.is-unknown {
+      width: 16px;
+      height: 16px;
+      border-width: 1px;
+      border-radius: 50%;
+      color: #d9e4f2;
+      border-style: dashed;
+      background: #26364d;
+      font-size: 8px;
+    }
 
     .rijnland-temperature-marker.is-selected,
     .rijnland-pump-marker.is-selected {
@@ -858,7 +868,7 @@
                   <label class="layer-toggle"><input id="layer-hotspots" type="checkbox"><span class="layer-swatch hotspot-swatch"></span> Weloverwogen snoekspots</label>
                   <span class="layer-section-title">Rijnland actuele metingen</span>
                   <label class="layer-toggle"><input id="layer-rijnland-temperature" type="checkbox" checked><span class="layer-swatch temperature-swatch"></span> Watertemperatuur + diepteprofiel</label>
-                  <label class="layer-toggle"><input id="layer-rijnland-pumps" type="checkbox" checked><span class="layer-swatch pump-status-swatch"></span> Gemalen live aan/uit</label>
+                  <label class="layer-toggle"><input id="layer-rijnland-pumps" type="checkbox" checked><span class="layer-swatch pump-status-swatch"></span> Gemalen AAN/UIT/? (alle PDOK)</label>
                   <span class="layer-section-title">PDOK IMWA - 18 exacte lagen</span>
                   <label class="layer-toggle"><input data-layer-filter="brug" type="checkbox"><span class="layer-swatch" style="--swatch:#ffd166"></span> Brug</label>
                   <label class="layer-toggle"><input data-layer-filter="coupure" type="checkbox"><span class="layer-swatch" style="--swatch:#f4a261"></span> Coupure</label>
@@ -1290,19 +1300,23 @@
         `;
       } else {
         const statusLabel = item.active === true ? 'AAN' : item.active === false ? 'UIT' : 'ONBEKEND';
+        const hasFlow = Number.isFinite(item.flowM3s);
+        const sourceLabel = item.hasLiveStatus
+          ? `Rijnland gemaalstatus - ${rijnlandUpdatedLabel(item.sourceUpdatedAt)}`
+          : 'PDOK gemaal - geen gekoppelde live AAN/UIT-status';
         spotDetail.innerHTML = `
           <h3>
             <span>${esc(item.name)}</span>
             <button id="spot-detail-close" type="button">x</button>
           </h3>
-          <p class="muted">Rijnland gemaalstatus - ${esc(rijnlandUpdatedLabel(item.sourceUpdatedAt))}</p>
+          <p class="muted">${esc(sourceLabel)}</p>
           <div class="spot-meta">
             <span class="badge">${esc(statusLabel)}</span>
-            <span class="badge">${esc(item.flowM3s.toFixed(3))} m3/s</span>
+            ${hasFlow ? `<span class="badge">${esc(item.flowM3s.toFixed(3))} m3/s</span>` : '<span class="badge">debiet onbekend</span>'}
             <span class="badge">${esc(item.flowDirection)}</span>
           </div>
           <p>${esc(item.currentNote)}</p>
-          <p class="muted" style="margin-top: 7px;">Rijnland-code ${esc(item.featureIdentifier)}. Debiet is lokale pompwerking; stroomsterkte verderop wordt niet geinterpoleerd.</p>
+          <p class="muted" style="margin-top: 7px;">PDOK-code ${esc(item.featureIdentifier || 'onbekend')}. ${item.hasLiveStatus ? 'Debiet is lokale pompwerking; stroomsterkte verderop wordt niet geinterpoleerd.' : 'Onbekend betekent niet UIT: zonder live bron trekken we geen conclusie over stroming.'}</p>
         `;
       }
       document.getElementById('spot-detail-close').addEventListener('click', (event) => {
@@ -1350,21 +1364,25 @@
 
       rijnlandData.pumps.forEach((item) => {
         const selected = item.id === selectedRijnlandId;
-        const stateClass = item.active === true ? ' is-active' : item.active === false ? ' is-inactive' : '';
+        const stateClass = item.active === true ? ' is-active' : item.active === false ? ' is-inactive' : ' is-unknown';
         const stateLabel = item.active === true ? 'AAN' : item.active === false ? 'UIT' : '?';
+        const markerSize = item.hasLiveStatus ? 32 : 22;
+        const flowLabel = Number.isFinite(item.flowM3s)
+          ? `${item.flowM3s.toFixed(3)} m3/s ${item.flowDirection}`
+          : 'geen live debiet';
         const marker = L.marker([item.lat, item.lon], {
           pane: 'rijnland',
           title: `${item.name}, gemaal ${stateLabel}`,
-          alt: `${item.name}, gemaal ${stateLabel}, ${item.flowM3s.toFixed(3)} m3/s ${item.flowDirection}`,
+          alt: `${item.name}, gemaal ${stateLabel}, ${flowLabel}`,
           icon: L.divIcon({
             className: '',
             html: `<span class="rijnland-pump-marker${stateClass}${selected ? ' is-selected' : ''}">${esc(stateLabel)}</span>`,
-            iconSize: [32, 32],
-            iconAnchor: [16, 16]
+            iconSize: [markerSize, markerSize],
+            iconAnchor: [markerSize / 2, markerSize / 2]
           }),
-          zIndexOffset: selected ? 1800 : 1300
+          zIndexOffset: selected ? 1800 : item.hasLiveStatus ? 1400 : 1250
         });
-        marker.bindTooltip(`${item.name} - ${stateLabel} - ${item.flowM3s.toFixed(3)} m3/s ${item.flowDirection}`, { direction: 'top' });
+        marker.bindTooltip(`${item.name} - ${stateLabel} - ${flowLabel}`, { direction: 'top' });
         marker.on('click', () => selectRijnland('pump', item));
         marker.addTo(rijnlandPumpLayer);
       });
@@ -1494,7 +1512,9 @@
       }
       if (layerRijnlandPumps.checked && rijnlandData.pumps?.length) {
         const active = rijnlandData.pumps.filter((pump) => pump.active === true).length;
-        parts.push(`<span class="legend-item"><span class="layer-swatch pump-status-swatch"></span>Gemalen AAN ${esc(active)} / ${esc(rijnlandData.pumps.length)}</span>`);
+        const inactive = rijnlandData.pumps.filter((pump) => pump.active === false).length;
+        const unknown = rijnlandData.pumps.length - active - inactive;
+        parts.push(`<span class="legend-item"><span class="layer-swatch pump-status-swatch"></span>Gemalen AAN ${esc(active)} · UIT ${esc(inactive)} · ? ${esc(unknown)}</span>`);
       }
       return parts.join('');
     }
@@ -1513,6 +1533,7 @@
         return counts;
       }, {});
       visible.forEach((item) => {
+        if (item.sourceLayer === 'gemaal' && layerRijnlandPumps.checked) return;
         const selected = item.id === selectedStructureId;
         const color = structureLayerColor(item.sourceLayer);
         const geometry = L.geoJSON({ type: 'Feature', geometry: item.geometry, properties: {} }, {
@@ -1553,6 +1574,7 @@
       });
 
       const legendLayers = Object.keys(visibleCounts)
+        .filter((layer) => !(layer === 'gemaal' && layerRijnlandPumps.checked))
         .sort((a, b) => visibleCounts[b] - visibleCounts[a])
         .slice(0, 8);
       const derivedLegend = [
@@ -1656,11 +1678,12 @@
 
       if (rijnlandData) {
         const activePumps = rijnlandData.pumps.filter((pump) => pump.active === true).length;
+        const livePumps = rijnlandData.pumps.filter((pump) => pump.hasLiveStatus).length;
         const depthProfiles = rijnlandData.temperatureProfiles.filter((profile) => profile.readings.length > 1).length;
         cards.push(`
           <div class="card">
             <h3>Rijnland live meetlagen <span class="badge">${esc(rijnlandData.temperatureProfiles.length + rijnlandData.pumps.length)} punten</span></h3>
-            <p class="muted">Temperatuurlocaties: ${esc(rijnlandData.temperatureProfiles.length)}, waarvan ${esc(depthProfiles)} met meerdere dieptes. Gemalen actief: ${esc(activePumps)} van ${esc(rijnlandData.pumps.length)}. ${esc(rijnlandData.coverageNote)}</p>
+            <p class="muted">Temperatuurlocaties: ${esc(rijnlandData.temperatureProfiles.length)}, waarvan ${esc(depthProfiles)} met meerdere dieptes. Gemalen: ${esc(rijnlandData.pumps.length)} PDOK-locaties, ${esc(livePumps)} met live status en ${esc(activePumps)} nu actief. ${esc(rijnlandData.coverageNote)}</p>
             ${rijnlandData.errors?.length ? `<p class="warning" style="margin-top: 7px;">${esc(rijnlandData.errors.join(' - '))}</p>` : ''}
           </div>
         `);
