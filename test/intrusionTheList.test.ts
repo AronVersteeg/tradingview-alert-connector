@@ -20,13 +20,13 @@ describe('The List', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test('starts with the eleven user-labeled reference cases', () => {
+  test('starts with the sixteen user-labeled reference cases', () => {
     const snapshot = intrusionTheListSnapshot();
     expect(snapshot.methodology.selectedMetric).toBe('OI_FLUSH_PCT');
     expect(snapshot.methodology.strongWhenContractChangePctLte).toBe(-1.8);
-    expect(snapshot.methodology.labeledSampleSize).toBe(11);
+    expect(snapshot.methodology.labeledSampleSize).toBe(16);
     expect(snapshot.records.filter((record) => record.userLabel === 'STRONG')).toHaveLength(3);
-    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(8);
+    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(13);
 
     const moderateStrong = snapshot.records
       .find((record) => record.key === 'INJ-USD|2026-08-28 16:00:00');
@@ -52,6 +52,28 @@ describe('The List', () => {
     expect(records[0].impulseQuality.openInterest).toMatchObject({
       contractChangePct: 0.4456443352116146, usdChangePct: 1.3486931446338835, samples: 15
     });
+  });
+
+  test('records the five late-August and September false outcomes against their original cases', () => {
+    const records = intrusionTheListSnapshot().records;
+    const expected = [
+      ['INJ-USD|2026-08-31 01:00:00', 1.0504007381189506, false],
+      ['INJ-USD|2026-09-01 08:00:00', 1.0059355189300012, false],
+      ['SOL-USD|2026-09-01 18:00:00', 0.0720722355503911, false],
+      ['INJ-USD|2026-09-01 20:00:00', 0.7572342804394117, true],
+      ['INJ-USD|2026-09-02 00:00:00', 0.9776061498412592, true]
+    ] as const;
+
+    for (const [key, oiChange, completeFalse] of expected) {
+      const matches = records.filter((record) => record.key === key);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]).toMatchObject({
+        userLabel: 'WEAK', automaticLabel: 'IQ WEAK', direction: 'short', filteredStatus: 'PASS'
+      });
+      expect(matches[0].impulseQuality.openInterest?.contractChangePct).toBeCloseTo(oiChange, 10);
+      expect(matches[0].userLabelNote).toContain('User-confirmed');
+      expect(matches[0].userLabelNote?.includes('complete false impulse')).toBe(completeFalse);
+    }
   });
 
   test('attaches the ZEC false outcome without replacing stored diagnostics or duplicating the case', () => {
@@ -88,7 +110,7 @@ describe('The List', () => {
       expect(matches[0].automaticLabel).toBe('IQ WEAK');
       expect(matches[0].impulseQuality).toEqual(storedQuality);
       expect(matches[0].candleReview).toEqual(candleReview);
-      expect(snapshot.methodology.labeledSampleSize).toBe(11);
+      expect(snapshot.methodology.labeledSampleSize).toBe(16);
     }
   });
 

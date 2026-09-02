@@ -298,6 +298,36 @@ const SEED_RECORDS: IntrusionTheListRecord[] = [
     timestampNl: '30-08-2026 14:00 NL', cutoff: '2026-08-30T13:14:17.895Z', direction: 'long',
     userLabel: 'WEAK', contractChangePct: 0.4456443352116146, usdChangePct: 1.3486931446338835, samples: 15,
     note: 'User-confirmed false impulse. Original stored Delay assessment: candle/delta PASS and IQ WEAK with rising contract OI.'
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-08-31 01:00:00',
+    timestampNl: '31-08-2026 03:00 NL', cutoff: '2026-08-31T02:10:19.015Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 1.0504007381189506, usdChangePct: -0.428976218842414, samples: 15,
+    note: 'User-confirmed false impulse. Original stored Delay assessment: candle/delta PASS and IQ WEAK with rising contract OI.'
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-09-01 08:00:00',
+    timestampNl: '01-09-2026 10:00 NL', cutoff: '2026-09-01T09:12:42.302Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 1.0059355189300012, usdChangePct: -1.2832794469722186, samples: 15,
+    note: 'User-confirmed false impulse. Original stored Delay assessment: candle/delta PASS and IQ WEAK with rising contract OI.'
+  }),
+  seedRecord({
+    market: 'SOL-USD', symbol: 'SOLUSDT', asset: 'SOL', timestamp: '2026-09-01 18:00:00',
+    timestampNl: '01-09-2026 20:00 NL', cutoff: '2026-09-01T19:15:16.580Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 0.0720722355503911, usdChangePct: -0.6944203101710178, samples: 16,
+    note: 'User-confirmed false impulse. Original stored Delay assessment: candle/delta PASS and IQ WEAK with slightly rising contract OI.'
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-09-01 20:00:00',
+    timestampNl: '01-09-2026 22:00 NL', cutoff: '2026-09-01T21:12:42.294Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 0.7572342804394117, usdChangePct: 0.22363972345176286, samples: 15,
+    note: 'User-confirmed complete false impulse ("hele false impulse"). Original stored Delay assessment: candle/delta PASS, IQ WEAK with rising contract OI, and a close hurdle.'
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-09-02 00:00:00',
+    timestampNl: '02-09-2026 02:00 NL', cutoff: '2026-09-02T01:12:41.591Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 0.9776061498412592, usdChangePct: 0.08965996655878605, samples: 15,
+    note: 'User-confirmed complete false impulse ("hele false impulse"). Original stored Delay assessment: candle/delta PASS, IQ WEAK with rising contract OI, and a close hurdle.'
   })
 ];
 
