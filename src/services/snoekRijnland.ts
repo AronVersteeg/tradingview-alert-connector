@@ -1,8 +1,11 @@
 import { getSnoekStructures, SnoekStructure } from './snoekStructures';
+import { buildRoofvisAdvice, FISH_ADVICE_SOURCES, FishAdviceSource, RoofvisAdvice } from './snoekFishAdvice';
 
 export type RijnlandTemperatureReading = {
   depthM: number | null;
   temperatureC: number;
+  chlorideMgL: number | null;
+  conductivityUsCm: number | null;
   classification: string;
   featureIdentifier: string;
   chartUrl: string;
@@ -20,7 +23,15 @@ export type RijnlandTemperatureProfile = {
   depthHintM: number | null;
   profileNote: string;
   presentationHint: string;
+  roofvisAdvice: RoofvisAdvice[];
+  scientificSources: FishAdviceSource[];
+  measuredVariables: string[];
+  missingVariables: string[];
   sourceUpdatedAt: string | null;
+  waterQualityUpdatedAt: {
+    chloride: string | null;
+    conductivity: string | null;
+  };
 };
 
 export type RijnlandPumpStatus = {
@@ -59,6 +70,8 @@ type ArcGisFeature = {
 };
 
 const TEMPERATURE_LAYER = 'https://services1.arcgis.com/KXsJqtRt2xEqyDWx/arcgis/rest/services/c2f887f8-c73e-4c63-a8d5-2947995f44c4/FeatureServer/0';
+const CHLORIDE_LAYER = 'https://services1.arcgis.com/KXsJqtRt2xEqyDWx/arcgis/rest/services/9f44ec39-93cf-49b2-86a9-c0fb1c695ca4/FeatureServer/0';
+const CONDUCTIVITY_LAYER = 'https://services1.arcgis.com/KXsJqtRt2xEqyDWx/arcgis/rest/services/61c1bf48-e5d1-4bdd-9313-e0762046a0df/FeatureServer/0';
 const PUMP_STATUS_LAYER = 'https://services1.arcgis.com/KXsJqtRt2xEqyDWx/arcgis/rest/services/e2d54d5c-4cd4-4476-898e-2effd50d9019/FeatureServer/0';
 const INTEREST_ENVELOPE = '4.47,52.355,4.82,52.505';
 const CACHE_MS = 5 * 60 * 1000;
@@ -192,6 +205,8 @@ export function parseRijnlandTemperatureFeatures(features: ArcGisFeature[], upda
     group.readings.push({
       depthM: depthFromFeature(name, featureIdentifier),
       temperatureC: round(temperatureC),
+      chlorideMgL: null,
+      conductivityUsCm: null,
       classification: String(attributes.classification || ''),
       featureIdentifier,
       chartUrl: String(attributes.chartUrl || '')
@@ -218,7 +233,15 @@ export function parseRijnlandTemperatureFeatures(features: ArcGisFeature[], upda
       maxC,
       rangeC: round(maxC - minC),
       ...profileAdvice(readings),
-      sourceUpdatedAt: updatedAt
+      roofvisAdvice: buildRoofvisAdvice(readings, new Date().getMonth() + 1),
+      scientificSources: FISH_ADVICE_SOURCES,
+      measuredVariables: ['watertemperatuur'],
+      missingVariables: ['zuurstof', 'troebelheid', 'vegetatie', 'lokale prooivisbemonstering'],
+      sourceUpdatedAt: updatedAt,
+      waterQualityUpdatedAt: {
+        chloride: null,
+        conductivity: null
+      }
     };
   });
 
@@ -235,6 +258,54 @@ export function parseRijnlandTemperatureFeatures(features: ArcGisFeature[], upda
       return hasDepth || !locationsWithDepthProfiles.has(locationKey);
     })
     .sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+}
+
+type WaterQualityMetric = 'chlorideMgL' | 'conductivityUsCm';
+
+export function parseRijnlandWaterQualityFeatures(features: ArcGisFeature[]): Map<string, number> {
+  const values = new Map<string, number>();
+  for (const feature of features) {
+    const featureIdentifier = String(feature.attributes?.featureIdentifier || '');
+    const value = finiteNumber(feature.attributes?.value);
+    if (featureIdentifier && value !== null) values.set(featureIdentifier, round(value));
+  }
+  return values;
+}
+
+export function enrichRijnlandTemperatureProfiles(
+  profiles: RijnlandTemperatureProfile[],
+  chlorideFeatures: ArcGisFeature[],
+  conductivityFeatures: ArcGisFeature[],
+  month: number,
+  updatedAt: { chloride: string | null; conductivity: string | null } = { chloride: null, conductivity: null }
+): RijnlandTemperatureProfile[] {
+  const qualityMaps: Array<{ metric: WaterQualityMetric; values: Map<string, number> }> = [
+    { metric: 'chlorideMgL', values: parseRijnlandWaterQualityFeatures(chlorideFeatures) },
+    { metric: 'conductivityUsCm', values: parseRijnlandWaterQualityFeatures(conductivityFeatures) }
+  ];
+
+  return profiles.map((profile) => {
+    const readings = profile.readings.map((reading) => {
+      const enriched = { ...reading };
+      qualityMaps.forEach(({ metric, values }) => {
+        enriched[metric] = values.get(reading.featureIdentifier) ?? null;
+      });
+      return enriched;
+    });
+    const hasChloride = readings.some((reading) => reading.chlorideMgL !== null);
+    const hasConductivity = readings.some((reading) => reading.conductivityUsCm !== null);
+    return {
+      ...profile,
+      readings,
+      roofvisAdvice: buildRoofvisAdvice(readings, month),
+      measuredVariables: [
+        'watertemperatuur',
+        ...(hasChloride ? ['chloride'] : []),
+        ...(hasConductivity ? ['EGV/geleiding'] : [])
+      ],
+      waterQualityUpdatedAt: updatedAt
+    };
+  });
 }
 
 export function parseRijnlandPumpFeatures(features: ArcGisFeature[], updatedAt: string | null = null): RijnlandPumpStatus[] {
@@ -343,8 +414,10 @@ export async function getSnoekRijnland(now = new Date()): Promise<SnoekRijnlandR
   let temperatureProfiles: RijnlandTemperatureProfile[] = [];
   let livePumps: RijnlandPumpStatus[] = [];
   let pdokPumps: SnoekStructure[] = [];
-  const [temperatureResult, pumpResult, pdokResult] = await Promise.allSettled([
+  const [temperatureResult, chlorideResult, conductivityResult, pumpResult, pdokResult] = await Promise.allSettled([
     fetchLayer(TEMPERATURE_LAYER),
+    fetchLayer(CHLORIDE_LAYER),
+    fetchLayer(CONDUCTIVITY_LAYER),
     fetchLayer(PUMP_STATUS_LAYER),
     getSnoekStructures({
       west: 4.47,
@@ -360,6 +433,26 @@ export async function getSnoekRijnland(now = new Date()): Promise<SnoekRijnlandR
     temperatureProfiles = parseRijnlandTemperatureFeatures(temperatureResult.value.features, temperatureResult.value.updatedAt);
   } else {
     errors.push(`Temperatuurlaag: ${temperatureResult.reason instanceof Error ? temperatureResult.reason.message : String(temperatureResult.reason)}`);
+  }
+  if (temperatureProfiles.length) {
+    const chlorideFeatures = chlorideResult.status === 'fulfilled' ? chlorideResult.value.features : [];
+    const conductivityFeatures = conductivityResult.status === 'fulfilled' ? conductivityResult.value.features : [];
+    temperatureProfiles = enrichRijnlandTemperatureProfiles(
+      temperatureProfiles,
+      chlorideFeatures,
+      conductivityFeatures,
+      now.getMonth() + 1,
+      {
+        chloride: chlorideResult.status === 'fulfilled' ? chlorideResult.value.updatedAt : null,
+        conductivity: conductivityResult.status === 'fulfilled' ? conductivityResult.value.updatedAt : null
+      }
+    );
+  }
+  if (chlorideResult.status === 'rejected') {
+    errors.push(`Chloridelaag: ${chlorideResult.reason instanceof Error ? chlorideResult.reason.message : String(chlorideResult.reason)}`);
+  }
+  if (conductivityResult.status === 'rejected') {
+    errors.push(`EGV-laag: ${conductivityResult.reason instanceof Error ? conductivityResult.reason.message : String(conductivityResult.reason)}`);
   }
   if (pumpResult.status === 'fulfilled') {
     livePumps = parseRijnlandPumpFeatures(pumpResult.value.features, pumpResult.value.updatedAt);
@@ -379,12 +472,12 @@ export async function getSnoekRijnland(now = new Date()): Promise<SnoekRijnlandR
   const result: SnoekRijnlandResult = {
     ok: true,
     source: 'rijnland-arcgis',
-    attribution: 'Gemaallocaties: PDOK Waterschappen Kunstwerken IMWA. Actuele status: Hoogheemraadschap van Rijnland via ArcGIS Online en HydroNET.',
+    attribution: 'Temperatuur, chloride, EGV en gemaalstatus: Hoogheemraadschap van Rijnland via ArcGIS Online en HydroNET. Gemaallocaties: PDOK Waterschappen Kunstwerken IMWA.',
     generatedAt: now.toISOString(),
     temperatureProfiles,
     pumps,
     errors,
-    coverageNote: `Temperatuurpunten zijn gegroepeerd tot diepteprofielen. Alle ${pumps.length} PDOK-gemalen krijgen een statusmarker; ${pumps.filter((pump) => pump.hasLiveStatus).length} hebben een gekoppelde live AAN/UIT-status. Debiet bewijst alleen pompstroming bij het kunstwerk.`
+    coverageNote: `Temperatuurpunten zijn waar mogelijk verrijkt met chloride en EGV op dezelfde meetdiepte. Alle ${pumps.length} PDOK-gemalen krijgen een statusmarker; ${pumps.filter((pump) => pump.hasLiveStatus).length} hebben een gekoppelde live AAN/UIT-status. Advieszones zijn hypotheses uit meting plus literatuur, geen visdetectie.`
   };
   cache = {
     expiresAt: now.getTime() + (errors.length ? ERROR_CACHE_MS : CACHE_MS),
