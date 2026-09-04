@@ -8,6 +8,8 @@ Currently supports [dYdX v3](https://dydx.exchange), [dYdX v4](https://dydx.trad
 
 https://tv-connector.gitbook.io/docs/
 
+Local operations: [Render log export (24 hours / 7 days)](docs/RENDER_LOG_EXPORT.md).
+
 # Snoek AI tools route
 
 This Render app can also host small non-trading tools under separate routes. The first one is Snoek AI Scout:
