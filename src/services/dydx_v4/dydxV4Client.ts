@@ -20,6 +20,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { AbstractDexClient } from '../abstractDexClient';
+import { createReadResilientIndexerClient } from './indexerReadRecovery';
 
 type ProgressResult =
   | { kind: 'target'; currentSize: number }
@@ -3214,20 +3215,23 @@ export class DydxV4Client extends AbstractDexClient {
       return accountApi.getSubaccount(this.wallet.address, 0);
     }
 
+    if (typeof accountApi.getSubaccountPerpetualPositions !== 'function' ||
+        typeof accountApi.getSubaccountAssetPositions !== 'function') {
+      throw new Error('dYdX indexer account read methods are unavailable.');
+    }
+
     const [perpetualPositions, assetPositions] = await Promise.allSettled([
-      accountApi.getSubaccountPerpetualPositions?.(this.wallet.address, 0),
-      accountApi.getSubaccountAssetPositions?.(this.wallet.address, 0)
+      accountApi.getSubaccountPerpetualPositions(this.wallet.address, 0),
+      accountApi.getSubaccountAssetPositions(this.wallet.address, 0)
     ]);
 
+    // An unavailable account must not be interpreted as an empty/flat account.
+    if (perpetualPositions.status === 'rejected') throw perpetualPositions.reason;
+    if (assetPositions.status === 'rejected') throw assetPositions.reason;
+
     return {
-      perpetualPositions:
-        perpetualPositions.status === 'fulfilled'
-          ? perpetualPositions.value
-          : this.serializeError(perpetualPositions.reason),
-      assetPositions:
-        assetPositions.status === 'fulfilled'
-          ? assetPositions.value
-          : this.serializeError(assetPositions.reason)
+      perpetualPositions: perpetualPositions.value,
+      assetPositions: assetPositions.value
     };
   }
 
@@ -5574,7 +5578,7 @@ export class DydxV4Client extends AbstractDexClient {
   }
 
   private createIndexerClient(): IndexerClient {
-    return new IndexerClient(
+    return createReadResilientIndexerClient(
       process.env.NODE_ENV === 'production'
         ? this.getIndexerConfig()
         : Network.testnet().indexerConfig
