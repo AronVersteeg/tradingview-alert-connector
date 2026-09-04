@@ -20,13 +20,13 @@ describe('The List', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test('starts with the twenty-three user-labeled reference cases', () => {
+  test('starts with the twenty-four user-labeled reference cases', () => {
     const snapshot = intrusionTheListSnapshot();
     expect(snapshot.methodology.selectedMetric).toBe('OI_FLUSH_PCT');
     expect(snapshot.methodology.strongWhenContractChangePctLte).toBe(-1.8);
-    expect(snapshot.methodology.labeledSampleSize).toBe(23);
+    expect(snapshot.methodology.labeledSampleSize).toBe(24);
     expect(snapshot.records.filter((record) => record.userLabel === 'STRONG')).toHaveLength(4);
-    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(19);
+    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(20);
 
     const moderateStrong = snapshot.records
       .find((record) => record.key === 'INJ-USD|2026-08-28 16:00:00');
@@ -110,7 +110,7 @@ describe('The List', () => {
       expect(matches[0].automaticLabel).toBe('IQ WEAK');
       expect(matches[0].impulseQuality).toEqual(storedQuality);
       expect(matches[0].candleReview).toEqual(candleReview);
-      expect(snapshot.methodology.labeledSampleSize).toBe(23);
+      expect(snapshot.methodology.labeledSampleSize).toBe(24);
     }
   });
 
@@ -161,6 +161,42 @@ describe('The List', () => {
       expect(matches[0].impulseQuality).toEqual(storedQuality);
       expect(matches[0].candleReview).toEqual(candleReview);
       expect(matches[0].userLabelNote).toContain('potential profit');
+    }
+  });
+
+  test('attaches the September 4 pronounced ZEC false outcome and preserves stored evidence', () => {
+    const key = 'ZEC-USD|2026-09-04 08:00:00';
+    const seed = intrusionTheListSnapshot().records.find((record) => record.key === key)!;
+    expect(seed).toMatchObject({
+      timestampNl: '04-09-2026 10:00 NL', direction: 'long', filteredStatus: 'PASS',
+      automaticLabel: 'IQ WEAK', userLabel: 'WEAK', delayCutoffAt: '2026-09-04T09:57:05.955Z'
+    });
+    expect(seed.impulseQuality.openInterest).toMatchObject({
+      contractChangePct: 0.2026593466398774, usdChangePct: 4.124369330869282, samples: 24
+    });
+    const storedQuality = {
+      ...seed.impulseQuality,
+      openInterest: {
+        ...seed.impulseQuality.openInterest!,
+        fetchedAt: '2026-09-04T09:57:06.556Z',
+        startContractOpenInterest: 609966.439,
+        endContractOpenInterest: 611202.593
+      }
+    };
+    const candleReview = { status: 'PASS', candleColors: ['green'], volumeDeltaColors: ['green'] };
+    fs.writeFileSync(process.env.INTRUSION_THE_LIST_FILE!, JSON.stringify({ records: [{
+      ...seed, userLabel: undefined, userLabelNote: undefined,
+      impulseQuality: storedQuality, candleReview
+    }] }));
+    for (let read = 0; read < 2; read++) {
+      const snapshot = intrusionTheListSnapshot();
+      const matches = snapshot.records.filter((record) => record.key === key);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]).toMatchObject({ userLabel: 'WEAK', automaticLabel: 'IQ WEAK' });
+      expect(matches[0].userLabelNote).toContain('hele dikke false impulse');
+      expect(matches[0].impulseQuality).toEqual(storedQuality);
+      expect(matches[0].candleReview).toEqual(candleReview);
+      expect(snapshot.methodology.labeledSampleSize).toBe(24);
     }
   });
 
