@@ -328,6 +328,48 @@ const SEED_RECORDS: IntrusionTheListRecord[] = [
     timestampNl: '02-09-2026 02:00 NL', cutoff: '2026-09-02T01:12:41.591Z', direction: 'short',
     userLabel: 'WEAK', contractChangePct: 0.9776061498412592, usdChangePct: 0.08965996655878605, samples: 15,
     note: 'User-confirmed complete false impulse ("hele false impulse"). Original stored Delay assessment: candle/delta PASS, IQ WEAK with rising contract OI, and a close hurdle.'
+  }),
+  seedRecord({
+    market: 'BTC-USD', symbol: 'BTCUSDT', asset: 'BTC', timestamp: '2026-09-03 18:00:00',
+    timestampNl: '03-09-2026 20:00 NL', cutoff: '2026-09-03T21:38:51.554Z', direction: 'long',
+    userLabel: 'WEAK', contractChangePct: -0.487456221422522, usdChangePct: 0.8612793171132838, samples: 44,
+    note: 'User-confirmed false impulse. Original stored Delay assessment: IQ WEAK.'
+  }),
+  seedRecord({
+    market: 'SOL-USD', symbol: 'SOLUSDT', asset: 'SOL', timestamp: '2026-09-02 09:00:00',
+    timestampNl: '02-09-2026 11:00 NL', cutoff: '2026-09-02T10:15:16.214Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 0.49889688740754057, usdChangePct: 0.049397619406033044, samples: 16,
+    note: 'User-confirmed false impulse. Original stored Delay assessment: IQ WEAK.'
+  }),
+  seedRecord({
+    market: 'SOL-USD', symbol: 'SOLUSDT', asset: 'SOL', timestamp: '2026-09-02 10:00:00',
+    timestampNl: '02-09-2026 12:00 NL', cutoff: '2026-09-02T11:15:16.276Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 1.564014295545335, usdChangePct: 1.0039195340886042, samples: 16,
+    note: 'User-confirmed false impulse. Original stored Delay assessment: IQ WEAK.'
+  }),
+  seedRecord({
+    market: 'ZEC-USD', symbol: 'ZECUSDT', asset: 'ZEC', timestamp: '2026-09-02 10:00:00',
+    timestampNl: '02-09-2026 12:00 NL', cutoff: '2026-09-02T11:16:42.591Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: -1.297872996637106, usdChangePct: -3.163631453283078, samples: 16,
+    note: 'User-confirmed false impulse. Original stored Delay assessment: IQ WEAK.'
+  }),
+  seedRecord({
+    market: 'ZEC-USD', symbol: 'ZECUSDT', asset: 'ZEC', timestamp: '2026-09-02 11:00:00',
+    timestampNl: '02-09-2026 13:00 NL', cutoff: '2026-09-02T12:48:40.957Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 1.4691702303321952, usdChangePct: 1.3048619203551715, samples: 22,
+    note: 'User-confirmed false impulse. Original stored Delay assessment: IQ WEAK.'
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-09-02 22:00:00',
+    timestampNl: '03-09-2026 00:00 NL', cutoff: '2026-09-02T23:46:32.5Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 0.5564487181533462, usdChangePct: 0.17561459947232905, samples: 22,
+    note: 'User-confirmed strong false impulse ("strong false impulse"). This describes the user outcome, not an automatic IQ STRONG label. Original stored Delay assessment: IQ WEAK.'
+  }),
+  seedRecord({
+    market: 'ZEC-USD', symbol: 'ZECUSDT', asset: 'ZEC', timestamp: '2026-09-03 14:00:00',
+    timestampNl: '03-09-2026 16:00 NL', cutoff: '2026-09-03T15:59:31.241Z', direction: 'long',
+    userLabel: 'STRONG', contractChangePct: 7.790200965905969, usdChangePct: 19.345429756979037, samples: 24,
+    note: 'User-observed impulse with potential profit ("impulse met potentiele winst"); realized profit is not confirmed. Original stored Delay assessment: IQ WEAK with rising contract OI.'
   })
 ];
 
