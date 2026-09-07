@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
+import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import {
   allocateStepSizes,
   selectDelayedNewest,
@@ -463,6 +464,7 @@ export type DecentraderTradeExecutor = {
 };
 
 type MonitorStatus = {
+  positionManagement?: any;
   enabled: boolean;
   running: boolean;
   symbol: string;
@@ -4905,7 +4907,7 @@ export function buildDirectionalPlan(
   const marketPrice = marketInfo.oraclePrice || fallbackPrice;
   const tpZones = rawTpZones
     .filter((zone) => isLong ? zone.price > marketPrice : zone.price < marketPrice);
-  const stop = buildFractalStop(rows, frameIndex, direction, marketPrice);
+  const stop = buildFractalStop(rows, frameIndex, direction, marketPrice, { enforceMinDistance: false });
   const stopPrice = stop.valid ? stop.price : undefined;
   const equity = numberOrZero(account.equity);
   const freeCollateral = numberOrZero(account.freeCollateral);
@@ -5148,6 +5150,8 @@ export function buildDecentraderOrderAlert(plan: any, signature: string): AlertO
       timestampNl: plan.timestampNl,
       direction,
       confidenceScore: activePlan?.sizing?.confidenceScore,
+      riskBudgetUsd: activePlan?.sizing?.riskBudgetUsd,
+      riskBasis: 'entry-fill-to-stop-trigger-excludes-costs',
       equityFraction: activePlan?.sizing?.equityFraction,
       notional: activePlan?.sizing?.notional,
       stop: activePlan?.stop,
@@ -5535,6 +5539,14 @@ async function fetchSnapshot(symbol: string): Promise<DecentraderRow[]> {
 }
 
 export class DecentraderGapMonitor {
+  private managementInterval: NodeJS.Timeout | undefined;
+  private managementPromise: Promise<any> | undefined;
+  private takeProfitPromise: Promise<void> | undefined;
+  private managementStatus: any = { running: false };
+  private readonly coordinator = new ManagedPositionCoordinator<AlertState>(
+    () => readState(this.config().stateFile),
+    (state) => writeState(this.config().stateFile, state)
+  );
   private interval: NodeJS.Timeout | undefined;
   private checkPromise: Promise<any> | undefined;
   private latestRows: DecentraderRow[] | undefined;
@@ -5580,7 +5592,12 @@ export class DecentraderGapMonitor {
       hasTradeExecutor: this.tradeExecutor !== undefined
     };
 
-    if (!config.enabled || this.interval) return;
+    if (this.interval || this.managementInterval) return;
+    const manage = () => this.checkManagedPosition().catch((error) =>
+      console.error('Decentrader position management failed:', error));
+    void manage();
+    this.managementInterval = setInterval(manage, config.pollMinutes * 60_000);
+    if (!config.enabled) return;
 
     this.checkOnce().catch((error) => {
       console.error('Initial Decentrader gap check failed:', error);
@@ -5593,6 +5610,8 @@ export class DecentraderGapMonitor {
   }
 
   stop(): void {
+    if (this.managementInterval) clearInterval(this.managementInterval);
+    this.managementInterval = undefined;
     if (this.interval) {
       clearInterval(this.interval);
       this.interval = undefined;
@@ -5631,6 +5650,7 @@ export class DecentraderGapMonitor {
 
     return {
       ...this.status,
+      positionManagement: this.managementStatus,
       lastResult,
       enabled: config.enabled,
       symbol: config.symbol,
@@ -5664,13 +5684,69 @@ export class DecentraderGapMonitor {
     };
   }
 
+  async checkManagedPosition(): Promise<any> {
+    if (this.managementPromise) return this.managementPromise;
+    this.managementPromise = this.coordinator.exclusive(() => this.coordinator.withState(async (state) => {
+      const result: any = { running: true, lastStartedAt: nowNlIso() };
+      this.managementStatus = { ...this.managementStatus, ...result, error: undefined };
+      try {
+        if (state.managedPosition) {
+          await this.maybeSyncDynamicStopLoss(state, result);
+          if (result.dynamicSlSync?.outcome === 'ERROR') throw new Error(result.dynamicSlSync.reason);
+          if (['UPDATED', 'UNCHANGED', 'READY', 'FLATTENED', 'FLAT_CLEANED_UP'].includes(result.dynamicSlSync?.outcome)) {
+            result.lastSuccessfulStopCheckAt = nowNlIso();
+          }
+          if (state.managedPosition && !['FLATTEN_ATTEMPTED', 'FLATTENED'].includes(result.dynamicSlSync?.outcome)) {
+            this.scheduleTakeProfitSync();
+          }
+        }
+        result.ok = result.dynamicTpSync?.outcome !== 'ERROR';
+      } catch (error) {
+        result.ok = false;
+        result.error = error instanceof Error ? error.message : String(error);
+        console.error('Decentrader protective order check failed:', result.error);
+      } finally {
+        this.managementStatus = { ...this.managementStatus, ...result, running: false, lastFinishedAt: nowNlIso() };
+      }
+      return this.managementStatus;
+    }));
+    try {
+      return await this.managementPromise;
+    } finally {
+      this.managementPromise = undefined;
+    }
+  }
+
+  private scheduleTakeProfitSync(): void {
+    if (this.takeProfitPromise || !this.tradeExecutor?.syncTakeProfits || !decentraderDynamicTpEnabled()) return;
+    this.takeProfitPromise = this.coordinator.withState(async (state) => {
+      const managed = state.managedPosition;
+      if (!managed) return;
+      const preparedAt = Date.now();
+      const plan = await this.getTradePlan(undefined, decentraderTradeMarket());
+      await this.coordinator.exclusive(async () => {
+        if (state.managedPosition !== managed) return;
+        if (Date.now() - preparedAt > this.config().pollMinutes * 60_000) {
+          this.managementStatus.dynamicTpSync = { outcome: 'SKIPPED', reason: 'TP preparation exceeded one management interval.' };
+          return;
+        }
+        const result: any = {};
+        await this.maybeSyncDynamicTakeProfits(state, result, plan);
+        this.managementStatus.dynamicTpSync = result.dynamicTpSync;
+      });
+    }).catch((error) => {
+      this.managementStatus.dynamicTpSync = { outcome: 'ERROR', reason: error instanceof Error ? error.message : String(error) };
+      console.warn('Decentrader TP preparation failed; independent stop management continues:', this.managementStatus.dynamicTpSync);
+    }).finally(() => { this.takeProfitPromise = undefined; });
+  }
+
   async checkOnce(): Promise<any> {
     if (this.checkPromise) {
       console.log('Decentrader gap check joined the already running single-flight check.');
       return this.checkPromise;
     }
 
-    this.checkPromise = this.runCheckOnce();
+    this.checkPromise = this.coordinator.withState((state) => this.runCheckOnce(state));
     try {
       return await this.checkPromise;
     } finally {
@@ -5678,7 +5754,7 @@ export class DecentraderGapMonitor {
     }
   }
 
-  private async runCheckOnce(): Promise<any> {
+  private async runCheckOnce(state: AlertState): Promise<any> {
     const config = this.config();
     this.status = {
       ...this.status,
@@ -5717,7 +5793,6 @@ export class DecentraderGapMonitor {
       applyIntrusionHourlyCandleColorsToPayload(this.latestTimelapsePayload, intrusionCandleCandles);
       const rsiStudy = await rsiStudyForRows(rows);
       this.latestTimelapsePayload.rsiStudy = rsiStudy;
-      const state = readState(config.stateFile);
       const previousDataTimestamp = state.lastDataTimestamp;
       const intrusionCandleFilterEnabled = decentraderIntrusionCandleFilterEnabled();
       const regularIntrusionEmailEnabled = decentraderRegularIntrusionEmailEnabled();
@@ -5810,8 +5885,6 @@ export class DecentraderGapMonitor {
         duplicate: false
       };
 
-      await this.maybeSyncDynamicStopLoss(state, result);
-      await this.maybeSyncDynamicTakeProfits(state, result);
 
       const smtpSettings = smtpSettingsFromEnv();
       await this.processDailyMasterScanner(rows, rsiStudy, previousDataTimestamp, state, result, smtpSettings);
@@ -6626,7 +6699,7 @@ export class DecentraderGapMonitor {
     if (events.length) result.alertCount += events.length;
   }
 
-  private async maybeSyncDynamicTakeProfits(state: AlertState, result: any): Promise<void> {
+  private async maybeSyncDynamicTakeProfits(state: AlertState, result: any, preparedPlan?: any): Promise<void> {
     if (!decentraderDynamicTpEnabled()) {
       result.dynamicTpSync = {
         outcome: 'DISABLED',
@@ -6635,13 +6708,6 @@ export class DecentraderGapMonitor {
       return;
     }
 
-    if (!decentraderAutoTradeEnabled()) {
-      result.dynamicTpSync = {
-        outcome: 'SKIPPED',
-        reason: 'Auto-trading is disabled; dynamic TP orders were preserved.'
-      };
-      return;
-    }
 
     const executor = this.tradeExecutor;
     const syncTakeProfits = executor?.syncTakeProfits;
@@ -6697,7 +6763,14 @@ export class DecentraderGapMonitor {
         return;
       }
 
-      const plan = await this.getTradePlan(account, market);
+      const plan = preparedPlan || await this.getTradePlan(account, market);
+      plan.marketInfo = account.markets[market];
+      const currentPrice = Number(plan.marketInfo?.oraclePrice);
+      if (!Number.isFinite(currentPrice) || !(currentPrice > 0) || (positionDirection === 'long'
+        ? currentPrice <= managedPosition.currentStop : currentPrice >= managedPosition.currentStop)) {
+        result.dynamicTpSync = { outcome: 'SKIPPED', reason: 'No valid price or stop breached; awaiting protective management.' };
+        return;
+      }
       const alert = buildDecentraderDynamicTpAlert(plan, position);
       const proposedTakeProfits = (alert as any).take_profits || [];
       const directionalPlan = plan?.plans?.[positionDirection];
@@ -6764,13 +6837,6 @@ export class DecentraderGapMonitor {
       return;
     }
 
-    if (!decentraderAutoTradeEnabled()) {
-      result.dynamicSlSync = {
-        outcome: 'SKIPPED',
-        reason: 'Auto-trading is disabled; dynamic SL orders were preserved.'
-      };
-      return;
-    }
 
     const executor = this.tradeExecutor;
     const syncTrailingStop = executor?.syncTrailingStop;
@@ -6866,12 +6932,11 @@ export class DecentraderGapMonitor {
         return;
       }
 
-      const plan = await this.getTradePlan(account, market);
-      const directionalPlan = plan?.plans?.[positionDirection];
-      const currentPrice =
-        numberOrZero(directionalPlan?.entryReference?.price) ||
-        numberOrZero(plan?.marketInfo?.oraclePrice) ||
-        numberOrZero(plan?.price);
+      const marketInfo = account.markets[market];
+      const currentPrice = numberOrZero(marketInfo?.oraclePrice);
+      if (!(currentPrice > 0)) throw new Error(`No current dYdX price for ${market} stop management.`);
+      const timestamp = nowNlIso();
+      const plan = { market, marketInfo, price: currentPrice, timestamp, timestampNl: nlTime(timestamp) };
       const rows = dydxHourlyCandlesToFractalRows(
         await fetchDydxHourlyCandlesForMarket(market)
       );
@@ -6904,7 +6969,7 @@ export class DecentraderGapMonitor {
       const candidateStopDetails = needsDydxFractalRebase
         ? rebaseStop
         : !hasStopFractalAnchor
-          ? directionalPlan?.stop
+          ? buildFractalStop(rows, frameIndex, positionDirection, currentPrice, { fractalDelay, enforceMinDistance: false })
           : delayedStop;
       const candidateStop = numberOrZero(candidateStopDetails?.price);
       const candidateStopOnCorrectSide =
@@ -7132,6 +7197,16 @@ export class DecentraderGapMonitor {
   }
 
   private async maybeExecuteTradeForAlert(
+    alert: GapAlert,
+    signature: string,
+    state: AlertState,
+    result: any,
+    options: TradeEvaluationOptions = {}
+  ): Promise<void> {
+    return this.coordinator.exclusive(() => this.executeTradeExclusive(alert, signature, state, result, options));
+  }
+
+  private async executeTradeExclusive(
     alert: GapAlert,
     signature: string,
     state: AlertState,

@@ -21,6 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { AbstractDexClient } from '../abstractDexClient';
 import { createReadResilientIndexerClient } from './indexerReadRecovery';
+import { assessEntryDepth, constrainEntryPrice, entryRiskLimit, EntryRiskLimit } from './entryRiskGuard';
 
 type ProgressResult =
   | { kind: 'target'; currentSize: number }
@@ -174,6 +175,7 @@ type PriceCandidate = {
 type CorrectionOrderPriceReference = {
   price?: number;
   source: string;
+  entryRiskLimit?: EntryRiskLimit;
 };
 
 type CorrectionOrderPricing = {
@@ -1481,6 +1483,8 @@ export class DydxV4Client extends AbstractDexClient {
 
     const targetSize = this.getTargetSize(alert, Number((alert as any).size ?? 0));
 
+    const priceReference = await this.prepareEntryRiskReference(market, targetSize, alert, telemetry);
+
     console.log('Target position:', { market, targetSize, profile: profile.name });
 
     await this.cancelOpenOrders(market);
@@ -1494,7 +1498,7 @@ export class DydxV4Client extends AbstractDexClient {
     const targetReached = await this.reachTargetPositionOrFailsafeFlat(
       market,
       targetSize,
-      this.getAlertPriceReference(alert, telemetry)
+      priceReference
     );
 
     if (!targetReached) {
@@ -2671,6 +2675,9 @@ export class DydxV4Client extends AbstractDexClient {
       priceReference,
       marketInfo
     );
+    pricing.price = constrainEntryPrice(
+      pricing.price, side === OrderSide.BUY ? 'BUY' : 'SELL', reduceOnly, priceReference?.entryRiskLimit
+    );
 
     const clientId = this.createClientId();
     const submittedAt = Date.now();
@@ -2685,6 +2692,7 @@ export class DydxV4Client extends AbstractDexClient {
       priceSource: pricing.priceSource,
       slippagePct: pricing.slippagePct,
       usedFallbackWorstPrice: pricing.usedFallbackWorstPrice,
+      entryRiskLimit: reduceOnly ? undefined : priceReference?.entryRiskLimit,
       minOrderSize: sizeCheck.minOrderSize,
       roundedOrderSize: sizeCheck.roundedOrderSize,
       stepSize: sizeCheck.stepSize,
@@ -2782,6 +2790,36 @@ export class DydxV4Client extends AbstractDexClient {
 
       throw error;
     }
+  }
+
+  private async prepareEntryRiskReference(
+    market: string,
+    targetSize: number,
+    alert: AlertObject,
+    telemetry: TradingViewTelemetry
+  ): Promise<CorrectionOrderPriceReference | undefined> {
+    const reference = this.getAlertPriceReference(alert, telemetry);
+    const budgetValue = (alert as any).decentrader?.riskBudgetUsd;
+    if (Math.abs(targetSize) < this.TOLERANCE || budgetValue === undefined) return reference;
+    const side = targetSize > 0 ? OrderSide.BUY : OrderSide.SELL;
+    const riskSide = targetSize > 0 ? 'BUY' : 'SELL';
+    const marketInfo = await this.getMarketInfoBestEffort(market);
+    const stop = Number((alert as any).static_sl);
+    const oracle = Number(marketInfo?.oraclePrice);
+    if (!(oracle > 0) || !(stop > 0) || (targetSize > 0 ? stop >= oracle : stop <= oracle)) {
+      throw new Error('Entry risk guard: protective stop is no longer valid against the current dYdX oracle.');
+    }
+    const limit = entryRiskLimit(riskSide, Math.abs(targetSize), stop, Number(budgetValue), Number(marketInfo?.tickSize));
+    const pricing = await this.resolveCorrectionOrderPricing(market, side, reference, marketInfo);
+    const limitPrice = constrainEntryPrice(pricing.price, riskSide, false, limit);
+    const book = await (this.indexer.markets as any).getPerpetualMarketOrderbook(market);
+    const depth = assessEntryDepth(book, riskSide, Math.abs(targetSize), limitPrice);
+    console.log('dYdX entry risk preflight passed:', {
+      market, ...depth, riskBudgetUsd: Number(budgetValue), stop,
+      expectedStopRiskUsd: Math.abs(targetSize) * Math.abs(depth.expectedFillPrice - stop),
+      riskBasis: 'entry-fill-to-stop-trigger-excludes-costs'
+    });
+    return { ...reference, source: reference?.source || 'risk-guard', entryRiskLimit: limit };
   }
 
   private getAlertPriceReference(
@@ -3271,6 +3309,10 @@ export class DydxV4Client extends AbstractDexClient {
       direction: isLong ? 'LONG' : 'SHORT',
       positionSize: position.size,
       entryReferencePrice,
+      actualEntryPrice: position.entryPrice,
+      actualEntryToTriggerRiskUsd: size * Math.abs(position.entryPrice - triggerPrice),
+      plannedRiskBudgetUsd: (alert as any).decentrader?.riskBudgetUsd,
+      riskBasis: 'entry-fill-to-stop-trigger-excludes-costs',
       triggerPrice,
       executionPrice,
       side,

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 
 import { AlertObject } from '../types';
 
@@ -727,6 +728,14 @@ function writeState(state: EthMonitorState, config: OpenLiquidityV2TradeMonitorC
 
 export class OpenLiquidityV2EthTradeMonitor {
   private interval: NodeJS.Timeout | undefined;
+  private managementInterval: NodeJS.Timeout | undefined;
+  private managementPromise: Promise<any> | undefined;
+  private takeProfitPromise: Promise<void> | undefined;
+  private managementStatus: any = { running: false };
+  private readonly coordinator = new ManagedPositionCoordinator<EthMonitorState>(
+    () => readState(this.config),
+    (state) => writeState(state, this.config)
+  );
   private initialTimer: NodeJS.Timeout | undefined;
   private running = false;
   private executor: DecentraderTradeExecutor | undefined;
@@ -762,13 +771,19 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   start(initialDelayMs = 75_000): void {
-    if (!this.enabled() || this.interval || this.initialTimer) return;
+    if (this.interval || this.initialTimer || this.managementInterval) return;
     const begin = () => {
       this.initialTimer = undefined;
-      this.check().catch((error) => console.error(`${this.config.asset} V2 intrusion monitor initial check failed:`, error));
-      this.interval = setInterval(() => {
-        this.check().catch((error) => console.error(`${this.config.asset} V2 intrusion monitor check failed:`, error));
-      }, this.pollMinutes() * 60_000);
+      const manage = () => this.checkManagedPosition().catch((error) =>
+        console.error(`${this.config.asset} V2 position management failed:`, error));
+      void manage();
+      this.managementInterval = setInterval(manage, this.pollMinutes() * 60_000);
+      if (this.enabled()) {
+        this.check().catch((error) => console.error(`${this.config.asset} V2 intrusion monitor initial check failed:`, error));
+        this.interval = setInterval(() => {
+          this.check().catch((error) => console.error(`${this.config.asset} V2 intrusion monitor check failed:`, error));
+        }, this.pollMinutes() * 60_000);
+      }
     };
     this.initialTimer = setTimeout(begin, initialDelayMs);
     console.log(`${this.config.asset} Public Perp V2 intrusion/trade monitor scheduled:`, {
@@ -786,6 +801,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     return {
       enabled: this.enabled(),
       running: this.running,
+      positionManagement: this.managementStatus,
       market: this.config.market,
       autoTradeEnabled: this.autoTradeEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
@@ -1056,6 +1072,10 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private async executeAlert(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
+    return this.coordinator.exclusive(() => this.executeAlertExclusive(state, alert, signature, result));
+  }
+
+  private async executeAlertExclusive(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
     if (!this.autoTradeEnabled()) {
       result.tradeSkipped = `${this.config.asset} V2 auto-trading is disabled.`;
       return;
@@ -1232,10 +1252,14 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
   }
 
-  private async syncManagedOrders(state: EthMonitorState, result: any): Promise<void> {
+  private async syncManagedOrders(
+    state: EthMonitorState,
+    result: any,
+    options: { stopOnly?: boolean; skipStop?: boolean; preparedPlan?: any } = {}
+  ): Promise<void> {
     const executor = this.executor;
     const managed = state.managedPosition;
-    if (!executor || !managed || !this.autoTradeEnabled()) return;
+    if (!executor || !managed) return;
     const account = await executor.getAccountSnapshot([this.config.market]);
     const position = existingPosition(account, this.config.market);
     if (!position) {
@@ -1254,40 +1278,73 @@ export class OpenLiquidityV2EthTradeMonitor {
       result.managedOrderSync = { outcome: 'SKIPPED', reason: `${this.config.asset} position no longer matches the monitor-owned entry.` };
       return;
     }
-    const plan = await this.getTradePlan(account);
-    result.tradePlan = plan;
+    const marketInfo = account.markets[this.config.market];
+    const currentPrice = finite(marketInfo?.oraclePrice);
+    if (!(currentPrice > 0)) throw new Error(`No current dYdX price for ${this.config.market} stop management.`);
+    const stopPlan = { market: this.config.market, marketInfo, price: currentPrice };
+    if (options.skipStop && (direction === 'long' ? currentPrice <= managed.currentStop : currentPrice >= managed.currentStop)) {
+      result.dynamicTpSync = { outcome: 'SKIPPED', reason: 'Stop breached; awaiting protective management.' };
+      return;
+    }
+    // Protective orders must not depend on the map, TP capacity or TP submissions.
+    if (!options.skipStop) await this.syncManagedStop(state, result, position, stopPlan);
+    if (!state.managedPosition || result.dynamicSlSync?.outcome === 'FLATTENED_AFTER_STOP_BREACH') return;
+    if (['UPDATED', 'UNCHANGED', 'READY'].includes(result.dynamicSlSync?.outcome)) {
+      result.lastSuccessfulStopCheckAt = nowNlIso();
+    }
+    if (options.stopOnly) return;
     if (boolEnv('DECENTRADER_DYNAMIC_TP_ENABLED', true) && executor.syncTakeProfits) {
-      const tpAlert = buildDecentraderDynamicTpAlert(plan, position);
-      (tpAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_tps`;
-      await this.applyStatefulOrderCapacity(tpAlert, result);
-      const directionalPlan = plan?.plans?.[direction];
-      const minimumOrderSize =
-        finite(directionalPlan?.sizing?.minimumOrderSize) ||
-        finite(plan?.marketInfo?.stepSize);
-      const stabilized = stabilizeManagedTakeProfits(
-        managed,
-        (tpAlert as any).take_profits || [],
-        Math.abs(finite(position.size)),
-        nowNlIso(),
-        Array.isArray(state.lastTradeDecision?.takeProfits)
-          ? state.lastTradeDecision.takeProfits
-          : [],
-        minimumOrderSize,
-        { currentPrice: finite(plan.marketInfo?.oraclePrice) || finite(plan.price) }
-      );
-      (tpAlert as any).take_profits = stabilized.takeProfits;
-      if (stabilized.takeProfits.length) {
-        result.dynamicTpSync = await executor.syncTakeProfits(tpAlert);
-        result.dynamicTpSync = {
-          ...result.dynamicTpSync,
-          tp1Lifecycle: stabilized.lifecycle || null,
-          tpRatchetLifecycle: stabilized.ratchetLifecycle,
-          tp1ConsumedNow: stabilized.consumedNow,
-          takeProfits: stabilized.takeProfits
-        };
+      try {
+        const plan = options.preparedPlan || await this.getTradePlan(account);
+        plan.marketInfo = marketInfo;
+        result.tradePlan = plan;
+        const tpAlert = buildDecentraderDynamicTpAlert(plan, position);
+        (tpAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_tps`;
+        await this.applyStatefulOrderCapacity(tpAlert, result);
+        const directionalPlan = plan?.plans?.[direction];
+        const minimumOrderSize =
+          finite(directionalPlan?.sizing?.minimumOrderSize) ||
+          finite(plan?.marketInfo?.stepSize);
+        const stabilized = stabilizeManagedTakeProfits(
+          managed,
+          (tpAlert as any).take_profits || [],
+          Math.abs(finite(position.size)),
+          nowNlIso(),
+          Array.isArray(state.lastTradeDecision?.takeProfits)
+            ? state.lastTradeDecision.takeProfits
+            : [],
+          minimumOrderSize,
+          { currentPrice: finite(plan.marketInfo?.oraclePrice) || finite(plan.price) }
+        );
+        (tpAlert as any).take_profits = stabilized.takeProfits;
+        if (stabilized.takeProfits.length) {
+          result.dynamicTpSync = await executor.syncTakeProfits(tpAlert);
+          result.dynamicTpSync = {
+            ...result.dynamicTpSync,
+            tp1Lifecycle: stabilized.lifecycle || null,
+            tpRatchetLifecycle: stabilized.ratchetLifecycle,
+            tp1ConsumedNow: stabilized.consumedNow,
+            takeProfits: stabilized.takeProfits
+          };
+        }
+      } catch (error) {
+        result.dynamicTpSync = { outcome: 'ERROR', reason: error instanceof Error ? error.message : String(error) };
+        console.warn(`${this.config.asset} V2 TP sync failed after stop management:`, result.dynamicTpSync);
       }
     }
-    if (!boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true) || !executor.syncTrailingStop || !managed.currentStop) return;
+  }
+
+  private async syncManagedStop(state: EthMonitorState, result: any, position: DydxOpenPosition, plan: any): Promise<void> {
+    const executor = this.executor!;
+    const managed = state.managedPosition!;
+    const direction = directionForPosition(position);
+    if (!boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true)) {
+      result.dynamicSlSync = { outcome: 'DISABLED' };
+      return;
+    }
+    if (!executor.syncTrailingStop || !(managed.currentStop > 0)) {
+      throw new Error(`Cannot manage ${this.config.market} protection: missing stop or stop executor.`);
+    }
     const currentPrice = finite(plan.marketInfo?.oraclePrice) || finite(plan.price);
     const breached = direction === 'long'
       ? currentPrice <= finite(managed.currentStop)
@@ -1296,7 +1353,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       await executor.placeOrder(buildDecentraderStopBreachFlatAlert(this.config.market, currentPrice, position, managed.currentStop));
       const after = await executor.getAccountSnapshot([this.config.market]);
       if (!existingPosition(after, this.config.market)) delete state.managedPosition;
-      result.dynamicSlSync = { outcome: 'FLATTENED_AFTER_STOP_BREACH', currentPrice, stop: managed.currentStop };
+      result.dynamicSlSync = { outcome: 'FLATTENED_AFTER_STOP_BREACH', currentPrice, stop: managed.currentStop, remainingPosition: existingPosition(after, this.config.market) || null };
       return;
     }
     const rows = dydxHourlyCandlesToFractalRows(
@@ -1390,7 +1447,14 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (this.running) return this.lastResult;
     this.running = true;
     this.lastStartedAt = nowNlIso();
-    const state = readState(this.config);
+    try {
+      return await this.coordinator.withState((state) => this.checkWithState(state));
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async checkWithState(state: EthMonitorState): Promise<any> {
     const result: any = {
       ok: true,
       market: this.config.market,
@@ -1596,11 +1660,6 @@ export class OpenLiquidityV2EthTradeMonitor {
       if (!state.managedPosition && !result.tradePlaced) {
         await this.recoverUnmanagedFilteredPosition(state, payload, result);
       }
-      // The managed entry flow already submits its initial SL and TPs. Waiting
-      // until the next poll avoids resubmitting while the indexer catches up.
-      if (!result.tradePlaced) {
-        await this.syncManagedOrders(state, result);
-      }
       this.lastResult = result;
       return result;
     } catch (error) {
@@ -1611,10 +1670,68 @@ export class OpenLiquidityV2EthTradeMonitor {
       return result;
     } finally {
       state.lastCheckedAt = nowNlIso();
-      writeState(state, this.config);
       this.lastFinishedAt = nowNlIso();
       this.running = false;
     }
+  }
+
+  stop(): void {
+    if (this.initialTimer) clearTimeout(this.initialTimer);
+    if (this.interval) clearInterval(this.interval);
+    if (this.managementInterval) clearInterval(this.managementInterval);
+    this.initialTimer = this.interval = this.managementInterval = undefined;
+  }
+
+  async checkManagedPosition(): Promise<any> {
+    if (this.managementPromise) return this.managementPromise;
+    this.managementPromise = this.coordinator.exclusive(() => this.coordinator.withState(async (state) => {
+      const result: any = { running: true, lastStartedAt: nowNlIso() };
+      this.managementStatus = { ...this.managementStatus, ...result, error: undefined };
+      try {
+        await this.syncManagedOrders(state, result, { stopOnly: true });
+        result.ok = result.dynamicTpSync?.outcome !== 'ERROR';
+        if (state.managedPosition && result.dynamicSlSync?.outcome !== 'FLATTENED_AFTER_STOP_BREACH') {
+          this.scheduleTakeProfitSync();
+        }
+      } catch (error) {
+        result.ok = false;
+        result.error = error instanceof Error ? error.message : String(error);
+        console.error(`${this.config.asset} V2 protective order check failed:`, result.error);
+      } finally {
+        this.managementStatus = { ...this.managementStatus, ...result, running: false, lastFinishedAt: nowNlIso() };
+      }
+      return this.managementStatus;
+    }));
+    try {
+      return await this.managementPromise;
+    } finally {
+      this.managementPromise = undefined;
+    }
+  }
+
+  private scheduleTakeProfitSync(): void {
+    if (this.takeProfitPromise || !this.executor?.syncTakeProfits || !boolEnv('DECENTRADER_DYNAMIC_TP_ENABLED', true)) return;
+    this.takeProfitPromise = this.coordinator.withState(async (state) => {
+      const managed = state.managedPosition;
+      if (!managed) return;
+      // Map preparation is read-only and must not hold the position lock.
+      const preparedAt = Date.now();
+      const account = await this.executor!.getAccountSnapshot([this.config.market]);
+      const plan = await this.getTradePlan(account);
+      await this.coordinator.exclusive(async () => {
+        if (state.managedPosition !== managed) return;
+        if (Date.now() - preparedAt > this.pollMinutes() * 60_000) {
+          this.managementStatus.dynamicTpSync = { outcome: 'SKIPPED', reason: 'TP preparation exceeded one management interval.' };
+          return;
+        }
+        const result: any = {};
+        await this.syncManagedOrders(state, result, { skipStop: true, preparedPlan: plan });
+        this.managementStatus.dynamicTpSync = result.dynamicTpSync;
+      });
+    }).catch((error) => {
+      this.managementStatus.dynamicTpSync = { outcome: 'ERROR', reason: error instanceof Error ? error.message : String(error) };
+      console.warn(`${this.config.asset} V2 TP preparation failed; independent stop management continues:`, this.managementStatus.dynamicTpSync);
+    }).finally(() => { this.takeProfitPromise = undefined; });
   }
 }
 
