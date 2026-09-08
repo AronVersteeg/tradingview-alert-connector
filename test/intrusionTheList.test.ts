@@ -20,13 +20,14 @@ describe('The List', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test('starts with the twenty-four user-labeled reference cases', () => {
+  test('starts with twenty-nine cases, separating impulse labels from a loss-only report', () => {
     const snapshot = intrusionTheListSnapshot();
     expect(snapshot.methodology.selectedMetric).toBe('OI_FLUSH_PCT');
     expect(snapshot.methodology.strongWhenContractChangePctLte).toBe(-1.8);
-    expect(snapshot.methodology.labeledSampleSize).toBe(24);
-    expect(snapshot.records.filter((record) => record.userLabel === 'STRONG')).toHaveLength(4);
-    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(20);
+    expect(snapshot.records).toHaveLength(29);
+    expect(snapshot.methodology.labeledSampleSize).toBe(28);
+    expect(snapshot.records.filter((record) => record.userLabel === 'STRONG')).toHaveLength(6);
+    expect(snapshot.records.filter((record) => record.userLabel === 'WEAK')).toHaveLength(22);
 
     const moderateStrong = snapshot.records
       .find((record) => record.key === 'INJ-USD|2026-08-28 16:00:00');
@@ -110,7 +111,7 @@ describe('The List', () => {
       expect(matches[0].automaticLabel).toBe('IQ WEAK');
       expect(matches[0].impulseQuality).toEqual(storedQuality);
       expect(matches[0].candleReview).toEqual(candleReview);
-      expect(snapshot.methodology.labeledSampleSize).toBe(24);
+      expect(snapshot.methodology.labeledSampleSize).toBe(28);
     }
   });
 
@@ -134,7 +135,7 @@ describe('The List', () => {
     expect(records.find((record) => record.key === expected[5][0])?.userLabelNote)
       .toContain('strong false impulse');
     expect(records.find((record) => record.key === expected[6][0])?.userLabelNote)
-      .toContain('realized profit is not confirmed');
+      .toContain('Realized profit is not confirmed');
   });
 
   test('merges the September positive outcome without changing live diagnostics on repeated reads', () => {
@@ -196,8 +197,86 @@ describe('The List', () => {
       expect(matches[0].userLabelNote).toContain('hele dikke false impulse');
       expect(matches[0].impulseQuality).toEqual(storedQuality);
       expect(matches[0].candleReview).toEqual(candleReview);
-      expect(snapshot.methodology.labeledSampleSize).toBe(24);
+      expect(snapshot.methodology.labeledSampleSize).toBe(28);
     }
+  });
+
+  test('adds September observations without turning reported outcomes into automatic IQ labels', () => {
+    const records = intrusionTheListSnapshot().records;
+    const cases = [
+      ['INJ-USD|2026-09-04 14:00:00', 'FALSE', 0.08404117625182561],
+      ['INJ-USD|2026-09-06 05:00:00', 'POTENTIAL', -0.9797534630839766],
+      ['INJ-USD|2026-09-06 09:00:00', 'UNCLASSIFIED', 0.07732865324154847],
+      ['INJ-USD|2026-09-06 19:00:00', 'TRUE', -0.28532620766250627],
+      ['SOL-USD|2026-09-06 12:00:00', 'FALSE', -0.3840384759166149]
+    ] as const;
+    for (const [key, impulse, oi] of cases) {
+      const matches = records.filter(r => r.key === key);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]).toMatchObject({ automaticLabel: 'IQ WEAK', userOutcome: { source: 'user', reportedOn: '2026-09-07', impulse } });
+      expect(matches[0].impulseQuality.openInterest?.contractChangePct).toBeCloseTo(oi, 10);
+    }
+    const loss = records.find(r => r.key === cases[2][0])!;
+    expect(loss.userLabel).toBeUndefined();
+    expect(loss.userOutcome).toMatchObject({ tradeResult: 'LOSS', exitReason: 'STOP_LOSS' });
+    const potential = records.find(r => r.key === cases[1][0])!;
+    expect(potential.userOutcome).toMatchObject({ tradeResult: 'UNCONFIRMED', exitReason: 'TRAILING_STOP' });
+    expect(records.find(r => r.key === cases[3][0])?.userOutcome?.dailyFractalBreak)
+      .toMatchObject({ reported: true, verifiedBeforeDelayCutoff: false });
+  });
+
+  test('the six reference measurements agree with the archived original assessments', () => {
+    const evidence = JSON.parse(fs.readFileSync(path.join(__dirname, '../docs/research/the-list-2026-09-07-evidence.json'), 'utf8'));
+    const records = intrusionTheListSnapshot().records;
+    expect(evidence.records).toHaveLength(6);
+    for (const original of evidence.records) {
+      const reference = records.find(r => r.key === original.key)!;
+      expect(reference).toMatchObject({
+        timestampNl: original.timestampNl, direction: original.direction,
+        delayCutoffAt: original.delayCutoffAt, automaticLabel: original.automaticLabel
+      });
+      expect(reference.impulseQuality.openInterest).toMatchObject({
+        contractChangePct: original.impulseQuality.openInterest.contractChangePct,
+        usdChangePct: original.impulseQuality.openInterest.usdChangePct,
+        samples: original.impulseQuality.openInterest.samples
+      });
+    }
+  });
+
+  test('revises a persisted ZEC annotation without overwriting its original Delay evidence', () => {
+    const key = 'ZEC-USD|2026-09-03 14:00:00';
+    const seed = intrusionTheListSnapshot().records.find(r => r.key === key)!;
+    const stored = { ...seed, userOutcome: undefined, userLabelNote: 'Old potential-profit report',
+      impulseQuality: { ...seed.impulseQuality, reasons: ['Original live evidence retained'] } };
+    fs.writeFileSync(process.env.INTRUSION_THE_LIST_FILE!, JSON.stringify({ records: [stored] }));
+    for (let i = 0; i < 2; i++) {
+      const matches = intrusionTheListSnapshot().records.filter(r => r.key === key);
+      expect(matches).toHaveLength(1);
+      expect(matches[0].userLabelNote).toContain('start of an impulse');
+      expect(matches[0].userOutcome?.dailyFractalBreak?.verifiedBeforeDelayCutoff).toBe(false);
+      expect(matches[0].impulseQuality).toEqual(stored.impulseQuality);
+    }
+  });
+
+  test('keeps a newer user revision ahead of seeded annotations', () => {
+    const seed = intrusionTheListSnapshot().records.find(r => r.key === 'ZEC-USD|2026-09-03 14:00:00')!;
+    const updated = { ...seed, userLabel: 'WEAK', userLabelNote: 'Later correction',
+      userOutcome: { source: 'user', reportedOn: '2026-09-08', impulse: 'FALSE', tradeResult: 'LOSS' } };
+    fs.writeFileSync(process.env.INTRUSION_THE_LIST_FILE!, JSON.stringify({ records: [updated] }));
+    const record = intrusionTheListSnapshot().records.find(r => r.key === seed.key)!;
+    expect(record.userLabel).toBe('WEAK');
+    expect(record.userLabelNote).toBe('Later correction');
+  });
+
+  test('live diagnostic refresh preserves the new structured user outcome', () => {
+    const seed = intrusionTheListSnapshot().records.find(r => r.key === 'INJ-USD|2026-09-06 05:00:00')!;
+    const impulseQuality = { ...seed.impulseQuality, reasons: ['Refreshed diagnostic evidence'] };
+    recordIntrusionTheList({ ...seed, impulseQuality, userOutcome: undefined });
+    const record = intrusionTheListSnapshot().records.find(r => r.key === seed.key)!;
+    expect(record.userOutcome).toEqual(seed.userOutcome);
+    expect(record.userLabel).toBe('STRONG');
+    expect(record.automaticLabel).toBe('IQ WEAK');
+    expect(record.impulseQuality.reasons).toEqual(['Refreshed diagnostic evidence']);
   });
 
   test('updates live diagnostics without overwriting a user label', () => {

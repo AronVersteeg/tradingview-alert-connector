@@ -6,6 +6,20 @@ import type { IntrusionForwardHurdle } from './intrusionForwardHurdle';
 
 export type IntrusionUserLabel = 'STRONG' | 'WEAK';
 
+export type IntrusionUserOutcome = {
+  source: 'user';
+  reportedOn: string;
+  impulse: 'TRUE' | 'FALSE' | 'POTENTIAL' | 'UNCLASSIFIED';
+  tradeResult: 'PROFIT' | 'LOSS' | 'UNCONFIRMED';
+  exitReason?: 'TRAILING_STOP' | 'STOP_LOSS';
+  immediateReversal?: boolean;
+  dailyFractalBreak?: {
+    reported: true;
+    verifiedBeforeDelayCutoff: false;
+    note: string;
+  };
+};
+
 export type BinanceDelayAnalytics = {
   source: 'binance-futures';
   causal: true;
@@ -45,6 +59,7 @@ export type IntrusionTheListRecord = {
   filteredStatus?: string;
   userLabel?: IntrusionUserLabel;
   userLabelNote?: string;
+  userOutcome?: IntrusionUserOutcome;
   automaticLabel: IntrusionImpulseQuality['label'];
   selectedMetric: 'OI_FLUSH_PCT';
   impulseQuality: IntrusionImpulseQuality;
@@ -204,7 +219,8 @@ function seedRecord(input: {
   timestampNl: string;
   cutoff: string;
   direction: 'long' | 'short';
-  userLabel: IntrusionUserLabel;
+  userLabel?: IntrusionUserLabel;
+  userOutcome?: IntrusionUserOutcome;
   contractChangePct: number;
   usdChangePct: number;
   samples: number;
@@ -224,6 +240,7 @@ function seedRecord(input: {
     filteredStatus: 'PASS',
     userLabel: input.userLabel,
     userLabelNote: input.note,
+    userOutcome: input.userOutcome,
     automaticLabel: quality.label,
     selectedMetric: 'OI_FLUSH_PCT',
     impulseQuality: quality,
@@ -369,13 +386,51 @@ const SEED_RECORDS: IntrusionTheListRecord[] = [
     market: 'ZEC-USD', symbol: 'ZECUSDT', asset: 'ZEC', timestamp: '2026-09-03 14:00:00',
     timestampNl: '03-09-2026 16:00 NL', cutoff: '2026-09-03T15:59:31.241Z', direction: 'long',
     userLabel: 'STRONG', contractChangePct: 7.790200965905969, usdChangePct: 19.345429756979037, samples: 24,
-    note: 'User-observed impulse with potential profit ("impulse met potentiele winst"); realized profit is not confirmed. Original stored Delay assessment: IQ WEAK with rising contract OI.'
+    note: 'User-confirmed start of an impulse, updated 07-09-2026; earlier described as an impulse with potential profit. Daily confirmation through a fractal break was reported; its timing and level are not yet verified. Realized profit is not confirmed. Original stored Delay assessment: IQ WEAK with rising contract OI.',
+    userOutcome: { source: 'user', reportedOn: '2026-09-07', impulse: 'TRUE', tradeResult: 'UNCONFIRMED',
+      dailyFractalBreak: { reported: true, verifiedBeforeDelayCutoff: false, note: 'Daily confirmation through fractal break reported by user; venue, level and confirmation time pending.' } }
   }),
   seedRecord({
     market: 'ZEC-USD', symbol: 'ZECUSDT', asset: 'ZEC', timestamp: '2026-09-04 08:00:00',
     timestampNl: '04-09-2026 10:00 NL', cutoff: '2026-09-04T09:57:05.955Z', direction: 'long',
     userLabel: 'WEAK', contractChangePct: 0.2026593466398774, usdChangePct: 4.124369330869282, samples: 24,
     note: 'User-confirmed pronounced false impulse ("hele dikke false impulse"). Original stored Delay assessment: candle/delta PASS, IQ WEAK with rising contract OI, and a close hurdle.'
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-09-04 14:00:00',
+    timestampNl: '04-09-2026 16:00 NL', cutoff: '2026-09-04T15:27:22.829Z', direction: 'short',
+    userLabel: 'WEAK', contractChangePct: 0.08404117625182561, usdChangePct: -0.9576520509539388, samples: 18,
+    note: 'User-confirmed severe false impulse with immediate reversal ("zware false impulse/directe reversal"). Original stored Delay assessment: candle/delta PASS, IQ WEAK.',
+    userOutcome: { source: 'user', reportedOn: '2026-09-07', impulse: 'FALSE', tradeResult: 'UNCONFIRMED', immediateReversal: true }
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-09-06 05:00:00',
+    timestampNl: '06-09-2026 07:00 NL', cutoff: '2026-09-06T06:40:03.278Z', direction: 'long',
+    userLabel: 'STRONG', contractChangePct: -0.9797534630839766, usdChangePct: -1.5807809199625433, samples: 21,
+    note: 'User-observed potentially profitable impulse, exited by trailing stop. Realized profit is not confirmed; STRONG denotes a provisional positive user outcome, not the automatic IQ label. Original stored Delay assessment: candle/delta PASS, IQ WEAK.',
+    userOutcome: { source: 'user', reportedOn: '2026-09-07', impulse: 'POTENTIAL', tradeResult: 'UNCONFIRMED', exitReason: 'TRAILING_STOP' }
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-09-06 09:00:00',
+    timestampNl: '06-09-2026 11:00 NL', cutoff: '2026-09-06T10:40:03.455Z', direction: 'long',
+    contractChangePct: 0.07732865324154847, usdChangePct: 0.5726669469076962, samples: 21,
+    note: 'User-reported loss, stop loss hit. Impulse truth is unclassified: a losing exit alone does not prove a false impulse. Original stored Delay assessment: candle/delta PASS, IQ WEAK.',
+    userOutcome: { source: 'user', reportedOn: '2026-09-07', impulse: 'UNCLASSIFIED', tradeResult: 'LOSS', exitReason: 'STOP_LOSS' }
+  }),
+  seedRecord({
+    market: 'INJ-USD', symbol: 'INJUSDT', asset: 'INJ', timestamp: '2026-09-06 19:00:00',
+    timestampNl: '06-09-2026 21:00 NL', cutoff: '2026-09-06T20:40:03.167Z', direction: 'long',
+    userLabel: 'STRONG', contractChangePct: -0.28532620766250627, usdChangePct: 0.4494649338666834, samples: 21,
+    note: 'User-reported profitable impulse with daily confirmation through fractal break. Fractal level and confirmation time are not yet verified against the original Delay cutoff. Original stored Delay assessment: candle/delta PASS, IQ WEAK.',
+    userOutcome: { source: 'user', reportedOn: '2026-09-07', impulse: 'TRUE', tradeResult: 'PROFIT',
+      dailyFractalBreak: { reported: true, verifiedBeforeDelayCutoff: false, note: 'Daily confirmation through fractal break reported by user; venue, level and confirmation time pending.' } }
+  }),
+  seedRecord({
+    market: 'SOL-USD', symbol: 'SOLUSDT', asset: 'SOL', timestamp: '2026-09-06 12:00:00',
+    timestampNl: '06-09-2026 14:00 NL', cutoff: '2026-09-06T13:42:33.986Z', direction: 'long',
+    userLabel: 'WEAK', contractChangePct: -0.3840384759166149, usdChangePct: -0.5400903159752946, samples: 21,
+    note: 'User-confirmed severe false impulse with immediate reversal ("zware false impulse/directe reversal"). Original stored Delay assessment: candle/delta PASS, IQ WEAK.',
+    userOutcome: { source: 'user', reportedOn: '2026-09-07', impulse: 'FALSE', tradeResult: 'UNCONFIRMED', immediateReversal: true }
   })
 ];
 
@@ -393,11 +448,14 @@ function mergeWithSeeds(records: IntrusionTheListRecord[]): IntrusionTheListReco
   for (const seed of SEED_RECORDS) byKey.set(seed.key, seed);
   for (const record of records) {
     const seed = byKey.get(record.key);
+    const revisedAnnotation = Boolean(seed?.userOutcome &&
+      (!record.userOutcome || seed.userOutcome.reportedOn > record.userOutcome.reportedOn));
     byKey.set(record.key, {
       ...seed,
       ...record,
-      userLabel: record.userLabel || seed?.userLabel,
-      userLabelNote: record.userLabelNote || seed?.userLabelNote
+      userLabel: revisedAnnotation ? seed?.userLabel : record.userLabel || seed?.userLabel,
+      userLabelNote: revisedAnnotation ? seed?.userLabelNote : record.userLabelNote || seed?.userLabelNote,
+      userOutcome: revisedAnnotation ? seed?.userOutcome : record.userOutcome || seed?.userOutcome
     });
   }
   return [...byKey.values()].sort((left, right) => left.alertTimestamp.localeCompare(right.alertTimestamp));
@@ -434,6 +492,7 @@ export function recordIntrusionTheList(input: Omit<IntrusionTheListRecord, 'vers
     key,
     userLabel: existing?.userLabel,
     userLabelNote: existing?.userLabelNote,
+    userOutcome: existing?.userOutcome,
     automaticLabel: input.impulseQuality.label,
     selectedMetric: 'OI_FLUSH_PCT',
     binance: buildBinanceDelayAnalytics({

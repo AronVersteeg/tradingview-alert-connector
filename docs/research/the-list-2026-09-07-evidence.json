@@ -1,0 +1,2528 @@
+{
+  "generatedAt": "2026-09-07T12:44:44.978Z",
+  "source": "https://arons-tradingview-alert-connector.onrender.com/research/intrusion-the-list",
+  "snapshotSha256": "570976f4772f63769cb29bb5f0840b168312b568434cb1b365122a80511ab63e",
+  "methodology": "Stored assessments preserved. Historical Binance 1m bars and DOM minute buckets use only closed intervals inside each original Delay. Historical availability is not proof of live ingestion. Last30 excludes the partial first minute. Daily fractal confirmation remains user-reported and unverified. Loss-only INJ 06-09 11:00 is excluded from impulse truth counts; potential INJ 06-09 07:00 is provisionally positive.",
+  "thresholds": [
+    {
+      "threshold": -1.8,
+      "sample": 28,
+      "admitted": 4,
+      "positive": 3,
+      "false": 1,
+      "missedPositive": [
+        "INJ-USD|2026-09-06 19:00:00",
+        "INJ-USD|2026-09-06 05:00:00",
+        "ZEC-USD|2026-09-03 14:00:00"
+      ]
+    },
+    {
+      "threshold": -1,
+      "sample": 28,
+      "admitted": 6,
+      "positive": 3,
+      "false": 3,
+      "missedPositive": [
+        "INJ-USD|2026-09-06 19:00:00",
+        "INJ-USD|2026-09-06 05:00:00",
+        "ZEC-USD|2026-09-03 14:00:00"
+      ]
+    },
+    {
+      "threshold": -0.5,
+      "sample": 28,
+      "admitted": 8,
+      "positive": 4,
+      "false": 4,
+      "missedPositive": [
+        "INJ-USD|2026-09-06 19:00:00",
+        "ZEC-USD|2026-09-03 14:00:00"
+      ]
+    },
+    {
+      "threshold": 0,
+      "sample": 28,
+      "admitted": 11,
+      "positive": 5,
+      "false": 6,
+      "missedPositive": [
+        "ZEC-USD|2026-09-03 14:00:00"
+      ]
+    }
+  ],
+  "records": [
+    {
+      "market": "INJ-USD",
+      "symbol": "INJUSDT",
+      "asset": "INJ",
+      "alertTimestamp": "2026-09-04 14:00:00",
+      "timestampNl": "04-09-2026 16:00 NL",
+      "direction": "short",
+      "delayCutoffAt": "2026-09-04T15:27:22.829Z",
+      "filteredStatus": "PASS",
+      "impulseQuality": {
+        "version": 2,
+        "observeOnly": true,
+        "label": "IQ WEAK",
+        "headline": "IQ WEAK OI 0.08%",
+        "score": 0,
+        "availableSignals": 1,
+        "evaluatedAt": "2026-09-04T15:27:22.829Z",
+        "dataCutoffAt": "2026-09-04T15:27:22.829Z",
+        "selectedMetric": "OI_FLUSH_PCT",
+        "strongThresholdPct": -1.8,
+        "reasons": [
+          "Contract OI changed 0.08% inside The Delay.",
+          "The provisional strong flush threshold of -1.80% was not reached."
+        ],
+        "candle": {
+          "count": 1,
+          "directionalReturnPct": 1.3504958852078475,
+          "gapDisplacementRatio": 0.1185185185185183,
+          "directionalDeltaRatio": 0.10530117739841678,
+          "weakestDirectionalDeltaRatio": 0.10530117739841678
+        },
+        "dom": {
+          "requiredCoverageMinutes": 21,
+          "window": {
+            "from": "2026-09-04T14:00:00.000Z",
+            "to": "2026-09-04T15:27:22.829Z",
+            "coverageMinutes": 87,
+            "startPrice": 4.74005,
+            "endPrice": 4.69675,
+            "rawPriceReturnPct": -0.9134924737080885,
+            "directionalPriceReturnPct": 0.9134924737080885,
+            "rawTakerDeltaUsd": -72530.11999999998,
+            "directionalTakerDeltaUsd": 72530.11999999998,
+            "rawBookPressureUsd": -981560.279999991,
+            "directionalBookPressureUsd": 981560.279999991,
+            "averageImbalance25Bps": -0.02149020689655172,
+            "directionalImbalance25Bps": 0.02149020689655172,
+            "largestTradeUsd": 12562.54,
+            "bidNetChangeUsd": -214901.75999999605,
+            "askNetChangeUsd": 766658.5199999949
+          }
+        },
+        "coinGlass": {
+          "source": "Binance_INJUSDT",
+          "fetchedAt": null
+        },
+        "openInterest": {
+          "source": "binance-futures-open-interest",
+          "symbol": "INJUSDT",
+          "from": "2026-09-04T14:00:00.000Z",
+          "to": "2026-09-04T15:27:22.829Z",
+          "fetchedAt": "2026-09-04T15:27:23.970Z",
+          "samples": 18,
+          "firstTimestamp": "2026-09-04T14:00:00.000Z",
+          "lastTimestamp": "2026-09-04T15:25:00.000Z",
+          "startContractOpenInterest": 3745663.9,
+          "endContractOpenInterest": 3748811.8,
+          "contractChangePct": 0.08404117625182561,
+          "startOpenInterestUsd": 17756024.07269837,
+          "endOpenInterestUsd": 17585983.1439983,
+          "usdChangePct": -0.9576520509539388
+        }
+      },
+      "forwardHurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth",
+        "symbol": "INJUSDT",
+        "direction": "short",
+        "observedAt": "2026-09-04T15:27:24.204Z",
+        "dataCutoffAt": "2026-09-04T15:27:22.829Z",
+        "referencePrice": 4.6945,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "CLOSE",
+        "headline": "HURDLE CLOSE @4.66 | CG STALE",
+        "firstHurdle": {
+          "price": 4.663546737094241,
+          "distancePct": 0.6593516435351737,
+          "side": "bid",
+          "source": "binance",
+          "binanceUsd": 144570.8748,
+          "coinGlassUsd": 0,
+          "effectiveUsd": 144570.8748
+        },
+        "binance": {
+          "snapshotAt": "2026-09-04T15:27:24.204Z",
+          "lastUpdateId": 11475802222913,
+          "levelsConsidered": 93,
+          "binCount": 20,
+          "medianBinUsd": 50358.4356,
+          "materialThresholdUsd": 100716.8712,
+          "nearestMaterial": {
+            "price": 4.663546737094241,
+            "distancePct": 0.6593516435351737,
+            "side": "bid",
+            "source": "binance",
+            "binanceUsd": 144570.8748,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 144570.8748
+          }
+        },
+        "coinGlass": {
+          "maxAgeMinutes": 15,
+          "stale": true,
+          "freshnessError": "CoinGlass snapshot has no valid fetchedAt timestamp.",
+          "levelsConsidered": 0
+        },
+        "directionalDelayFlowUsd": 208255.17700000014,
+        "flowToHurdleRatio": 1.4405057539293533,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "candleReview": {
+        "enabled": true,
+        "status": "PASS",
+        "direction": "short",
+        "expectedColor": "red",
+        "intrusionColor": "red",
+        "candleColors": [
+          "red"
+        ],
+        "volumeDeltaEnabled": true,
+        "volumeDeltaColors": [
+          "red"
+        ],
+        "volumeDeltaQuote": [
+          -208255.17700000014
+        ],
+        "candleOpens": [
+          4.739
+        ],
+        "candleCloses": [
+          4.675
+        ],
+        "quoteVolume": [
+          1977709.8618
+        ],
+        "candleTimestamps": [
+          "2026-09-04T14:00:00.000Z"
+        ],
+        "closedCandlesChecked": 1,
+        "delayCutoffAt": "2026-09-04T15:27:22.829Z",
+        "intrusionTimestamp": "2026-09-04 14:00:00",
+        "source": "binance-futures",
+        "reason": "All 1 fully closed 1H candles and Binance taker-volume deltas in The Delay are red."
+      },
+      "coinGlass": {
+        "source": "Binance_INJUSDT",
+        "minUsd": 250000,
+        "levelsInsideGap": 0,
+        "buyUsd": 0,
+        "sellUsd": 0,
+        "bias": "BALANCED",
+        "fetchedAt": null
+      },
+      "version": 1,
+      "key": "INJ-USD|2026-09-04 14:00:00",
+      "automaticLabel": "IQ WEAK",
+      "selectedMetric": "OI_FLUSH_PCT",
+      "binance": {
+        "source": "binance-futures",
+        "causal": true,
+        "symbol": "INJUSDT",
+        "alertTimestamp": "2026-09-04 14:00:00",
+        "delayCutoffAt": "2026-09-04T15:27:22.829Z",
+        "candleTimestamps": [
+          "2026-09-04T14:00:00.000Z"
+        ],
+        "candleOpens": [
+          4.739
+        ],
+        "candleCloses": [
+          4.675
+        ],
+        "quoteVolume": [
+          1977709.8618
+        ],
+        "takerDeltaQuote": [
+          -208255.17700000014
+        ],
+        "closedCandles": 1,
+        "priceChangePct": -1.3504958852078475,
+        "directionalPriceChangePct": 1.3504958852078475,
+        "totalQuoteVolume": 1977709.8618,
+        "cumulativeTakerDeltaQuote": -208255.17700000014,
+        "takerDeltaRatio": -0.10530117739841678,
+        "directionalTakerDeltaRatio": 0.10530117739841678,
+        "alignedTakerDeltaCandles": 1,
+        "takerDeltaPersistencePct": 100,
+        "oiContractChangePct": 0.08404117625182561,
+        "oiUsdChangePct": -0.9576520509539388,
+        "oiSamples": 18,
+        "oiPriceRegime": "NEW_POSITION_BUILDUP"
+      },
+      "observedAt": "2026-09-04T15:27:24.217Z",
+      "updatedAt": "2026-09-04T15:27:24.217Z"
+    },
+    {
+      "market": "INJ-USD",
+      "symbol": "INJUSDT",
+      "asset": "INJ",
+      "alertTimestamp": "2026-09-06 05:00:00",
+      "timestampNl": "06-09-2026 07:00 NL",
+      "direction": "long",
+      "delayCutoffAt": "2026-09-06T06:40:03.278Z",
+      "filteredStatus": "PASS",
+      "impulseQuality": {
+        "version": 2,
+        "observeOnly": true,
+        "label": "IQ WEAK",
+        "headline": "IQ WEAK OI -0.98%",
+        "score": 0,
+        "availableSignals": 1,
+        "evaluatedAt": "2026-09-06T06:40:03.278Z",
+        "dataCutoffAt": "2026-09-06T06:40:03.278Z",
+        "selectedMetric": "OI_FLUSH_PCT",
+        "strongThresholdPct": -1.8,
+        "reasons": [
+          "Contract OI changed -0.98% inside The Delay.",
+          "The provisional strong flush threshold of -1.80% was not reached."
+        ],
+        "candle": {
+          "count": 1,
+          "directionalReturnPct": 0.19607843137257053,
+          "gapDisplacementRatio": 0.018518518518520547,
+          "directionalDeltaRatio": 0.08661189279485841,
+          "weakestDirectionalDeltaRatio": 0.08661189279485841
+        },
+        "dom": {
+          "requiredCoverageMinutes": 25,
+          "window": {
+            "from": "2026-09-06T05:00:00.000Z",
+            "to": "2026-09-06T06:40:03.278Z",
+            "coverageMinutes": 99,
+            "startPrice": 5.10045,
+            "endPrice": 5.06765,
+            "rawPriceReturnPct": -0.6430805125038019,
+            "directionalPriceReturnPct": -0.6430805125038019,
+            "rawTakerDeltaUsd": -17233.92000000001,
+            "directionalTakerDeltaUsd": -17233.92000000001,
+            "rawBookPressureUsd": -78063.10000000056,
+            "directionalBookPressureUsd": -78063.10000000056,
+            "averageImbalance25Bps": 0.030313020202020213,
+            "directionalImbalance25Bps": 0.030313020202020213,
+            "largestTradeUsd": 1058.23,
+            "bidNetChangeUsd": 152739.54000000283,
+            "askNetChangeUsd": 230802.6400000034
+          }
+        },
+        "coinGlass": {
+          "source": "Binance_INJUSDT",
+          "directionalSupportUsd": 309178.93,
+          "opposingUsd": 0,
+          "directionalRatio": 309178.93,
+          "fetchedAt": "2026-09-06T06:19:54.747Z"
+        },
+        "openInterest": {
+          "source": "binance-futures-open-interest",
+          "symbol": "INJUSDT",
+          "from": "2026-09-06T05:00:00.000Z",
+          "to": "2026-09-06T06:40:03.278Z",
+          "fetchedAt": "2026-09-06T06:40:03.868Z",
+          "samples": 21,
+          "firstTimestamp": "2026-09-06T05:00:00.000Z",
+          "lastTimestamp": "2026-09-06T06:40:00.000Z",
+          "startContractOpenInterest": 4000812.6,
+          "endContractOpenInterest": 3961614.5,
+          "contractChangePct": -0.9797534630839766,
+          "startOpenInterestUsd": 20400143.4474,
+          "endOpenInterestUsd": 20077661.87213851,
+          "usdChangePct": -1.5807809199625433
+        }
+      },
+      "forwardHurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth",
+        "symbol": "INJUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-06T06:40:04.212Z",
+        "dataCutoffAt": "2026-09-06T06:40:03.278Z",
+        "referencePrice": 5.0665,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "CLOSE",
+        "headline": "HURDLE CLOSE @5.1 | CG STALE",
+        "firstHurdle": {
+          "price": 5.099476573514357,
+          "distancePct": 0.65087483498189,
+          "side": "ask",
+          "source": "binance",
+          "binanceUsd": 179130.3277,
+          "coinGlassUsd": 0,
+          "effectiveUsd": 179130.3277
+        },
+        "binance": {
+          "snapshotAt": "2026-09-06T06:40:04.212Z",
+          "lastUpdateId": 11487150297668,
+          "levelsConsidered": 97,
+          "binCount": 20,
+          "medianBinUsd": 48377.07489999999,
+          "materialThresholdUsd": 96754.14979999998,
+          "nearestMaterial": {
+            "price": 5.099476573514357,
+            "distancePct": 0.65087483498189,
+            "side": "ask",
+            "source": "binance",
+            "binanceUsd": 179130.3277,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 179130.3277
+          }
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-06T06:19:54.747Z",
+          "ageMinutes": 20.15775,
+          "maxAgeMinutes": 15,
+          "stale": true,
+          "freshnessError": "CoinGlass snapshot is 20.2 minutes old; maximum is 15.0 minutes.",
+          "levelsConsidered": 0
+        },
+        "directionalDelayFlowUsd": 194631.09129999997,
+        "flowToHurdleRatio": 1.086533440758061,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "candleReview": {
+        "enabled": true,
+        "status": "PASS",
+        "direction": "long",
+        "expectedColor": "green",
+        "intrusionColor": "green",
+        "candleColors": [
+          "green"
+        ],
+        "volumeDeltaEnabled": true,
+        "volumeDeltaColors": [
+          "green"
+        ],
+        "volumeDeltaQuote": [
+          194631.09129999997
+        ],
+        "candleOpens": [
+          5.1
+        ],
+        "candleCloses": [
+          5.11
+        ],
+        "quoteVolume": [
+          2247163.5825
+        ],
+        "candleTimestamps": [
+          "2026-09-06T05:00:00.000Z"
+        ],
+        "closedCandlesChecked": 1,
+        "delayCutoffAt": "2026-09-06T06:40:03.278Z",
+        "intrusionTimestamp": "2026-09-06 05:00:00",
+        "source": "binance-futures",
+        "reason": "All 1 fully closed 1H candles and Binance taker-volume deltas in The Delay are green."
+      },
+      "coinGlass": {
+        "source": "Binance_INJUSDT",
+        "minUsd": 250000,
+        "levelsInsideGap": 1,
+        "buyUsd": 309178.93,
+        "sellUsd": 0,
+        "bias": "BUY_SUPPORT",
+        "fetchedAt": "2026-09-06T06:19:54.747Z"
+      },
+      "version": 1,
+      "key": "INJ-USD|2026-09-06 05:00:00",
+      "automaticLabel": "IQ WEAK",
+      "selectedMetric": "OI_FLUSH_PCT",
+      "binance": {
+        "source": "binance-futures",
+        "causal": true,
+        "symbol": "INJUSDT",
+        "alertTimestamp": "2026-09-06 05:00:00",
+        "delayCutoffAt": "2026-09-06T06:40:03.278Z",
+        "candleTimestamps": [
+          "2026-09-06T05:00:00.000Z"
+        ],
+        "candleOpens": [
+          5.1
+        ],
+        "candleCloses": [
+          5.11
+        ],
+        "quoteVolume": [
+          2247163.5825
+        ],
+        "takerDeltaQuote": [
+          194631.09129999997
+        ],
+        "closedCandles": 1,
+        "priceChangePct": 0.19607843137257053,
+        "directionalPriceChangePct": 0.19607843137257053,
+        "totalQuoteVolume": 2247163.5825,
+        "cumulativeTakerDeltaQuote": 194631.09129999997,
+        "takerDeltaRatio": 0.08661189279485841,
+        "directionalTakerDeltaRatio": 0.08661189279485841,
+        "alignedTakerDeltaCandles": 1,
+        "takerDeltaPersistencePct": 100,
+        "oiContractChangePct": -0.9797534630839766,
+        "oiUsdChangePct": -1.5807809199625433,
+        "oiSamples": 21,
+        "oiPriceRegime": "OI_FLAT_OR_MIXED"
+      },
+      "observedAt": "2026-09-06T06:40:04.216Z",
+      "updatedAt": "2026-09-06T06:40:04.216Z"
+    },
+    {
+      "market": "INJ-USD",
+      "symbol": "INJUSDT",
+      "asset": "INJ",
+      "alertTimestamp": "2026-09-06 09:00:00",
+      "timestampNl": "06-09-2026 11:00 NL",
+      "direction": "long",
+      "delayCutoffAt": "2026-09-06T10:40:03.455Z",
+      "filteredStatus": "PASS",
+      "impulseQuality": {
+        "version": 2,
+        "observeOnly": true,
+        "label": "IQ WEAK",
+        "headline": "IQ WEAK OI 0.08%",
+        "score": 0,
+        "availableSignals": 1,
+        "evaluatedAt": "2026-09-06T10:40:03.455Z",
+        "dataCutoffAt": "2026-09-06T10:40:03.455Z",
+        "selectedMetric": "OI_FLUSH_PCT",
+        "strongThresholdPct": -1.8,
+        "reasons": [
+          "Contract OI changed 0.08% inside The Delay.",
+          "The provisional strong flush threshold of -1.80% was not reached."
+        ],
+        "candle": {
+          "count": 1,
+          "directionalReturnPct": 1.135918527222879,
+          "gapDisplacementRatio": 0.111538461538462,
+          "directionalDeltaRatio": 0.042545935562235355,
+          "weakestDirectionalDeltaRatio": 0.042545935562235355
+        },
+        "dom": {
+          "requiredCoverageMinutes": 25,
+          "window": {
+            "from": "2026-09-06T09:00:00.000Z",
+            "to": "2026-09-06T10:40:03.455Z",
+            "coverageMinutes": 99,
+            "startPrice": 5.11355,
+            "endPrice": 5.1386,
+            "rawPriceReturnPct": 0.48987494011010213,
+            "directionalPriceReturnPct": 0.48987494011010213,
+            "rawTakerDeltaUsd": 20105.67,
+            "directionalTakerDeltaUsd": 20105.67,
+            "rawBookPressureUsd": 806207.0900000017,
+            "directionalBookPressureUsd": 806207.0900000017,
+            "averageImbalance25Bps": 0.03755112121212123,
+            "directionalImbalance25Bps": 0.03755112121212123,
+            "largestTradeUsd": 11198.99,
+            "bidNetChangeUsd": 87498.29999999795,
+            "askNetChangeUsd": -718708.7900000038
+          }
+        },
+        "coinGlass": {
+          "source": "Binance_INJUSDT",
+          "directionalSupportUsd": 590782.45,
+          "opposingUsd": 0,
+          "directionalRatio": 590782.45,
+          "fetchedAt": "2026-09-06T10:09:56.667Z"
+        },
+        "openInterest": {
+          "source": "binance-futures-open-interest",
+          "symbol": "INJUSDT",
+          "from": "2026-09-06T09:00:00.000Z",
+          "to": "2026-09-06T10:40:03.455Z",
+          "fetchedAt": "2026-09-06T10:40:04.848Z",
+          "samples": 21,
+          "firstTimestamp": "2026-09-06T09:00:00.000Z",
+          "lastTimestamp": "2026-09-06T10:40:00.000Z",
+          "startContractOpenInterest": 4006018.3,
+          "endContractOpenInterest": 4009116.1,
+          "contractChangePct": 0.07732865324154847,
+          "startOpenInterestUsd": 20458735.4581,
+          "endOpenInterestUsd": 20575895.87382382,
+          "usdChangePct": 0.5726669469076962
+        }
+      },
+      "forwardHurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth",
+        "symbol": "INJUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-06T10:40:05.083Z",
+        "dataCutoffAt": "2026-09-06T10:40:03.455Z",
+        "referencePrice": 5.1325,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "CLOSE",
+        "headline": "HURDLE CLOSE @5.16 | CG STALE",
+        "firstHurdle": {
+          "price": 5.162042736087556,
+          "distancePct": 0.5756012876289437,
+          "side": "ask",
+          "source": "binance",
+          "binanceUsd": 163105.0524,
+          "coinGlassUsd": 0,
+          "effectiveUsd": 163105.0524
+        },
+        "binance": {
+          "snapshotAt": "2026-09-06T10:40:05.083Z",
+          "lastUpdateId": 11488325844979,
+          "levelsConsidered": 102,
+          "binCount": 20,
+          "medianBinUsd": 61235.1478,
+          "materialThresholdUsd": 122470.2956,
+          "nearestMaterial": {
+            "price": 5.162042736087556,
+            "distancePct": 0.5756012876289437,
+            "side": "ask",
+            "source": "binance",
+            "binanceUsd": 163105.0524,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 163105.0524
+          }
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-06T10:09:56.667Z",
+          "ageMinutes": 30.140266666666665,
+          "maxAgeMinutes": 15,
+          "stale": true,
+          "freshnessError": "CoinGlass snapshot is 30.1 minutes old; maximum is 15.0 minutes.",
+          "levelsConsidered": 0
+        },
+        "directionalDelayFlowUsd": 82593.05579999997,
+        "flowToHurdleRatio": 0.5063795056295876,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "candleReview": {
+        "enabled": true,
+        "status": "PASS",
+        "direction": "long",
+        "expectedColor": "green",
+        "intrusionColor": "green",
+        "candleColors": [
+          "green"
+        ],
+        "volumeDeltaEnabled": true,
+        "volumeDeltaColors": [
+          "green"
+        ],
+        "volumeDeltaQuote": [
+          82593.05579999997
+        ],
+        "candleOpens": [
+          5.106
+        ],
+        "candleCloses": [
+          5.164
+        ],
+        "quoteVolume": [
+          1941267.8252
+        ],
+        "candleTimestamps": [
+          "2026-09-06T09:00:00.000Z"
+        ],
+        "closedCandlesChecked": 1,
+        "delayCutoffAt": "2026-09-06T10:40:03.455Z",
+        "intrusionTimestamp": "2026-09-06 09:00:00",
+        "source": "binance-futures",
+        "reason": "All 1 fully closed 1H candles and Binance taker-volume deltas in The Delay are green."
+      },
+      "coinGlass": {
+        "source": "Binance_INJUSDT",
+        "minUsd": 250000,
+        "levelsInsideGap": 2,
+        "buyUsd": 590782.45,
+        "sellUsd": 0,
+        "bias": "BUY_SUPPORT",
+        "fetchedAt": "2026-09-06T10:09:56.667Z"
+      },
+      "version": 1,
+      "key": "INJ-USD|2026-09-06 09:00:00",
+      "automaticLabel": "IQ WEAK",
+      "selectedMetric": "OI_FLUSH_PCT",
+      "binance": {
+        "source": "binance-futures",
+        "causal": true,
+        "symbol": "INJUSDT",
+        "alertTimestamp": "2026-09-06 09:00:00",
+        "delayCutoffAt": "2026-09-06T10:40:03.455Z",
+        "candleTimestamps": [
+          "2026-09-06T09:00:00.000Z"
+        ],
+        "candleOpens": [
+          5.106
+        ],
+        "candleCloses": [
+          5.164
+        ],
+        "quoteVolume": [
+          1941267.8252
+        ],
+        "takerDeltaQuote": [
+          82593.05579999997
+        ],
+        "closedCandles": 1,
+        "priceChangePct": 1.135918527222879,
+        "directionalPriceChangePct": 1.135918527222879,
+        "totalQuoteVolume": 1941267.8252,
+        "cumulativeTakerDeltaQuote": 82593.05579999997,
+        "takerDeltaRatio": 0.042545935562235355,
+        "directionalTakerDeltaRatio": 0.042545935562235355,
+        "alignedTakerDeltaCandles": 1,
+        "takerDeltaPersistencePct": 100,
+        "oiContractChangePct": 0.07732865324154847,
+        "oiUsdChangePct": 0.5726669469076962,
+        "oiSamples": 21,
+        "oiPriceRegime": "NEW_POSITION_BUILDUP"
+      },
+      "observedAt": "2026-09-06T10:40:05.090Z",
+      "updatedAt": "2026-09-06T10:40:05.090Z"
+    },
+    {
+      "market": "INJ-USD",
+      "symbol": "INJUSDT",
+      "asset": "INJ",
+      "alertTimestamp": "2026-09-06 19:00:00",
+      "timestampNl": "06-09-2026 21:00 NL",
+      "direction": "long",
+      "delayCutoffAt": "2026-09-06T20:40:03.167Z",
+      "filteredStatus": "PASS",
+      "impulseQuality": {
+        "version": 2,
+        "observeOnly": true,
+        "label": "IQ WEAK",
+        "headline": "IQ WEAK OI -0.29%",
+        "score": 0,
+        "availableSignals": 1,
+        "evaluatedAt": "2026-09-06T20:40:03.167Z",
+        "dataCutoffAt": "2026-09-06T20:40:03.167Z",
+        "selectedMetric": "OI_FLUSH_PCT",
+        "strongThresholdPct": -1.8,
+        "reasons": [
+          "Contract OI changed -0.29% inside The Delay.",
+          "The provisional strong flush threshold of -1.80% was not reached."
+        ],
+        "candle": {
+          "count": 1,
+          "directionalReturnPct": 1.3070620366757657,
+          "gapDisplacementRatio": 0.1339999999999995,
+          "directionalDeltaRatio": 0.22260006753146844,
+          "weakestDirectionalDeltaRatio": 0.22260006753146844
+        },
+        "dom": {
+          "requiredCoverageMinutes": 25,
+          "window": {
+            "from": "2026-09-06T19:00:00.000Z",
+            "to": "2026-09-06T20:40:03.167Z",
+            "coverageMinutes": 99,
+            "startPrice": 5.1286000000000005,
+            "endPrice": 5.1573,
+            "rawPriceReturnPct": 0.5596069102679069,
+            "directionalPriceReturnPct": 0.5596069102679069,
+            "rawTakerDeltaUsd": 70327.77999999994,
+            "directionalTakerDeltaUsd": 70327.77999999994,
+            "rawBookPressureUsd": 324864.5900000036,
+            "directionalBookPressureUsd": 324864.5900000036,
+            "averageImbalance25Bps": 0.07006422222222224,
+            "directionalImbalance25Bps": 0.07006422222222224,
+            "largestTradeUsd": 12888.36,
+            "bidNetChangeUsd": -117340.55000000075,
+            "askNetChangeUsd": -442205.1400000043
+          }
+        },
+        "coinGlass": {
+          "source": "Binance_INJUSDT",
+          "directionalSupportUsd": 310119.5,
+          "opposingUsd": 0,
+          "directionalRatio": 310119.5,
+          "fetchedAt": "2026-09-06T20:39:56.369Z"
+        },
+        "openInterest": {
+          "source": "binance-futures-open-interest",
+          "symbol": "INJUSDT",
+          "from": "2026-09-06T19:00:00.000Z",
+          "to": "2026-09-06T20:40:03.167Z",
+          "fetchedAt": "2026-09-06T20:40:03.762Z",
+          "samples": 21,
+          "firstTimestamp": "2026-09-06T19:00:00.000Z",
+          "lastTimestamp": "2026-09-06T20:40:00.000Z",
+          "startContractOpenInterest": 3905915.3,
+          "endContractOpenInterest": 3894770.7,
+          "contractChangePct": -0.28532620766250627,
+          "startOpenInterestUsd": 20030356.00980726,
+          "endOpenInterestUsd": 20120385.4362,
+          "usdChangePct": 0.4494649338666834
+        }
+      },
+      "forwardHurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth+coinglass",
+        "symbol": "INJUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-06T20:40:04.325Z",
+        "dataCutoffAt": "2026-09-06T20:40:03.167Z",
+        "referencePrice": 5.169499999999999,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "CLOSE",
+        "headline": "HURDLE CLOSE @5.19",
+        "firstHurdle": {
+          "price": 5.187846238828945,
+          "distancePct": 0.3548938742420981,
+          "side": "ask",
+          "source": "binance",
+          "binanceUsd": 229461.0275,
+          "coinGlassUsd": 0,
+          "effectiveUsd": 229461.0275
+        },
+        "binance": {
+          "snapshotAt": "2026-09-06T20:40:04.325Z",
+          "lastUpdateId": 11491319923835,
+          "levelsConsidered": 100,
+          "binCount": 20,
+          "medianBinUsd": 65087.354699999996,
+          "materialThresholdUsd": 130174.70939999999,
+          "nearestMaterial": {
+            "price": 5.187846238828945,
+            "distancePct": 0.3548938742420981,
+            "side": "ask",
+            "source": "binance",
+            "binanceUsd": 229461.0275,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 229461.0275
+          }
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-06T20:39:56.369Z",
+          "ageMinutes": 0.1326,
+          "maxAgeMinutes": 15,
+          "stale": false,
+          "levelsConsidered": 0
+        },
+        "directionalDelayFlowUsd": 377341.926,
+        "flowToHurdleRatio": 1.644470654172417,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "candleReview": {
+        "enabled": true,
+        "status": "PASS",
+        "direction": "long",
+        "expectedColor": "green",
+        "intrusionColor": "green",
+        "candleColors": [
+          "green"
+        ],
+        "volumeDeltaEnabled": true,
+        "volumeDeltaColors": [
+          "green"
+        ],
+        "volumeDeltaQuote": [
+          377341.926
+        ],
+        "candleOpens": [
+          5.126
+        ],
+        "candleCloses": [
+          5.193
+        ],
+        "quoteVolume": [
+          1695156.386
+        ],
+        "candleTimestamps": [
+          "2026-09-06T19:00:00.000Z"
+        ],
+        "closedCandlesChecked": 1,
+        "delayCutoffAt": "2026-09-06T20:40:03.167Z",
+        "intrusionTimestamp": "2026-09-06 19:00:00",
+        "source": "binance-futures",
+        "reason": "All 1 fully closed 1H candles and Binance taker-volume deltas in The Delay are green."
+      },
+      "coinGlass": {
+        "source": "Binance_INJUSDT",
+        "minUsd": 250000,
+        "levelsInsideGap": 1,
+        "buyUsd": 310119.5,
+        "sellUsd": 0,
+        "bias": "BUY_SUPPORT",
+        "fetchedAt": "2026-09-06T20:39:56.369Z"
+      },
+      "version": 1,
+      "key": "INJ-USD|2026-09-06 19:00:00",
+      "automaticLabel": "IQ WEAK",
+      "selectedMetric": "OI_FLUSH_PCT",
+      "binance": {
+        "source": "binance-futures",
+        "causal": true,
+        "symbol": "INJUSDT",
+        "alertTimestamp": "2026-09-06 19:00:00",
+        "delayCutoffAt": "2026-09-06T20:40:03.167Z",
+        "candleTimestamps": [
+          "2026-09-06T19:00:00.000Z"
+        ],
+        "candleOpens": [
+          5.126
+        ],
+        "candleCloses": [
+          5.193
+        ],
+        "quoteVolume": [
+          1695156.386
+        ],
+        "takerDeltaQuote": [
+          377341.926
+        ],
+        "closedCandles": 1,
+        "priceChangePct": 1.3070620366757657,
+        "directionalPriceChangePct": 1.3070620366757657,
+        "totalQuoteVolume": 1695156.386,
+        "cumulativeTakerDeltaQuote": 377341.926,
+        "takerDeltaRatio": 0.22260006753146844,
+        "directionalTakerDeltaRatio": 0.22260006753146844,
+        "alignedTakerDeltaCandles": 1,
+        "takerDeltaPersistencePct": 100,
+        "oiContractChangePct": -0.28532620766250627,
+        "oiUsdChangePct": 0.4494649338666834,
+        "oiSamples": 21,
+        "oiPriceRegime": "OI_FLAT_OR_MIXED"
+      },
+      "observedAt": "2026-09-06T20:40:04.333Z",
+      "updatedAt": "2026-09-06T20:40:04.333Z"
+    },
+    {
+      "version": 1,
+      "key": "ZEC-USD|2026-09-03 14:00:00",
+      "market": "ZEC-USD",
+      "symbol": "ZECUSDT",
+      "asset": "ZEC",
+      "alertTimestamp": "2026-09-03 14:00:00",
+      "timestampNl": "03-09-2026 16:00 NL",
+      "direction": "long",
+      "delayCutoffAt": "2026-09-03T15:59:31.241Z",
+      "filteredStatus": "PASS",
+      "userLabel": "STRONG",
+      "userLabelNote": "User-observed impulse with potential profit (\"impulse met potentiele winst\"); realized profit is not confirmed. Original stored Delay assessment: IQ WEAK with rising contract OI.",
+      "automaticLabel": "IQ WEAK",
+      "selectedMetric": "OI_FLUSH_PCT",
+      "impulseQuality": {
+        "version": 2,
+        "observeOnly": true,
+        "label": "IQ WEAK",
+        "headline": "IQ WEAK OI 7.79%",
+        "score": 0,
+        "availableSignals": 1,
+        "evaluatedAt": "2026-09-03T15:59:31.241Z",
+        "dataCutoffAt": "2026-09-03T15:59:31.241Z",
+        "selectedMetric": "OI_FLUSH_PCT",
+        "strongThresholdPct": -1.8,
+        "reasons": [
+          "Contract OI changed 7.79% inside The Delay.",
+          "The provisional strong flush threshold of -1.80% was not reached."
+        ],
+        "candle": {
+          "count": 1,
+          "directionalReturnPct": 1.884521917936266,
+          "gapDisplacementRatio": 0.171595744680852,
+          "directionalDeltaRatio": 0.06933406078374486,
+          "weakestDirectionalDeltaRatio": 0.06933406078374486
+        },
+        "dom": {
+          "requiredCoverageMinutes": 29,
+          "window": {
+            "from": "2026-09-03T14:00:00.000Z",
+            "to": "2026-09-03T15:59:31.241Z",
+            "coverageMinutes": 119,
+            "startPrice": 855.8924999999999,
+            "endPrice": 965.175,
+            "rawPriceReturnPct": 12.768250685687743,
+            "directionalPriceReturnPct": 12.768250685687743,
+            "rawTakerDeltaUsd": 36633959.269999996,
+            "directionalTakerDeltaUsd": 36633959.269999996,
+            "rawBookPressureUsd": 73164502.77000022,
+            "directionalBookPressureUsd": 73164502.77000022,
+            "averageImbalance25Bps": -0.24813147899159663,
+            "directionalImbalance25Bps": -0.24813147899159663,
+            "largestTradeUsd": 371287.04,
+            "bidNetChangeUsd": 119175052.19,
+            "askNetChangeUsd": 46010549.41999978
+          }
+        },
+        "coinGlass": {
+          "source": "Binance_ZECUSDT",
+          "directionalSupportUsd": 4197310.350000001,
+          "opposingUsd": 529598.44,
+          "directionalRatio": 7.925458296289546,
+          "fetchedAt": "2026-09-03T15:59:08.281Z"
+        },
+        "openInterest": {
+          "source": "binance-futures-open-interest",
+          "symbol": "ZECUSDT",
+          "from": "2026-09-03T14:00:00.000Z",
+          "to": "2026-09-03T15:59:31.241Z",
+          "fetchedAt": "2026-09-03T15:59:31.861Z",
+          "samples": 24,
+          "firstTimestamp": "2026-09-03T14:00:00.000Z",
+          "lastTimestamp": "2026-09-03T15:55:00.000Z",
+          "startContractOpenInterest": 536243.098,
+          "endContractOpenInterest": 578017.513,
+          "contractChangePct": 7.790200965905969,
+          "startOpenInterestUsd": 458992766.1266823,
+          "endOpenInterestUsd": 547786889.2873347,
+          "usdChangePct": 19.345429756979037
+        }
+      },
+      "observedAt": "2026-09-03T15:59:32.221Z",
+      "updatedAt": "2026-09-03T15:59:32.221Z",
+      "forwardHurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth+coinglass",
+        "symbol": "ZECUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-03T15:59:32.205Z",
+        "dataCutoffAt": "2026-09-03T15:59:31.241Z",
+        "referencePrice": 955.7,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "AHEAD",
+        "headline": "HURDLE @968",
+        "firstHurdle": {
+          "price": 967.97,
+          "distancePct": 1.2838756932091642,
+          "side": "ask",
+          "source": "coinglass",
+          "binanceUsd": 0,
+          "coinGlassUsd": 753735.47,
+          "effectiveUsd": 753735.47,
+          "persistenceHours": 0.007556944444444444
+        },
+        "binance": {
+          "snapshotAt": "2026-09-03T15:59:32.205Z",
+          "lastUpdateId": 11466120222700,
+          "levelsConsidered": 500,
+          "binCount": 7,
+          "medianBinUsd": 306347.19584,
+          "materialThresholdUsd": 612694.39168
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-03T15:59:08.281Z",
+          "ageMinutes": 0.39873333333333333,
+          "maxAgeMinutes": 15,
+          "stale": false,
+          "levelsConsidered": 2,
+          "nearest": {
+            "price": 967.97,
+            "distancePct": 1.2838756932091642,
+            "side": "ask",
+            "source": "coinglass",
+            "binanceUsd": 0,
+            "coinGlassUsd": 753735.47,
+            "effectiveUsd": 753735.47,
+            "persistenceHours": 0.007556944444444444
+          }
+        },
+        "directionalDelayFlowUsd": 9500302.744789988,
+        "flowToHurdleRatio": 12.604293048315728,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "candleReview": {
+        "enabled": true,
+        "status": "PASS",
+        "direction": "long",
+        "expectedColor": "green",
+        "intrusionColor": "green",
+        "candleColors": [
+          "green"
+        ],
+        "volumeDeltaEnabled": true,
+        "volumeDeltaColors": [
+          "green"
+        ],
+        "volumeDeltaQuote": [
+          9500302.744789988
+        ],
+        "candleOpens": [
+          855.92
+        ],
+        "candleCloses": [
+          872.05
+        ],
+        "quoteVolume": [
+          137022159.63409
+        ],
+        "candleTimestamps": [
+          "2026-09-03T14:00:00.000Z"
+        ],
+        "closedCandlesChecked": 1,
+        "delayCutoffAt": "2026-09-03T15:59:31.241Z",
+        "intrusionTimestamp": "2026-09-03 14:00:00",
+        "source": "binance-futures",
+        "reason": "All 1 fully closed 1H candles and Binance taker-volume deltas in The Delay are green."
+      },
+      "coinGlass": {
+        "source": "Binance_ZECUSDT",
+        "minUsd": 500000,
+        "levelsInsideGap": 4,
+        "buyUsd": 4197310.350000001,
+        "sellUsd": 529598.44,
+        "bias": "BUY_SUPPORT",
+        "fetchedAt": "2026-09-03T15:59:08.281Z"
+      },
+      "binance": {
+        "source": "binance-futures",
+        "causal": true,
+        "symbol": "ZECUSDT",
+        "alertTimestamp": "2026-09-03 14:00:00",
+        "delayCutoffAt": "2026-09-03T15:59:31.241Z",
+        "candleTimestamps": [
+          "2026-09-03T14:00:00.000Z"
+        ],
+        "candleOpens": [
+          855.92
+        ],
+        "candleCloses": [
+          872.05
+        ],
+        "quoteVolume": [
+          137022159.63409
+        ],
+        "takerDeltaQuote": [
+          9500302.744789988
+        ],
+        "closedCandles": 1,
+        "priceChangePct": 1.884521917936266,
+        "directionalPriceChangePct": 1.884521917936266,
+        "totalQuoteVolume": 137022159.63409,
+        "cumulativeTakerDeltaQuote": 9500302.744789988,
+        "takerDeltaRatio": 0.06933406078374486,
+        "directionalTakerDeltaRatio": 0.06933406078374486,
+        "alignedTakerDeltaCandles": 1,
+        "takerDeltaPersistencePct": 100,
+        "oiContractChangePct": 7.790200965905969,
+        "oiUsdChangePct": 19.345429756979037,
+        "oiSamples": 24,
+        "oiPriceRegime": "NEW_POSITION_BUILDUP"
+      }
+    },
+    {
+      "market": "SOL-USD",
+      "symbol": "SOLUSDT",
+      "asset": "SOL",
+      "alertTimestamp": "2026-09-06 12:00:00",
+      "timestampNl": "06-09-2026 14:00 NL",
+      "direction": "long",
+      "delayCutoffAt": "2026-09-06T13:42:33.986Z",
+      "filteredStatus": "PASS",
+      "impulseQuality": {
+        "version": 2,
+        "observeOnly": true,
+        "label": "IQ WEAK",
+        "headline": "IQ WEAK OI -0.38%",
+        "score": 0,
+        "availableSignals": 1,
+        "evaluatedAt": "2026-09-06T13:42:33.986Z",
+        "dataCutoffAt": "2026-09-06T13:42:33.986Z",
+        "selectedMetric": "OI_FLUSH_PCT",
+        "strongThresholdPct": -1.8,
+        "reasons": [
+          "Contract OI changed -0.38% inside The Delay.",
+          "The provisional strong flush threshold of -1.80% was not reached."
+        ],
+        "candle": {
+          "count": 1,
+          "directionalReturnPct": 0.31948881789136685,
+          "gapDisplacementRatio": 0.031192660550458058,
+          "directionalDeltaRatio": 0.04027829363838151,
+          "weakestDirectionalDeltaRatio": 0.04027829363838151
+        },
+        "dom": {
+          "requiredCoverageMinutes": 25,
+          "window": {
+            "from": "2026-09-06T12:00:00.000Z",
+            "to": "2026-09-06T13:42:33.986Z",
+            "coverageMinutes": 102,
+            "startPrice": 106.4725,
+            "endPrice": 106.3925,
+            "rawPriceReturnPct": -0.0751367724060148,
+            "directionalPriceReturnPct": -0.0751367724060148,
+            "rawTakerDeltaUsd": -2113261.55,
+            "directionalTakerDeltaUsd": -2113261.55,
+            "rawBookPressureUsd": -226409552.99999952,
+            "directionalBookPressureUsd": -226409552.99999952,
+            "averageImbalance25Bps": -0.3505927058823531,
+            "directionalImbalance25Bps": -0.3505927058823531,
+            "largestTradeUsd": 113417.02,
+            "bidNetChangeUsd": -209274054.39999986,
+            "askNetChangeUsd": 17135498.599999666
+          }
+        },
+        "coinGlass": {
+          "source": "Binance_SOLUSDT",
+          "directionalSupportUsd": 1352764.56,
+          "opposingUsd": 2279636.4,
+          "directionalRatio": 0.5934124231390585,
+          "fetchedAt": "2026-09-06T13:40:59.184Z"
+        },
+        "openInterest": {
+          "source": "binance-futures-open-interest",
+          "symbol": "SOLUSDT",
+          "from": "2026-09-06T12:00:00.000Z",
+          "to": "2026-09-06T13:42:33.986Z",
+          "fetchedAt": "2026-09-06T13:42:34.759Z",
+          "samples": 21,
+          "firstTimestamp": "2026-09-06T12:00:00.000Z",
+          "lastTimestamp": "2026-09-06T13:40:00.000Z",
+          "startContractOpenInterest": 8330347.61,
+          "endContractOpenInterest": 8298355.87,
+          "contractChangePct": -0.3840384759166149,
+          "startOpenInterestUsd": 886488147.826178,
+          "endOpenInterestUsd": 881700311.1875,
+          "usdChangePct": -0.5400903159752946
+        }
+      },
+      "forwardHurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth+coinglass",
+        "symbol": "SOLUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-06T13:42:35.101Z",
+        "dataCutoffAt": "2026-09-06T13:42:33.986Z",
+        "referencePrice": 106.38499999999999,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "AHEAD",
+        "headline": "HURDLE @107.5",
+        "firstHurdle": {
+          "price": 107.5,
+          "distancePct": 1.0480800864783657,
+          "side": "ask",
+          "source": "coinglass",
+          "binanceUsd": 0,
+          "coinGlassUsd": 2279636.4,
+          "effectiveUsd": 2279636.4,
+          "persistenceHours": 104.03530583333334
+        },
+        "binance": {
+          "snapshotAt": "2026-09-06T13:42:35.101Z",
+          "lastUpdateId": 11489218593934,
+          "levelsConsidered": 213,
+          "binCount": 20,
+          "medianBinUsd": 1889913.4378999998,
+          "materialThresholdUsd": 3779826.8757999996,
+          "nearestMaterial": {
+            "price": 108.46300390967973,
+            "distancePct": 1.9532865626542624,
+            "side": "ask",
+            "source": "binance",
+            "binanceUsd": 4184634.6762,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 4184634.6762
+          }
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-06T13:40:59.184Z",
+          "ageMinutes": 1.5986166666666666,
+          "maxAgeMinutes": 15,
+          "stale": false,
+          "levelsConsidered": 1,
+          "nearest": {
+            "price": 107.5,
+            "distancePct": 1.0480800864783657,
+            "side": "ask",
+            "source": "coinglass",
+            "binanceUsd": 0,
+            "coinGlassUsd": 2279636.4,
+            "effectiveUsd": 2279636.4,
+            "persistenceHours": 104.03530583333334
+          }
+        },
+        "directionalDelayFlowUsd": 3767193.46859999,
+        "flowToHurdleRatio": 1.6525413739664756,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "candleReview": {
+        "enabled": true,
+        "status": "PASS",
+        "direction": "long",
+        "expectedColor": "green",
+        "intrusionColor": "green",
+        "candleColors": [
+          "green"
+        ],
+        "volumeDeltaEnabled": true,
+        "volumeDeltaColors": [
+          "green"
+        ],
+        "volumeDeltaQuote": [
+          3767193.46859999
+        ],
+        "candleOpens": [
+          106.42
+        ],
+        "candleCloses": [
+          106.76
+        ],
+        "quoteVolume": [
+          93529122.7186
+        ],
+        "candleTimestamps": [
+          "2026-09-06T12:00:00.000Z"
+        ],
+        "closedCandlesChecked": 1,
+        "delayCutoffAt": "2026-09-06T13:42:33.986Z",
+        "intrusionTimestamp": "2026-09-06 12:00:00",
+        "source": "binance-futures",
+        "reason": "All 1 fully closed 1H candles and Binance taker-volume deltas in The Delay are green."
+      },
+      "coinGlass": {
+        "source": "Binance_SOLUSDT",
+        "minUsd": 1000000,
+        "levelsInsideGap": 2,
+        "buyUsd": 1352764.56,
+        "sellUsd": 2279636.4,
+        "bias": "SELL_FRICTION",
+        "fetchedAt": "2026-09-06T13:40:59.184Z"
+      },
+      "version": 1,
+      "key": "SOL-USD|2026-09-06 12:00:00",
+      "automaticLabel": "IQ WEAK",
+      "selectedMetric": "OI_FLUSH_PCT",
+      "binance": {
+        "source": "binance-futures",
+        "causal": true,
+        "symbol": "SOLUSDT",
+        "alertTimestamp": "2026-09-06 12:00:00",
+        "delayCutoffAt": "2026-09-06T13:42:33.986Z",
+        "candleTimestamps": [
+          "2026-09-06T12:00:00.000Z"
+        ],
+        "candleOpens": [
+          106.42
+        ],
+        "candleCloses": [
+          106.76
+        ],
+        "quoteVolume": [
+          93529122.7186
+        ],
+        "takerDeltaQuote": [
+          3767193.46859999
+        ],
+        "closedCandles": 1,
+        "priceChangePct": 0.31948881789136685,
+        "directionalPriceChangePct": 0.31948881789136685,
+        "totalQuoteVolume": 93529122.7186,
+        "cumulativeTakerDeltaQuote": 3767193.46859999,
+        "takerDeltaRatio": 0.04027829363838151,
+        "directionalTakerDeltaRatio": 0.04027829363838151,
+        "alignedTakerDeltaCandles": 1,
+        "takerDeltaPersistencePct": 100,
+        "oiContractChangePct": -0.3840384759166149,
+        "oiUsdChangePct": -0.5400903159752946,
+        "oiSamples": 21,
+        "oiPriceRegime": "OI_FLAT_OR_MIXED"
+      },
+      "observedAt": "2026-09-06T13:42:35.108Z",
+      "updatedAt": "2026-09-06T13:42:35.108Z"
+    }
+  ],
+  "analysis": [
+    {
+      "key": "INJ-USD|2026-09-04 14:00:00",
+      "nl": "04-09-2026 16:00 NL",
+      "direction": "short",
+      "cutoff": "2026-09-04T15:27:22.829Z",
+      "automatic": "IQ WEAK",
+      "oi": {
+        "source": "binance-futures-open-interest",
+        "symbol": "INJUSDT",
+        "from": "2026-09-04T14:00:00.000Z",
+        "to": "2026-09-04T15:27:22.829Z",
+        "fetchedAt": "2026-09-04T15:27:23.970Z",
+        "samples": 18,
+        "firstTimestamp": "2026-09-04T14:00:00.000Z",
+        "lastTimestamp": "2026-09-04T15:25:00.000Z",
+        "startContractOpenInterest": 3745663.9,
+        "endContractOpenInterest": 3748811.8,
+        "contractChangePct": 0.08404117625182561,
+        "startOpenInterestUsd": 17756024.07269837,
+        "endOpenInterestUsd": 17585983.1439983,
+        "usdChangePct": -0.9576520509539388
+      },
+      "closedHour": {
+        "count": 1,
+        "directionalReturnPct": 1.3504958852078475,
+        "gapDisplacementRatio": 0.1185185185185183,
+        "directionalDeltaRatio": 0.10530117739841678,
+        "weakestDirectionalDeltaRatio": 0.10530117739841678
+      },
+      "storedDom": {
+        "from": "2026-09-04T14:00:00.000Z",
+        "to": "2026-09-04T15:27:22.829Z",
+        "coverageMinutes": 87,
+        "startPrice": 4.74005,
+        "endPrice": 4.69675,
+        "rawPriceReturnPct": -0.9134924737080885,
+        "directionalPriceReturnPct": 0.9134924737080885,
+        "rawTakerDeltaUsd": -72530.11999999998,
+        "directionalTakerDeltaUsd": 72530.11999999998,
+        "rawBookPressureUsd": -981560.279999991,
+        "directionalBookPressureUsd": 981560.279999991,
+        "averageImbalance25Bps": -0.02149020689655172,
+        "directionalImbalance25Bps": 0.02149020689655172,
+        "largestTradeUsd": 12562.54,
+        "bidNetChangeUsd": -214901.75999999605,
+        "askNetChangeUsd": 766658.5199999949
+      },
+      "hurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth",
+        "symbol": "INJUSDT",
+        "direction": "short",
+        "observedAt": "2026-09-04T15:27:24.204Z",
+        "dataCutoffAt": "2026-09-04T15:27:22.829Z",
+        "referencePrice": 4.6945,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "CLOSE",
+        "headline": "HURDLE CLOSE @4.66 | CG STALE",
+        "firstHurdle": {
+          "price": 4.663546737094241,
+          "distancePct": 0.6593516435351737,
+          "side": "bid",
+          "source": "binance",
+          "binanceUsd": 144570.8748,
+          "coinGlassUsd": 0,
+          "effectiveUsd": 144570.8748
+        },
+        "binance": {
+          "snapshotAt": "2026-09-04T15:27:24.204Z",
+          "lastUpdateId": 11475802222913,
+          "levelsConsidered": 93,
+          "binCount": 20,
+          "medianBinUsd": 50358.4356,
+          "materialThresholdUsd": 100716.8712,
+          "nearestMaterial": {
+            "price": 4.663546737094241,
+            "distancePct": 0.6593516435351737,
+            "side": "bid",
+            "source": "binance",
+            "binanceUsd": 144570.8748,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 144570.8748
+          }
+        },
+        "coinGlass": {
+          "maxAgeMinutes": 15,
+          "stale": true,
+          "freshnessError": "CoinGlass snapshot has no valid fetchedAt timestamp.",
+          "levelsConsidered": 0
+        },
+        "directionalDelayFlowUsd": 208255.17700000014,
+        "flowToHurdleRatio": 1.4405057539293533,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "binance": {
+        "full": {
+          "count": 87,
+          "from": "2026-09-04T14:00:00.000Z",
+          "to": "2026-09-04T15:26:59.999Z",
+          "open": 4.739,
+          "close": 4.699,
+          "returnPct": 0.8440599282549033,
+          "deltaRatio": 0.06631353119546816,
+          "deltaUsd": 164300.74779999987,
+          "volume": 2477635.3307999996,
+          "efficiency": 0.10810810810810662
+        },
+        "last30": {
+          "count": 29,
+          "from": "2026-09-04T14:58:00.000Z",
+          "to": "2026-09-04T15:26:59.999Z",
+          "open": 4.677,
+          "close": 4.699,
+          "returnPct": -0.4703870002138233,
+          "deltaRatio": -0.10070637441909001,
+          "deltaUsd": -52656.950400000016,
+          "volume": 522876.04140000005,
+          "efficiency": -0.2291666666666605
+        },
+        "unfinishedHour": {
+          "count": 27,
+          "from": "2026-09-04T15:00:00.000Z",
+          "to": "2026-09-04T15:26:59.999Z",
+          "open": 4.674,
+          "close": 4.699,
+          "returnPct": -0.5348737697903116,
+          "deltaRatio": -0.08792196422383117,
+          "deltaUsd": -43954.42920000001,
+          "volume": 499925.469,
+          "efficiency": -0.26881720430105677
+        }
+      },
+      "dom": {
+        "dydx": {
+          "full": {
+            "minutes": 87,
+            "returnPct": 0.8863564419119951,
+            "deltaRatio": null,
+            "imbalance": 0.03459768965517242,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.49213651438966277,
+            "deltaRatio": null,
+            "imbalance": 0.0401753448275862,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "hyperliquid": {
+          "full": {
+            "minutes": 87,
+            "returnPct": 0.9406107642989658,
+            "deltaRatio": 0.46328943514041654,
+            "imbalance": 0.008383126436781607,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.4533983489456439,
+            "deltaRatio": 0.2534408318123156,
+            "imbalance": 0.021086344827586208,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "binance": {
+          "full": {
+            "minutes": 0
+          },
+          "last30": {
+            "minutes": 0
+          }
+        }
+      }
+    },
+    {
+      "key": "INJ-USD|2026-09-06 05:00:00",
+      "nl": "06-09-2026 07:00 NL",
+      "direction": "long",
+      "cutoff": "2026-09-06T06:40:03.278Z",
+      "automatic": "IQ WEAK",
+      "oi": {
+        "source": "binance-futures-open-interest",
+        "symbol": "INJUSDT",
+        "from": "2026-09-06T05:00:00.000Z",
+        "to": "2026-09-06T06:40:03.278Z",
+        "fetchedAt": "2026-09-06T06:40:03.868Z",
+        "samples": 21,
+        "firstTimestamp": "2026-09-06T05:00:00.000Z",
+        "lastTimestamp": "2026-09-06T06:40:00.000Z",
+        "startContractOpenInterest": 4000812.6,
+        "endContractOpenInterest": 3961614.5,
+        "contractChangePct": -0.9797534630839766,
+        "startOpenInterestUsd": 20400143.4474,
+        "endOpenInterestUsd": 20077661.87213851,
+        "usdChangePct": -1.5807809199625433
+      },
+      "closedHour": {
+        "count": 1,
+        "directionalReturnPct": 0.19607843137257053,
+        "gapDisplacementRatio": 0.018518518518520547,
+        "directionalDeltaRatio": 0.08661189279485841,
+        "weakestDirectionalDeltaRatio": 0.08661189279485841
+      },
+      "storedDom": {
+        "from": "2026-09-06T05:00:00.000Z",
+        "to": "2026-09-06T06:40:03.278Z",
+        "coverageMinutes": 99,
+        "startPrice": 5.10045,
+        "endPrice": 5.06765,
+        "rawPriceReturnPct": -0.6430805125038019,
+        "directionalPriceReturnPct": -0.6430805125038019,
+        "rawTakerDeltaUsd": -17233.92000000001,
+        "directionalTakerDeltaUsd": -17233.92000000001,
+        "rawBookPressureUsd": -78063.10000000056,
+        "directionalBookPressureUsd": -78063.10000000056,
+        "averageImbalance25Bps": 0.030313020202020213,
+        "directionalImbalance25Bps": 0.030313020202020213,
+        "largestTradeUsd": 1058.23,
+        "bidNetChangeUsd": 152739.54000000283,
+        "askNetChangeUsd": 230802.6400000034
+      },
+      "hurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth",
+        "symbol": "INJUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-06T06:40:04.212Z",
+        "dataCutoffAt": "2026-09-06T06:40:03.278Z",
+        "referencePrice": 5.0665,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "CLOSE",
+        "headline": "HURDLE CLOSE @5.1 | CG STALE",
+        "firstHurdle": {
+          "price": 5.099476573514357,
+          "distancePct": 0.65087483498189,
+          "side": "ask",
+          "source": "binance",
+          "binanceUsd": 179130.3277,
+          "coinGlassUsd": 0,
+          "effectiveUsd": 179130.3277
+        },
+        "binance": {
+          "snapshotAt": "2026-09-06T06:40:04.212Z",
+          "lastUpdateId": 11487150297668,
+          "levelsConsidered": 97,
+          "binCount": 20,
+          "medianBinUsd": 48377.07489999999,
+          "materialThresholdUsd": 96754.14979999998,
+          "nearestMaterial": {
+            "price": 5.099476573514357,
+            "distancePct": 0.65087483498189,
+            "side": "ask",
+            "source": "binance",
+            "binanceUsd": 179130.3277,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 179130.3277
+          }
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-06T06:19:54.747Z",
+          "ageMinutes": 20.15775,
+          "maxAgeMinutes": 15,
+          "stale": true,
+          "freshnessError": "CoinGlass snapshot is 20.2 minutes old; maximum is 15.0 minutes.",
+          "levelsConsidered": 0
+        },
+        "directionalDelayFlowUsd": 194631.09129999997,
+        "flowToHurdleRatio": 1.086533440758061,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "binance": {
+        "full": {
+          "count": 100,
+          "from": "2026-09-06T05:00:00.000Z",
+          "to": "2026-09-06T06:39:59.999Z",
+          "open": 5.1,
+          "close": 5.068,
+          "returnPct": -0.6274509803921524,
+          "deltaRatio": -0.03865587000561463,
+          "deltaUsd": -139092.8496999999,
+          "volume": 3598233.584699999,
+          "efficiency": -0.0707964601769915
+        },
+        "last30": {
+          "count": 29,
+          "from": "2026-09-06T06:11:00.000Z",
+          "to": "2026-09-06T06:39:59.999Z",
+          "open": 5.085,
+          "close": 5.068,
+          "returnPct": -0.33431661750246144,
+          "deltaRatio": -0.24955809628993547,
+          "deltaUsd": -204557.53579999998,
+          "volume": 819679.0200000001,
+          "efficiency": -0.15887850467290016
+        },
+        "unfinishedHour": {
+          "count": 40,
+          "from": "2026-09-06T06:00:00.000Z",
+          "to": "2026-09-06T06:39:59.999Z",
+          "open": 5.111,
+          "close": 5.068,
+          "returnPct": -0.8413226374486382,
+          "deltaRatio": -0.24700714282500857,
+          "deltaUsd": -333723.94099999993,
+          "volume": 1351070.0021999995,
+          "efficiency": -0.2606060606060643
+        }
+      },
+      "dom": {
+        "dydx": {
+          "full": {
+            "minutes": 100,
+            "returnPct": -0.6278202864430038,
+            "deltaRatio": null,
+            "imbalance": 0.045907849999999986,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.5497741998821803,
+            "deltaRatio": null,
+            "imbalance": -0.0028841724137931043,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "hyperliquid": {
+          "full": {
+            "minutes": 100,
+            "returnPct": -0.6504829640079146,
+            "deltaRatio": -0.1760298416602489,
+            "imbalance": 0.014942959999999998,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.49451519849290637,
+            "deltaRatio": -0.45085253549867865,
+            "imbalance": 0.07082989655172414,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "binance": {
+          "full": {
+            "minutes": 0
+          },
+          "last30": {
+            "minutes": 0
+          }
+        }
+      }
+    },
+    {
+      "key": "INJ-USD|2026-09-06 09:00:00",
+      "nl": "06-09-2026 11:00 NL",
+      "direction": "long",
+      "cutoff": "2026-09-06T10:40:03.455Z",
+      "automatic": "IQ WEAK",
+      "oi": {
+        "source": "binance-futures-open-interest",
+        "symbol": "INJUSDT",
+        "from": "2026-09-06T09:00:00.000Z",
+        "to": "2026-09-06T10:40:03.455Z",
+        "fetchedAt": "2026-09-06T10:40:04.848Z",
+        "samples": 21,
+        "firstTimestamp": "2026-09-06T09:00:00.000Z",
+        "lastTimestamp": "2026-09-06T10:40:00.000Z",
+        "startContractOpenInterest": 4006018.3,
+        "endContractOpenInterest": 4009116.1,
+        "contractChangePct": 0.07732865324154847,
+        "startOpenInterestUsd": 20458735.4581,
+        "endOpenInterestUsd": 20575895.87382382,
+        "usdChangePct": 0.5726669469076962
+      },
+      "closedHour": {
+        "count": 1,
+        "directionalReturnPct": 1.135918527222879,
+        "gapDisplacementRatio": 0.111538461538462,
+        "directionalDeltaRatio": 0.042545935562235355,
+        "weakestDirectionalDeltaRatio": 0.042545935562235355
+      },
+      "storedDom": {
+        "from": "2026-09-06T09:00:00.000Z",
+        "to": "2026-09-06T10:40:03.455Z",
+        "coverageMinutes": 99,
+        "startPrice": 5.11355,
+        "endPrice": 5.1386,
+        "rawPriceReturnPct": 0.48987494011010213,
+        "directionalPriceReturnPct": 0.48987494011010213,
+        "rawTakerDeltaUsd": 20105.67,
+        "directionalTakerDeltaUsd": 20105.67,
+        "rawBookPressureUsd": 806207.0900000017,
+        "directionalBookPressureUsd": 806207.0900000017,
+        "averageImbalance25Bps": 0.03755112121212123,
+        "directionalImbalance25Bps": 0.03755112121212123,
+        "largestTradeUsd": 11198.99,
+        "bidNetChangeUsd": 87498.29999999795,
+        "askNetChangeUsd": -718708.7900000038
+      },
+      "hurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth",
+        "symbol": "INJUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-06T10:40:05.083Z",
+        "dataCutoffAt": "2026-09-06T10:40:03.455Z",
+        "referencePrice": 5.1325,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "CLOSE",
+        "headline": "HURDLE CLOSE @5.16 | CG STALE",
+        "firstHurdle": {
+          "price": 5.162042736087556,
+          "distancePct": 0.5756012876289437,
+          "side": "ask",
+          "source": "binance",
+          "binanceUsd": 163105.0524,
+          "coinGlassUsd": 0,
+          "effectiveUsd": 163105.0524
+        },
+        "binance": {
+          "snapshotAt": "2026-09-06T10:40:05.083Z",
+          "lastUpdateId": 11488325844979,
+          "levelsConsidered": 102,
+          "binCount": 20,
+          "medianBinUsd": 61235.1478,
+          "materialThresholdUsd": 122470.2956,
+          "nearestMaterial": {
+            "price": 5.162042736087556,
+            "distancePct": 0.5756012876289437,
+            "side": "ask",
+            "source": "binance",
+            "binanceUsd": 163105.0524,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 163105.0524
+          }
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-06T10:09:56.667Z",
+          "ageMinutes": 30.140266666666665,
+          "maxAgeMinutes": 15,
+          "stale": true,
+          "freshnessError": "CoinGlass snapshot is 30.1 minutes old; maximum is 15.0 minutes.",
+          "levelsConsidered": 0
+        },
+        "directionalDelayFlowUsd": 82593.05579999997,
+        "flowToHurdleRatio": 0.5063795056295876,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "binance": {
+        "full": {
+          "count": 100,
+          "from": "2026-09-06T09:00:00.000Z",
+          "to": "2026-09-06T10:39:59.999Z",
+          "open": 5.106,
+          "close": 5.132,
+          "returnPct": 0.5092048570309426,
+          "deltaRatio": -0.060566413173247076,
+          "deltaUsd": -193722.98919999998,
+          "volume": 3198521.7391999993,
+          "efficiency": 0.06103286384976502
+        },
+        "last30": {
+          "count": 29,
+          "from": "2026-09-06T10:11:00.000Z",
+          "to": "2026-09-06T10:39:59.999Z",
+          "open": 5.143,
+          "close": 5.132,
+          "returnPct": -0.2138829476958981,
+          "deltaRatio": -0.045653833667924665,
+          "deltaUsd": -32338.588699999993,
+          "volume": 708343.3329,
+          "efficiency": -0.12643678160919844
+        },
+        "unfinishedHour": {
+          "count": 40,
+          "from": "2026-09-06T10:00:00.000Z",
+          "to": "2026-09-06T10:39:59.999Z",
+          "open": 5.164,
+          "close": 5.132,
+          "returnPct": -0.6196746707978318,
+          "deltaRatio": -0.21977743868849065,
+          "deltaUsd": -276316.0449999998,
+          "volume": 1257253.9139999996,
+          "efficiency": -0.21333333333333807
+        }
+      },
+      "dom": {
+        "dydx": {
+          "full": {
+            "minutes": 100,
+            "returnPct": 0.4694376528117328,
+            "deltaRatio": 0.2044325963096545,
+            "imbalance": 0.10518696000000004,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.1943068104537038,
+            "deltaRatio": -1,
+            "imbalance": -0.2105653103448276,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "hyperliquid": {
+          "full": {
+            "minutes": 100,
+            "returnPct": 0.48488640362882585,
+            "deltaRatio": 0.08638452662545713,
+            "imbalance": -0.03235817999999999,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.17868935244532702,
+            "deltaRatio": 0.48664874027310645,
+            "imbalance": -0.03510886206896552,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "binance": {
+          "full": {
+            "minutes": 0
+          },
+          "last30": {
+            "minutes": 0
+          }
+        }
+      }
+    },
+    {
+      "key": "INJ-USD|2026-09-06 19:00:00",
+      "nl": "06-09-2026 21:00 NL",
+      "direction": "long",
+      "cutoff": "2026-09-06T20:40:03.167Z",
+      "automatic": "IQ WEAK",
+      "oi": {
+        "source": "binance-futures-open-interest",
+        "symbol": "INJUSDT",
+        "from": "2026-09-06T19:00:00.000Z",
+        "to": "2026-09-06T20:40:03.167Z",
+        "fetchedAt": "2026-09-06T20:40:03.762Z",
+        "samples": 21,
+        "firstTimestamp": "2026-09-06T19:00:00.000Z",
+        "lastTimestamp": "2026-09-06T20:40:00.000Z",
+        "startContractOpenInterest": 3905915.3,
+        "endContractOpenInterest": 3894770.7,
+        "contractChangePct": -0.28532620766250627,
+        "startOpenInterestUsd": 20030356.00980726,
+        "endOpenInterestUsd": 20120385.4362,
+        "usdChangePct": 0.4494649338666834
+      },
+      "closedHour": {
+        "count": 1,
+        "directionalReturnPct": 1.3070620366757657,
+        "gapDisplacementRatio": 0.1339999999999995,
+        "directionalDeltaRatio": 0.22260006753146844,
+        "weakestDirectionalDeltaRatio": 0.22260006753146844
+      },
+      "storedDom": {
+        "from": "2026-09-06T19:00:00.000Z",
+        "to": "2026-09-06T20:40:03.167Z",
+        "coverageMinutes": 99,
+        "startPrice": 5.1286000000000005,
+        "endPrice": 5.1573,
+        "rawPriceReturnPct": 0.5596069102679069,
+        "directionalPriceReturnPct": 0.5596069102679069,
+        "rawTakerDeltaUsd": 70327.77999999994,
+        "directionalTakerDeltaUsd": 70327.77999999994,
+        "rawBookPressureUsd": 324864.5900000036,
+        "directionalBookPressureUsd": 324864.5900000036,
+        "averageImbalance25Bps": 0.07006422222222224,
+        "directionalImbalance25Bps": 0.07006422222222224,
+        "largestTradeUsd": 12888.36,
+        "bidNetChangeUsd": -117340.55000000075,
+        "askNetChangeUsd": -442205.1400000043
+      },
+      "hurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth+coinglass",
+        "symbol": "INJUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-06T20:40:04.325Z",
+        "dataCutoffAt": "2026-09-06T20:40:03.167Z",
+        "referencePrice": 5.169499999999999,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "CLOSE",
+        "headline": "HURDLE CLOSE @5.19",
+        "firstHurdle": {
+          "price": 5.187846238828945,
+          "distancePct": 0.3548938742420981,
+          "side": "ask",
+          "source": "binance",
+          "binanceUsd": 229461.0275,
+          "coinGlassUsd": 0,
+          "effectiveUsd": 229461.0275
+        },
+        "binance": {
+          "snapshotAt": "2026-09-06T20:40:04.325Z",
+          "lastUpdateId": 11491319923835,
+          "levelsConsidered": 100,
+          "binCount": 20,
+          "medianBinUsd": 65087.354699999996,
+          "materialThresholdUsd": 130174.70939999999,
+          "nearestMaterial": {
+            "price": 5.187846238828945,
+            "distancePct": 0.3548938742420981,
+            "side": "ask",
+            "source": "binance",
+            "binanceUsd": 229461.0275,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 229461.0275
+          }
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-06T20:39:56.369Z",
+          "ageMinutes": 0.1326,
+          "maxAgeMinutes": 15,
+          "stale": false,
+          "levelsConsidered": 0
+        },
+        "directionalDelayFlowUsd": 377341.926,
+        "flowToHurdleRatio": 1.644470654172417,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "binance": {
+        "full": {
+          "count": 100,
+          "from": "2026-09-06T19:00:00.000Z",
+          "to": "2026-09-06T20:39:59.999Z",
+          "open": 5.126,
+          "close": 5.168,
+          "returnPct": 0.8193523214982346,
+          "deltaRatio": 0.1089506994162138,
+          "deltaUsd": 268687.1876999998,
+          "volume": 2466135.501099999,
+          "efficiency": 0.09459459459459361
+        },
+        "last30": {
+          "count": 29,
+          "from": "2026-09-06T20:11:00.000Z",
+          "to": "2026-09-06T20:39:59.999Z",
+          "open": 5.165,
+          "close": 5.168,
+          "returnPct": 0.058083252662144425,
+          "deltaRatio": -0.03559464393001204,
+          "deltaUsd": -18288.302099999983,
+          "volume": 513793.65209999995,
+          "efficiency": 0.024793388429752553
+        },
+        "unfinishedHour": {
+          "count": 40,
+          "from": "2026-09-06T20:00:00.000Z",
+          "to": "2026-09-06T20:39:59.999Z",
+          "open": 5.193,
+          "close": 5.168,
+          "returnPct": -0.48141729250913423,
+          "deltaRatio": -0.1409308451706982,
+          "deltaUsd": -108654.7383,
+          "volume": 770979.1150999999,
+          "efficiency": -0.15151515151514663
+        }
+      },
+      "dom": {
+        "dydx": {
+          "full": {
+            "minutes": 100,
+            "returnPct": 0.7902439024390251,
+            "deltaRatio": null,
+            "imbalance": -0.000199219999999998,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.1739298482945295,
+            "deltaRatio": null,
+            "imbalance": -0.013701206896551724,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "hyperliquid": {
+          "full": {
+            "minutes": 100,
+            "returnPct": 0.7423716924515711,
+            "deltaRatio": 0.264117238429614,
+            "imbalance": 0.13969952999999996,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.1641306866455472,
+            "deltaRatio": -0.11599500512842671,
+            "imbalance": 0.1693588620689655,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "binance": {
+          "full": {
+            "minutes": 0
+          },
+          "last30": {
+            "minutes": 0
+          }
+        }
+      }
+    },
+    {
+      "key": "ZEC-USD|2026-09-03 14:00:00",
+      "nl": "03-09-2026 16:00 NL",
+      "direction": "long",
+      "cutoff": "2026-09-03T15:59:31.241Z",
+      "automatic": "IQ WEAK",
+      "oi": {
+        "source": "binance-futures-open-interest",
+        "symbol": "ZECUSDT",
+        "from": "2026-09-03T14:00:00.000Z",
+        "to": "2026-09-03T15:59:31.241Z",
+        "fetchedAt": "2026-09-03T15:59:31.861Z",
+        "samples": 24,
+        "firstTimestamp": "2026-09-03T14:00:00.000Z",
+        "lastTimestamp": "2026-09-03T15:55:00.000Z",
+        "startContractOpenInterest": 536243.098,
+        "endContractOpenInterest": 578017.513,
+        "contractChangePct": 7.790200965905969,
+        "startOpenInterestUsd": 458992766.1266823,
+        "endOpenInterestUsd": 547786889.2873347,
+        "usdChangePct": 19.345429756979037
+      },
+      "closedHour": {
+        "count": 1,
+        "directionalReturnPct": 1.884521917936266,
+        "gapDisplacementRatio": 0.171595744680852,
+        "directionalDeltaRatio": 0.06933406078374486,
+        "weakestDirectionalDeltaRatio": 0.06933406078374486
+      },
+      "storedDom": {
+        "from": "2026-09-03T14:00:00.000Z",
+        "to": "2026-09-03T15:59:31.241Z",
+        "coverageMinutes": 119,
+        "startPrice": 855.8924999999999,
+        "endPrice": 965.175,
+        "rawPriceReturnPct": 12.768250685687743,
+        "directionalPriceReturnPct": 12.768250685687743,
+        "rawTakerDeltaUsd": 36633959.269999996,
+        "directionalTakerDeltaUsd": 36633959.269999996,
+        "rawBookPressureUsd": 73164502.77000022,
+        "directionalBookPressureUsd": 73164502.77000022,
+        "averageImbalance25Bps": -0.24813147899159663,
+        "directionalImbalance25Bps": -0.24813147899159663,
+        "largestTradeUsd": 371287.04,
+        "bidNetChangeUsd": 119175052.19,
+        "askNetChangeUsd": 46010549.41999978
+      },
+      "hurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth+coinglass",
+        "symbol": "ZECUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-03T15:59:32.205Z",
+        "dataCutoffAt": "2026-09-03T15:59:31.241Z",
+        "referencePrice": 955.7,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "AHEAD",
+        "headline": "HURDLE @968",
+        "firstHurdle": {
+          "price": 967.97,
+          "distancePct": 1.2838756932091642,
+          "side": "ask",
+          "source": "coinglass",
+          "binanceUsd": 0,
+          "coinGlassUsd": 753735.47,
+          "effectiveUsd": 753735.47,
+          "persistenceHours": 0.007556944444444444
+        },
+        "binance": {
+          "snapshotAt": "2026-09-03T15:59:32.205Z",
+          "lastUpdateId": 11466120222700,
+          "levelsConsidered": 500,
+          "binCount": 7,
+          "medianBinUsd": 306347.19584,
+          "materialThresholdUsd": 612694.39168
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-03T15:59:08.281Z",
+          "ageMinutes": 0.39873333333333333,
+          "maxAgeMinutes": 15,
+          "stale": false,
+          "levelsConsidered": 2,
+          "nearest": {
+            "price": 967.97,
+            "distancePct": 1.2838756932091642,
+            "side": "ask",
+            "source": "coinglass",
+            "binanceUsd": 0,
+            "coinGlassUsd": 753735.47,
+            "effectiveUsd": 753735.47,
+            "persistenceHours": 0.007556944444444444
+          }
+        },
+        "directionalDelayFlowUsd": 9500302.744789988,
+        "flowToHurdleRatio": 12.604293048315728,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "binance": {
+        "full": {
+          "count": 119,
+          "from": "2026-09-03T14:00:00.000Z",
+          "to": "2026-09-03T15:58:59.999Z",
+          "open": 855.92,
+          "close": 960.28,
+          "returnPct": 12.192728292363775,
+          "deltaRatio": 0.1085473593465603,
+          "deltaUsd": 74100735.84232,
+          "volume": 682658116.12918,
+          "efficiency": 0.3906273394220693
+        },
+        "last30": {
+          "count": 29,
+          "from": "2026-09-03T15:30:00.000Z",
+          "to": "2026-09-03T15:58:59.999Z",
+          "open": 914.61,
+          "close": 960.28,
+          "returnPct": 4.993385158701513,
+          "deltaRatio": 0.09663104232888328,
+          "deltaUsd": 27603670.654079996,
+          "volume": 285660487.44596004,
+          "efficiency": 0.40476823539838647
+        },
+        "unfinishedHour": {
+          "count": 59,
+          "from": "2026-09-03T15:00:00.000Z",
+          "to": "2026-09-03T15:58:59.999Z",
+          "open": 872.05,
+          "close": 960.28,
+          "returnPct": 10.11753913193052,
+          "deltaRatio": 0.11839475080141887,
+          "deltaUsd": 64600433.09753001,
+          "volume": 545635956.49509,
+          "efficiency": 0.4330731850979233
+        }
+      },
+      "dom": {
+        "dydx": {
+          "full": {
+            "minutes": 119,
+            "returnPct": 12.875917352187338,
+            "deltaRatio": 0.8836885303648128,
+            "imbalance": -0.4922721596638656,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": 5.595608717024403,
+            "deltaRatio": 0.8384066050003323,
+            "imbalance": -0.295665,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "hyperliquid": {
+          "full": {
+            "minutes": 119,
+            "returnPct": 12.660455002455052,
+            "deltaRatio": 0.22765301653316578,
+            "imbalance": -0.003991226890756308,
+            "fullDepth25Fraction": 0.01680672268907563
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": 5.582185214604607,
+            "deltaRatio": 0.1850625189893578,
+            "imbalance": 0.06483631034482759,
+            "fullDepth25Fraction": 0.034482758620689655
+          }
+        },
+        "binance": {
+          "full": {
+            "minutes": 0
+          },
+          "last30": {
+            "minutes": 0
+          }
+        }
+      }
+    },
+    {
+      "key": "SOL-USD|2026-09-06 12:00:00",
+      "nl": "06-09-2026 14:00 NL",
+      "direction": "long",
+      "cutoff": "2026-09-06T13:42:33.986Z",
+      "automatic": "IQ WEAK",
+      "oi": {
+        "source": "binance-futures-open-interest",
+        "symbol": "SOLUSDT",
+        "from": "2026-09-06T12:00:00.000Z",
+        "to": "2026-09-06T13:42:33.986Z",
+        "fetchedAt": "2026-09-06T13:42:34.759Z",
+        "samples": 21,
+        "firstTimestamp": "2026-09-06T12:00:00.000Z",
+        "lastTimestamp": "2026-09-06T13:40:00.000Z",
+        "startContractOpenInterest": 8330347.61,
+        "endContractOpenInterest": 8298355.87,
+        "contractChangePct": -0.3840384759166149,
+        "startOpenInterestUsd": 886488147.826178,
+        "endOpenInterestUsd": 881700311.1875,
+        "usdChangePct": -0.5400903159752946
+      },
+      "closedHour": {
+        "count": 1,
+        "directionalReturnPct": 0.31948881789136685,
+        "gapDisplacementRatio": 0.031192660550458058,
+        "directionalDeltaRatio": 0.04027829363838151,
+        "weakestDirectionalDeltaRatio": 0.04027829363838151
+      },
+      "storedDom": {
+        "from": "2026-09-06T12:00:00.000Z",
+        "to": "2026-09-06T13:42:33.986Z",
+        "coverageMinutes": 102,
+        "startPrice": 106.4725,
+        "endPrice": 106.3925,
+        "rawPriceReturnPct": -0.0751367724060148,
+        "directionalPriceReturnPct": -0.0751367724060148,
+        "rawTakerDeltaUsd": -2113261.55,
+        "directionalTakerDeltaUsd": -2113261.55,
+        "rawBookPressureUsd": -226409552.99999952,
+        "directionalBookPressureUsd": -226409552.99999952,
+        "averageImbalance25Bps": -0.3505927058823531,
+        "directionalImbalance25Bps": -0.3505927058823531,
+        "largestTradeUsd": 113417.02,
+        "bidNetChangeUsd": -209274054.39999986,
+        "askNetChangeUsd": 17135498.599999666
+      },
+      "hurdle": {
+        "version": 1,
+        "observeOnly": true,
+        "causal": true,
+        "source": "binance-futures-depth+coinglass",
+        "symbol": "SOLUSDT",
+        "direction": "long",
+        "observedAt": "2026-09-06T13:42:35.101Z",
+        "dataCutoffAt": "2026-09-06T13:42:33.986Z",
+        "referencePrice": 106.38499999999999,
+        "referenceSource": "binance-depth-mid",
+        "horizonPct": 2,
+        "binPct": 0.1,
+        "closeDistancePct": 0.75,
+        "status": "AHEAD",
+        "headline": "HURDLE @107.5",
+        "firstHurdle": {
+          "price": 107.5,
+          "distancePct": 1.0480800864783657,
+          "side": "ask",
+          "source": "coinglass",
+          "binanceUsd": 0,
+          "coinGlassUsd": 2279636.4,
+          "effectiveUsd": 2279636.4,
+          "persistenceHours": 104.03530583333334
+        },
+        "binance": {
+          "snapshotAt": "2026-09-06T13:42:35.101Z",
+          "lastUpdateId": 11489218593934,
+          "levelsConsidered": 213,
+          "binCount": 20,
+          "medianBinUsd": 1889913.4378999998,
+          "materialThresholdUsd": 3779826.8757999996,
+          "nearestMaterial": {
+            "price": 108.46300390967973,
+            "distancePct": 1.9532865626542624,
+            "side": "ask",
+            "source": "binance",
+            "binanceUsd": 4184634.6762,
+            "coinGlassUsd": 0,
+            "effectiveUsd": 4184634.6762
+          }
+        },
+        "coinGlass": {
+          "fetchedAt": "2026-09-06T13:40:59.184Z",
+          "ageMinutes": 1.5986166666666666,
+          "maxAgeMinutes": 15,
+          "stale": false,
+          "levelsConsidered": 1,
+          "nearest": {
+            "price": 107.5,
+            "distancePct": 1.0480800864783657,
+            "side": "ask",
+            "source": "coinglass",
+            "binanceUsd": 0,
+            "coinGlassUsd": 2279636.4,
+            "effectiveUsd": 2279636.4,
+            "persistenceHours": 104.03530583333334
+          }
+        },
+        "directionalDelayFlowUsd": 3767193.46859999,
+        "flowToHurdleRatio": 1.6525413739664756,
+        "caveat": "Resting orders can be cancelled or spoofed. Flow-to-hurdle is an observe-only absorption proxy, not guaranteed executable capacity."
+      },
+      "binance": {
+        "full": {
+          "count": 102,
+          "from": "2026-09-06T12:00:00.000Z",
+          "to": "2026-09-06T13:41:59.999Z",
+          "open": 106.42,
+          "close": 106.33,
+          "returnPct": -0.08457056944183305,
+          "deltaRatio": -0.10496605118926082,
+          "deltaUsd": -19370583.0248,
+          "volume": 184541409.39219996,
+          "efficiency": -0.013740458015267612
+        },
+        "last30": {
+          "count": 29,
+          "from": "2026-09-06T13:13:00.000Z",
+          "to": "2026-09-06T13:41:59.999Z",
+          "open": 106.66,
+          "close": 106.33,
+          "returnPct": -0.3093943371460739,
+          "deltaRatio": -0.266560853144205,
+          "deltaUsd": -17739781.619899992,
+          "volume": 66550588.39529997,
+          "efficiency": -0.15789473684210525
+        },
+        "unfinishedHour": {
+          "count": 42,
+          "from": "2026-09-06T13:00:00.000Z",
+          "to": "2026-09-06T13:41:59.999Z",
+          "open": 106.77,
+          "close": 106.33,
+          "returnPct": -0.4121007773719154,
+          "deltaRatio": -0.2542269548328092,
+          "deltaUsd": -23137776.493399996,
+          "volume": 91012286.67360002,
+          "efficiency": -0.15492957746478775
+        }
+      },
+      "dom": {
+        "dydx": {
+          "full": {
+            "minutes": 102,
+            "returnPct": -0.06572152849498858,
+            "deltaRatio": -0.8358442940485427,
+            "imbalance": -0.6777826176470589,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.33241256613137926,
+            "deltaRatio": -0.8264775353556648,
+            "imbalance": -0.6688849310344827,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "hyperliquid": {
+          "full": {
+            "minutes": 102,
+            "returnPct": -0.08455865081975489,
+            "deltaRatio": -0.11900815767353864,
+            "imbalance": -0.023403068627450976,
+            "fullDepth25Fraction": 1
+          },
+          "last30": {
+            "minutes": 29,
+            "returnPct": -0.32803786494212117,
+            "deltaRatio": -0.41934750069976773,
+            "imbalance": -0.017674172413793106,
+            "fullDepth25Fraction": 1
+          }
+        },
+        "binance": {
+          "full": {
+            "minutes": 0
+          },
+          "last30": {
+            "minutes": 0
+          }
+        }
+      }
+    }
+  ],
+  "rawFiles": [
+    {
+      "file": "INJ-USD_2026-09-04_14_00_00-1m.json",
+      "sha256": "a6e4d0bc2cfbb0a2f8a123bfbdf65e9663cc79543bce47a4f123450c50c0dc87"
+    },
+    {
+      "file": "INJ-USD_2026-09-04_14_00_00-assessment.json",
+      "sha256": "9e851ed759a87902ddfe7c960213a182ff8dddfefa31b3854131e4ffd428ea27"
+    },
+    {
+      "file": "INJ-USD_2026-09-04_14_00_00-dom.json",
+      "sha256": "98bf91f84051a28f324f73f1f1d68dc9f80915dcdfeda8c7c7cbae9e6f4781ec"
+    },
+    {
+      "file": "INJ-USD_2026-09-06_05_00_00-1m.json",
+      "sha256": "3b636a5809c67893574e174c6b06849940b1e495b340f21c8561e9e3f484c16b"
+    },
+    {
+      "file": "INJ-USD_2026-09-06_05_00_00-assessment.json",
+      "sha256": "a9ea323548bd030fb3cf647dd79b34cd973c24b3b85645d4ab49c6e2d38f2f8e"
+    },
+    {
+      "file": "INJ-USD_2026-09-06_05_00_00-dom.json",
+      "sha256": "f81990d8bfd0912d4bce40e35324ad5fbc0d83a7d1cbb81b272dccdabf949146"
+    },
+    {
+      "file": "INJ-USD_2026-09-06_09_00_00-1m.json",
+      "sha256": "ad162244023143cfad31ab15b185c649ab47c68006fbea90e8e5a999d0ef6960"
+    },
+    {
+      "file": "INJ-USD_2026-09-06_09_00_00-assessment.json",
+      "sha256": "7f5b05ea529e8522039cc3019180bed31474378a01dbc6cf90b57468e8d09328"
+    },
+    {
+      "file": "INJ-USD_2026-09-06_09_00_00-dom.json",
+      "sha256": "e7f958fa2e28000959bfbc5a287bdc3670ef70ec3708a71aa5a19e46935fdadf"
+    },
+    {
+      "file": "INJ-USD_2026-09-06_19_00_00-1m.json",
+      "sha256": "cc827cb6796fd36c2bb407147691415f4c2889f0a3437afc8e49a9e3acee9748"
+    },
+    {
+      "file": "INJ-USD_2026-09-06_19_00_00-assessment.json",
+      "sha256": "121384ebf27db0dc21a07407736545f138a072c547fc4f4e695331fdeb4c51ca"
+    },
+    {
+      "file": "INJ-USD_2026-09-06_19_00_00-dom.json",
+      "sha256": "1a518120a66b7b37a51bad57c9cb0fcbe0b47ab3dd812a8f1e8bffb9440b5dba"
+    },
+    {
+      "file": "SOL-USD_2026-09-06_12_00_00-1m.json",
+      "sha256": "62879f8fa2877b664fac77ddaf835c5003ac3d2a2b7326b936f7fbee9033c3cd"
+    },
+    {
+      "file": "SOL-USD_2026-09-06_12_00_00-assessment.json",
+      "sha256": "48ceeca3d9ec7e7951c2fc3990cd400c03b702b066b33213ba1ac961502b67a6"
+    },
+    {
+      "file": "SOL-USD_2026-09-06_12_00_00-dom.json",
+      "sha256": "045863862488f72a66695fbbc855ade2dd7449f04b4588d0cd3ed94fa7222705"
+    },
+    {
+      "file": "ZEC-USD_2026-09-03_14_00_00-1m.json",
+      "sha256": "e7c83fdc4877b56d2bcf97a79936bb577eaa75cc7f856a0ffb27e414dde8b71d"
+    },
+    {
+      "file": "ZEC-USD_2026-09-03_14_00_00-assessment.json",
+      "sha256": "c6138846da90e1372dc7916af9cf2e31bf3511c6777555b2923f9628c634dbdd"
+    },
+    {
+      "file": "ZEC-USD_2026-09-03_14_00_00-dom.json",
+      "sha256": "568b90af748554158b489b4828d58bfdf60892724655ca7ee0d20ae5287f29aa"
+    }
+  ]
+}
