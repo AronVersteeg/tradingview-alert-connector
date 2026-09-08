@@ -399,6 +399,37 @@
       background: var(--panel);
     }
 
+    .daily-fractal-scroll {
+      height: 180px;
+      min-height: 180px;
+      margin-top: 7px;
+      overflow: auto;
+      scrollbar-gutter: stable;
+      border-top: 1px solid rgba(129, 148, 170, 0.2);
+    }
+
+    .daily-fractal-table {
+      min-width: 980px;
+      table-layout: auto;
+    }
+
+    .daily-fractal-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--panel);
+    }
+
+    .daily-fractal-table td:nth-child(2) {
+      font-variant-numeric: tabular-nums;
+      font-weight: 650;
+    }
+
+    .daily-fractal-active {
+      color: var(--price);
+      font-weight: 650;
+    }
+
     @media (max-width: 900px) {
       .delay-history-card {
         grid-column: 1 / -1;
@@ -1189,6 +1220,20 @@
           </div>
         </div>
       </div>
+      <div class="gap-card delay-history-card" id="dailyFractalHistoryCard" hidden>
+        <div class="gap-label">BTC daily Williams fractals - Binance Futures</div>
+        <div class="gap-status" id="dailyFractalHistoryStatus">Loading confirmed daily fractals</div>
+        <div class="daily-fractal-scroll">
+          <table class="delay-history-table daily-fractal-table" aria-label="BTC confirmed Binance daily Williams fractal history">
+            <thead>
+              <tr><th>Type</th><th>Exact wick</th><th>Pivot day</th><th>Confirmed at</th><th>Line state</th><th>First later break</th></tr>
+            </thead>
+            <tbody id="dailyFractalHistoryRows">
+              <tr><td colspan="6">Loading confirmed daily fractals</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <section class="stage">
@@ -1428,7 +1473,11 @@
     const CLOUD_DOM_COLLECTOR_HISTORY_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/research/dom-collector/history'
       : '/research/dom-collector/history';
+    const CLOUD_DAILY_FRACTAL_HISTORY_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+      ? 'https://arons-tradingview-alert-connector.onrender.com/research/binance-daily-fractals'
+      : '/research/binance-daily-fractals';
     let payload = activeSource === 'decentrader' ? window.DECENTRADER_LIQUIDITY_TIMELAPSE : null;
+    let dailyFractalHistory = null;
     const canvas = document.getElementById('chart');
     const ctx = canvas.getContext('2d');
     const frameInput = document.getElementById('frame');
@@ -1501,6 +1550,9 @@
     const delayHistoryStatus = document.getElementById('delayHistoryStatus');
     const delayHistoryStatsRows = document.getElementById('delayHistoryStatsRows');
     const delayHistoryLatestRows = document.getElementById('delayHistoryLatestRows');
+    const dailyFractalHistoryCard = document.getElementById('dailyFractalHistoryCard');
+    const dailyFractalHistoryStatus = document.getElementById('dailyFractalHistoryStatus');
+    const dailyFractalHistoryRows = document.getElementById('dailyFractalHistoryRows');
     const tradeZoneValue = document.getElementById('tradeZoneValue');
     const tradeZoneStatus = document.getElementById('tradeZoneStatus');
     const tradePlanValue = document.getElementById('tradePlanValue');
@@ -3061,6 +3113,84 @@
       delayHistoryStatus.textContent = tableRecords.length
         ? `${tableRecords.length} reconstructed intrusion${tableRecords.length === 1 ? '' : 's'} | ${totalRecords} sent mail${totalRecords === 1 ? '' : 's'} | pre-context uses only data available before each alert`
         : 'Historical intrusion reconstruction starts after deployment';
+    }
+
+    function exactDecimalLabel(value) {
+      const raw = String(value ?? '').trim();
+      if (!/^-?\d+(?:\.\d+)?$/.test(raw)) return '-';
+      const parts = raw.split('.');
+      const integer = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+      const fraction = String(parts[1] || '').replace(/0+$/, '');
+      return fraction ? `${integer}.${fraction}` : integer;
+    }
+
+    function dailyFractalDate(timestamp, includeTime = false) {
+      const date = new Date(timestamp);
+      if (!Number.isFinite(date.getTime())) return '-';
+      return new Intl.DateTimeFormat('nl-NL', {
+        timeZone: 'Europe/Amsterdam',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        ...(includeTime ? { hour: '2-digit', minute: '2-digit', hour12: false } : {})
+      }).format(date).replace(',', '') + (includeTime ? ' NL' : '');
+    }
+
+    function dailyFractalState(record) {
+      if (record.isLatestForType && !record.firstBrokenAt) return 'ACTIVE';
+      if (record.isLatestForType) return 'LATEST / BROKEN';
+      if (record.firstBrokenAt && (!record.supersededAt || Date.parse(record.firstBrokenAt) < Date.parse(record.supersededAt))) {
+        return 'BROKEN';
+      }
+      return 'REPLACED';
+    }
+
+    function updateDailyFractalHistory() {
+      if (!dailyFractalHistoryCard) return;
+      dailyFractalHistoryCard.hidden = activeSource !== 'decentrader';
+      if (activeSource !== 'decentrader') return;
+
+      const records = Array.isArray(dailyFractalHistory?.records) ? dailyFractalHistory.records : [];
+      if (!records.length) {
+        dailyFractalHistoryRows.innerHTML = '<tr><td colspan="6">No confirmed daily fractals available</td></tr>';
+        return;
+      }
+
+      const latestHigh = records.find((record) => record.type === 'HIGH' && record.isLatestForType);
+      const latestLow = records.find((record) => record.type === 'LOW' && record.isLatestForType);
+      dailyFractalHistoryStatus.textContent = [
+        latestHigh ? `Latest high ${exactDecimalLabel(latestHigh.priceExact)} (${dailyFractalDate(latestHigh.pivotAt)})` : 'Latest high -',
+        latestLow ? `Latest low ${exactDecimalLabel(latestLow.priceExact)} (${dailyFractalDate(latestLow.pivotAt)})` : 'Latest low -',
+        dailyFractalHistory.latestClosedCandleAt ? `closed through ${dailyFractalDate(dailyFractalHistory.latestClosedCandleAt)}` : '',
+        dailyFractalHistory.cached ? 'cached' : 'fresh'
+      ].filter(Boolean).join(' | ');
+
+      dailyFractalHistoryRows.innerHTML = records.map((record) => {
+        const state = dailyFractalState(record);
+        return `<tr>
+          <td>${record.type === 'HIGH' ? 'High' : 'Low'}</td>
+          <td>${exactDecimalLabel(record.priceExact)}</td>
+          <td>${dailyFractalDate(record.pivotAt)}</td>
+          <td>${dailyFractalDate(record.confirmedAt, true)}</td>
+          <td class="${state === 'ACTIVE' ? 'daily-fractal-active' : ''}">${state}</td>
+          <td>${record.firstBrokenAt ? dailyFractalDate(record.firstBrokenAt) : 'Intact'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function refreshDailyFractalHistory() {
+      if (activeSource !== 'decentrader') return null;
+      try {
+        const response = await fetch(`${CLOUD_DAILY_FRACTAL_HISTORY_URL}?market=BTC-USD&ts=${Date.now()}`, { cache: 'no-store' });
+        const nextHistory = await response.json();
+        if (!response.ok || nextHistory.error) throw new Error(nextHistory.error || `Daily fractals ${response.status}`);
+        dailyFractalHistory = nextHistory;
+        updateDailyFractalHistory();
+        return nextHistory;
+      } catch (error) {
+        dailyFractalHistoryStatus.textContent = `Daily fractal refresh failed: ${String(error.message || error)}`;
+        throw error;
+      }
     }
 
     function updateIntrusionDomStudy() {
@@ -5267,6 +5397,7 @@
       }
 
       draw();
+      refreshDailyFractalHistory().catch(() => undefined);
       refreshTradePlan().catch((error) => {
         latestTradePlanError = String(error.message || error);
         updateTradePlanMonitor(payload?.frames?.[Number(frameInput.value)]);
@@ -5301,6 +5432,7 @@
       const sourceEventCount = Number(payload.eventCount ?? payload.events?.length ?? 0);
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${sourceEventCount.toLocaleString('en-US')} zone events`;
       note.textContent = payload.source.note;
+      updateDailyFractalHistory();
       resizeCanvas();
     }
 

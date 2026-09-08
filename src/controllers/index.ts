@@ -42,6 +42,7 @@ import { getSnoekRijnland } from '../services/snoekRijnland';
 import { getSnoekStructures } from '../services/snoekStructures';
 import { getSnoekWeather } from '../services/snoekWeather';
 import { intrusionTheListSnapshot } from '../services/intrusionTheList';
+import { binanceBtcDailyFractalHistory } from '../services/binanceDailyFractalHistory';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
 
@@ -513,6 +514,24 @@ router.get('/research/intrusion-the-list', async (_req, res) => {
   } catch (error) {
     console.error('The List snapshot request failed:', error);
     res.status(500).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.get('/research/binance-daily-fractals', async (req, res) => {
+  try {
+    const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
+    if (market !== 'BTC-USD') {
+      return res.status(400).send({ ok: false, error: 'Daily fractal history currently supports BTC-USD.' });
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(await binanceBtcDailyFractalHistory(req.query.refresh === '1'));
+  } catch (error) {
+    console.error('Binance BTC daily fractal history request failed:', error);
+    res.status(502).send({
       ok: false,
       error: error instanceof Error ? error.message : String(error)
     });
