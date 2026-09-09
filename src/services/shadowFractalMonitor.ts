@@ -15,7 +15,7 @@ import { sendEmailBestEffort, smtpSettingsFromEnv } from './decentraderGapMonito
 
 const BINANCE_FUTURES_KLINES_URL = 'https://fapi.binance.com/fapi/v1/klines';
 const HOUR_MS = 60 * 60_000;
-const CLOSE_BUFFER_MS = 90_000;
+const CLOSE_BUFFER_MS = 15_000;
 
 const SHADOW_MARKETS: Array<{ market: DailyFractalMarket; asset: string; symbol: string }> = [
   { market: 'BTC-USD', asset: 'BTC', symbol: 'BTCUSDT' },
