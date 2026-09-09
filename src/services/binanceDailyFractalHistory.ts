@@ -24,6 +24,15 @@ export type BinanceDailyCandle = {
   low: string;
 };
 
+export type ConfirmedWilliamsFractal = {
+  type: 'HIGH' | 'LOW';
+  price: number;
+  priceExact: string;
+  pivotAt: string;
+  confirmedAt: string;
+  pivotIndex: number;
+};
+
 export type DailyFractalHistoryItem = {
   id: string;
   market: DailyFractalMarket;
@@ -86,21 +95,20 @@ export function parseBinanceDailyCandles(rows: unknown[], nowMs = Date.now()): B
     .sort((left, right) => left.openTime - right.openTime);
 }
 
-export function buildDailyFractalHistory(
+export function confirmedWilliamsFractals(
   candles: BinanceDailyCandle[],
-  market: DailyFractalMarket = 'BTC-USD',
-  symbol = BINANCE_DAILY_FRACTAL_MARKETS[market].symbol
-): DailyFractalHistoryItem[] {
-  const records: DailyFractalHistoryItem[] = [];
+  window = WILLIAMS_WINDOW
+): ConfirmedWilliamsFractal[] {
+  const fractals: ConfirmedWilliamsFractal[] = [];
 
-  for (let index = WILLIAMS_WINDOW; index < candles.length - WILLIAMS_WINDOW; index += 1) {
+  for (let index = window; index < candles.length - window; index += 1) {
     const pivot = candles[index];
     const pivotHigh = Number(pivot.high);
     const pivotLow = Number(pivot.low);
     let isHigh = true;
     let isLow = true;
 
-    for (let offset = -WILLIAMS_WINDOW; offset <= WILLIAMS_WINDOW; offset += 1) {
+    for (let offset = -window; offset <= window; offset += 1) {
       if (offset === 0) continue;
       const neighbor = candles[index + offset];
       const neighborHigh = Number(neighbor.high);
@@ -112,35 +120,49 @@ export function buildDailyFractalHistory(
       if (offset < 0 ? pivotLow > neighborLow : pivotLow >= neighborLow) isLow = false;
     }
 
-    const confirmedAt = new Date(candles[index + WILLIAMS_WINDOW].closeTime).toISOString();
+    const confirmedAt = new Date(candles[index + window].closeTime).toISOString();
     const pivotAt = new Date(pivot.openTime).toISOString();
     if (isHigh) {
-      records.push({
-        id: `${symbol}|HIGH|${pivot.openTime}`,
-        market,
-        symbol,
+      fractals.push({
         type: 'HIGH',
         price: pivotHigh,
         priceExact: pivot.high,
         pivotAt,
         confirmedAt,
-        isLatestForType: false
+        pivotIndex: index
       });
     }
     if (isLow) {
-      records.push({
-        id: `${symbol}|LOW|${pivot.openTime}`,
-        market,
-        symbol,
+      fractals.push({
         type: 'LOW',
         price: pivotLow,
         priceExact: pivot.low,
         pivotAt,
         confirmedAt,
-        isLatestForType: false
+        pivotIndex: index
       });
     }
   }
+
+  return fractals;
+}
+
+export function buildDailyFractalHistory(
+  candles: BinanceDailyCandle[],
+  market: DailyFractalMarket = 'BTC-USD',
+  symbol = BINANCE_DAILY_FRACTAL_MARKETS[market].symbol
+): DailyFractalHistoryItem[] {
+  const records: DailyFractalHistoryItem[] = confirmedWilliamsFractals(candles).map((fractal) => ({
+    id: `${symbol}|${fractal.type}|${candles[fractal.pivotIndex].openTime}`,
+    market,
+    symbol,
+    type: fractal.type,
+    price: fractal.price,
+    priceExact: fractal.priceExact,
+    pivotAt: fractal.pivotAt,
+    confirmedAt: fractal.confirmedAt,
+    isLatestForType: false
+  }));
 
   for (const type of ['HIGH', 'LOW'] as const) {
     const typed = records.filter((record) => record.type === type);

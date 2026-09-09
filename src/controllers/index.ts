@@ -46,6 +46,7 @@ import {
   binanceDailyFractalHistory,
   isDailyFractalMarket
 } from '../services/binanceDailyFractalHistory';
+import { shadowFractalMonitor } from '../services/shadowFractalMonitor';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
 
@@ -255,6 +256,7 @@ initializeExchanges()
     openLiquidityV2SilverIntrusionMonitor.start(225_000);
     openLiquidityV2SolTradeMonitor.start(255_000);
     openLiquidityV2ZecTradeMonitor.start(345_000);
+    shadowFractalMonitor.start(390_000);
   })
   .catch((err) => {
     console.error("Exchange initialization failed:", err);
@@ -542,6 +544,12 @@ router.get('/research/binance-daily-fractals', async (req, res) => {
       error: error instanceof Error ? error.message : String(error)
     });
   }
+});
+
+router.get('/research/shadow-fractal/status', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.send(shadowFractalMonitor.getStatus());
 });
 
 function openLiquidityV2CollectorForMarket(market: string) {
