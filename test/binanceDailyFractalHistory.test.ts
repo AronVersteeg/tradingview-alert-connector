@@ -1,6 +1,8 @@
 import {
+  BINANCE_DAILY_FRACTAL_MARKETS,
   BinanceDailyCandle,
   buildDailyFractalHistory,
+  isDailyFractalMarket,
   parseBinanceDailyCandles
 } from '../src/services/binanceDailyFractalHistory';
 
@@ -15,6 +17,20 @@ function candle(day: number, high: string, low: string): BinanceDailyCandle {
 }
 
 describe('Binance daily Williams fractal history', () => {
+  test('maps every dashboard pair to its explicit Binance Futures source', () => {
+    expect(BINANCE_DAILY_FRACTAL_MARKETS).toEqual({
+      'BTC-USD': { symbol: 'BTCUSDT' },
+      'ETH-USD': { symbol: 'ETHUSDT' },
+      'INJ-USD': { symbol: 'INJUSDT' },
+      'SOL-USD': { symbol: 'SOLUSDT' },
+      'ZEC-USD': { symbol: 'ZECUSDT' },
+      'PAXG-USD': { symbol: 'XAUUSDT' },
+      'XAG-USD': { symbol: 'XAGUSDT' }
+    });
+    expect(isDailyFractalMarket('SOL-USD')).toBe(true);
+    expect(isDailyFractalMarket('DOGE-USD')).toBe(false);
+  });
+
   test('uses closed candles and preserves Binance decimal values', () => {
     const nowMs = Date.UTC(2026, 0, 3);
     const rows = [
@@ -66,5 +82,22 @@ describe('Binance daily Williams fractal history', () => {
     expect(latest).toHaveLength(2);
     expect(latest.find((record) => record.type === 'HIGH')?.price).toBe(14);
     expect(latest.find((record) => record.type === 'LOW')?.price).toBe(4);
+  });
+
+  test('labels records with the requested dashboard market and Binance symbol', () => {
+    const candles = [
+      candle(1, '10', '8'), candle(2, '11', '7'), candle(3, '14.50', '6'),
+      candle(4, '12', '5'), candle(5, '11', '6')
+    ];
+    const records = buildDailyFractalHistory(candles, 'INJ-USD', 'INJUSDT');
+
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: `INJUSDT|HIGH|${Date.UTC(2026, 0, 3)}`,
+        market: 'INJ-USD',
+        symbol: 'INJUSDT',
+        priceExact: '14.50'
+      })
+    ]));
   });
 });
