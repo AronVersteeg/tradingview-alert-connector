@@ -2,7 +2,8 @@ import { DailyFractalHistoryItem } from '../src/services/binanceDailyFractalHist
 import {
   ShadowHourlyCandle,
   evaluateShadowFractalBreakout,
-  parseBinanceHourlyCandles
+  parseBinanceHourlyCandles,
+  shadowFractalEntryIsFresh
 } from '../src/services/shadowFractalMonitor';
 
 function hourly(
@@ -40,7 +41,7 @@ function daily(
   };
 }
 
-describe('read-only Shadow Williams breakout monitor', () => {
+describe('Shadow Williams breakout monitor', () => {
   test('ignores the still-open Binance 1H candle and preserves exact decimals', () => {
     const nowMs = Date.UTC(2026, 8, 9, 2);
     const rows = [
@@ -107,5 +108,12 @@ describe('read-only Shadow Williams breakout monitor', () => {
       candles,
       [daily('HIGH', '10.50', '2026-09-08T23:59:59.999Z')]
     )).toBeUndefined();
+  });
+
+  test('only permits live entries during the first 15 minutes after the 1H close', () => {
+    const closedAt = Date.UTC(2026, 8, 9, 12);
+    expect(shadowFractalEntryIsFresh(closedAt, closedAt + 15 * 60_000)).toBe(true);
+    expect(shadowFractalEntryIsFresh(closedAt, closedAt + 15 * 60_000 + 1)).toBe(false);
+    expect(shadowFractalEntryIsFresh(closedAt, closedAt - 1)).toBe(false);
   });
 });

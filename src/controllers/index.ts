@@ -169,6 +169,13 @@ function configureDecentraderTradeExecutor() {
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
+  shadowFractalMonitor.configureEntryHandler('BTC-USD', decentraderGapMonitor);
+  shadowFractalMonitor.configureEntryHandler('ETH-USD', openLiquidityV2EthTradeMonitor);
+  shadowFractalMonitor.configureEntryHandler('INJ-USD', openLiquidityV2InjTradeMonitor);
+  shadowFractalMonitor.configureEntryHandler('SOL-USD', openLiquidityV2SolTradeMonitor);
+  shadowFractalMonitor.configureEntryHandler('ZEC-USD', openLiquidityV2ZecTradeMonitor);
+  shadowFractalMonitor.configureEntryHandler('PAXG-USD', openLiquidityV2GoldIntrusionMonitor);
+  shadowFractalMonitor.configureEntryHandler('XAG-USD', openLiquidityV2SilverIntrusionMonitor);
 }
 
 async function initializeExchanges() {

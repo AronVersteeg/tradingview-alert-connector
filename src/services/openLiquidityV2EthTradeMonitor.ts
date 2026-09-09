@@ -1,6 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
+import {
+  FractalEntryRequest,
+  delayEntryModelEnabled,
+  fractalEntryModelEnabled
+} from './entryModelSwitches';
 
 import { AlertObject } from '../types';
 
@@ -790,6 +795,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       market: this.config.market,
       pollMinutes: this.pollMinutes(),
       autoTradeEnabled: this.autoTradeEnabled(),
+      delayEntryModelEnabled: delayEntryModelEnabled(),
       observeOnly: !this.config.tradeCapable,
       stateFile: stateFile(this.config),
       inheritsDecentraderRiskAndOrderEnvs: true
@@ -804,6 +810,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       positionManagement: this.managementStatus,
       market: this.config.market,
       autoTradeEnabled: this.autoTradeEnabled(),
+      delayEntryModelEnabled: delayEntryModelEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       observeOnly: !this.config.tradeCapable,
       hasTradeExecutor: Boolean(this.executor),
@@ -922,7 +929,11 @@ export class OpenLiquidityV2EthTradeMonitor {
     });
   }
 
-  async getTradePlan(account: DydxSizingAccountSnapshot, signalAlert?: GapAlert): Promise<any> {
+  async getTradePlan(
+    account: DydxSizingAccountSnapshot,
+    signalAlert?: GapAlert,
+    directionOverride?: TradePlanDirection
+  ): Promise<any> {
     const payload = await this.collector.getPayload();
     const rows = replicaRows(payload);
     const frameIndex = rows.length - 1;
@@ -951,7 +962,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
     const longPlan = buildDirectionalPlan('long', account, marketInfo, fractalRows, fractalFrameIndex, gap, signalAlert, zones, finite(frame.price), mode);
     const shortPlan = buildDirectionalPlan('short', account, marketInfo, fractalRows, fractalFrameIndex, gap, signalAlert, zones, finite(frame.price), mode);
-    const activeDirection = mapDirectionFromAlert(signalAlert);
+    const activeDirection = directionOverride || mapDirectionFromAlert(signalAlert);
     return {
       ok: true,
       symbol: this.config.symbol,
@@ -962,7 +973,11 @@ export class OpenLiquidityV2EthTradeMonitor {
       price: finite(frame.price),
       signal: {
         direction: activeDirection || 'none',
-        reason: activeDirection ? `${activeDirection} bias from ${this.config.asset} V2 gap intrusion` : `No fresh ${this.config.asset} intrusion`
+        reason: activeDirection
+          ? directionOverride
+            ? `${activeDirection} bias from confirmed 1H + Daily Williams fractal breakout`
+            : `${activeDirection} bias from ${this.config.asset} V2 gap intrusion`
+          : `No fresh ${this.config.asset} intrusion`
       },
       account: {
         equity: account.equity,
@@ -1071,11 +1086,136 @@ export class OpenLiquidityV2EthTradeMonitor {
     };
   }
 
+  async executeFractalEntry(request: FractalEntryRequest): Promise<any> {
+    const result: any = {
+      model: 'SHADOW_FRACTAL',
+      market: this.config.market,
+      direction: request.direction,
+      signature: request.signature,
+      tradePlaced: false
+    };
+
+    if (normalizedMarket(request.market) !== this.config.market) {
+      return { ...result, tradeSkipped: `Fractal entry market ${request.market} does not match ${this.config.market}.` };
+    }
+
+    try {
+      return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
+        if (!fractalEntryModelEnabled()) {
+          result.tradeSkipped = 'SHADOW_FRACTAL_ENTRY_MODEL_ENABLED is false.';
+          return result;
+        }
+        if (!this.autoTradeEnabled()) {
+          result.tradeSkipped = `${this.config.asset} auto-trading is disabled by ${this.config.autoTradeEnv}.`;
+          return result;
+        }
+        if (!this.executor) {
+          result.tradeSkipped = `No dYdX executor is configured for ${this.config.asset}.`;
+          return result;
+        }
+        if (
+          state.lastTradeExecutedSignature === request.signature ||
+          state.lastTradeAttemptedSignature === request.signature
+        ) {
+          result.tradeSkipped = `Duplicate ${this.config.asset} fractal entry signature.`;
+          result.duplicate = true;
+          return result;
+        }
+
+        const account = await this.executor.getAccountSnapshot([this.config.market]);
+        const openPosition = existingPosition(account, this.config.market);
+        if (openPosition) {
+          result.tradeSkipped = `Existing ${this.config.market} position detected; fractal entry skipped.`;
+          return result;
+        }
+
+        const plan = await this.getTradePlan(account, undefined, request.direction);
+        const marketStatus = String(plan.marketInfo?.status || '').trim().toUpperCase();
+        if (marketStatus && marketStatus !== 'ACTIVE') {
+          result.tradeSkipped = `${this.config.market} is ${marketStatus}; no live order was submitted.`;
+          return result;
+        }
+        if (
+          !plan.activePlan ||
+          plan.activePlan.direction !== request.direction ||
+          plan.activePlan.status === 'invalid-stop' ||
+          plan.activePlan.status === 'invalid-size' ||
+          plan.activePlan.stop?.valid === false
+        ) {
+          result.tradeSkipped =
+            plan.activePlan?.statusReason ||
+            plan.activePlan?.stop?.reason ||
+            'Fractal entry skipped because the shared SL/TP trade plan is invalid.';
+          result.tradePlan = plan;
+          return result;
+        }
+
+        const orderAlert = buildDecentraderOrderAlert(plan, request.signature);
+        (orderAlert as any).strategy = `${this.config.strategyPrefix}_shadow_fractal_entry`;
+        (orderAlert as any).fractal_entry = { ...request };
+        await this.applyStatefulOrderCapacity(orderAlert, result);
+        state.lastTradeAttemptedSignature = request.signature;
+        state.lastTradeAttemptedAt = nowNlIso();
+        result.tradePlan = plan;
+
+        try {
+          await this.executor.placeOrder(orderAlert);
+        } catch (error) {
+          const partialPosition = await this.waitForExpectedPosition(request.direction);
+          if (!partialPosition || directionForPosition(partialPosition) !== request.direction) throw error;
+          const oraclePrice = finite(plan.marketInfo?.oraclePrice) || finite(plan.price);
+          this.registerManagedPosition(
+            state,
+            request.signature,
+            request.direction,
+            partialPosition,
+            oraclePrice,
+            plan,
+            orderAlert,
+            'RECOVERED_AFTER_PARTIAL_EXECUTION'
+          );
+          result.tradePlaced = true;
+          result.tradeRecovered = true;
+          result.tradeWarning = error instanceof Error ? error.message : String(error);
+          await this.syncManagedOrders(state, result);
+          return result;
+        }
+
+        const placedPosition = await this.waitForExpectedPosition(request.direction);
+        if (!placedPosition || directionForPosition(placedPosition) !== request.direction) {
+          throw new Error(`dYdX did not report the requested ${this.config.market} ${request.direction} position.`);
+        }
+        const oraclePrice = finite(plan.marketInfo?.oraclePrice) || finite(plan.price);
+        this.registerManagedPosition(
+          state,
+          request.signature,
+          request.direction,
+          placedPosition,
+          oraclePrice,
+          plan,
+          orderAlert,
+          'PLACED'
+        );
+        result.tradePlaced = true;
+        console.log(`${this.config.asset} Shadow fractal entry placed:`, state.lastTradeDecision);
+        return result;
+      }));
+    } catch (error) {
+      result.tradeError = error instanceof Error ? error.message : String(error);
+      console.error(`${this.config.asset} Shadow fractal entry failed:`, error);
+      return result;
+    }
+  }
+
   private async executeAlert(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
     return this.coordinator.exclusive(() => this.executeAlertExclusive(state, alert, signature, result));
   }
 
   private async executeAlertExclusive(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
+    if (!delayEntryModelEnabled()) {
+      result.tradeSkipped = 'DECENTRADER_DELAY_ENTRY_MODEL_ENABLED is false; Delay entries and entry emails are disabled.';
+      return;
+    }
     if (!this.autoTradeEnabled()) {
       result.tradeSkipped = `${this.config.asset} V2 auto-trading is disabled.`;
       return;
@@ -1214,7 +1354,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private async recoverUnmanagedFilteredPosition(state: EthMonitorState, payload: any, result: any): Promise<void> {
-    if (!this.executor || !this.autoTradeEnabled() || state.managedPosition) return;
+    if (!delayEntryModelEnabled() || !this.executor || !this.autoTradeEnabled() || state.managedPosition) return;
 
     const account = await this.executor.getAccountSnapshot([this.config.market]);
     const position = existingPosition(account, this.config.market);
@@ -1474,6 +1614,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         const reconstructed = reconstructReplicaIntrusions(payload, state.lastDataTimestamp);
         result.alerts = reconstructed.alerts;
         const smtp = smtpSettingsFromEnv();
+        const delayModelEnabled = delayEntryModelEnabled();
         const regularIntrusionEmailEnabled = decentraderRegularIntrusionEmailEnabled();
         state.pendingAlerts = state.pendingAlerts || {};
         const normalSent = new Set(state.normalSentSignatures || []);
@@ -1495,7 +1636,7 @@ export class OpenLiquidityV2EthTradeMonitor {
             ? { ...pending.alert, frameIndex: currentFrameIndex }
             : pending.alert;
           pending.alert = alert;
-          if (!normalSent.has(signature) && regularIntrusionEmailEnabled && smtp) {
+          if (delayModelEnabled && !normalSent.has(signature) && regularIntrusionEmailEnabled && smtp) {
             const sent = await sendEmailBestEffort(
               smtp,
               `${this.config.asset} ${sideCounts(alert)} | ${alert.timestampNl}`,
@@ -1508,7 +1649,7 @@ export class OpenLiquidityV2EthTradeMonitor {
               result.emailSentCount += 1;
             }
           }
-          if (filterEnabled && !regularIntrusionEmailEnabled && !pending.normalSmtpSentAt) {
+          if (filterEnabled && (!regularIntrusionEmailEnabled || !delayModelEnabled) && !pending.normalSmtpSentAt) {
             // Keep a stable Delay cutoff while suppressing the raw intrusion
             // email. Only a passing FILTERED alert is delivered.
             pending.normalSmtpSentAt = nowNlIso();
@@ -1603,7 +1744,7 @@ export class OpenLiquidityV2EthTradeMonitor {
           });
           if (review.status === 'PENDING') continue;
           if (review.status === 'PASS') {
-            if (!filteredSent.has(signature) && smtp) {
+            if (delayModelEnabled && !filteredSent.has(signature) && smtp) {
               const sent = await sendEmailBestEffort(
                 smtp,
                 `FILTERED ${this.config.asset} ${sideCounts(alert)} | ${forwardHurdle?.headline || 'HURDLE DATA GAP'} | ${impulseQuality.headline} | ${alert.timestampNl}`,

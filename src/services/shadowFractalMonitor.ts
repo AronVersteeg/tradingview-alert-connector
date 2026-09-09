@@ -12,10 +12,16 @@ import {
   confirmedWilliamsFractals
 } from './binanceDailyFractalHistory';
 import { sendEmailBestEffort, smtpSettingsFromEnv } from './decentraderGapMonitor';
+import {
+  FractalEntryHandler,
+  FractalEntryRequest,
+  fractalEntryModelEnabled
+} from './entryModelSwitches';
 
 const BINANCE_FUTURES_KLINES_URL = 'https://fapi.binance.com/fapi/v1/klines';
 const HOUR_MS = 60 * 60_000;
 const CLOSE_BUFFER_MS = 15_000;
+export const SHADOW_FRACTAL_MAX_ENTRY_DELAY_MS = 15 * 60_000;
 
 const SHADOW_MARKETS: Array<{ market: DailyFractalMarket; asset: string; symbol: string }> = [
   { market: 'BTC-USD', asset: 'BTC', symbol: 'BTCUSDT' },
@@ -63,6 +69,11 @@ export type ShadowFractalAlertRecord = {
   lastEmailAttemptAt?: string;
   emailSentAt?: string;
   emailError?: string;
+  tradeAttempts?: number;
+  lastTradeAttemptAt?: string;
+  tradePlacedAt?: string;
+  tradeSkipped?: string;
+  tradeError?: string;
 };
 
 type ShadowFractalState = {
@@ -194,6 +205,11 @@ export function evaluateShadowFractalBreakout(
   return undefined;
 }
 
+export function shadowFractalEntryIsFresh(candleClosedAtMs: number, nowMs = Date.now()): boolean {
+  const ageMs = nowMs - candleClosedAtMs;
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= SHADOW_FRACTAL_MAX_ENTRY_DELAY_MS;
+}
+
 function nlTimestamp(timestampMs: number): string {
   return new Intl.DateTimeFormat('nl-NL', {
     timeZone: 'Europe/Amsterdam',
@@ -208,7 +224,8 @@ function nlTimestamp(timestampMs: number): string {
 
 function signalBody(config: typeof SHADOW_MARKETS[number], signal: ShadowFractalSignal): string {
   return [
-    'Read-only Shadow strategy alert. No order has been placed.',
+    'Live Shadow strategy entry signal.',
+    'A dYdX entry is attempted only when the master model and this pair\'s auto-trade switch are enabled.',
     '',
     `Market: ${config.market}`,
     `Source: Binance Futures ${config.symbol}`,
@@ -243,14 +260,19 @@ export class ShadowFractalMonitor {
   private initialTimer: NodeJS.Timeout | undefined;
   private nextTimer: NodeJS.Timeout | undefined;
   private checkPromise: Promise<void> | undefined;
-  private status: any = { enabled: false, running: false, readOnly: true };
+  private status: any = { enabled: false, running: false, readOnly: false };
+  private readonly entryHandlers = new Map<string, FractalEntryHandler>();
 
   private enabled(): boolean {
-    return boolValue(process.env.SHADOW_FRACTAL_ALERTS_ENABLED, true);
+    return fractalEntryModelEnabled();
   }
 
   private marketEnabled(asset: string): boolean {
     return boolValue(process.env[`SHADOW_FRACTAL_${asset}_ENABLED`], true);
+  }
+
+  configureEntryHandler(market: string, handler: FractalEntryHandler): void {
+    this.entryHandlers.set(String(market).replace(/_/g, '-').toUpperCase(), handler);
   }
 
   start(initialDelayMs = 390_000): void {
@@ -270,7 +292,7 @@ export class ShadowFractalMonitor {
       this.initialTimer = undefined;
       this.runAndReschedule();
     }, initialDelayMs);
-    console.log('Read-only Shadow fractal monitor scheduled:', {
+    console.log('Shadow fractal entry model scheduled:', {
       initialDelayMs,
       markets: this.status.markets,
       source: 'Binance Futures 1H + 1D',
@@ -290,7 +312,8 @@ export class ShadowFractalMonitor {
     return {
       ...this.status,
       enabled: this.enabled(),
-      readOnly: true,
+      readOnly: false,
+      liveEntryEnabled: this.enabled(),
       emailConfigured: smtpSettingsFromEnv() !== undefined,
       historyFile: stateFile(),
       records: state.records.length,
@@ -408,37 +431,67 @@ export class ShadowFractalMonitor {
       writeState(state);
     }
 
-    if (record.emailSentAt) {
-      return { market: config.market, signal: signal.direction, duplicate: true, emailSentAt: record.emailSentAt };
-    }
-    if (Number(record.emailAttempts || 0) >= 3) {
-      return {
-        market: config.market,
-        signal: signal.direction,
-        emailSent: false,
-        retryEmail: false,
-        error: record.emailError || 'SMTP retry limit reached.'
-      };
-    }
-
-    const smtp = smtpSettingsFromEnv();
-    if (!smtp) {
-      record.emailError = 'SMTP is not configured.';
-      state.updatedAt = new Date().toISOString();
-      writeState(state);
-      return { market: config.market, signal: signal.direction, emailSent: false, retryEmail: false, error: record.emailError };
-    }
-
     const timestamp = nlTimestamp(signal.candle.openTime);
     const subject = `${config.asset} Shadow ${signal.direction === 'LONG' ? 'Long' : 'Short'} | ${timestamp}`;
-    record.emailAttempts = Number(record.emailAttempts || 0) + 1;
-    record.lastEmailAttemptAt = new Date().toISOString();
-    const email = await sendEmailBestEffort(smtp, subject, signalBody(config, signal));
-    if (email.sent) {
-      record.emailSentAt = new Date().toISOString();
-      record.emailError = undefined;
-    } else {
-      record.emailError = email.error;
+    let emailSent = Boolean(record.emailSentAt);
+    if (!emailSent && Number(record.emailAttempts || 0) < 3) {
+      const smtp = smtpSettingsFromEnv();
+      if (!smtp) {
+        record.emailError = 'SMTP is not configured.';
+      } else {
+        record.emailAttempts = Number(record.emailAttempts || 0) + 1;
+        record.lastEmailAttemptAt = new Date().toISOString();
+        const email = await sendEmailBestEffort(smtp, subject, signalBody(config, signal));
+        emailSent = email.sent;
+        if (email.sent) {
+          record.emailSentAt = new Date().toISOString();
+          record.emailError = undefined;
+        } else {
+          record.emailError = email.error;
+        }
+      }
+    }
+
+    let tradeResult: any = record.lastTradeAttemptAt
+      ? { duplicate: true, tradePlaced: Boolean(record.tradePlacedAt), tradeSkipped: record.tradeSkipped, tradeError: record.tradeError }
+      : undefined;
+    if (!record.lastTradeAttemptAt) {
+      const handler = this.entryHandlers.get(config.market);
+      record.tradeAttempts = Number(record.tradeAttempts || 0) + 1;
+      record.lastTradeAttemptAt = new Date().toISOString();
+      state.updatedAt = record.lastTradeAttemptAt;
+      writeState(state);
+
+      if (!shadowFractalEntryIsFresh(signal.candle.closeTime)) {
+        const ageMinutes = Math.max(0, (Date.now() - signal.candle.closeTime) / 60_000);
+        tradeResult = {
+          tradePlaced: false,
+          tradeSkipped: `Shadow signal is ${ageMinutes.toFixed(1)} minutes old; live entries are limited to 15 minutes after the 1H close.`
+        };
+      } else if (!handler) {
+        tradeResult = { tradePlaced: false, tradeError: `No fractal entry handler is configured for ${config.market}.` };
+      } else {
+        const request: FractalEntryRequest = {
+          market: config.market,
+          direction: signal.direction === 'LONG' ? 'long' : 'short',
+          signature: `shadow-fractal|${signature}`,
+          signalCandleStartedAt: new Date(signal.candle.openTime).toISOString(),
+          signalCandleClosedAt: new Date(signal.candle.closeTime).toISOString(),
+          signalClose: Number(signal.candle.close),
+          hourlyFractal: signal.hourlyFractal.price,
+          dailyFractal: signal.dailyFractal.price
+        };
+        tradeResult = await handler.executeFractalEntry(request);
+      }
+
+      if (tradeResult?.tradePlaced) {
+        record.tradePlacedAt = new Date().toISOString();
+        record.tradeSkipped = undefined;
+        record.tradeError = undefined;
+      } else {
+        record.tradeSkipped = tradeResult?.tradeSkipped;
+        record.tradeError = tradeResult?.tradeError;
+      }
     }
     state.updatedAt = new Date().toISOString();
     writeState(state);
@@ -450,15 +503,20 @@ export class ShadowFractalMonitor {
       close: signal.candle.close,
       hourlyFractal: signal.hourlyFractal.priceExact,
       dailyFractal: signal.dailyFractal.priceExact,
-      emailSent: email.sent,
-      readOnly: true
+      emailSent,
+      tradePlaced: Boolean(tradeResult?.tradePlaced),
+      tradeSkipped: tradeResult?.tradeSkipped,
+      tradeError: tradeResult?.tradeError,
+      readOnly: false
     });
     return {
       market: config.market,
       signal: signal.direction,
-      emailSent: email.sent,
-      retryEmail: !email.sent && Number(record.emailAttempts) < 3,
-      error: email.error
+      emailSent,
+      emailSentAt: record.emailSentAt,
+      retryEmail: !emailSent && Boolean(smtpSettingsFromEnv()) && Number(record.emailAttempts || 0) < 3,
+      emailError: record.emailError,
+      tradeResult
     };
   }
 }

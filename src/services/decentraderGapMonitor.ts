@@ -5,6 +5,11 @@ import net from 'net';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import {
+  FractalEntryRequest,
+  delayEntryModelEnabled,
+  fractalEntryModelEnabled
+} from './entryModelSwitches';
+import {
   allocateStepSizes,
   selectDelayedNewest,
   selectEntryNotional
@@ -471,6 +476,7 @@ type MonitorStatus = {
   pollMinutes: number;
   hasSmtp: boolean;
   autoTradeEnabled?: boolean;
+  delayEntryModelEnabled?: boolean;
   hasTradeExecutor?: boolean;
   tradeRiskPct?: number;
   tradeRiskUsd?: number;
@@ -5568,6 +5574,7 @@ export class DecentraderGapMonitor {
       ...this.status,
       hasTradeExecutor: true,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
+      delayEntryModelEnabled: delayEntryModelEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       regularIntrusionEmailEnabled: decentraderRegularIntrusionEmailEnabled(),
@@ -5585,6 +5592,7 @@ export class DecentraderGapMonitor {
       pollMinutes: config.pollMinutes,
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
+      delayEntryModelEnabled: delayEntryModelEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       intrusionCandleSource: decentraderIntrusionCandleSource(),
@@ -5657,6 +5665,7 @@ export class DecentraderGapMonitor {
       pollMinutes: config.pollMinutes,
       hasSmtp: smtpSettingsFromEnv() !== undefined,
       autoTradeEnabled: decentraderAutoTradeEnabled(),
+      delayEntryModelEnabled: delayEntryModelEnabled(),
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       intrusionCandleSource: decentraderIntrusionCandleSource(),
@@ -5795,6 +5804,7 @@ export class DecentraderGapMonitor {
       this.latestTimelapsePayload.rsiStudy = rsiStudy;
       const previousDataTimestamp = state.lastDataTimestamp;
       const intrusionCandleFilterEnabled = decentraderIntrusionCandleFilterEnabled();
+      const delayModelEnabled = delayEntryModelEnabled();
       const regularIntrusionEmailEnabled = decentraderRegularIntrusionEmailEnabled();
       const pendingCandleSignatures = new Set(
         intrusionCandleFilterEnabled ? state.pendingIntrusionCandleAlertSignatures || [] : []
@@ -6023,7 +6033,7 @@ export class DecentraderGapMonitor {
           if (pendingCandleReview || emailDuplicate) {
             result.duplicate = true;
           }
-        } else if (regularIntrusionEmailEnabled && smtpSettings) {
+        } else if (delayModelEnabled && regularIntrusionEmailEnabled && smtpSettings) {
           const emailResult = await sendEmailBestEffort(
             smtpSettings,
             `${sideCounts(alert)} | ${alert.timestampNl}`,
@@ -6051,7 +6061,7 @@ export class DecentraderGapMonitor {
               error: emailResult.error
             });
           }
-        } else if (!regularIntrusionEmailEnabled && intrusionCandleFilterEnabled) {
+        } else if ((!regularIntrusionEmailEnabled || !delayModelEnabled) && intrusionCandleFilterEnabled) {
           // Preserve the original Delay boundary without delivering the raw
           // intrusion email. The later FILTERED email remains the only mail.
           normalSmtpSentAt = nowNlIso();
@@ -6196,7 +6206,7 @@ export class DecentraderGapMonitor {
           pendingCandleSignatures.delete(signature);
         }
 
-        if (candleReview.enabled && candleReview.status === 'PASS' && smtpSettings) {
+        if (delayModelEnabled && candleReview.enabled && candleReview.status === 'PASS' && smtpSettings) {
           const filteredSignature = `FILTERED|${signature}`;
           if (filteredSignature !== state.lastFilteredAlertSentSignature) {
             const filteredEmailResult = await sendEmailBestEffort(
@@ -6242,6 +6252,18 @@ export class DecentraderGapMonitor {
             forwardHurdle
           };
           console.log('Decentrader IQ trade filter blocked entry:', result.tradeDecision);
+          continue;
+        }
+
+        if (!delayModelEnabled) {
+          delete pendingCandleAlerts[signature];
+          result.tradeSkipped = 'DECENTRADER_DELAY_ENTRY_MODEL_ENABLED is false; Delay entries and entry emails are disabled.';
+          this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped, {
+            intrusionCandleReview: candleReview,
+            impulseQuality,
+            impulseTradeGate,
+            forwardHurdle
+          });
           continue;
         }
 
@@ -7748,10 +7770,167 @@ export class DecentraderGapMonitor {
     return backtestTpZones(rows, options);
   }
 
+  private async waitForFractalEntryPosition(
+    market: string,
+    direction: TradePlanDirection
+  ): Promise<DydxOpenPosition | undefined> {
+    if (!this.tradeExecutor) return undefined;
+    const configuredTimeout = Number(process.env.DYDX_V4_ENTRY_CONFIRMATION_TIMEOUT_SECONDS || 90);
+    const timeoutSeconds = clamp(Number.isFinite(configuredTimeout) ? Math.floor(configuredTimeout) : 90, 5, 300);
+    const deadline = Date.now() + timeoutSeconds * 1_000;
+
+    do {
+      const snapshot = await this.tradeExecutor.getAccountSnapshot([market]);
+      const position = existingMarketPosition(snapshot, market);
+      if (position && positionDirection(position) === direction) return position;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    } while (Date.now() < deadline);
+
+    return undefined;
+  }
+
+  async executeFractalEntry(request: FractalEntryRequest): Promise<any> {
+    const market = decentraderTradeMarket();
+    const result: any = {
+      model: 'SHADOW_FRACTAL',
+      market,
+      direction: request.direction,
+      signature: request.signature,
+      tradePlaced: false
+    };
+
+    if (request.market.replace(/_/g, '-').toUpperCase() !== market) {
+      return { ...result, tradeSkipped: `Fractal entry market ${request.market} does not match ${market}.` };
+    }
+
+    try {
+      return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
+        if (!fractalEntryModelEnabled()) {
+          result.tradeSkipped = 'SHADOW_FRACTAL_ENTRY_MODEL_ENABLED is false.';
+          return result;
+        }
+        if (!decentraderAutoTradeEnabled()) {
+          result.tradeSkipped = 'DECENTRADER_AUTO_TRADE_ENABLED is not true.';
+          return result;
+        }
+        if (!this.tradeExecutor) {
+          result.tradeSkipped = 'No dYdX trade executor is configured.';
+          return result;
+        }
+        if (
+          state.lastTradeExecutedSignature === request.signature ||
+          state.lastTradeAttemptedSignature === request.signature
+        ) {
+          result.tradeSkipped = 'Duplicate BTC fractal entry signature.';
+          result.duplicate = true;
+          return result;
+        }
+
+        const account = await this.tradeExecutor.getAccountSnapshot([market]);
+        const openPosition = existingMarketPosition(account, market);
+        if (openPosition) {
+          result.tradeSkipped = `Existing ${market} position detected; fractal entry skipped.`;
+          return result;
+        }
+
+        const plan = await this.getTradePlan(account, market, request.direction, 'shadow-fractal');
+        if (
+          !plan.activePlan ||
+          plan.activePlan.direction !== request.direction ||
+          plan.activePlan.status === 'invalid-stop' ||
+          plan.activePlan.status === 'invalid-size' ||
+          plan.activePlan.stop?.valid === false
+        ) {
+          result.tradeSkipped =
+            plan.activePlan?.statusReason ||
+            plan.activePlan?.stop?.reason ||
+            'Fractal entry skipped because the shared SL/TP trade plan is invalid.';
+          result.tradePlan = plan;
+          return result;
+        }
+
+        const orderAlert = buildDecentraderOrderAlert(plan, request.signature);
+        (orderAlert as any).strategy = 'decentrader_shadow_fractal_entry';
+        (orderAlert as any).fractal_entry = { ...request };
+        state.lastTradeAttemptedSignature = request.signature;
+        state.lastTradeAttemptedAt = nowNlIso();
+        result.tradePlan = plan;
+
+        let placedPosition: DydxOpenPosition | undefined;
+        try {
+          await this.tradeExecutor.placeOrder(orderAlert);
+          placedPosition = await this.waitForFractalEntryPosition(market, request.direction);
+        } catch (error) {
+          placedPosition = await this.waitForFractalEntryPosition(market, request.direction);
+          if (!placedPosition) throw error;
+          result.tradeRecovered = true;
+          result.tradeWarning = error instanceof Error ? error.message : String(error);
+        }
+        if (!placedPosition) {
+          throw new Error(`dYdX did not report the requested ${market} ${request.direction} position.`);
+        }
+
+        const registeredAt = nowNlIso();
+        const initialStopFractal = (orderAlert as any).decentrader?.stop?.fractal;
+        state.lastTradeExecutedSignature = request.signature;
+        state.lastTradeExecutedAt = registeredAt;
+        state.lastTradeExecutionError = undefined;
+        state.managedPosition = {
+          market,
+          direction: request.direction,
+          openedAt: registeredAt,
+          entrySignature: request.signature,
+          initialSize: Math.abs(placedPosition.size),
+          entryPrice: placedPosition.entryPrice,
+          currentStop: numberOrZero((orderAlert as any).static_sl),
+          currentStopUpdatedAt: registeredAt,
+          currentStopFractalIndex: typeof initialStopFractal?.index === 'number' ? initialStopFractal.index : undefined,
+          currentStopFractalTimestamp: initialStopFractal?.timestamp,
+          currentStopFractalPrice: typeof initialStopFractal?.price === 'number' ? initialStopFractal.price : undefined,
+          currentStopFractalSource: initialStopFractal?.source,
+          currentStopFractalCandleSource: 'dydx-1h',
+          takeProfits: Array.isArray((orderAlert as any).take_profits)
+            ? (orderAlert as any).take_profits.map(takeProfitLevelCopy)
+            : []
+        };
+        stabilizeManagedTakeProfits(
+          state.managedPosition,
+          (orderAlert as any).take_profits || [],
+          Math.abs(placedPosition.size),
+          registeredAt,
+          [],
+          0,
+          { currentPrice: placedPosition.entryPrice }
+        );
+        state.lastTradeDecision = {
+          at: registeredAt,
+          outcome: result.tradeRecovered ? 'RECOVERED_AFTER_PARTIAL_EXECUTION' : 'PLACED',
+          model: 'SHADOW_FRACTAL',
+          market,
+          direction: request.direction,
+          signature: request.signature,
+          size: Math.abs(placedPosition.size),
+          stop: numberOrZero((orderAlert as any).static_sl),
+          takeProfits: state.managedPosition.takeProfits,
+          signal: request
+        };
+        result.tradePlaced = true;
+        result.tradeDecision = state.lastTradeDecision;
+        console.log('BTC Shadow fractal entry placed:', state.lastTradeDecision);
+        return result;
+      }));
+    } catch (error) {
+      result.tradeError = error instanceof Error ? error.message : String(error);
+      console.error('BTC Shadow fractal entry failed:', error);
+      return result;
+    }
+  }
+
   async getTradePlan(
     account: DydxSizingAccountSnapshot,
     market = 'BTC-USD',
-    simulatedDirection?: TradePlanDirection
+    simulatedDirection?: TradePlanDirection,
+    directionSource: 'gap-simulation' | 'shadow-fractal' = 'gap-simulation'
   ): Promise<any> {
     const config = this.config();
     const rows = this.latestRows || (await fetchSnapshot(config.symbol));
@@ -7772,9 +7951,13 @@ export class DecentraderGapMonitor {
     const bars = activeBarsForFrame(rows, frameIndex);
     const gap = cleanGapForBars(frame, bars);
     const detectedAlert = detectGapIntrusion(rows, frameIndex);
-    const alert = simulatedDirection
-      ? buildSimulatedGapAlert(rows, frameIndex, simulatedDirection, gap)
-      : detectedAlert;
+    const alert = directionSource === 'shadow-fractal'
+      ? undefined
+      : simulatedDirection
+        ? gap
+          ? buildSimulatedGapAlert(rows, frameIndex, simulatedDirection, gap)
+          : undefined
+        : detectedAlert;
     const zones = tradeZonesForFrame(rows, frameIndex);
     const normalizedMarket = market.replace(/_/g, '-').toUpperCase();
     const marketInfo =
@@ -7815,14 +7998,17 @@ export class DecentraderGapMonitor {
       price,
       signal: {
         direction: activeDirection || 'none',
-        simulated: Boolean(simulatedDirection),
+        simulated: Boolean(simulatedDirection && directionSource === 'gap-simulation'),
+        model: directionSource === 'shadow-fractal' ? 'SHADOW_FRACTAL' : undefined,
         simulatedEdge: simulatedDirection === 'long'
           ? 'left'
           : simulatedDirection === 'short'
             ? 'right'
             : undefined,
         reason: activeDirection
-          ? simulatedDirection
+          ? directionSource === 'shadow-fractal'
+            ? `${activeDirection} bias from confirmed 1H + Daily Williams fractal breakout`
+            : simulatedDirection
             ? `${activeDirection} bias from simulated ${simulatedDirection === 'long' ? 'left' : 'right'} edge`
             : `${activeDirection} bias from latest gap intrusion`
           : 'No fresh one-sided gap intrusion on latest frame',
