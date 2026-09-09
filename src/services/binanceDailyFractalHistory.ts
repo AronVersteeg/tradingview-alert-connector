@@ -5,6 +5,8 @@ const WILLIAMS_WINDOW = 2;
 const HISTORY_LIMIT = 1000;
 const CACHE_TTL_MS = 15 * 60_000;
 
+export type BinanceFractalInterval = '1d' | '1w';
+
 export const BINANCE_DAILY_FRACTAL_MARKETS = {
   'BTC-USD': { symbol: 'BTCUSDT' },
   'ETH-USD': { symbol: 'ETHUSDT' },
@@ -52,7 +54,7 @@ export type DailyFractalHistorySnapshot = {
   market: DailyFractalMarket;
   symbol: string;
   venue: 'Binance Futures';
-  interval: '1d';
+  interval: BinanceFractalInterval;
   window: 2;
   fetchedAt: string;
   latestClosedCandleAt?: string;
@@ -65,8 +67,8 @@ type CachedSnapshot = {
   snapshot: DailyFractalHistorySnapshot;
 };
 
-const cachedSnapshots = new Map<DailyFractalMarket, CachedSnapshot>();
-const pendingSnapshots = new Map<DailyFractalMarket, Promise<DailyFractalHistorySnapshot>>();
+const cachedSnapshots = new Map<string, CachedSnapshot>();
+const pendingSnapshots = new Map<string, Promise<DailyFractalHistorySnapshot>>();
 
 function finiteNumber(value: unknown): number | undefined {
   const parsed = Number(value);
@@ -187,16 +189,19 @@ export function buildDailyFractalHistory(
   return records.sort((left, right) => Date.parse(right.confirmedAt) - Date.parse(left.confirmedAt));
 }
 
-async function fetchSnapshot(market: DailyFractalMarket): Promise<DailyFractalHistorySnapshot> {
+async function fetchSnapshot(
+  market: DailyFractalMarket,
+  interval: BinanceFractalInterval
+): Promise<DailyFractalHistorySnapshot> {
   const symbol = BINANCE_DAILY_FRACTAL_MARKETS[market].symbol;
   const fetchedAt = new Date().toISOString();
   const response = await binanceGet<unknown[]>(BINANCE_FUTURES_KLINES_URL, {
-    params: { symbol, interval: '1d', limit: HISTORY_LIMIT },
+    params: { symbol, interval, limit: HISTORY_LIMIT },
     timeout: 20_000
   });
   const candles = parseBinanceDailyCandles(Array.isArray(response.data) ? response.data : []);
   if (candles.length < WILLIAMS_WINDOW * 2 + 1) {
-    throw new Error(`Binance ${symbol} returned only ${candles.length} closed daily candles.`);
+    throw new Error(`Binance ${symbol} returned only ${candles.length} closed ${interval} candles.`);
   }
 
   return {
@@ -204,7 +209,7 @@ async function fetchSnapshot(market: DailyFractalMarket): Promise<DailyFractalHi
     market,
     symbol,
     venue: 'Binance Futures',
-    interval: '1d',
+    interval,
     window: WILLIAMS_WINDOW,
     fetchedAt,
     latestClosedCandleAt: new Date(candles[candles.length - 1].closeTime).toISOString(),
@@ -217,28 +222,31 @@ export function isDailyFractalMarket(value: string): value is DailyFractalMarket
   return Object.prototype.hasOwnProperty.call(BINANCE_DAILY_FRACTAL_MARKETS, value);
 }
 
-export async function binanceDailyFractalHistory(
+export async function binanceFractalHistory(
   market: DailyFractalMarket,
+  interval: BinanceFractalInterval,
   forceRefresh = false
 ): Promise<DailyFractalHistorySnapshot> {
+  const cacheKey = `${market}|${interval}`;
   const now = Date.now();
-  const cachedSnapshot = cachedSnapshots.get(market);
+  const cachedSnapshot = cachedSnapshots.get(cacheKey);
   if (!forceRefresh && cachedSnapshot && now - cachedSnapshot.storedAt < CACHE_TTL_MS) {
     return { ...cachedSnapshot.snapshot, cached: true };
   }
-  const pendingSnapshot = pendingSnapshots.get(market);
+  const pendingSnapshot = pendingSnapshots.get(cacheKey);
   if (pendingSnapshot) return pendingSnapshot;
 
-  const request = fetchSnapshot(market)
+  const request = fetchSnapshot(market, interval)
     .then((snapshot) => {
-      cachedSnapshots.set(market, { storedAt: Date.now(), snapshot });
+      cachedSnapshots.set(cacheKey, { storedAt: Date.now(), snapshot });
       return snapshot;
     })
     .catch((error) => {
-      const fallback = cachedSnapshots.get(market);
+      const fallback = cachedSnapshots.get(cacheKey);
       if (fallback) {
-        console.warn('Binance daily fractal refresh failed; using cached snapshot.', {
+        console.warn('Binance fractal refresh failed; using cached snapshot.', {
           market,
+          interval,
           symbol: BINANCE_DAILY_FRACTAL_MARKETS[market].symbol,
           error: error instanceof Error ? error.message : String(error),
           fetchedAt: fallback.snapshot.fetchedAt
@@ -248,11 +256,25 @@ export async function binanceDailyFractalHistory(
       throw error;
     })
     .finally(() => {
-      pendingSnapshots.delete(market);
+      pendingSnapshots.delete(cacheKey);
     });
 
-  pendingSnapshots.set(market, request);
+  pendingSnapshots.set(cacheKey, request);
   return request;
+}
+
+export async function binanceDailyFractalHistory(
+  market: DailyFractalMarket,
+  forceRefresh = false
+): Promise<DailyFractalHistorySnapshot> {
+  return binanceFractalHistory(market, '1d', forceRefresh);
+}
+
+export async function binanceWeeklyFractalHistory(
+  market: DailyFractalMarket,
+  forceRefresh = false
+): Promise<DailyFractalHistorySnapshot> {
+  return binanceFractalHistory(market, '1w', forceRefresh);
 }
 
 export async function binanceBtcDailyFractalHistory(

@@ -44,6 +44,7 @@ import { getSnoekWeather } from '../services/snoekWeather';
 import { intrusionTheListSnapshot } from '../services/intrusionTheList';
 import {
   binanceDailyFractalHistory,
+  binanceWeeklyFractalHistory,
   isDailyFractalMarket
 } from '../services/binanceDailyFractalHistory';
 import { shadowFractalMonitor } from '../services/shadowFractalMonitor';
@@ -539,6 +540,27 @@ router.get('/research/binance-daily-fractals', async (req, res) => {
     res.send(await binanceDailyFractalHistory(market, req.query.refresh === '1'));
   } catch (error) {
     console.error('Binance daily fractal history request failed:', error);
+    res.status(502).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.get('/research/binance-weekly-fractals', async (req, res) => {
+  try {
+    const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();
+    if (!isDailyFractalMarket(market)) {
+      return res.status(400).send({
+        ok: false,
+        error: 'Weekly fractal history supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, PAXG-USD and XAG-USD.'
+      });
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(await binanceWeeklyFractalHistory(market, req.query.refresh === '1'));
+  } catch (error) {
+    console.error('Binance weekly fractal history request failed:', error);
     res.status(502).send({
       ok: false,
       error: error instanceof Error ? error.message : String(error)

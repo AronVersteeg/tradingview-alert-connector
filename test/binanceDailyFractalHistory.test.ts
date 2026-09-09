@@ -1,10 +1,16 @@
 import {
   BINANCE_DAILY_FRACTAL_MARKETS,
   BinanceDailyCandle,
+  binanceWeeklyFractalHistory,
   buildDailyFractalHistory,
   isDailyFractalMarket,
   parseBinanceDailyCandles
 } from '../src/services/binanceDailyFractalHistory';
+import { binanceGet } from '../src/services/binanceHttp';
+
+jest.mock('../src/services/binanceHttp', () => ({
+  binanceGet: jest.fn()
+}));
 
 function candle(day: number, high: string, low: string): BinanceDailyCandle {
   const openTime = Date.UTC(2026, 0, day);
@@ -99,5 +105,37 @@ describe('Binance daily Williams fractal history', () => {
         priceExact: '14.50'
       })
     ]));
+  });
+
+  test('requests closed Binance Futures weekly candles for the weekly snapshot', async () => {
+    const rows = Array.from({ length: 7 }, (_, index) => {
+      const openTime = Date.UTC(2026, 0, 5 + index * 7);
+      return [
+        openTime,
+        '10',
+        String(12 + (index === 2 ? 5 : 0)),
+        String(8 - (index === 4 ? 2 : 0)),
+        '11',
+        '1',
+        openTime + 7 * 86_400_000 - 1
+      ];
+    });
+    (binanceGet as jest.Mock).mockResolvedValueOnce({ data: rows });
+
+    const snapshot = await binanceWeeklyFractalHistory('ZEC-USD', true);
+
+    expect(binanceGet).toHaveBeenCalledWith(
+      'https://fapi.binance.com/fapi/v1/klines',
+      expect.objectContaining({ params: { symbol: 'ZECUSDT', interval: '1w', limit: 1000 } })
+    );
+    expect(snapshot).toEqual(expect.objectContaining({
+      market: 'ZEC-USD',
+      symbol: 'ZECUSDT',
+      venue: 'Binance Futures',
+      interval: '1w',
+      window: 2,
+      cached: false
+    }));
+    expect(snapshot.records.length).toBeGreaterThan(0);
   });
 });
