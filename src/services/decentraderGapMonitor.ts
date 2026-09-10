@@ -5,6 +5,12 @@ import net from 'net';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import {
+  BtcManualEntryRequest,
+  btcManualTradeOverrideEnabled,
+  btcManualTradeOverrideIsArmed,
+  buildManualTakeProfitOrderLevels
+} from './btcManualTradeOverride';
+import {
   FractalEntryRequest,
   delayEntryModelEnabled,
   fractalEntryModelEnabled
@@ -572,6 +578,7 @@ export type AlertState = {
     currentStopFractalSource?: 'highRef' | 'lowRef' | 'ohlc4';
     currentStopFractalCandleSource?: 'dydx-1h';
     takeProfits?: any[];
+    takeProfitMode?: 'dynamic' | 'manual-locked';
     tp1Lifecycle?: ManagedTp1Lifecycle;
     tpRatchetLifecycle?: ManagedTpRatchetLifecycle;
   };
@@ -6785,6 +6792,17 @@ export class DecentraderGapMonitor {
         return;
       }
 
+      if (managedPosition.takeProfitMode === 'manual-locked') {
+        result.dynamicTpSync = {
+          outcome: 'LOCKED',
+          reason: 'Manual BTC TP ladder is locked; dynamic map TP refresh was skipped.',
+          market,
+          position,
+          takeProfits: managedPosition.takeProfits || []
+        };
+        return;
+      }
+
       const plan = preparedPlan || await this.getTradePlan(account, market);
       plan.marketInfo = account.markets[market];
       const currentPrice = Number(plan.marketInfo?.oraclePrice);
@@ -7237,6 +7255,16 @@ export class DecentraderGapMonitor {
   ): Promise<void> {
     if (!decentraderAutoTradeEnabled()) {
       result.tradeSkipped = 'DECENTRADER_AUTO_TRADE_ENABLED is not true.';
+      this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped);
+      return;
+    }
+
+    if (
+      btcManualTradeOverrideIsArmed() &&
+      !options.dryRun &&
+      options.liveTestHoldSeconds === undefined
+    ) {
+      result.tradeSkipped = 'An armed BTC manual entry/TP override has priority over automatic Decentrader entries.';
       this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped);
       return;
     }
@@ -7809,6 +7837,10 @@ export class DecentraderGapMonitor {
           result.tradeSkipped = 'SHADOW_FRACTAL_ENTRY_MODEL_ENABLED is false.';
           return result;
         }
+        if (btcManualTradeOverrideIsArmed()) {
+          result.tradeSkipped = 'An armed BTC manual entry/TP override has priority over Shadow entries.';
+          return result;
+        }
         if (!decentraderAutoTradeEnabled()) {
           result.tradeSkipped = 'DECENTRADER_AUTO_TRADE_ENABLED is not true.';
           return result;
@@ -7926,11 +7958,176 @@ export class DecentraderGapMonitor {
     }
   }
 
+  async executeManualBtcEntry(request: BtcManualEntryRequest): Promise<any> {
+    const market = decentraderTradeMarket();
+    const result: any = {
+      model: 'MANUAL_OVERRIDE',
+      market,
+      direction: request.direction,
+      signature: request.signature,
+      tradePlaced: false
+    };
+
+    if (request.market !== 'BTC-USD' || market !== 'BTC-USD') {
+      return { ...result, tradeSkipped: `BTC manual override cannot execute on ${market}.` };
+    }
+
+    try {
+      return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
+        if (!btcManualTradeOverrideEnabled()) {
+          result.tradeSkipped = 'MANUAL_ENTRY_TP_OVERRIDE_ENABLED is false.';
+          return result;
+        }
+        if (!decentraderAutoTradeEnabled()) {
+          result.tradeSkipped = 'DECENTRADER_AUTO_TRADE_ENABLED is not true.';
+          return result;
+        }
+        if (!this.tradeExecutor) {
+          result.tradeSkipped = 'No dYdX trade executor is configured.';
+          return result;
+        }
+        if (
+          state.lastTradeExecutedSignature === request.signature ||
+          state.lastTradeAttemptedSignature === request.signature
+        ) {
+          result.tradeSkipped = 'Duplicate BTC manual override signature.';
+          result.duplicate = true;
+          return result;
+        }
+
+        const account = await this.tradeExecutor.getAccountSnapshot([market]);
+        const openPosition = existingMarketPosition(account, market);
+        if (openPosition) {
+          result.tradeSkipped = `Existing ${market} position detected; manual override skipped.`;
+          return result;
+        }
+
+        const plan = await this.getTradePlan(account, market, request.direction, 'manual-override');
+        if (
+          !plan.activePlan ||
+          plan.activePlan.direction !== request.direction ||
+          plan.activePlan.status === 'invalid-stop' ||
+          plan.activePlan.status === 'invalid-size' ||
+          plan.activePlan.stop?.valid === false
+        ) {
+          result.tradeSkipped =
+            plan.activePlan?.statusReason ||
+            plan.activePlan?.stop?.reason ||
+            'Manual BTC entry skipped because the shared Williams SL/risk plan is invalid.';
+          result.tradePlan = plan;
+          return result;
+        }
+
+        const orderAlert = buildDecentraderOrderAlert(plan, request.signature);
+        const manualTpLocked = request.takeProfits.length > 0;
+        if (manualTpLocked) {
+          (orderAlert as any).take_profits = buildManualTakeProfitOrderLevels(
+            request.direction,
+            request.takeProfits,
+            numberOrZero(plan.activePlan.sizing?.size),
+            numberOrZero(plan.activePlan.sizing?.minimumOrderSize) || numberOrZero(plan.marketInfo?.stepSize),
+            numberOrZero(plan.marketInfo?.oraclePrice) || numberOrZero(plan.price)
+          );
+        }
+        (orderAlert as any).strategy = 'decentrader_manual_entry_tp_override';
+        (orderAlert as any).manual_entry_override = { ...request, manualTpLocked };
+        (orderAlert as any).decentrader = {
+          ...(orderAlert as any).decentrader,
+          note: manualTpLocked
+            ? 'Manual BTC 1H close entry with locked manual TP ladder and automatic Williams SL/trailing.'
+            : 'Manual BTC 1H close entry with automatic map TPs and automatic Williams SL/trailing.'
+        };
+        state.lastTradeAttemptedSignature = request.signature;
+        state.lastTradeAttemptedAt = nowNlIso();
+        result.tradePlan = plan;
+        result.tradeAlert = {
+          strategy: (orderAlert as any).strategy,
+          market: orderAlert.market,
+          desired_position: (orderAlert as any).desired_position,
+          size: (orderAlert as any).size,
+          static_sl: (orderAlert as any).static_sl,
+          take_profits: (orderAlert as any).take_profits
+        };
+
+        let placedPosition: DydxOpenPosition | undefined;
+        try {
+          await this.tradeExecutor.placeOrder(orderAlert);
+          placedPosition = await this.waitForFractalEntryPosition(market, request.direction);
+        } catch (error) {
+          placedPosition = await this.waitForFractalEntryPosition(market, request.direction);
+          if (!placedPosition) throw error;
+          result.tradeRecovered = true;
+          result.tradeWarning = error instanceof Error ? error.message : String(error);
+        }
+        if (!placedPosition) {
+          throw new Error(`dYdX did not report the requested manual ${market} ${request.direction} position.`);
+        }
+
+        const registeredAt = nowNlIso();
+        const initialStopFractal = (orderAlert as any).decentrader?.stop?.fractal;
+        state.lastTradeExecutedSignature = request.signature;
+        state.lastTradeExecutedAt = registeredAt;
+        state.lastTradeExecutionError = undefined;
+        state.managedPosition = {
+          market,
+          direction: request.direction,
+          openedAt: registeredAt,
+          entrySignature: request.signature,
+          initialSize: Math.abs(placedPosition.size),
+          entryPrice: placedPosition.entryPrice,
+          currentStop: numberOrZero((orderAlert as any).static_sl),
+          currentStopUpdatedAt: registeredAt,
+          currentStopFractalIndex: typeof initialStopFractal?.index === 'number' ? initialStopFractal.index : undefined,
+          currentStopFractalTimestamp: initialStopFractal?.timestamp,
+          currentStopFractalPrice: typeof initialStopFractal?.price === 'number' ? initialStopFractal.price : undefined,
+          currentStopFractalSource: initialStopFractal?.source,
+          currentStopFractalCandleSource: 'dydx-1h',
+          takeProfitMode: manualTpLocked ? 'manual-locked' : 'dynamic',
+          takeProfits: Array.isArray((orderAlert as any).take_profits)
+            ? (orderAlert as any).take_profits.map(takeProfitLevelCopy)
+            : []
+        };
+        if (!manualTpLocked) {
+          stabilizeManagedTakeProfits(
+            state.managedPosition,
+            (orderAlert as any).take_profits || [],
+            Math.abs(placedPosition.size),
+            registeredAt,
+            [],
+            0,
+            { currentPrice: placedPosition.entryPrice }
+          );
+        }
+        state.lastTradeDecision = {
+          at: registeredAt,
+          outcome: result.tradeRecovered ? 'RECOVERED_AFTER_PARTIAL_EXECUTION' : 'PLACED',
+          model: 'MANUAL_OVERRIDE',
+          market,
+          direction: request.direction,
+          signature: request.signature,
+          size: Math.abs(placedPosition.size),
+          stop: numberOrZero((orderAlert as any).static_sl),
+          takeProfitMode: state.managedPosition.takeProfitMode,
+          takeProfits: state.managedPosition.takeProfits,
+          signal: request
+        };
+        result.tradePlaced = true;
+        result.tradeDecision = state.lastTradeDecision;
+        console.log('BTC manual entry/TP override placed:', state.lastTradeDecision);
+        return result;
+      }));
+    } catch (error) {
+      result.tradeError = error instanceof Error ? error.message : String(error);
+      console.error('BTC manual entry/TP override failed:', error);
+      return result;
+    }
+  }
+
   async getTradePlan(
     account: DydxSizingAccountSnapshot,
     market = 'BTC-USD',
     simulatedDirection?: TradePlanDirection,
-    directionSource: 'gap-simulation' | 'shadow-fractal' = 'gap-simulation'
+    directionSource: 'gap-simulation' | 'shadow-fractal' | 'manual-override' = 'gap-simulation'
   ): Promise<any> {
     const config = this.config();
     const rows = this.latestRows || (await fetchSnapshot(config.symbol));
@@ -7951,7 +8148,7 @@ export class DecentraderGapMonitor {
     const bars = activeBarsForFrame(rows, frameIndex);
     const gap = cleanGapForBars(frame, bars);
     const detectedAlert = detectGapIntrusion(rows, frameIndex);
-    const alert = directionSource === 'shadow-fractal'
+    const alert = directionSource === 'shadow-fractal' || directionSource === 'manual-override'
       ? undefined
       : simulatedDirection
         ? gap
@@ -7999,15 +8196,21 @@ export class DecentraderGapMonitor {
       signal: {
         direction: activeDirection || 'none',
         simulated: Boolean(simulatedDirection && directionSource === 'gap-simulation'),
-        model: directionSource === 'shadow-fractal' ? 'SHADOW_FRACTAL' : undefined,
+        model: directionSource === 'shadow-fractal'
+          ? 'SHADOW_FRACTAL'
+          : directionSource === 'manual-override'
+            ? 'MANUAL_OVERRIDE'
+            : undefined,
         simulatedEdge: simulatedDirection === 'long'
           ? 'left'
           : simulatedDirection === 'short'
             ? 'right'
             : undefined,
         reason: activeDirection
-          ? directionSource === 'shadow-fractal'
-            ? `${activeDirection} bias from confirmed 1H + Daily Williams fractal breakout`
+          ? directionSource === 'shadow-fractal' || directionSource === 'manual-override'
+            ? directionSource === 'shadow-fractal'
+              ? `${activeDirection} bias from confirmed 1H + Daily Williams fractal breakout`
+              : `${activeDirection} bias from armed manual BTC 1H close override`
             : simulatedDirection
             ? `${activeDirection} bias from simulated ${simulatedDirection === 'long' ? 'left' : 'right'} edge`
             : `${activeDirection} bias from latest gap intrusion`

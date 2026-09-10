@@ -48,6 +48,7 @@ import {
   isDailyFractalMarket
 } from '../services/binanceDailyFractalHistory';
 import { shadowFractalMonitor } from '../services/shadowFractalMonitor';
+import { btcManualTradeOverrideMonitor } from '../services/btcManualTradeOverride';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
 
@@ -176,6 +177,7 @@ function configureDecentraderTradeExecutor() {
   shadowFractalMonitor.configureEntryHandler('ZEC-USD', openLiquidityV2ZecTradeMonitor);
   shadowFractalMonitor.configureEntryHandler('PAXG-USD', openLiquidityV2GoldIntrusionMonitor);
   shadowFractalMonitor.configureEntryHandler('XAG-USD', openLiquidityV2SilverIntrusionMonitor);
+  btcManualTradeOverrideMonitor.configureEntryHandler(decentraderGapMonitor);
 }
 
 async function initializeExchanges() {
@@ -264,6 +266,7 @@ initializeExchanges()
     openLiquidityV2SilverIntrusionMonitor.start(225_000);
     openLiquidityV2SolTradeMonitor.start(255_000);
     openLiquidityV2ZecTradeMonitor.start(345_000);
+    btcManualTradeOverrideMonitor.start(30_000);
     shadowFractalMonitor.start(390_000);
   })
   .catch((err) => {
@@ -579,6 +582,45 @@ router.get('/research/shadow-fractal/status', async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.send(shadowFractalMonitor.getStatus());
+});
+
+router.get('/decentrader/manual-override', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.send(btcManualTradeOverrideMonitor.getStatus());
+});
+
+router.options('/decentrader/manual-override', (_req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Webhook-Token');
+  res.sendStatus(204);
+});
+
+router.post('/decentrader/manual-override', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!isMonitorRequestAuthorized(req)) {
+    return res.status(401).send({ ok: false, error: 'Unauthorized' });
+  }
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.send({ ok: true, override: btcManualTradeOverrideMonitor.arm(req.body) });
+  } catch (error) {
+    res.status(400).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.delete('/decentrader/manual-override', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!isMonitorRequestAuthorized(req)) {
+    return res.status(401).send({ ok: false, error: 'Unauthorized' });
+  }
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.send({ ok: true, override: btcManualTradeOverrideMonitor.cancel() });
+  } catch (error) {
+    res.status(409).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 function openLiquidityV2CollectorForMarket(market: string) {

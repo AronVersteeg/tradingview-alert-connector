@@ -315,6 +315,88 @@
       min-width: 0;
     }
 
+    .manual-override-card {
+      grid-column: 1 / -1;
+      min-width: 0;
+    }
+
+    .manual-override-head,
+    .manual-override-actions,
+    .manual-tp-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .manual-override-fields {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(130px, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .manual-field {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .manual-override-card input,
+    .manual-override-card select {
+      width: 100%;
+      height: 34px;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #101722;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      padding: 0 10px;
+    }
+
+    .manual-tp-head {
+      margin-top: 12px;
+    }
+
+    .manual-tp-rows {
+      display: grid;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .manual-tp-row {
+      display: grid;
+      grid-template-columns: 56px minmax(120px, 1fr) minmax(100px, 0.5fr) 34px;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .manual-tp-row span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .manual-tp-remove {
+      min-width: 34px;
+      padding: 0;
+    }
+
+    .manual-override-actions {
+      justify-content: flex-start;
+      margin-top: 10px;
+    }
+
+    .manual-override-card.is-armed {
+      border-color: var(--new);
+    }
+
+    .manual-override-card.is-triggered {
+      border-color: var(--price);
+    }
+
     .delay-history-layout {
       display: grid;
       grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
@@ -974,6 +1056,14 @@
         grid-column: 1 / -1;
       }
 
+      .manual-override-fields {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .manual-tp-row {
+        grid-template-columns: 48px minmax(0, 1fr) minmax(84px, 0.65fr) 34px;
+      }
+
       .liquidity-counter-grid {
         grid-template-columns: 1fr;
       }
@@ -1183,6 +1273,43 @@
         <div class="gap-label">Trade plan</div>
         <div class="gap-value" id="tradePlanValue">-</div>
         <div class="gap-status" id="tradePlanStatus">Waiting for dYdX sizing</div>
+      </div>
+      <div class="gap-card manual-override-card" id="manualOverrideCard">
+        <div class="manual-override-head">
+          <div>
+            <div class="gap-label">BTC manual entry / TP override</div>
+            <div class="gap-value" id="manualOverrideValue">Inactive</div>
+          </div>
+          <div class="gap-status" id="manualOverrideStatus">Loading status</div>
+        </div>
+        <form id="manualOverrideForm">
+          <div class="manual-override-fields">
+            <label class="manual-field">Direction
+              <select id="manualOverrideDirection">
+                <option value="long">Long</option>
+                <option value="short">Short</option>
+              </select>
+            </label>
+            <label class="manual-field"><span id="manualTriggerLabel">1H close above</span>
+              <input id="manualOverrideTrigger" type="number" min="0" step="any" inputmode="decimal" required>
+            </label>
+            <label class="manual-field">Valid hours
+              <input id="manualOverrideExpiry" type="number" min="1" max="168" step="1" value="24" required>
+            </label>
+            <label class="manual-field">API token
+              <input id="manualOverrideToken" type="password" autocomplete="off">
+            </label>
+          </div>
+          <div class="manual-tp-head">
+            <div class="gap-label">Locked take profits - optional</div>
+            <button id="manualAddTp" type="button" aria-label="Add take profit" title="Add take profit">+</button>
+          </div>
+          <div class="manual-tp-rows" id="manualTpRows"></div>
+          <div class="manual-override-actions">
+            <button id="manualOverrideArm" type="submit">Arm override</button>
+            <button id="manualOverrideCancel" type="button">Cancel override</button>
+          </div>
+        </form>
       </div>
       <div class="gap-card delay-history-card" id="delayHistoryCard">
         <div class="gap-label">The Delay - SMTP intrusion history</div>
@@ -1493,6 +1620,9 @@
     const CLOUD_WEEKLY_FRACTAL_HISTORY_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/research/binance-weekly-fractals'
       : '/research/binance-weekly-fractals';
+    const CLOUD_MANUAL_OVERRIDE_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
+      ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/manual-override'
+      : '/decentrader/manual-override';
     let payload = activeSource === 'decentrader' ? window.DECENTRADER_LIQUIDITY_TIMELAPSE : null;
     let dailyFractalHistory = null;
     let weeklyFractalHistory = null;
@@ -1580,6 +1710,19 @@
     const tradeZoneStatus = document.getElementById('tradeZoneStatus');
     const tradePlanValue = document.getElementById('tradePlanValue');
     const tradePlanStatus = document.getElementById('tradePlanStatus');
+    const manualOverrideCard = document.getElementById('manualOverrideCard');
+    const manualOverrideValue = document.getElementById('manualOverrideValue');
+    const manualOverrideStatus = document.getElementById('manualOverrideStatus');
+    const manualOverrideForm = document.getElementById('manualOverrideForm');
+    const manualOverrideDirection = document.getElementById('manualOverrideDirection');
+    const manualOverrideTrigger = document.getElementById('manualOverrideTrigger');
+    const manualTriggerLabel = document.getElementById('manualTriggerLabel');
+    const manualOverrideExpiry = document.getElementById('manualOverrideExpiry');
+    const manualOverrideToken = document.getElementById('manualOverrideToken');
+    const manualTpRows = document.getElementById('manualTpRows');
+    const manualAddTp = document.getElementById('manualAddTp');
+    const manualOverrideArm = document.getElementById('manualOverrideArm');
+    const manualOverrideCancel = document.getElementById('manualOverrideCancel');
     const domObserverPanel = document.getElementById('domObserverPanel');
     const domObserverStatus = document.getElementById('domObserverStatus');
     const domWindow = document.getElementById('domWindow');
@@ -1614,6 +1757,7 @@
     let lastSentTpHitSignature = '';
     let latestTradePlan = null;
     let latestTradePlanError = '';
+    let manualOverrideSnapshot = null;
     let tradeZonesVisible = true;
     let canvasScale = 1;
     let canvasCssWidth = 0;
@@ -1653,6 +1797,7 @@
     pairTabGold?.setAttribute('aria-current', activePair === 'GOLD' ? 'page' : 'false');
     pairTabSilver?.setAttribute('aria-current', activePair === 'SILVER' ? 'page' : 'false');
     if (btcSourceTabs) btcSourceTabs.hidden = activePair !== 'BTC';
+    if (manualOverrideCard) manualOverrideCard.hidden = activeSource !== 'decentrader';
     sourceTabDecentrader?.classList.toggle('is-active', activeSource === 'decentrader');
     sourceTabOpenV2?.classList.toggle('is-active', activeSource === 'open-v2');
 
@@ -5065,6 +5210,135 @@
       ].filter(Boolean).join(' | ');
     }
 
+    function manualToken() {
+      const value = String(manualOverrideToken?.value || '').trim();
+      if (value) {
+        try { window.sessionStorage?.setItem('decentraderManualOverrideToken', value); } catch (error) {}
+      }
+      return value;
+    }
+
+    function addManualTpRow(price = '', allocationPct = '') {
+      if (!manualTpRows || manualTpRows.children.length >= 6) return;
+      const row = document.createElement('div');
+      row.className = 'manual-tp-row';
+      const index = manualTpRows.children.length + 1;
+      row.innerHTML = `<span>TP${index}</span>
+        <input class="manual-tp-price" type="number" min="0" step="any" inputmode="decimal" aria-label="TP${index} price" placeholder="Price">
+        <input class="manual-tp-allocation" type="number" min="0.01" max="100" step="0.01" inputmode="decimal" aria-label="TP${index} allocation percentage" placeholder="Allocation %">
+        <button class="manual-tp-remove" type="button" aria-label="Remove TP${index}" title="Remove take profit">-</button>`;
+      row.querySelector('.manual-tp-price').value = price;
+      row.querySelector('.manual-tp-allocation').value = allocationPct;
+      row.querySelector('.manual-tp-remove').addEventListener('click', () => {
+        row.remove();
+        [...manualTpRows.children].forEach((candidate, rowIndex) => {
+          candidate.querySelector('span').textContent = `TP${rowIndex + 1}`;
+        });
+      });
+      manualTpRows.appendChild(row);
+    }
+
+    function manualOverrideResultText(state) {
+      const result = state?.result;
+      if (!result) return '';
+      if (result.tradePlaced) return 'dYdX position placed';
+      return result.tradeSkipped || result.tradeError || '';
+    }
+
+    function updateManualOverrideMonitor(snapshot) {
+      if (!manualOverrideCard || activeSource !== 'decentrader') return;
+      manualOverrideSnapshot = snapshot;
+      const state = snapshot?.override || {};
+      const status = String(state.status || 'IDLE');
+      manualOverrideCard.classList.toggle('is-armed', status === 'ARMED' || status === 'EXECUTING');
+      manualOverrideCard.classList.toggle('is-triggered', status === 'TRIGGERED');
+      manualOverrideValue.textContent = status === 'ARMED'
+        ? `${String(state.direction || '').toUpperCase()} 1H close ${state.direction === 'short' ? '<' : '>'} ${money(state.closeTrigger)}`
+        : status === 'EXECUTING'
+          ? 'Executing'
+          : status.charAt(0) + status.slice(1).toLowerCase();
+      const details = [];
+      if (!snapshot?.enabled) details.push('Feature disabled');
+      if (state.expiresAt && status === 'ARMED') details.push(`expires ${new Date(state.expiresAt).toLocaleString('nl-NL')}`);
+      if (Array.isArray(state.takeProfits) && state.takeProfits.length) details.push(`${state.takeProfits.length} locked TP${state.takeProfits.length === 1 ? '' : 's'}`);
+      const resultText = manualOverrideResultText(state);
+      if (resultText) details.push(resultText);
+      if (snapshot?.lastError) details.push(snapshot.lastError);
+      manualOverrideStatus.textContent = details.join(' | ') || 'Ready';
+      manualOverrideArm.disabled = !snapshot?.enabled;
+      manualOverrideCancel.disabled = status !== 'ARMED';
+    }
+
+    async function refreshManualOverride() {
+      if (activeSource !== 'decentrader') return null;
+      const response = await fetch(`${CLOUD_MANUAL_OVERRIDE_URL}?ts=${Date.now()}`, { cache: 'no-store' });
+      const snapshot = await response.json();
+      if (!response.ok || snapshot.error) throw new Error(snapshot.error || `Manual override ${response.status}`);
+      updateManualOverrideMonitor(snapshot);
+      return snapshot;
+    }
+
+    function manualTakeProfitsFromForm() {
+      return [...manualTpRows.querySelectorAll('.manual-tp-row')]
+        .map((row) => ({
+          price: String(row.querySelector('.manual-tp-price').value || '').trim(),
+          allocationPct: String(row.querySelector('.manual-tp-allocation').value || '').trim()
+        }))
+        .filter((level) => level.price !== '')
+        .map((level) => ({ price: Number(level.price), allocationPct: Number(level.allocationPct) }));
+    }
+
+    async function armManualOverride(event) {
+      event.preventDefault();
+      const token = manualToken();
+      if (!token) {
+        manualOverrideStatus.textContent = 'API token required';
+        return;
+      }
+      manualOverrideArm.disabled = true;
+      try {
+        const response = await fetch(CLOUD_MANUAL_OVERRIDE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Webhook-Token': token },
+          body: JSON.stringify({
+            direction: manualOverrideDirection.value,
+            closeTrigger: Number(manualOverrideTrigger.value),
+            expiresInHours: Number(manualOverrideExpiry.value),
+            takeProfits: manualTakeProfitsFromForm()
+          })
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || `Manual override ${response.status}`);
+        await refreshManualOverride();
+      } catch (error) {
+        manualOverrideStatus.textContent = String(error.message || error);
+      } finally {
+        manualOverrideArm.disabled = !manualOverrideSnapshot?.enabled;
+      }
+    }
+
+    async function cancelManualOverride() {
+      const token = manualToken();
+      if (!token) {
+        manualOverrideStatus.textContent = 'API token required';
+        return;
+      }
+      manualOverrideCancel.disabled = true;
+      try {
+        const response = await fetch(CLOUD_MANUAL_OVERRIDE_URL, {
+          method: 'DELETE',
+          headers: { 'X-Webhook-Token': token }
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || `Manual override ${response.status}`);
+        await refreshManualOverride();
+      } catch (error) {
+        manualOverrideStatus.textContent = String(error.message || error);
+      } finally {
+        manualOverrideCancel.disabled = String(manualOverrideSnapshot?.override?.status || '') !== 'ARMED';
+      }
+    }
+
     function maybeSendGapAlert(frameIndex, frame, intrusion) {
       if (!alertsEnabled || !intrusion?.entrants?.length) return;
       if (frameIndex !== Number(frameInput.max)) return;
@@ -5468,6 +5742,9 @@
 
       draw();
       refreshFractalHistories().catch(() => undefined);
+      refreshManualOverride().catch((error) => {
+        if (manualOverrideStatus) manualOverrideStatus.textContent = String(error.message || error);
+      });
       refreshTradePlan().catch((error) => {
         latestTradePlanError = String(error.message || error);
         updateTradePlanMonitor(payload?.frames?.[Number(frameInput.value)]);
@@ -5532,6 +5809,12 @@
         refreshPayload().catch(showRefreshError);
       });
       refreshDataButton.addEventListener('click', () => refreshPayload().catch(showRefreshError));
+      manualOverrideDirection?.addEventListener('change', () => {
+        manualTriggerLabel.textContent = manualOverrideDirection.value === 'short' ? '1H close below' : '1H close above';
+      });
+      manualAddTp?.addEventListener('click', () => addManualTpRow());
+      manualOverrideForm?.addEventListener('submit', armManualOverride);
+      manualOverrideCancel?.addEventListener('click', cancelManualOverride);
       zoomOutButton.addEventListener('click', () => zoomPrice(1.25));
       zoomResetButton.addEventListener('click', resetPriceView);
       zoomInButton.addEventListener('click', () => zoomPrice(0.8));
@@ -5558,6 +5841,10 @@
 
       syncNotificationState();
       syncCandleFilterState();
+      try {
+        manualOverrideToken.value = window.sessionStorage?.getItem('decentraderManualOverrideToken') || '';
+      } catch (error) {}
+      addManualTpRow('', '100');
       startLiveMonitor();
       refreshPayload()
         .then(() => {
