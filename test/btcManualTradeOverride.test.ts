@@ -1,12 +1,25 @@
 import {
+  BtcManualTradeOverrideStore,
   BtcManualTradeOverrideState,
   buildManualTakeProfitOrderLevels,
+  btcManualTriggerEmailSubject,
+  cancelAlternativeBtcManualOverrides,
   matchingManualOverrideCandle,
-  normalizeBtcManualTradeOverrideRequest
+  normalizeBtcManualTradeOverrideRequest,
+  upsertBtcManualTradeOverride
 } from '../src/services/btcManualTradeOverride';
 
 describe('BTC manual entry and TP override', () => {
   const now = Date.parse('2026-09-10T10:30:00.000Z');
+
+  function store(overrides: BtcManualTradeOverrideState[] = []): BtcManualTradeOverrideStore {
+    return {
+      version: 2,
+      market: 'BTC-USD',
+      overrides,
+      updatedAt: '2026-09-10T10:30:00.000Z'
+    };
+  }
 
   test('arms a validated one-shot long override', () => {
     const state = normalizeBtcManualTradeOverrideRequest({
@@ -27,6 +40,19 @@ describe('BTC manual entry and TP override', () => {
       armedAt: '2026-09-10T10:30:00.000Z',
       expiresAt: '2026-09-10T22:30:00.000Z'
     });
+  });
+
+  test('builds the requested manual trigger email header', () => {
+    expect(btcManualTriggerEmailSubject({
+      market: 'BTC-USD',
+      direction: 'long',
+      signature: 'manual-test',
+      signalCandleStartedAt: '2026-09-10T13:00:00.000Z',
+      signalCandleClosedAt: '2026-09-10T13:59:59.999Z',
+      signalClose: 80100,
+      closeTrigger: 80000,
+      takeProfits: []
+    })).toBe('BTC MANUAL LONG TRIGGERED | 10-09-2026 15:00 NL');
   });
 
   test('rejects TP allocations that do not total 100 percent', () => {
@@ -51,6 +77,7 @@ describe('BTC manual entry and TP override', () => {
   test('only accepts a matching candle that closed after arming', () => {
     const state: BtcManualTradeOverrideState = {
       version: 1,
+      id: 'long',
       market: 'BTC-USD',
       status: 'ARMED',
       direction: 'long',
@@ -73,6 +100,7 @@ describe('BTC manual entry and TP override', () => {
   test('does not execute an old matching close after service downtime', () => {
     const state: BtcManualTradeOverrideState = {
       version: 1,
+      id: 'long',
       market: 'BTC-USD',
       status: 'ARMED',
       direction: 'long',
@@ -92,6 +120,7 @@ describe('BTC manual entry and TP override', () => {
   test('only evaluates the newest closed candle', () => {
     const state: BtcManualTradeOverrideState = {
       version: 1,
+      id: 'long',
       market: 'BTC-USD',
       status: 'ARMED',
       direction: 'long',
@@ -107,6 +136,61 @@ describe('BTC manual entry and TP override', () => {
     ];
 
     expect(matchingManualOverrideCandle(state, candles, Date.parse('2026-09-10T13:00:20.000Z'))).toBeUndefined();
+  });
+
+  test('keeps one armed long and one armed short plan', () => {
+    const long = normalizeBtcManualTradeOverrideRequest({
+      direction: 'long',
+      closeTrigger: 81000,
+      takeProfits: []
+    }, now);
+    const short = normalizeBtcManualTradeOverrideRequest({
+      direction: 'short',
+      closeTrigger: 79000,
+      takeProfits: []
+    }, now + 1000);
+
+    const result = upsertBtcManualTradeOverride(upsertBtcManualTradeOverride(store(), long), short);
+
+    expect(result.overrides.map((override) => [override.direction, override.closeTrigger])).toEqual([
+      ['long', 81000],
+      ['short', 79000]
+    ]);
+  });
+
+  test('rejects overlapping long and short triggers', () => {
+    const long = normalizeBtcManualTradeOverrideRequest({
+      direction: 'long',
+      closeTrigger: 78000,
+      takeProfits: []
+    }, now);
+    const short = normalizeBtcManualTradeOverrideRequest({
+      direction: 'short',
+      closeTrigger: 79000,
+      takeProfits: []
+    }, now + 1000);
+
+    expect(() => upsertBtcManualTradeOverride(upsertBtcManualTradeOverride(store(), long), short))
+      .toThrow('Short close trigger must be below');
+  });
+
+  test('cancels the opposite armed plan when one trigger fires', () => {
+    const long = normalizeBtcManualTradeOverrideRequest({
+      direction: 'long',
+      closeTrigger: 81000,
+      takeProfits: []
+    }, now);
+    const short = normalizeBtcManualTradeOverrideRequest({
+      direction: 'short',
+      closeTrigger: 79000,
+      takeProfits: []
+    }, now + 1000);
+    const armed = upsertBtcManualTradeOverride(upsertBtcManualTradeOverride(store(), long), short);
+
+    const result = cancelAlternativeBtcManualOverrides(armed, 'long', '2026-09-10T12:00:20.000Z');
+
+    expect(result.overrides.find((override) => override.direction === 'long')?.status).toBe('ARMED');
+    expect(result.overrides.find((override) => override.direction === 'short')?.status).toBe('CANCELLED');
   });
 
   test('allocates the exact manual TP ladder at dYdX step size', () => {

@@ -1306,8 +1306,8 @@
           </div>
           <div class="manual-tp-rows" id="manualTpRows"></div>
           <div class="manual-override-actions">
-            <button id="manualOverrideArm" type="submit">Arm override</button>
-            <button id="manualOverrideCancel" type="button">Cancel override</button>
+            <button id="manualOverrideArm" type="submit">Arm / replace plan</button>
+            <button id="manualOverrideCancel" type="button">Cancel selected</button>
           </div>
         </form>
       </div>
@@ -1758,6 +1758,7 @@
     let latestTradePlan = null;
     let latestTradePlanError = '';
     let manualOverrideSnapshot = null;
+    let manualOverrideFormInitialized = false;
     let tradeZonesVisible = true;
     let canvasScale = 1;
     let canvasCssWidth = 0;
@@ -5245,28 +5246,76 @@
       return result.tradeSkipped || result.tradeError || '';
     }
 
+    function manualOverrides() {
+      if (Array.isArray(manualOverrideSnapshot?.overrides)) return manualOverrideSnapshot.overrides;
+      return manualOverrideSnapshot?.override ? [manualOverrideSnapshot.override] : [];
+    }
+
+    function manualOverrideForDirection(direction) {
+      return manualOverrides().find((state) => state.direction === direction);
+    }
+
+    function resetManualTpRows(levels = []) {
+      manualTpRows.innerHTML = '';
+      if (!levels.length) {
+        addManualTpRow('', '100');
+        return;
+      }
+      levels.forEach((level) => addManualTpRow(level.price, level.allocationPct));
+    }
+
+    function loadManualOverrideForm(direction) {
+      const state = manualOverrideForDirection(direction);
+      manualTriggerLabel.textContent = direction === 'short' ? '1H close below' : '1H close above';
+      manualOverrideTrigger.value = state?.closeTrigger || '';
+      if (state?.expiresAt) {
+        const remainingHours = Math.max(1, Math.ceil((Date.parse(state.expiresAt) - Date.now()) / 3600000));
+        manualOverrideExpiry.value = Math.min(168, remainingHours);
+      } else {
+        manualOverrideExpiry.value = 24;
+      }
+      resetManualTpRows(Array.isArray(state?.takeProfits) ? state.takeProfits : []);
+      const executing = manualOverrides().some((candidate) => candidate.status === 'EXECUTING');
+      manualOverrideArm.disabled = !manualOverrideSnapshot?.enabled || executing;
+      manualOverrideCancel.disabled = state?.status !== 'ARMED';
+    }
+
     function updateManualOverrideMonitor(snapshot) {
       if (!manualOverrideCard || activeSource !== 'decentrader') return;
       manualOverrideSnapshot = snapshot;
-      const state = snapshot?.override || {};
-      const status = String(state.status || 'IDLE');
-      manualOverrideCard.classList.toggle('is-armed', status === 'ARMED' || status === 'EXECUTING');
-      manualOverrideCard.classList.toggle('is-triggered', status === 'TRIGGERED');
-      manualOverrideValue.textContent = status === 'ARMED'
-        ? `${String(state.direction || '').toUpperCase()} 1H close ${state.direction === 'short' ? '<' : '>'} ${money(state.closeTrigger)}`
-        : status === 'EXECUTING'
-          ? 'Executing'
-          : status.charAt(0) + status.slice(1).toLowerCase();
+      const overrides = manualOverrides();
+      const active = overrides.filter((state) => state.status === 'ARMED' || state.status === 'EXECUTING');
+      const latestTerminal = overrides
+        .filter((state) => !['ARMED', 'EXECUTING'].includes(state.status))
+        .sort((left, right) => Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || ''))[0];
+      manualOverrideCard.classList.toggle('is-armed', active.length > 0);
+      manualOverrideCard.classList.toggle('is-triggered', latestTerminal?.status === 'TRIGGERED');
+      manualOverrideValue.textContent = active.length
+        ? active.map((state) => (
+            `${state.direction.toUpperCase()} ${state.direction === 'short' ? '<' : '>'} ${money(state.closeTrigger)}` +
+            `${state.status === 'EXECUTING' ? ' (executing)' : ''}`
+          )).join(' | ')
+        : 'No armed plans';
       const details = [];
       if (!snapshot?.enabled) details.push('Feature disabled');
-      if (state.expiresAt && status === 'ARMED') details.push(`expires ${new Date(state.expiresAt).toLocaleString('nl-NL')}`);
-      if (Array.isArray(state.takeProfits) && state.takeProfits.length) details.push(`${state.takeProfits.length} locked TP${state.takeProfits.length === 1 ? '' : 's'}`);
-      const resultText = manualOverrideResultText(state);
-      if (resultText) details.push(resultText);
+      active.forEach((state) => {
+        const tpCount = Array.isArray(state.takeProfits) ? state.takeProfits.length : 0;
+        details.push(`${state.direction.toUpperCase()} expires ${new Date(state.expiresAt).toLocaleString('nl-NL')}${tpCount ? ` | ${tpCount} locked TP${tpCount === 1 ? '' : 's'}` : ''}`);
+      });
+      const resultText = manualOverrideResultText(latestTerminal);
+      if (!active.length && resultText) details.push(resultText);
+      if (!active.length && latestTerminal?.triggerEmailSentAt) details.push('trigger email sent');
+      if (!active.length && latestTerminal?.triggerEmailError) details.push(`email: ${latestTerminal.triggerEmailError}`);
       if (snapshot?.lastError) details.push(snapshot.lastError);
       manualOverrideStatus.textContent = details.join(' | ') || 'Ready';
-      manualOverrideArm.disabled = !snapshot?.enabled;
-      manualOverrideCancel.disabled = status !== 'ARMED';
+      const selected = manualOverrideForDirection(manualOverrideDirection.value);
+      const executing = overrides.some((state) => state.status === 'EXECUTING');
+      manualOverrideArm.disabled = !snapshot?.enabled || executing;
+      manualOverrideCancel.disabled = selected?.status !== 'ARMED';
+      if (!manualOverrideFormInitialized) {
+        manualOverrideFormInitialized = true;
+        loadManualOverrideForm(manualOverrideDirection.value);
+      }
     }
 
     async function refreshManualOverride() {
@@ -5310,6 +5359,7 @@
         const result = await response.json();
         if (!response.ok || result.error) throw new Error(result.error || `Manual override ${response.status}`);
         await refreshManualOverride();
+        loadManualOverrideForm(manualOverrideDirection.value);
       } catch (error) {
         manualOverrideStatus.textContent = String(error.message || error);
       } finally {
@@ -5325,17 +5375,19 @@
       }
       manualOverrideCancel.disabled = true;
       try {
-        const response = await fetch(CLOUD_MANUAL_OVERRIDE_URL, {
+        const direction = manualOverrideDirection.value;
+        const response = await fetch(`${CLOUD_MANUAL_OVERRIDE_URL}?direction=${encodeURIComponent(direction)}`, {
           method: 'DELETE',
           headers: { 'X-Webhook-Token': token }
         });
         const result = await response.json();
         if (!response.ok || result.error) throw new Error(result.error || `Manual override ${response.status}`);
         await refreshManualOverride();
+        loadManualOverrideForm(direction);
       } catch (error) {
         manualOverrideStatus.textContent = String(error.message || error);
       } finally {
-        manualOverrideCancel.disabled = String(manualOverrideSnapshot?.override?.status || '') !== 'ARMED';
+        manualOverrideCancel.disabled = manualOverrideForDirection(manualOverrideDirection.value)?.status !== 'ARMED';
       }
     }
 
@@ -5810,7 +5862,7 @@
       });
       refreshDataButton.addEventListener('click', () => refreshPayload().catch(showRefreshError));
       manualOverrideDirection?.addEventListener('change', () => {
-        manualTriggerLabel.textContent = manualOverrideDirection.value === 'short' ? '1H close below' : '1H close above';
+        loadManualOverrideForm(manualOverrideDirection.value);
       });
       manualAddTp?.addEventListener('click', () => addManualTpRow());
       manualOverrideForm?.addEventListener('submit', armManualOverride);
@@ -5844,7 +5896,7 @@
       try {
         manualOverrideToken.value = window.sessionStorage?.getItem('decentraderManualOverrideToken') || '';
       } catch (error) {}
-      addManualTpRow('', '100');
+      resetManualTpRows();
       startLiveMonitor();
       refreshPayload()
         .then(() => {

@@ -6,6 +6,8 @@ import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import {
   BtcManualEntryRequest,
+  btcManualTriggerEmailSubject,
+  btcManualTriggerTimestampNl,
   btcManualTradeOverrideEnabled,
   btcManualTradeOverrideIsArmed,
   buildManualTakeProfitOrderLevels
@@ -8106,6 +8108,7 @@ export class DecentraderGapMonitor {
           direction: request.direction,
           signature: request.signature,
           size: Math.abs(placedPosition.size),
+          entryPrice: placedPosition.entryPrice,
           stop: numberOrZero((orderAlert as any).static_sl),
           takeProfitMode: state.managedPosition.takeProfitMode,
           takeProfits: state.managedPosition.takeProfits,
@@ -8121,6 +8124,53 @@ export class DecentraderGapMonitor {
       console.error('BTC manual entry/TP override failed:', error);
       return result;
     }
+  }
+
+  async sendManualBtcTriggerEmail(
+    request: BtcManualEntryRequest,
+    result: any
+  ): Promise<{ sent: boolean; error?: string }> {
+    const smtp = smtpSettingsFromEnv();
+    if (!smtp) return { sent: false, error: 'SMTP is not configured.' };
+
+    const direction = request.direction.toUpperCase();
+    const timestampNl = btcManualTriggerTimestampNl(request.signalCandleStartedAt);
+    const decision = result?.tradeDecision || {};
+    const outcome = result?.tradePlaced
+      ? 'PLACED'
+      : result?.tradeSkipped
+        ? `SKIPPED: ${result.tradeSkipped}`
+        : `ERROR: ${result?.tradeError || 'Unknown execution result'}`;
+    const takeProfits = Array.isArray(decision.takeProfits)
+      ? decision.takeProfits
+      : Array.isArray(result?.tradeAlert?.take_profits)
+        ? result.tradeAlert.take_profits
+        : [];
+    const tpLines = takeProfits.length
+      ? takeProfits.map((level: any, index: number) => (
+          `TP${index + 1}: ${money(numberOrZero(level.price))} | size ${numberOrZero(level.size)}`
+        ))
+      : ['TPs: dynamic Decentrader map ladder'];
+    const body = [
+      `BTC MANUAL ${direction} TRIGGERED`,
+      `Signal candle: ${timestampNl}`,
+      `Binance 1H close: ${money(request.signalClose)}`,
+      `Configured close trigger: ${request.direction === 'long' ? 'above' : 'below'} ${money(request.closeTrigger)}`,
+      `Order result: ${outcome}`,
+      decision.entryPrice ? `dYdX entry: ${money(numberOrZero(decision.entryPrice))}` : '',
+      decision.size ? `Position size: ${numberOrZero(decision.size)}` : '',
+      decision.stop ? `Williams SL: ${money(numberOrZero(decision.stop))}` : '',
+      ...tpLines
+    ].filter(Boolean).join('\n');
+    const subject = btcManualTriggerEmailSubject(request);
+    const email = await sendEmailBestEffort(smtp, subject, body);
+    console.log('BTC manual entry trigger email result:', {
+      subject,
+      sent: email.sent,
+      error: email.error,
+      signature: request.signature
+    });
+    return email;
   }
 
   async getTradePlan(

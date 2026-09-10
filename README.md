@@ -87,7 +87,7 @@ Status:
 GET /decentrader/gap-status
 ```
 
-For BTC only, the Decentrader dashboard can arm a one-shot manual entry and optional locked TP ladder:
+For BTC only, the Decentrader dashboard can arm one long and one short manual entry plan with separate optional locked TP ladders:
 
 ```text
 MANUAL_ENTRY_TP_OVERRIDE_ENABLED=true
@@ -95,7 +95,7 @@ MANUAL_ENTRY_TP_OVERRIDE_ENABLED=true
 BTC_MANUAL_TRADE_OVERRIDE_FILE=/app/data/btc-manual-trade-override.json
 ```
 
-The override waits for the first fresh Binance Futures `BTCUSDT` 1H candle that closes above the long trigger or below the short trigger. It never acts retroactively: only candles closed after arming qualify, and execution must begin within 15 minutes of the latest close. While armed or executing it has priority over automatic BTC Delay and Shadow entries. A supplied TP ladder remains fixed for that position; without manual TPs the existing dynamic map TP logic applies. Position sizing, the initial dYdX 1H Williams-fractal stop and trailing-stop automation remain unchanged. Arming and cancelling use `DECENTRADER_API_TOKEN` (or the existing `TRADINGVIEW_PASSPHRASE` fallback) and an executing override cannot be cancelled or replaced.
+The plans wait for the first fresh Binance Futures `BTCUSDT` 1H candle that closes above the long trigger or below the short trigger. The long trigger must be above the short trigger. The two plans are OCO alternatives: when one fires, the other is cancelled. They never act retroactively: only candles closed after arming qualify, and execution must begin within 15 minutes of the latest close. While either plan is armed or executing it has priority over automatic BTC Delay and Shadow entries. A supplied TP ladder remains fixed for that position; without manual TPs the existing dynamic map TP logic applies. Position sizing, the initial dYdX 1H Williams-fractal stop and trailing-stop automation remain unchanged. A separate `BTC MANUAL LONG TRIGGERED` or `BTC MANUAL SHORT TRIGGERED` email records the candle, execution result, SL and TPs. Arming and cancelling use `DECENTRADER_API_TOKEN` (or the existing `TRADINGVIEW_PASSPHRASE` fallback) and an executing plan cannot be cancelled or replaced.
 
 When auto-trading is enabled, TP prices come from the latest qualifying liquidity-map zones. TP1 front-runs the opposite gap edge; TP2+ is selected from active Decentrader histogram clusters by historical liquidity peak strength, overlap across leverage bands, 10x participation, freshness, and CoinGlass orderbook confluence before the final levels are ordered along the trade path. The selector does not use fixed max-distance staging for TP1/TP2/TP3; it applies a minimum spacing between selected analytical zones so nearby ladder noise does not crowd out stronger historical/CG levels. While a BTC position opened by this monitor is active, every monitor poll can replace only the dYdX take-profit ladder when the map changes. Unknown/manual positions, position size, direction, and stop orders are not changed by this TP-only sync.
 
