@@ -49,6 +49,7 @@ import {
   buildDirectionalPlan,
   buildFractalStop,
   decentraderRegularIntrusionEmailEnabled,
+  dydxTargetFailedAndFlattened,
   dydxHourlyCandlesToFractalRows,
   fetchBinanceFuturesHourlyCandlesForSymbol,
   fetchDydxHourlyCandlesForMarket,
@@ -1159,7 +1160,12 @@ export class OpenLiquidityV2EthTradeMonitor {
         result.tradePlan = plan;
 
         try {
-          await this.executor.placeOrder(orderAlert);
+          const placement = await this.executor.placeOrder(orderAlert);
+          if (dydxTargetFailedAndFlattened(placement)) {
+            result.tradeSkipped = placement.reason;
+            result.tradePlacement = placement;
+            return result;
+          }
         } catch (error) {
           const partialPosition = await this.waitForExpectedPosition(request.direction);
           if (!partialPosition || directionForPosition(partialPosition) !== request.direction) throw error;
@@ -1293,7 +1299,12 @@ export class OpenLiquidityV2EthTradeMonitor {
     state.lastTradeAttemptedSignature = signature;
     state.lastTradeAttemptedAt = nowNlIso();
     try {
-      await this.executor.placeOrder(orderAlert);
+      const placement = await this.executor.placeOrder(orderAlert);
+      if (dydxTargetFailedAndFlattened(placement)) {
+        result.tradeSkipped = placement.reason;
+        result.tradePlacement = placement;
+        return;
+      }
     } catch (error) {
       const partialPosition = await this.waitForExpectedPosition(direction);
       if (!partialPosition || directionForPosition(partialPosition) !== direction) throw error;

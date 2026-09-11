@@ -63,7 +63,11 @@ describe('managed entry stop-risk protection', () => {
   test('passes the budget limit to the target-position loop for every correction', async () => {
     const { client, alert } = clientAndAlert();
     alert.decentrader.riskBudgetUsd = 16;
-    await client.placeOrderForMarket('ETH-USD', alert);
+    await expect(client.placeOrderForMarket('ETH-USD', alert)).resolves.toMatchObject({
+      outcome: 'TARGET_FAILED_FLATTENED',
+      market: 'ETH-USD',
+      targetSize: 1
+    });
     expect(client.reachTargetPositionOrFailsafeFlat).toHaveBeenCalledWith('ETH-USD', 1,
       expect.objectContaining({ entryRiskLimit: { side: 'BUY', price: 106 } }));
   });

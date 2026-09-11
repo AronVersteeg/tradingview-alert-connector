@@ -564,7 +564,7 @@ export class DydxV4Client extends AbstractDexClient {
     };
   }
 
-  async placeOrder(alert: AlertObject): Promise<void> {
+  async placeOrder(alert: AlertObject): Promise<any> {
     const market = this.normalizeMarket((alert as any).market);
 
     return this.withStatefulOrderQueue(() =>
@@ -1439,7 +1439,7 @@ export class DydxV4Client extends AbstractDexClient {
   private async placeOrderForMarket(
     market: string,
     alert: AlertObject
-  ): Promise<void> {
+  ): Promise<any> {
     const signal = this.getSignal(alert);
     const telemetry = this.getTradingViewTelemetry(alert);
     const profile = this.getExecutionProfile(alert);
@@ -1507,7 +1507,13 @@ export class DydxV4Client extends AbstractDexClient {
         targetSize,
         profile: profile.name
       });
-      return;
+      return {
+        outcome: 'TARGET_FAILED_FLATTENED',
+        market,
+        targetSize,
+        profile: profile.name,
+        reason: 'The requested target position was not reached and the partial position was fail-safe flattened.'
+      };
     }
 
     await this.rebalanceStatefulOrderCapacity(market);

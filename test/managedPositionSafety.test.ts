@@ -100,6 +100,58 @@ describe('managed position safety independent from entry scanning', () => {
     expect(orders.placeOrder).not.toHaveBeenCalled();
   });
 
+  test('a fail-safe-flattened Shadow fill is never registered from stale indexer data', async () => {
+    process.env.SHADOW_FRACTAL_ENTRY_MODEL_ENABLED = 'true';
+    process.env.DECENTRADER_AUTO_TRADE_ENABLED = 'true';
+    process.env.OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED = 'true';
+    const monitor = new OpenLiquidityV2EthTradeMonitor({} as any) as any;
+    const orders = {
+      getAccountSnapshot: jest.fn().mockResolvedValue({
+        markets: { 'ETH-USD': { oraclePrice: 120, status: 'ACTIVE', stepSize: 0.001 } },
+        openPositions: []
+      }),
+      placeOrder: jest.fn().mockResolvedValue({
+        outcome: 'TARGET_FAILED_FLATTENED',
+        market: 'ETH-USD',
+        targetSize: 0.05,
+        reason: 'The requested target position was not reached and the partial position was fail-safe flattened.'
+      })
+    };
+    monitor.configureTradeExecutor(orders);
+    monitor.getTradePlan = jest.fn().mockResolvedValue({
+      market: 'ETH-USD',
+      price: 120,
+      timestamp: '2026-09-11 13:00:00',
+      marketInfo: { oraclePrice: 120, status: 'ACTIVE', stepSize: 0.001 },
+      activePlan: {
+        direction: 'long',
+        status: 'ready',
+        stop: { price: 110, valid: true },
+        sizing: { size: 0.05, notional: 6, riskBudgetUsd: 15, minimumOrderSize: 0.001 },
+        takeProfits: [{ label: 'L TP1', price: 130 }]
+      }
+    });
+    monitor.waitForExpectedPosition = jest.fn().mockResolvedValue({
+      market: 'ETH-USD', size: 0.004, entryPrice: 120
+    });
+
+    const result = await monitor.executeFractalEntry({
+      market: 'ETH-USD',
+      direction: 'long',
+      signature: 'shadow-fractal|eth-regression',
+      signalCandleStartedAt: '2026-09-11T13:00:00.000Z',
+      signalCandleClosedAt: '2026-09-11T14:00:00.000Z',
+      signalClose: 120,
+      hourlyFractal: 118,
+      dailyFractal: 115
+    });
+
+    expect(result.tradePlaced).toBe(false);
+    expect(result.tradePlacement.outcome).toBe('TARGET_FAILED_FLATTENED');
+    expect(monitor.waitForExpectedPosition).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(monitor.getStatus().stateFile, 'utf8')).managedPosition).toBeUndefined();
+  });
+
   test('management completes while the scanner is still waiting for its payload', async () => {
     let finish!: (payload: any) => void;
     const collector = { getPayload: jest.fn(() => new Promise((resolve) => { finish = resolve; })) };

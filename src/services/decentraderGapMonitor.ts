@@ -471,10 +471,14 @@ export type DecentraderTradeExecutor = {
       orderSlots: number;
     }>;
   }>;
-  placeOrder: (alert: AlertObject) => Promise<void>;
+  placeOrder: (alert: AlertObject) => Promise<any>;
   syncTakeProfits?: (alert: AlertObject) => Promise<any>;
   syncTrailingStop?: (alert: AlertObject) => Promise<any>;
 };
+
+export function dydxTargetFailedAndFlattened(result: any): boolean {
+  return result?.outcome === 'TARGET_FAILED_FLATTENED';
+}
 
 type MonitorStatus = {
   positionManagement?: any;
@@ -7598,7 +7602,10 @@ export class DecentraderGapMonitor {
             takeProfits: (orderAlert as any).take_profits,
             holdSeconds
           });
-          await this.tradeExecutor.placeOrder(orderAlert);
+          const placement = await this.tradeExecutor.placeOrder(orderAlert);
+          if (dydxTargetFailedAndFlattened(placement)) {
+            throw new Error(placement.reason);
+          }
           const entrySnapshot = await this.tradeExecutor.getAccountSnapshot([orderAlert.market]);
           const observedEntryPosition = existingMarketPosition(entrySnapshot, orderAlert.market);
           const expectedLong = direction === 'long';
@@ -7696,7 +7703,18 @@ export class DecentraderGapMonitor {
         return;
       }
 
-      await this.tradeExecutor.placeOrder(orderAlert);
+      const placement = await this.tradeExecutor.placeOrder(orderAlert);
+      if (dydxTargetFailedAndFlattened(placement)) {
+        result.tradeSkipped = placement.reason;
+        result.tradePlacement = placement;
+        this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', placement.reason, {
+          market: orderAlert.market,
+          desiredPosition: orderAlert.desired_position,
+          size: orderAlert.size,
+          placement
+        });
+        return;
+      }
       const entrySnapshot = await this.tradeExecutor.getAccountSnapshot([orderAlert.market]);
       const observedEntryPosition = existingMarketPosition(entrySnapshot, orderAlert.market);
       const expectedLong = direction === 'long';
@@ -7892,7 +7910,12 @@ export class DecentraderGapMonitor {
 
         let placedPosition: DydxOpenPosition | undefined;
         try {
-          await this.tradeExecutor.placeOrder(orderAlert);
+          const placement = await this.tradeExecutor.placeOrder(orderAlert);
+          if (dydxTargetFailedAndFlattened(placement)) {
+            result.tradeSkipped = placement.reason;
+            result.tradePlacement = placement;
+            return result;
+          }
           placedPosition = await this.waitForFractalEntryPosition(market, request.direction);
         } catch (error) {
           placedPosition = await this.waitForFractalEntryPosition(market, request.direction);
@@ -8053,7 +8076,12 @@ export class DecentraderGapMonitor {
 
         let placedPosition: DydxOpenPosition | undefined;
         try {
-          await this.tradeExecutor.placeOrder(orderAlert);
+          const placement = await this.tradeExecutor.placeOrder(orderAlert);
+          if (dydxTargetFailedAndFlattened(placement)) {
+            result.tradeSkipped = placement.reason;
+            result.tradePlacement = placement;
+            return result;
+          }
           placedPosition = await this.waitForFractalEntryPosition(market, request.direction);
         } catch (error) {
           placedPosition = await this.waitForFractalEntryPosition(market, request.direction);
