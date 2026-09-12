@@ -21,7 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { AbstractDexClient } from '../abstractDexClient';
 import { createReadResilientIndexerClient } from './indexerReadRecovery';
-import { assessEntryDepth, constrainEntryPrice, entryRiskLimit, EntryRiskLimit } from './entryRiskGuard';
+import { constrainEntryPrice, findRiskCompatibleEntry, EntryRiskLimit } from './entryRiskGuard';
 
 type ProgressResult =
   | { kind: 'target'; currentSize: number }
@@ -258,6 +258,11 @@ const parseEnvPositiveNumber = (value: unknown, fallback: number): number => {
   return Number.isFinite(parsed) && parsed > 0
     ? parsed
     : fallback;
+};
+
+type PreparedEntryRisk = {
+  targetSize: number;
+  priceReference?: CorrectionOrderPriceReference;
 };
 
 export function allocateStatefulOrderSlots(
@@ -1481,11 +1486,18 @@ export class DydxV4Client extends AbstractDexClient {
       return;
     }
 
-    const targetSize = this.getTargetSize(alert, Number((alert as any).size ?? 0));
+    const requestedTargetSize = this.getTargetSize(alert, Number((alert as any).size ?? 0));
+    const preparedEntry = await this.prepareEntryRiskReference(market, requestedTargetSize, alert, telemetry);
+    const targetSize = preparedEntry.targetSize;
+    const priceReference = preparedEntry.priceReference;
 
-    const priceReference = await this.prepareEntryRiskReference(market, targetSize, alert, telemetry);
-
-    console.log('Target position:', { market, targetSize, profile: profile.name });
+    console.log('Target position:', {
+      market,
+      requestedTargetSize,
+      targetSize,
+      dynamicallyDownsized: Math.abs(targetSize) + this.TOLERANCE < Math.abs(requestedTargetSize),
+      profile: profile.name
+    });
 
     await this.cancelOpenOrders(market);
 
@@ -2803,10 +2815,12 @@ export class DydxV4Client extends AbstractDexClient {
     targetSize: number,
     alert: AlertObject,
     telemetry: TradingViewTelemetry
-  ): Promise<CorrectionOrderPriceReference | undefined> {
+  ): Promise<PreparedEntryRisk> {
     const reference = this.getAlertPriceReference(alert, telemetry);
     const budgetValue = (alert as any).decentrader?.riskBudgetUsd;
-    if (Math.abs(targetSize) < this.TOLERANCE || budgetValue === undefined) return reference;
+    if (Math.abs(targetSize) < this.TOLERANCE || budgetValue === undefined) {
+      return { targetSize, priceReference: reference };
+    }
     const side = targetSize > 0 ? OrderSide.BUY : OrderSide.SELL;
     const riskSide = targetSize > 0 ? 'BUY' : 'SELL';
     const marketInfo = await this.getMarketInfoBestEffort(market);
@@ -2815,17 +2829,53 @@ export class DydxV4Client extends AbstractDexClient {
     if (!(oracle > 0) || !(stop > 0) || (targetSize > 0 ? stop >= oracle : stop <= oracle)) {
       throw new Error('Entry risk guard: protective stop is no longer valid against the current dYdX oracle.');
     }
-    const limit = entryRiskLimit(riskSide, Math.abs(targetSize), stop, Number(budgetValue), Number(marketInfo?.tickSize));
     const pricing = await this.resolveCorrectionOrderPricing(market, side, reference, marketInfo);
-    const limitPrice = constrainEntryPrice(pricing.price, riskSide, false, limit);
     const book = await (this.indexer.markets as any).getPerpetualMarketOrderbook(market);
-    const depth = assessEntryDepth(book, riskSide, Math.abs(targetSize), limitPrice);
+    const sizeCheck = this.getCorrectionOrderSizeCheck(market, Math.abs(targetSize), marketInfo);
+    const stepSize = Number(sizeCheck.stepSize ?? marketInfo?.stepSize ?? marketInfo?.step_size);
+    const compatible = findRiskCompatibleEntry(
+      book,
+      riskSide,
+      Math.abs(targetSize),
+      stop,
+      Number(budgetValue),
+      Number(marketInfo?.tickSize),
+      stepSize,
+      pricing.price
+    );
+    const adjustedTargetSize = targetSize > 0 ? compatible.size : -compatible.size;
+    if (compatible.downsized) {
+      console.warn('dYdX entry dynamically downsized to preserve stop risk:', {
+        market,
+        side: riskSide,
+        requestedSize: Math.abs(targetSize),
+        adjustedSize: compatible.size,
+        stepSize,
+        riskBudgetUsd: Number(budgetValue),
+        stop,
+        limitPrice: compatible.depth.limitPrice,
+        expectedFillPrice: compatible.depth.expectedFillPrice,
+        expectedStopRiskUsd: compatible.size * Math.abs(compatible.depth.expectedFillPrice - stop)
+      });
+    }
     console.log('dYdX entry risk preflight passed:', {
-      market, ...depth, riskBudgetUsd: Number(budgetValue), stop,
-      expectedStopRiskUsd: Math.abs(targetSize) * Math.abs(depth.expectedFillPrice - stop),
+      market,
+      requestedSize: Math.abs(targetSize),
+      dynamicallyDownsized: compatible.downsized,
+      ...compatible.depth,
+      riskBudgetUsd: Number(budgetValue),
+      stop,
+      expectedStopRiskUsd: compatible.size * Math.abs(compatible.depth.expectedFillPrice - stop),
       riskBasis: 'entry-fill-to-stop-trigger-excludes-costs'
     });
-    return { ...reference, source: reference?.source || 'risk-guard', entryRiskLimit: limit };
+    return {
+      targetSize: adjustedTargetSize,
+      priceReference: {
+        ...reference,
+        source: reference?.source || 'risk-guard',
+        entryRiskLimit: compatible.limit
+      }
+    };
   }
 
   private getAlertPriceReference(

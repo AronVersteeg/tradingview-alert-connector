@@ -2,6 +2,14 @@ import Decimal from 'decimal.js';
 
 export type EntryRiskLimit = { side: 'BUY' | 'SELL'; price: number };
 
+export type RiskCompatibleEntry = {
+  requestedSize: number;
+  size: number;
+  downsized: boolean;
+  limit: EntryRiskLimit;
+  depth: ReturnType<typeof assessEntryDepth>;
+};
+
 export function entryRiskLimit(side: 'BUY' | 'SELL', size: number, stop: number, budget: number, tickSize: number): EntryRiskLimit {
   if (![size, stop, budget, tickSize].every((value) => Number.isFinite(value) && value > 0)) {
     throw new Error('Entry risk guard requires positive size, stop, risk budget and tick size.');
@@ -54,4 +62,72 @@ export function assessEntryDepth(book: any, side: 'BUY' | 'SELL', size: number, 
     limitPrice,
     size
   };
+}
+
+function isInsufficientDepthError(error: unknown): boolean {
+  return error instanceof Error && /insufficient visible liquidity/i.test(error.message);
+}
+
+export function findRiskCompatibleEntry(
+  book: any,
+  side: 'BUY' | 'SELL',
+  requestedSize: number,
+  stop: number,
+  budget: number,
+  tickSize: number,
+  stepSize: number,
+  marketPriceLimit: number
+): RiskCompatibleEntry {
+  if (![requestedSize, stepSize, marketPriceLimit].every((value) => Number.isFinite(value) && value > 0)) {
+    throw new Error('Entry risk guard: dynamic sizing requires positive requested size, step size and market price limit.');
+  }
+
+  const requestedSteps = Math.floor(new Decimal(requestedSize).div(stepSize).plus('1e-9').toNumber());
+  if (requestedSteps < 1) {
+    throw new Error('Entry risk guard: requested size is below the dYdX minimum order size.');
+  }
+
+  const evaluate = (steps: number): Omit<RiskCompatibleEntry, 'requestedSize' | 'downsized'> => {
+    const size = new Decimal(stepSize).mul(steps).toNumber();
+    const limit = entryRiskLimit(side, size, stop, budget, tickSize);
+    const limitPrice = constrainEntryPrice(marketPriceLimit, side, false, limit);
+    const depth = assessEntryDepth(book, side, size, limitPrice);
+    return { size, limit, depth };
+  };
+
+  try {
+    const full = evaluate(requestedSteps);
+    return { requestedSize, ...full, downsized: full.size + Number.EPSILON < requestedSize };
+  } catch (error) {
+    if (!isInsufficientDepthError(error)) throw error;
+  }
+
+  let minimum: Omit<RiskCompatibleEntry, 'requestedSize' | 'downsized'>;
+  try {
+    minimum = evaluate(1);
+  } catch (error) {
+    if (isInsufficientDepthError(error)) {
+      throw new Error(
+        'Entry risk guard: insufficient visible liquidity even after downsizing to the dYdX minimum order size.'
+      );
+    }
+    throw error;
+  }
+
+  let low = 1;
+  let high = requestedSteps - 1;
+  let best = minimum;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    try {
+      const candidate = evaluate(middle);
+      best = candidate;
+      low = middle + 1;
+    } catch (error) {
+      if (!isInsufficientDepthError(error)) throw error;
+      high = middle - 1;
+    }
+  }
+
+  return { requestedSize, ...best, downsized: true };
 }

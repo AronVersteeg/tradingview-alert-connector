@@ -35,7 +35,11 @@ A failed or disabled check must not be interpreted as proof of stop coverage.
 Generated managed entry alerts carry the configured `riskBudgetUsd`. Before
 cancelling existing orders, the dYdX executor fetches current market metadata
 and the orderbook. It rejects an invalid/breached stop, missing book/metadata,
-or insufficient visible liquidity within the risk-compatible entry price.
+or insufficient visible liquidity within the risk-compatible entry price. When
+the complete planned size does not fit, it now selects the largest valid dYdX
+step size that is fully executable within both the current book and the same
+fixed dollar-risk budget. It rejects the entry only when even the market's
+minimum order size cannot be executed safely.
 
 For a quantity Q, trigger S and budget B, the adverse entry boundary is
 `S + B/Q` for a long and `S - B/Q` for a short, rounded conservatively to market
