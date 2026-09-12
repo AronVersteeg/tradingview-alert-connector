@@ -26,6 +26,10 @@ describe('managed entry stop-risk protection', () => {
     expect(entryRiskLimit('SELL', 3, 110, 10, 0.1).price).toBe(106.7);
   });
 
+  test('uses the minimum positive tick when a small short is safe across the complete price range', () => {
+    expect(entryRiskLimit('SELL', 0.001, 2548.0455, 15, 0.1).price).toBe(0.1);
+  });
+
   test('does not restrict protective reduce-only exits or orders on the opposite side', () => {
     const limit = entryRiskLimit('BUY', 1, 90, 10, 0.1);
     expect(constrainEntryPrice(120, 'BUY', true, limit)).toBe(120);

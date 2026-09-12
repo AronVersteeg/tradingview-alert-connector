@@ -19,7 +19,9 @@ export function entryRiskLimit(side: 'BUY' | 'SELL', size: number, stop: number,
   const trigger = new Decimal(stop).div(tickSize)
     .toDecimalPlaces(0, side === 'BUY' ? Decimal.ROUND_FLOOR : Decimal.ROUND_CEIL).mul(tickSize);
   const raw = side === 'BUY' ? trigger.plus(distance) : trigger.minus(distance);
-  const price = raw.div(tickSize).toDecimalPlaces(0, side === 'BUY' ? Decimal.ROUND_FLOOR : Decimal.ROUND_CEIL).mul(tickSize).toNumber();
+  const price = side === 'SELL' && raw.lte(0)
+    ? tickSize
+    : raw.div(tickSize).toDecimalPlaces(0, side === 'BUY' ? Decimal.ROUND_FLOOR : Decimal.ROUND_CEIL).mul(tickSize).toNumber();
   if (!(price > 0) || (side === 'BUY' ? price <= stop : price >= stop)) {
     throw new Error('Entry risk budget leaves no valid tick between entry and protective stop.');
   }
