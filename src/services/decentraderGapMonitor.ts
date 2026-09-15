@@ -8011,10 +8011,7 @@ export class DecentraderGapMonitor {
           result.tradeSkipped = 'No dYdX trade executor is configured.';
           return result;
         }
-        if (
-          state.lastTradeExecutedSignature === request.signature ||
-          state.lastTradeAttemptedSignature === request.signature
-        ) {
+        if (state.lastTradeExecutedSignature === request.signature) {
           result.tradeSkipped = 'Duplicate BTC manual override signature.';
           result.duplicate = true;
           return result;
@@ -8025,6 +8022,18 @@ export class DecentraderGapMonitor {
         if (openPosition) {
           result.tradeSkipped = `Existing ${market} position detected; manual override skipped.`;
           return result;
+        }
+        if (state.lastTradeAttemptedSignature === request.signature && !request.recovery) {
+          result.tradeSkipped = 'Duplicate BTC manual override signature.';
+          result.duplicate = true;
+          return result;
+        }
+        if (state.lastTradeAttemptedSignature === request.signature && request.recovery) {
+          console.warn('Retrying interrupted BTC manual entry after confirming the dYdX account is flat.', {
+            market,
+            direction: request.direction,
+            signature: request.signature
+          });
         }
 
         const plan = await this.getTradePlan(account, market, request.direction, 'manual-override');
@@ -8058,6 +8067,7 @@ export class DecentraderGapMonitor {
         (orderAlert as any).manual_entry_override = { ...request, manualTpLocked };
         (orderAlert as any).decentrader = {
           ...(orderAlert as any).decentrader,
+          entryRiskUtilization: 0.9,
           note: manualTpLocked
             ? 'Manual BTC 1H close entry with locked manual TP ladder and automatic Williams SL/trailing.'
             : 'Manual BTC 1H close entry with automatic map TPs and automatic Williams SL/trailing.'

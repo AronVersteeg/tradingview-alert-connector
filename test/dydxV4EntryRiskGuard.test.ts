@@ -147,6 +147,19 @@ describe('managed entry stop-risk protection', () => {
       expect.objectContaining({ entryRiskLimit: { side: 'BUY', price: 106 } }));
   });
 
+  test('uses optional sizing headroom while preserving the full hard risk limit', async () => {
+    const { client, alert } = clientAndAlert();
+    alert.decentrader.riskBudgetUsd = 16;
+    (alert.decentrader as any).entryRiskUtilization = 0.9;
+    await expect(client.placeOrderForMarket('ETH-USD', alert)).resolves.toMatchObject({
+      outcome: 'TARGET_FAILED_FLATTENED',
+      market: 'ETH-USD',
+      targetSize: 0.9
+    });
+    expect(client.reachTargetPositionOrFailsafeFlat).toHaveBeenCalledWith('ETH-USD', 0.9,
+      expect.objectContaining({ entryRiskLimit: { side: 'BUY', price: 107.7 } }));
+  });
+
   test('a missing book or a breached stop blocks entry before cancellations', async () => {
     const { client, alert } = clientAndAlert();
     client.getMarketInfoBestEffort.mockResolvedValue({

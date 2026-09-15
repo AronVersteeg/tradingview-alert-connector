@@ -6,6 +6,7 @@ import {
   cancelAlternativeBtcManualOverrides,
   matchingManualOverrideCandle,
   normalizeBtcManualTradeOverrideRequest,
+  recoverableManualOverrideRequest,
   upsertBtcManualTradeOverride
 } from '../src/services/btcManualTradeOverride';
 
@@ -215,5 +216,34 @@ describe('BTC manual entry and TP override', () => {
       0.0001,
       80200
     )).toThrow('not beyond the current long entry price');
+  });
+
+  test('recovers one recent manual entry that was fail-safe flattened', () => {
+    const state: BtcManualTradeOverrideState = {
+      version: 1,
+      id: 'short',
+      market: 'BTC-USD',
+      status: 'SKIPPED',
+      direction: 'short',
+      closeTrigger: 76000,
+      takeProfits: [{ price: 62500, allocationPct: 100 }],
+      armedAt: '2026-09-14T08:32:02.538Z',
+      expiresAt: '2026-09-17T11:32:02.538Z',
+      triggeredAt: '2026-09-15T15:00:20.002Z',
+      signalCandleStartedAt: '2026-09-15T14:00:00.000Z',
+      signalCandleClosedAt: '2026-09-15T14:59:59.999Z',
+      signalClose: 75907,
+      result: {
+        signature: 'btc-manual-test',
+        tradePlacement: { outcome: 'TARGET_FAILED_FLATTENED' }
+      },
+      updatedAt: '2026-09-15T15:04:19.822Z'
+    };
+
+    expect(recoverableManualOverrideRequest(state, Date.parse('2026-09-15T15:30:00.000Z')))
+      .toMatchObject({ direction: 'short', signature: 'btc-manual-test', recovery: true });
+    state.recoveryAttempts = 1;
+    expect(recoverableManualOverrideRequest(state, Date.parse('2026-09-15T15:30:00.000Z')))
+      .toBeUndefined();
   });
 });

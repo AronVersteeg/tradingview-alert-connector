@@ -21,7 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { AbstractDexClient } from '../abstractDexClient';
 import { createReadResilientIndexerClient } from './indexerReadRecovery';
-import { constrainEntryPrice, findRiskCompatibleEntry, EntryRiskLimit } from './entryRiskGuard';
+import { constrainEntryPrice, entryRiskLimit, findRiskCompatibleEntry, EntryRiskLimit } from './entryRiskGuard';
 
 type ProgressResult =
   | { kind: 'target'; currentSize: number }
@@ -2833,15 +2833,28 @@ export class DydxV4Client extends AbstractDexClient {
     const book = await (this.indexer.markets as any).getPerpetualMarketOrderbook(market);
     const sizeCheck = this.getCorrectionOrderSizeCheck(market, Math.abs(targetSize), marketInfo);
     const stepSize = Number(sizeCheck.stepSize ?? marketInfo?.stepSize ?? marketInfo?.step_size);
+    const riskBudgetUsd = Number(budgetValue);
+    const configuredUtilization = Number((alert as any).decentrader?.entryRiskUtilization);
+    const riskUtilization = Number.isFinite(configuredUtilization) && configuredUtilization > 0
+      ? Math.max(0.5, Math.min(1, configuredUtilization))
+      : 1;
+    const sizingRiskBudgetUsd = riskBudgetUsd * riskUtilization;
     const compatible = findRiskCompatibleEntry(
       book,
       riskSide,
       Math.abs(targetSize),
       stop,
-      Number(budgetValue),
+      sizingRiskBudgetUsd,
       Number(marketInfo?.tickSize),
       stepSize,
       pricing.price
+    );
+    const executionRiskLimit = entryRiskLimit(
+      riskSide,
+      compatible.size,
+      stop,
+      riskBudgetUsd,
+      Number(marketInfo?.tickSize)
     );
     const adjustedTargetSize = targetSize > 0 ? compatible.size : -compatible.size;
     if (compatible.downsized) {
@@ -2851,7 +2864,9 @@ export class DydxV4Client extends AbstractDexClient {
         requestedSize: Math.abs(targetSize),
         adjustedSize: compatible.size,
         stepSize,
-        riskBudgetUsd: Number(budgetValue),
+        riskBudgetUsd,
+        sizingRiskBudgetUsd,
+        riskHeadroomPct: (1 - riskUtilization) * 100,
         stop,
         limitPrice: compatible.depth.limitPrice,
         expectedFillPrice: compatible.depth.expectedFillPrice,
@@ -2863,7 +2878,9 @@ export class DydxV4Client extends AbstractDexClient {
       requestedSize: Math.abs(targetSize),
       dynamicallyDownsized: compatible.downsized,
       ...compatible.depth,
-      riskBudgetUsd: Number(budgetValue),
+      riskBudgetUsd,
+      sizingRiskBudgetUsd,
+      riskHeadroomPct: (1 - riskUtilization) * 100,
       stop,
       expectedStopRiskUsd: compatible.size * Math.abs(compatible.depth.expectedFillPrice - stop),
       riskBasis: 'entry-fill-to-stop-trigger-excludes-costs'
@@ -2873,7 +2890,7 @@ export class DydxV4Client extends AbstractDexClient {
       priceReference: {
         ...reference,
         source: reference?.source || 'risk-guard',
-        entryRiskLimit: compatible.limit
+        entryRiskLimit: executionRiskLimit
       }
     };
   }

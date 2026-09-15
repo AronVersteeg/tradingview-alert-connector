@@ -7,6 +7,8 @@ import { allocateStepSizes } from './decentraderExecutionPolicy';
 const HOUR_MS = 60 * 60_000;
 const CLOSE_BUFFER_MS = 20_000;
 export const MANUAL_OVERRIDE_MAX_ENTRY_DELAY_MS = 15 * 60_000;
+export const MANUAL_OVERRIDE_RECOVERY_MAX_AGE_MS = 4 * HOUR_MS;
+export const MANUAL_OVERRIDE_MAX_RECOVERY_ATTEMPTS = 1;
 const MAX_TAKE_PROFITS = 6;
 const BINANCE_FUTURES_KLINES_URL = 'https://fapi.binance.com/fapi/v1/klines';
 
@@ -37,6 +39,7 @@ export type BtcManualEntryRequest = {
   signalClose: number;
   closeTrigger: number;
   takeProfits: BtcManualTakeProfit[];
+  recovery?: boolean;
 };
 
 export type BtcManualEntryHandler = {
@@ -65,6 +68,8 @@ export type BtcManualTradeOverrideState = {
   signalClose?: number;
   triggerEmailSentAt?: string;
   triggerEmailError?: string;
+  recoveryAttempts?: number;
+  recoveredAt?: string;
   result?: any;
   updatedAt: string;
 };
@@ -295,6 +300,47 @@ export function matchingManualOverrideCandle(
     : Number(latest.close) < Number(state.closeTrigger) ? latest : undefined;
 }
 
+export function recoverableManualOverrideRequest(
+  state: BtcManualTradeOverrideState,
+  nowMs = Date.now()
+): BtcManualEntryRequest | undefined {
+  const failedFlat = state.status === 'SKIPPED' &&
+    state.result?.tradePlacement?.outcome === 'TARGET_FAILED_FLATTENED';
+  const triggeredAtMs = Date.parse(String(state.triggeredAt || ''));
+  const signalStartedAtMs = Date.parse(String(state.signalCandleStartedAt || ''));
+  const signalClosedAtMs = Date.parse(String(state.signalCandleClosedAt || ''));
+  const expiresAtMs = Date.parse(String(state.expiresAt || ''));
+  const attempts = Number(state.recoveryAttempts || 0);
+  if (
+    !failedFlat ||
+    attempts >= MANUAL_OVERRIDE_MAX_RECOVERY_ATTEMPTS ||
+    !state.direction ||
+    !(Number(state.closeTrigger) > 0) ||
+    !(Number(state.signalClose) > 0) ||
+    !Number.isFinite(triggeredAtMs) ||
+    !Number.isFinite(signalStartedAtMs) ||
+    !Number.isFinite(signalClosedAtMs) ||
+    !Number.isFinite(expiresAtMs) ||
+    expiresAtMs <= nowMs ||
+    nowMs - triggeredAtMs > MANUAL_OVERRIDE_RECOVERY_MAX_AGE_MS
+  ) {
+    return undefined;
+  }
+  return {
+    market: 'BTC-USD',
+    direction: state.direction,
+    signature: String(state.result?.signature || (
+      `btc-manual-override|${state.direction}|${signalStartedAtMs}|${state.closeTrigger}|${state.armedAt}`
+    )),
+    signalCandleStartedAt: new Date(signalStartedAtMs).toISOString(),
+    signalCandleClosedAt: new Date(signalClosedAtMs).toISOString(),
+    signalClose: Number(state.signalClose),
+    closeTrigger: Number(state.closeTrigger),
+    takeProfits: state.takeProfits || [],
+    recovery: true
+  };
+}
+
 async function fetchBtcHourlyCandles(nowMs = Date.now()): Promise<BtcManualHourlyCandle[]> {
   const response = await binanceGet<unknown[]>(BINANCE_FUTURES_KLINES_URL, {
     params: { symbol: 'BTCUSDT', interval: '1h', limit: 12 },
@@ -462,6 +508,27 @@ export class BtcManualTradeOverrideMonitor {
           ? { ...override, status: 'EXPIRED' as const, updatedAt: nowIso }
           : override
       ));
+      const recovery = store.overrides
+        .map((override) => ({ override, request: recoverableManualOverrideRequest(override, nowMs) }))
+        .find((candidate) => candidate.request);
+      if (recovery?.request) {
+        const state = recovery.override;
+        state.status = 'EXECUTING';
+        state.recoveryAttempts = Number(state.recoveryAttempts || 0) + 1;
+        state.recoveredAt = nowIso;
+        state.updatedAt = nowIso;
+        store.updatedAt = nowIso;
+        writeStore(store);
+        console.warn('Retrying a flat fail-safe BTC manual entry once with fresh market depth:', {
+          direction: state.direction,
+          signalCandleStartedAt: state.signalCandleStartedAt,
+          signalClose: state.signalClose,
+          closeTrigger: state.closeTrigger,
+          recoveryAttempt: state.recoveryAttempts
+        });
+        await this.completeExecution(store, state, recovery.request);
+        return;
+      }
       const armed = store.overrides.filter((override) => override.status === 'ARMED');
       if (!armed.length) {
         writeStore({ ...store, updatedAt: nowIso });
@@ -492,21 +559,6 @@ export class BtcManualTradeOverrideMonitor {
       writeStore(store);
 
       const signature = `btc-manual-override|${state.direction}|${candle.openTime}|${state.closeTrigger}|${state.armedAt}`;
-      let result: any;
-      if (!this.entryHandler) {
-        result = { tradePlaced: false, tradeError: 'No BTC manual entry handler is configured.' };
-      } else {
-        result = await this.entryHandler.executeManualBtcEntry({
-          market: 'BTC-USD',
-          direction: state.direction!,
-          signature,
-          signalCandleStartedAt: state.signalCandleStartedAt,
-          signalCandleClosedAt: state.signalCandleClosedAt,
-          signalClose: state.signalClose,
-          closeTrigger: state.closeTrigger!,
-          takeProfits: state.takeProfits || []
-        });
-      }
       const entryRequest: BtcManualEntryRequest = {
         market: 'BTC-USD',
         direction: state.direction!,
@@ -517,19 +569,7 @@ export class BtcManualTradeOverrideMonitor {
         closeTrigger: state.closeTrigger!,
         takeProfits: state.takeProfits || []
       };
-      if (this.entryHandler?.sendManualBtcTriggerEmail) {
-        const email = await this.entryHandler.sendManualBtcTriggerEmail(entryRequest, result);
-        state.triggerEmailSentAt = email.sent ? new Date().toISOString() : undefined;
-        state.triggerEmailError = email.error;
-      } else {
-        state.triggerEmailError = 'No manual BTC trigger email handler is configured.';
-      }
-      state.result = result;
-      state.status = result?.tradePlaced ? 'TRIGGERED' : result?.tradeError ? 'ERROR' : 'SKIPPED';
-      state.updatedAt = new Date().toISOString();
-      store.updatedAt = state.updatedAt;
-      writeStore(store);
-      console.log('BTC manual entry/TP override completed:', state);
+      await this.completeExecution(store, state, entryRequest);
     } catch (error) {
       const store = readBtcManualTradeOverrideStore();
       const message = error instanceof Error ? error.message : String(error);
@@ -546,6 +586,32 @@ export class BtcManualTradeOverrideMonitor {
     } finally {
       this.status = { ...this.status, running: false, lastFinishedAt: new Date().toISOString() };
     }
+  }
+
+  private async completeExecution(
+    store: BtcManualTradeOverrideStore,
+    state: BtcManualTradeOverrideState,
+    entryRequest: BtcManualEntryRequest
+  ): Promise<void> {
+    let result: any;
+    if (!this.entryHandler) {
+      result = { tradePlaced: false, tradeError: 'No BTC manual entry handler is configured.' };
+    } else {
+      result = await this.entryHandler.executeManualBtcEntry(entryRequest);
+    }
+    if (this.entryHandler?.sendManualBtcTriggerEmail) {
+      const email = await this.entryHandler.sendManualBtcTriggerEmail(entryRequest, result);
+      state.triggerEmailSentAt = email.sent ? new Date().toISOString() : undefined;
+      state.triggerEmailError = email.error;
+    } else {
+      state.triggerEmailError = 'No manual BTC trigger email handler is configured.';
+    }
+    state.result = result;
+    state.status = result?.tradePlaced ? 'TRIGGERED' : result?.tradeError ? 'ERROR' : 'SKIPPED';
+    state.updatedAt = new Date().toISOString();
+    store.updatedAt = state.updatedAt;
+    writeStore(store);
+    console.log('BTC manual entry/TP override completed:', state);
   }
 }
 
