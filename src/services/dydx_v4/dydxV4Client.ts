@@ -176,6 +176,14 @@ type CorrectionOrderPriceReference = {
   price?: number;
   source: string;
   entryRiskLimit?: EntryRiskLimit;
+  entryRiskSizing?: {
+    side: 'BUY' | 'SELL';
+    stop: number;
+    riskBudgetUsd: number;
+    sizingRiskBudgetUsd: number;
+    tickSize: number;
+    stepSize: number;
+  };
 };
 
 type CorrectionOrderPricing = {
@@ -329,13 +337,7 @@ export class DydxV4Client extends AbstractDexClient {
 
   private readonly POST_ORDER_SETTLE_MS = 2000;
 
-  private readonly ENTRY_RISK_UTILIZATION = Math.max(
-    0.5,
-    Math.min(
-      1,
-      parseEnvFraction(process.env.DYDX_V4_ENTRY_RISK_UTILIZATION, 0.9)
-    )
-  );
+  private readonly ENTRY_RISK_UTILIZATION = 0.9;
 
   private readonly ACCEPTED_ORDER_INDEXER_GRACE_POLLS = Math.max(
     1,
@@ -2451,25 +2453,28 @@ export class DydxV4Client extends AbstractDexClient {
     market: string,
     targetSize: number,
     priceReference?: CorrectionOrderPriceReference
-  ): Promise<void> {
+  ): Promise<number> {
+    let activeTargetSize = targetSize;
+    let activePriceReference = priceReference;
+
     for (let attempt = 1; attempt <= this.MAX_ATTEMPTS; attempt++) {
       await this.sleep(this.TARGET_POLL_DELAY_MS);
 
       const currentSize = await this.getCurrentSize(market);
-      const diff = targetSize - currentSize;
+      const diff = activeTargetSize - currentSize;
 
       console.log('Target attempt:', {
         market,
         attempt,
         maxAttempts: this.MAX_ATTEMPTS,
         currentSize,
-        targetSize,
+        targetSize: activeTargetSize,
         diff
       });
 
       if (Math.abs(diff) < this.TOLERANCE) {
-        console.log('Target reached within tolerance.', { market, targetSize });
-        return;
+        console.log('Target reached within tolerance.', { market, targetSize: activeTargetSize });
+        return activeTargetSize;
       }
 
       const side = diff > 0 ? OrderSide.BUY : OrderSide.SELL;
@@ -2480,15 +2485,15 @@ export class DydxV4Client extends AbstractDexClient {
         side,
         size,
         false,
-        priceReference
+        activePriceReference
       );
       await this.sleep(this.POST_ORDER_SETTLE_MS);
 
-      let progress = await this.waitForTargetProgress(market, currentSize, targetSize);
+      let progress = await this.waitForTargetProgress(market, currentSize, activeTargetSize);
 
       if (progress.kind === 'target') {
-        console.log('Target reached after correction.', { market, targetSize });
-        return;
+        console.log('Target reached after correction.', { market, targetSize: activeTargetSize });
+        return activeTargetSize;
       }
 
       if (progress.kind === 'progress') {
@@ -2516,27 +2521,30 @@ export class DydxV4Client extends AbstractDexClient {
           gracePolls: this.ACCEPTED_ORDER_INDEXER_GRACE_POLLS,
           graceSeconds: this.ACCEPTED_ORDER_INDEXER_GRACE_POLLS * this.TARGET_POLL_DELAY_MS / 1000,
           currentSize: progress.currentSize,
-          targetSize
+          targetSize: activeTargetSize
         });
 
         progress = await this.waitForTargetProgress(
           market,
           currentSize,
-          targetSize,
+          activeTargetSize,
           this.ACCEPTED_ORDER_INDEXER_GRACE_POLLS,
           'accepted-indexer-grace'
         );
 
         if (progress.kind === 'target') {
-          console.log('Target reached during accepted-order indexer grace.', { market, targetSize });
-          return;
+          console.log('Target reached during accepted-order indexer grace.', {
+            market,
+            targetSize: activeTargetSize
+          });
+          return activeTargetSize;
         }
 
         if (progress.kind === 'progress') {
           console.log('Accepted correction became visible during indexer grace.', {
             market,
             currentSize: progress.currentSize,
-            targetSize
+            targetSize: activeTargetSize
           });
           continue;
         }
@@ -2556,7 +2564,7 @@ export class DydxV4Client extends AbstractDexClient {
           attempt,
           maxAttempts: this.MAX_ATTEMPTS,
           currentSize,
-          targetSize,
+          targetSize: activeTargetSize,
           diff
         }
       );
@@ -2578,14 +2586,87 @@ export class DydxV4Client extends AbstractDexClient {
           currentHeight: placedOrder.currentHeight,
           attempt,
           currentSize: progress.currentSize,
-          targetSize
+          targetSize: activeTargetSize
         });
       }
+
+      const refreshed = await this.refreshRiskAdjustedEntryTarget(
+        market,
+        activeTargetSize,
+        activePriceReference
+      );
+      activeTargetSize = refreshed.targetSize;
+      activePriceReference = refreshed.priceReference;
 
       console.warn('No visible progress yet after correction; retrying cautiously.', { market });
     }
 
     throw new Error(`Target correction failed for ${market}: max attempts reached.`);
+  }
+
+  private async refreshRiskAdjustedEntryTarget(
+    market: string,
+    targetSize: number,
+    priceReference?: CorrectionOrderPriceReference
+  ): Promise<{ targetSize: number; priceReference?: CorrectionOrderPriceReference }> {
+    const sizing = priceReference?.entryRiskSizing;
+    if (!sizing || Math.abs(targetSize) < this.TOLERANCE) {
+      return { targetSize, priceReference };
+    }
+
+    try {
+      const side = targetSize > 0 ? OrderSide.BUY : OrderSide.SELL;
+      const marketInfo = await this.getMarketInfoBestEffort(market);
+      const pricing = await this.resolveCorrectionOrderPricing(market, side, priceReference, marketInfo);
+      const book = await (this.indexer.markets as any).getPerpetualMarketOrderbook(market);
+      const compatible = findRiskCompatibleEntry(
+        book,
+        sizing.side,
+        Math.abs(targetSize),
+        sizing.stop,
+        sizing.sizingRiskBudgetUsd,
+        sizing.tickSize,
+        sizing.stepSize,
+        pricing.price
+      );
+      const refreshedTargetSize = targetSize > 0 ? compatible.size : -compatible.size;
+      const refreshedRiskLimit = entryRiskLimit(
+        sizing.side,
+        compatible.size,
+        sizing.stop,
+        sizing.riskBudgetUsd,
+        sizing.tickSize
+      );
+
+      if (Math.abs(refreshedTargetSize) + this.TOLERANCE < Math.abs(targetSize)) {
+        console.warn('dYdX entry target reduced again after an unfilled risk-limited attempt.', {
+          market,
+          side: sizing.side,
+          previousTargetSize: targetSize,
+          refreshedTargetSize,
+          stop: sizing.stop,
+          riskBudgetUsd: sizing.riskBudgetUsd,
+          sizingRiskBudgetUsd: sizing.sizingRiskBudgetUsd,
+          expectedFillPrice: compatible.depth.expectedFillPrice,
+          expectedStopRiskUsd: compatible.size * Math.abs(compatible.depth.expectedFillPrice - sizing.stop)
+        });
+      }
+
+      return {
+        targetSize: refreshedTargetSize,
+        priceReference: {
+          ...priceReference,
+          entryRiskLimit: refreshedRiskLimit
+        }
+      };
+    } catch (error) {
+      console.warn('Could not refresh the risk-sized entry target; retaining it for the next attempt.', {
+        market,
+        targetSize,
+        error: this.serializeError(error)
+      });
+      return { targetSize, priceReference };
+    }
   }
 
   private async reachTargetPositionOrFailsafeFlat(
@@ -2594,8 +2675,7 @@ export class DydxV4Client extends AbstractDexClient {
     priceReference?: CorrectionOrderPriceReference
   ): Promise<number | undefined> {
     try {
-      await this.reachTargetPositionSafely(market, targetSize, priceReference);
-      return targetSize;
+      return await this.reachTargetPositionSafely(market, targetSize, priceReference);
     } catch (error) {
       if (!this.FAILSAFE_FLATTEN_ON_TARGET_FAILURE) {
         throw error;
@@ -2921,7 +3001,15 @@ export class DydxV4Client extends AbstractDexClient {
       priceReference: {
         ...reference,
         source: reference?.source || 'risk-guard',
-        entryRiskLimit: executionRiskLimit
+        entryRiskLimit: executionRiskLimit,
+        entryRiskSizing: {
+          side: riskSide,
+          stop,
+          riskBudgetUsd,
+          sizingRiskBudgetUsd,
+          tickSize: Number(marketInfo?.tickSize),
+          stepSize
+        }
       }
     };
   }

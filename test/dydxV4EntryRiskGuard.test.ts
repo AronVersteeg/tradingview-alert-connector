@@ -172,6 +172,41 @@ describe('managed entry stop-risk protection', () => {
     expect(client.placeStaticSafetyStopAfterEntry).toHaveBeenCalledWith('ETH-USD', 0.4, alert);
   });
 
+  test('retries an unfilled entry with a freshly reduced risk-compatible target', async () => {
+    const client = new DydxV4Client() as any;
+    client.MAX_ATTEMPTS = 2;
+    client.TARGET_POLL_DELAY_MS = 0;
+    client.POST_ORDER_SETTLE_MS = 0;
+    client.sleep = jest.fn().mockResolvedValue(undefined);
+    client.getCurrentSize = jest.fn().mockResolvedValue(0);
+    client.placeCorrectionOrder = jest.fn().mockResolvedValue({
+      market: 'ETH-USD', side: 'BUY', size: 1, price: 108, priceSource: 'test',
+      slippagePct: 0.03, usedFallbackWorstPrice: false, goodTilBlockBuffer: 20,
+      clientId: 1, reduceOnly: false, submittedAt: Date.now(), submitResult: { code: 1 }
+    });
+    client.waitForTargetProgress = jest.fn()
+      .mockResolvedValueOnce({ kind: 'unchanged', currentSize: 0 })
+      .mockResolvedValueOnce({ kind: 'target', currentSize: 0.5 });
+    client.logOrderDiagnostics = jest.fn().mockResolvedValue(undefined);
+    client.refreshRiskAdjustedEntryTarget = jest.fn().mockResolvedValue({
+      targetSize: 0.5,
+      priceReference: { source: 'risk-refresh', entryRiskLimit: { side: 'BUY', price: 110 } }
+    });
+
+    await expect(client.reachTargetPositionSafely('ETH-USD', 1, {
+      source: 'risk', entryRiskLimit: { side: 'BUY', price: 106 }
+    })).resolves.toBe(0.5);
+
+    expect(client.placeCorrectionOrder).toHaveBeenNthCalledWith(
+      2,
+      'ETH-USD',
+      'BUY',
+      0.5,
+      false,
+      expect.objectContaining({ entryRiskLimit: { side: 'BUY', price: 110 } })
+    );
+  });
+
   test('a missing book or a breached stop blocks entry before cancellations', async () => {
     const { client, alert } = clientAndAlert();
     client.getMarketInfoBestEffort.mockResolvedValue({
