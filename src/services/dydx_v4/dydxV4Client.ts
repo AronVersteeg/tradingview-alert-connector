@@ -329,6 +329,14 @@ export class DydxV4Client extends AbstractDexClient {
 
   private readonly POST_ORDER_SETTLE_MS = 2000;
 
+  private readonly ENTRY_RISK_UTILIZATION = Math.max(
+    0.5,
+    Math.min(
+      1,
+      parseEnvFraction(process.env.DYDX_V4_ENTRY_RISK_UTILIZATION, 0.9)
+    )
+  );
+
   private readonly ACCEPTED_ORDER_INDEXER_GRACE_POLLS = Math.max(
     1,
     Math.ceil(
@@ -1507,13 +1515,13 @@ export class DydxV4Client extends AbstractDexClient {
       return;
     }
 
-    const targetReached = await this.reachTargetPositionOrFailsafeFlat(
+    const reachedTargetSize = await this.reachTargetPositionOrFailsafeFlat(
       market,
       targetSize,
       priceReference
     );
 
-    if (!targetReached) {
+    if (reachedTargetSize === undefined) {
       console.warn('Target was not reached. Position was fail-safe flattened; skipping SL/TP setup.', {
         market,
         targetSize,
@@ -1528,6 +1536,16 @@ export class DydxV4Client extends AbstractDexClient {
       };
     }
 
+    const executedTargetSize = reachedTargetSize;
+    if (Math.abs(executedTargetSize - targetSize) >= this.TOLERANCE) {
+      console.warn('Using the smaller position actually reached by dYdX for managed protection.', {
+        market,
+        requestedTargetSize,
+        riskAdjustedTargetSize: targetSize,
+        executedTargetSize
+      });
+    }
+
     await this.rebalanceStatefulOrderCapacity(market);
 
     const explicitTakeProfits = this.getExplicitTakeProfitLevels(alert);
@@ -1537,14 +1555,14 @@ export class DydxV4Client extends AbstractDexClient {
       if (explicitTakeProfits.length) {
         await this.placeExplicitTakeProfitsAfterEntry(
           market,
-          targetSize,
+          executedTargetSize,
           alert,
           explicitTakeProfits
         );
       } else {
         console.log('Static stop skipped and no explicit TPs supplied.', {
           market,
-          targetSize,
+          targetSize: executedTargetSize,
           profile: profile.name
         });
       }
@@ -1555,7 +1573,7 @@ export class DydxV4Client extends AbstractDexClient {
       if (explicitTakeProfits.length) {
         await this.placeExplicitTakeProfitsAfterEntry(
           market,
-          targetSize,
+          executedTargetSize,
           alert,
           explicitTakeProfits
         );
@@ -1564,7 +1582,7 @@ export class DydxV4Client extends AbstractDexClient {
 
       console.log('Signal-only execution complete: no SL/TP/trailing orders placed.', {
         market,
-        targetSize,
+        targetSize: executedTargetSize,
         profile: profile.name
       });
       return;
@@ -1572,14 +1590,14 @@ export class DydxV4Client extends AbstractDexClient {
 
     const safetyStop = await this.placeStaticSafetyStopAfterEntry(
       market,
-      targetSize,
+      executedTargetSize,
       alert
     );
 
     if (explicitTakeProfits.length) {
       await this.placeExplicitTakeProfitsAfterEntry(
         market,
-        targetSize,
+        executedTargetSize,
         alert,
         explicitTakeProfits
       );
@@ -1593,7 +1611,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     const safetyTakeProfit = await this.placeSafetyTakeProfitAfterEntry(
       market,
-      targetSize,
+      executedTargetSize,
       alert,
       safetyStop
     );
@@ -1605,7 +1623,7 @@ export class DydxV4Client extends AbstractDexClient {
 
     await this.placeExtraTakeProfitsAfterEntry(
       market,
-      targetSize,
+      executedTargetSize,
       alert,
       safetyTakeProfit
     );
@@ -2574,16 +2592,16 @@ export class DydxV4Client extends AbstractDexClient {
     market: string,
     targetSize: number,
     priceReference?: CorrectionOrderPriceReference
-  ): Promise<boolean> {
+  ): Promise<number | undefined> {
     try {
       await this.reachTargetPositionSafely(market, targetSize, priceReference);
-      return true;
+      return targetSize;
     } catch (error) {
       if (!this.FAILSAFE_FLATTEN_ON_TARGET_FAILURE) {
         throw error;
       }
 
-      console.error('Target position failed. Starting fail-safe flatten.', {
+      console.error('Target position failed. Checking the final position before fail-safe flatten.', {
         market,
         targetSize,
         error: this.serializeError(error)
@@ -2597,7 +2615,20 @@ export class DydxV4Client extends AbstractDexClient {
             targetSize,
             currentSize: finalSize
           });
-          return true;
+          return targetSize;
+        }
+
+        if (
+          Math.abs(finalSize) >= this.TOLERANCE &&
+          Math.sign(finalSize) === Math.sign(targetSize) &&
+          Math.abs(finalSize) < Math.abs(targetSize)
+        ) {
+          console.warn('Target was only partially filled; preserving it as a smaller managed trade.', {
+            market,
+            requestedTargetSize: targetSize,
+            executedTargetSize: finalSize
+          });
+          return finalSize;
         }
 
         await this.cancelOpenOrders(market);
@@ -2612,7 +2643,7 @@ export class DydxV4Client extends AbstractDexClient {
           targetSize
         });
 
-        return false;
+        return undefined;
       } catch (flattenError) {
         console.error('Fail-safe flatten failed after target failure.', {
           market,
@@ -2837,7 +2868,7 @@ export class DydxV4Client extends AbstractDexClient {
     const configuredUtilization = Number((alert as any).decentrader?.entryRiskUtilization);
     const riskUtilization = Number.isFinite(configuredUtilization) && configuredUtilization > 0
       ? Math.max(0.5, Math.min(1, configuredUtilization))
-      : 1;
+      : this.ENTRY_RISK_UTILIZATION;
     const sizingRiskBudgetUsd = riskBudgetUsd * riskUtilization;
     const compatible = findRiskCompatibleEntry(
       book,

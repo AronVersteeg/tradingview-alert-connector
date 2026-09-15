@@ -8067,7 +8067,6 @@ export class DecentraderGapMonitor {
         (orderAlert as any).manual_entry_override = { ...request, manualTpLocked };
         (orderAlert as any).decentrader = {
           ...(orderAlert as any).decentrader,
-          entryRiskUtilization: 0.9,
           note: manualTpLocked
             ? 'Manual BTC 1H close entry with locked manual TP ladder and automatic Williams SL/trailing.'
             : 'Manual BTC 1H close entry with automatic map TPs and automatic Williams SL/trailing.'

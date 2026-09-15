@@ -110,7 +110,7 @@ describe('managed entry stop-risk protection', () => {
       bids: [{ price: 104, size: 10 }], asks: [{ price: 105, size: 10 }]
     }) } };
     client.cancelOpenOrders = jest.fn();
-    client.reachTargetPositionOrFailsafeFlat = jest.fn().mockResolvedValue(false);
+    client.reachTargetPositionOrFailsafeFlat = jest.fn().mockResolvedValue(undefined);
     const alert = { market: 'ETH-USD', desired_position: 'LONG', size: 1, price: 105,
       static_sl: 90, signal: 'LONG_ENTRY', profile: 'MANAGED', decentrader: { riskBudgetUsd: 10 } };
     return { client, alert };
@@ -135,9 +135,22 @@ describe('managed entry stop-risk protection', () => {
       expect.objectContaining({ entryRiskLimit: { side: 'BUY', price: 106.6 } }));
   });
 
-  test('passes the budget limit to the target-position loop for every correction', async () => {
+  test('uses general sizing headroom while passing the full budget limit to every correction', async () => {
     const { client, alert } = clientAndAlert();
     alert.decentrader.riskBudgetUsd = 16;
+    await expect(client.placeOrderForMarket('ETH-USD', alert)).resolves.toMatchObject({
+      outcome: 'TARGET_FAILED_FLATTENED',
+      market: 'ETH-USD',
+      targetSize: 0.9
+    });
+    expect(client.reachTargetPositionOrFailsafeFlat).toHaveBeenCalledWith('ETH-USD', 0.9,
+      expect.objectContaining({ entryRiskLimit: { side: 'BUY', price: 107.7 } }));
+  });
+
+  test('allows an explicit utilization override while preserving the full hard risk limit', async () => {
+    const { client, alert } = clientAndAlert();
+    alert.decentrader.riskBudgetUsd = 16;
+    (alert.decentrader as any).entryRiskUtilization = 1;
     await expect(client.placeOrderForMarket('ETH-USD', alert)).resolves.toMatchObject({
       outcome: 'TARGET_FAILED_FLATTENED',
       market: 'ETH-USD',
@@ -147,17 +160,16 @@ describe('managed entry stop-risk protection', () => {
       expect.objectContaining({ entryRiskLimit: { side: 'BUY', price: 106 } }));
   });
 
-  test('uses optional sizing headroom while preserving the full hard risk limit', async () => {
+  test('places managed protection for the smaller position actually filled', async () => {
     const { client, alert } = clientAndAlert();
-    alert.decentrader.riskBudgetUsd = 16;
-    (alert.decentrader as any).entryRiskUtilization = 0.9;
-    await expect(client.placeOrderForMarket('ETH-USD', alert)).resolves.toMatchObject({
-      outcome: 'TARGET_FAILED_FLATTENED',
-      market: 'ETH-USD',
-      targetSize: 0.9
-    });
-    expect(client.reachTargetPositionOrFailsafeFlat).toHaveBeenCalledWith('ETH-USD', 0.9,
-      expect.objectContaining({ entryRiskLimit: { side: 'BUY', price: 107.7 } }));
+    client.reachTargetPositionOrFailsafeFlat.mockResolvedValue(0.4);
+    client.rebalanceStatefulOrderCapacity = jest.fn().mockResolvedValue(undefined);
+    client.getExplicitTakeProfitLevels = jest.fn().mockReturnValue([]);
+    client.placeStaticSafetyStopAfterEntry = jest.fn().mockResolvedValue({ triggerPrice: 90 });
+
+    await expect(client.placeOrderForMarket('ETH-USD', alert)).resolves.toBeUndefined();
+
+    expect(client.placeStaticSafetyStopAfterEntry).toHaveBeenCalledWith('ETH-USD', 0.4, alert);
   });
 
   test('a missing book or a breached stop blocks entry before cancellations', async () => {

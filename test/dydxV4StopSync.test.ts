@@ -390,7 +390,23 @@ describe('dYdX v4 trailing stop synchronization', () => {
 
     const reached = await client.reachTargetPositionOrFailsafeFlat('INJ-USD', -74.4, 5.163);
 
-    expect(reached).toBe(true);
+    expect(reached).toBe(-74.4);
+    expect(client.cancelOpenOrders).not.toHaveBeenCalled();
+    expect(client.clearManagedOrdersForFlatMarket).not.toHaveBeenCalled();
+    expect(client.flattenPositionSafely).not.toHaveBeenCalled();
+  });
+
+  test('preserves a same-direction partial fill as a smaller managed trade', async () => {
+    const client = new DydxV4Client() as any;
+    client.reachTargetPositionSafely = jest.fn().mockRejectedValue(new Error('no further fill'));
+    client.getCurrentSize = jest.fn().mockResolvedValue(-20);
+    client.cancelOpenOrders = jest.fn().mockResolvedValue(undefined);
+    client.clearManagedOrdersForFlatMarket = jest.fn().mockResolvedValue(undefined);
+    client.flattenPositionSafely = jest.fn().mockResolvedValue(undefined);
+
+    const reached = await client.reachTargetPositionOrFailsafeFlat('INJ-USD', -74.4, 5.163);
+
+    expect(reached).toBe(-20);
     expect(client.cancelOpenOrders).not.toHaveBeenCalled();
     expect(client.clearManagedOrdersForFlatMarket).not.toHaveBeenCalled();
     expect(client.flattenPositionSafely).not.toHaveBeenCalled();

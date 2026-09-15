@@ -203,7 +203,7 @@ describe('dYdX indexer read recovery', () => {
     jest.spyOn(console, 'error').mockImplementation(() => undefined);
     const result = client.reachTargetPositionOrFailsafeFlat('INJ-USD', -74.4);
     await jest.runAllTimersAsync();
-    await expect(result).resolves.toBe(true);
+    await expect(result).resolves.toBe(-74.4);
     expect(client.cancelOpenOrders).not.toHaveBeenCalled();
     expect(client.flattenPositionSafely).not.toHaveBeenCalled();
   });
