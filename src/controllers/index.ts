@@ -309,6 +309,11 @@ router.get('/snoek', async (req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'snoek', 'index.html'));
 });
 
+router.get('/snoek/imwa-kunstwerken-visgids.svg', async (_req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(path.join(process.cwd(), 'public', 'snoek', 'imwa-kunstwerken-visgids.svg'));
+});
+
 router.get('/snoek/api/scout', async (req, res) => {
   res.send(buildSnoekScout(req.query as any));
 });

@@ -259,6 +259,71 @@
       height: 100%;
     }
 
+    .imwa-guide-preview {
+      display: block;
+      width: 100%;
+      height: min(42vw, 360px);
+      min-height: 220px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #f3fbff;
+      cursor: zoom-in;
+    }
+
+    .imwa-guide-preview img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .imwa-guide-dialog {
+      width: min(1100px, calc(100vw - 24px));
+      height: min(92vh, 1000px);
+      max-width: none;
+      max-height: none;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--ink);
+      background: var(--panel);
+    }
+
+    .imwa-guide-dialog::backdrop { background: rgba(3, 9, 17, 0.84); }
+
+    .imwa-guide-dialog[open] {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .imwa-guide-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .imwa-guide-actions { display: flex; gap: 6px; }
+
+    .imwa-guide-viewport {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      background: #f3fbff;
+      touch-action: pan-x pan-y;
+    }
+
+    .imwa-guide-viewport img {
+      display: block;
+      width: calc(var(--guide-zoom, 1) * 100%);
+      max-width: none;
+      height: auto;
+    }
+
     .leaflet-container {
       background: #08111d;
       font-family: Inter, Segoe UI, Arial, sans-serif;
@@ -928,7 +993,7 @@
                   <label class="layer-toggle"><input id="layer-rijnland-temperature" type="checkbox" checked><span class="layer-swatch temperature-swatch"></span> Watertemperatuur + roofvisadvies</label>
                   <label class="layer-toggle"><input id="layer-rijnland-pumps" type="checkbox" checked><span class="layer-swatch pump-status-swatch"></span> Gemalen AAN/UIT/? (alle PDOK)</label>
                   <span class="layer-section-title">PDOK IMWA - 18 exacte lagen</span>
-                  <label class="layer-toggle"><input data-layer-filter="brug" type="checkbox"><span class="layer-swatch" style="--swatch:#ffd166"></span> Brug</label>
+                  <label class="layer-toggle"><input data-layer-filter="brug" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ffd166"></span> Brug</label>
                   <label class="layer-toggle"><input data-layer-filter="coupure" type="checkbox"><span class="layer-swatch" style="--swatch:#f4a261"></span> Coupure</label>
                   <label class="layer-toggle"><input data-layer-filter="sluis" type="checkbox" checked><span class="layer-swatch" style="--swatch:#b388ff"></span> Sluis</label>
                   <label class="layer-toggle"><input data-layer-filter="verbeterinstallatie" type="checkbox"><span class="layer-swatch" style="--swatch:#e76f51"></span> Verbeterinstallatie</label>
@@ -939,7 +1004,7 @@
                   <label class="layer-toggle"><input data-layer-filter="sifon" type="checkbox"><span class="layer-swatch" style="--swatch:#4dd5ff"></span> Sifon</label>
                   <label class="layer-toggle"><input data-layer-filter="bodemval" type="checkbox"><span class="layer-swatch" style="--swatch:#ffb703"></span> Bodemval</label>
                   <label class="layer-toggle"><input data-layer-filter="put" type="checkbox"><span class="layer-swatch" style="--swatch:#8ecae6"></span> Put</label>
-                  <label class="layer-toggle"><input data-layer-filter="duiker" type="checkbox"><span class="layer-swatch" style="--swatch:#00b4d8"></span> Duiker</label>
+                  <label class="layer-toggle"><input data-layer-filter="duiker" type="checkbox" checked><span class="layer-swatch" style="--swatch:#00b4d8"></span> Duiker</label>
                   <label class="layer-toggle"><input data-layer-filter="vispassage" type="checkbox" checked><span class="layer-swatch" style="--swatch:#35d09f"></span> Vispassage</label>
                   <label class="layer-toggle"><input data-layer-filter="vastedam" type="checkbox"><span class="layer-swatch" style="--swatch:#6c757d"></span> VasteDam</label>
                   <label class="layer-toggle"><input data-layer-filter="zandvang" type="checkbox"><span class="layer-swatch" style="--swatch:#e9c46a"></span> Zandvang</label>
@@ -962,6 +1027,15 @@
           </div>
         </section>
 
+        <section class="panel" aria-labelledby="imwa-guide-title">
+          <div class="panel-header"><h2 id="imwa-guide-title">Kunstwerken visgids: 18 kaartlagen</h2></div>
+          <div class="panel-body">
+            <button class="imwa-guide-preview" id="imwa-guide-open" type="button" aria-label="Vergroot de schematische gids van 18 kunstwerken">
+              <img src="/snoek/imwa-kunstwerken-visgids.svg" alt="Schematische uitleg van de 18 IMWA-kunstwerken, hun werking en betekenis voor de visserij" loading="lazy">
+            </button>
+          </div>
+        </section>
+
         <details class="panel collapsible-panel">
           <summary class="panel-header">
             <h2>Community reviews</h2>
@@ -973,6 +1047,21 @@
       </section>
     </section>
   </main>
+
+  <dialog class="imwa-guide-dialog" id="imwa-guide-dialog" aria-label="Vergrote kunstwerken visgids">
+    <div class="imwa-guide-toolbar">
+      <strong>Kunstwerken visgids</strong>
+      <div class="imwa-guide-actions">
+        <button id="imwa-guide-zoom-out" type="button" aria-label="Uitzoomen" title="Uitzoomen">-</button>
+        <button id="imwa-guide-zoom-reset" type="button">100%</button>
+        <button id="imwa-guide-zoom-in" type="button" aria-label="Inzoomen" title="Inzoomen">+</button>
+        <button id="imwa-guide-close" type="button" aria-label="Sluiten" title="Sluiten">x</button>
+      </div>
+    </div>
+    <div class="imwa-guide-viewport" id="imwa-guide-viewport">
+      <img id="imwa-guide-image" src="/snoek/imwa-kunstwerken-visgids.svg" alt="Schematische uitleg van alle 18 IMWA-kaartlagen">
+    </div>
+  </dialog>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
@@ -995,6 +1084,28 @@
     const reviews = document.getElementById('reviews');
     const loadWeatherButton = document.getElementById('load-weather');
     const weatherStatus = document.getElementById('weather-status');
+    const imwaGuideDialog = document.getElementById('imwa-guide-dialog');
+    const imwaGuideViewport = document.getElementById('imwa-guide-viewport');
+    const imwaGuideImage = document.getElementById('imwa-guide-image');
+    let imwaGuideZoom = 1;
+
+    function setImwaGuideZoom(zoom) {
+      imwaGuideZoom = Math.max(1, Math.min(5, zoom));
+      imwaGuideImage.style.setProperty('--guide-zoom', imwaGuideZoom);
+      document.getElementById('imwa-guide-zoom-reset').textContent = `${Math.round(imwaGuideZoom * 100)}%`;
+      document.getElementById('imwa-guide-zoom-out').disabled = imwaGuideZoom === 1;
+      document.getElementById('imwa-guide-zoom-in').disabled = imwaGuideZoom === 5;
+    }
+
+    document.getElementById('imwa-guide-open').addEventListener('click', () => {
+      setImwaGuideZoom(1);
+      imwaGuideViewport.scrollTo(0, 0);
+      imwaGuideDialog.showModal();
+    });
+    document.getElementById('imwa-guide-close').addEventListener('click', () => imwaGuideDialog.close());
+    document.getElementById('imwa-guide-zoom-out').addEventListener('click', () => setImwaGuideZoom(imwaGuideZoom - 0.5));
+    document.getElementById('imwa-guide-zoom-in').addEventListener('click', () => setImwaGuideZoom(imwaGuideZoom + 0.5));
+    document.getElementById('imwa-guide-zoom-reset').addEventListener('click', () => setImwaGuideZoom(1));
     const interestBounds = L.latLngBounds([
       [52.355, 4.47],
       [52.505, 4.82]

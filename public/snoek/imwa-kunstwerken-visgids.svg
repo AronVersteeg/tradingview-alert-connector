@@ -1,0 +1,265 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="2800" viewBox="0 0 1800 2800">
+  <defs>
+    <style>
+      .card { fill:#fff; stroke:#c8d7df; stroke-width:3; }
+      .title { font:700 34px Arial,sans-serif; fill:#142b3a; }
+      .body { font:24px Arial,sans-serif; fill:#314b5a; }
+      .small { font:21px Arial,sans-serif; fill:#587080; }
+      .badge { font:700 17px Arial,sans-serif; fill:#fff; letter-spacing:.6px; }
+      .water { fill:#b9e4f5; stroke:#2e8fb9; stroke-width:4; }
+      .land { fill:#d8e0df; stroke:#84969a; stroke-width:4; }
+      .bed { fill:#d6bc83; stroke:#8b7045; stroke-width:5; }
+      .structure { fill:#edf1f3; stroke:#263f4d; stroke-width:9; stroke-linejoin:round; }
+      .line { fill:none; stroke:#263f4d; stroke-width:9; stroke-linecap:round; stroke-linejoin:round; }
+      .flow { fill:none; stroke:#137fb0; stroke-width:9; stroke-linecap:round; stroke-linejoin:round; }
+      .thin { fill:none; stroke:#526b77; stroke-width:5; stroke-linecap:round; }
+      .fish { fill:#f6ad3c; stroke:#8b5412; stroke-width:4; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#137fb0"/>
+    </marker>
+    <g id="fish">
+      <path class="fish" d="M0 0C18-15 42-13 58 0C42 13 18 15 0 0Z"/>
+      <path class="fish" d="M55 0L76-18V18Z"/>
+      <circle cx="15" cy="-3" r="3.5" fill="#142b3a"/>
+    </g>
+  </defs>
+
+  <rect width="1800" height="2800" fill="#edf4f6"/>
+  <rect width="1800" height="180" fill="#10283a"/>
+  <text x="70" y="76" font-family="Arial,sans-serif" font-size="52" font-weight="700" fill="#fff">Waterschappen Kunstwerken IMWA</text>
+  <text x="70" y="130" font-family="Arial,sans-serif" font-size="29" fill="#bfe0ef">18 dashboardlagen: vorm, werking en praktische betekenis voor de visserij</text>
+  <g transform="translate(1390 58)"><rect width="330" height="58" rx="29" fill="#24465a"/><text x="165" y="38" text-anchor="middle" font-family="Arial,sans-serif" font-size="22" font-weight="700" fill="#fff">SCHEMATISCHE GIDS</text></g>
+
+  <!-- 1 Brug -->
+  <g transform="translate(60 220)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">1. Brug</text>
+    <g transform="translate(344 22)"><rect width="166" height="38" rx="19" fill="#d49a22"/><text class="badge" x="83" y="25" text-anchor="middle">MIDDEL / HOOG</text></g>
+    <path class="water" d="M20 210Q80 190 140 210T260 210T380 210T520 210V265H20Z"/>
+    <rect class="land" x="20" y="150" width="115" height="60"/><rect class="land" x="405" y="150" width="115" height="60"/>
+    <path class="line" d="M100 118H440"/><path class="line" d="M175 118V210M365 118V210"/>
+    <use href="#fish" transform="translate(230 230) scale(.55)"/>
+    <text class="body" x="28" y="308">Schaduw, pijlers en harde oevers.</text>
+    <text class="small" x="28" y="350">Sterker signaal bij diepte of stroming.</text>
+  </g>
+
+  <!-- 2 Coupure -->
+  <g transform="translate(630 220)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">2. Coupure</text>
+    <g transform="translate(425 22)"><rect width="85" height="38" rx="19" fill="#7c8c94"/><text class="badge" x="42" y="25" text-anchor="middle">LAAG</text></g>
+    <path class="land" d="M20 265V120H205V265ZM335 265V120H520V265Z"/>
+    <path class="line" d="M205 120V265M335 120V265M205 170H335"/>
+    <path class="thin" d="M230 170V265M270 170V265M310 170V265"/>
+    <text class="body" x="28" y="308">Afsluitbare opening in dijk of kade.</text>
+    <text class="small" x="28" y="350">Zelden zelfstandig een interessante stek.</text>
+  </g>
+
+  <!-- 3 Sluis -->
+  <g transform="translate(1200 220)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">3. Sluis</text>
+    <g transform="translate(360 22)"><rect width="150" height="38" rx="19" fill="#d85c39"/><text class="badge" x="75" y="25" text-anchor="middle">HOOG ACTIEF</text></g>
+    <rect class="water" x="20" y="170" width="500" height="95"/>
+    <path class="line" d="M165 110V265M375 110V265"/><path class="line" d="M145 170L185 220M355 220L395 170"/>
+    <path class="flow" d="M55 215H135M405 215H485" marker-end="url(#arrow)"/>
+    <use href="#fish" transform="translate(235 235) scale(.5)"/>
+    <text class="body" x="28" y="308">Deuren scheiden twee waterpeilen.</text>
+    <text class="small" x="28" y="350">Schutten/spuien geeft stroom en aasvis.</text>
+  </g>
+
+  <!-- 4 Verbeterinstallatie -->
+  <g transform="translate(60 640)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">4. Verbeterinstallatie</text>
+    <g transform="translate(365 72)"><rect width="145" height="38" rx="19" fill="#4e7791"/><text class="badge" x="72" y="25" text-anchor="middle">VOORWAARDE</text></g>
+    <rect class="water" x="20" y="210" width="500" height="55"/>
+    <circle class="structure" cx="205" cy="180" r="75"/><circle class="structure" cx="365" cy="180" r="75"/>
+    <path class="flow" d="M45 235H125M280 180H290M440 235H495" marker-end="url(#arrow)"/>
+    <circle cx="180" cy="175" r="8" fill="#2e8fb9"/><circle cx="210" cy="145" r="7" fill="#2e8fb9"/><circle cx="235" cy="190" r="9" fill="#2e8fb9"/>
+    <text class="body" x="28" y="308">Filtert of behandelt vervuild water.</text>
+    <text class="small" x="28" y="350">Alleen relevant bij echte zichtbare uitstroom.</text>
+  </g>
+
+  <!-- 5 Hevel -->
+  <g transform="translate(630 640)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">5. Hevel</text>
+    <g transform="translate(365 22)"><rect width="145" height="38" rx="19" fill="#4e7791"/><text class="badge" x="72" y="25" text-anchor="middle">VOORWAARDE</text></g>
+    <rect class="water" x="20" y="190" width="130" height="75"/><rect class="water" x="390" y="190" width="130" height="75"/>
+    <path class="line" d="M105 220V185C105 85 435 85 435 185V220"/>
+    <path class="flow" d="M115 205C140 120 375 120 425 205" marker-end="url(#arrow)"/>
+    <text class="body" x="28" y="308">Buis gaat omhoog over een obstakel.</text>
+    <text class="small" x="28" y="350">In- en uitstroom tellen bij peilverschil.</text>
+  </g>
+
+  <!-- 6 Afsluitmiddel -->
+  <g transform="translate(1200 640)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">6. Afsluitmiddel</text>
+    <g transform="translate(365 72)"><rect width="145" height="38" rx="19" fill="#4e7791"/><text class="badge" x="72" y="25" text-anchor="middle">VOORWAARDE</text></g>
+    <rect class="water" x="20" y="185" width="500" height="80"/>
+    <path class="structure" d="M245 95H295V240H245Z"/><path class="line" d="M220 95H320"/>
+    <path class="flow" d="M65 225H205M335 225H475" marker-end="url(#arrow)"/>
+    <text class="body" x="28" y="308">Schuif, klep of deur regelt water.</text>
+    <text class="small" x="28" y="350">Niet dubbel tellen bij sluis, stuw of gemaal.</text>
+  </g>
+
+  <!-- 7 Stuw -->
+  <g transform="translate(60 1060)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">7. Stuw</text>
+    <g transform="translate(420 22)"><rect width="90" height="38" rx="19" fill="#d85c39"/><text class="badge" x="45" y="25" text-anchor="middle">HOOG</text></g>
+    <path class="water" d="M20 150H265V200Q300 230 335 230H520V265H20Z"/>
+    <path class="structure" d="M260 130V245H320V205"/>
+    <path class="flow" d="M210 170H270Q305 175 335 225" marker-end="url(#arrow)"/>
+    <path class="thin" d="M345 235Q375 210 405 235Q435 255 465 235"/>
+    <text class="body" x="28" y="308">Houdt en regelt het bovenstroomse peil.</text>
+    <text class="small" x="28" y="350">Val, kolk en keerwater zijn sterke zones.</text>
+  </g>
+
+  <!-- 8 Voorde -->
+  <g transform="translate(630 1060)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">8. Voorde</text>
+    <g transform="translate(405 22)"><rect width="105" height="38" rx="19" fill="#d49a22"/><text class="badge" x="52" y="25" text-anchor="middle">MIDDEL</text></g>
+    <path class="water" d="M20 185Q135 175 220 215Q270 240 320 215Q405 175 520 185V265H20Z"/>
+    <path class="bed" d="M20 250Q160 250 220 220Q270 198 320 220Q380 250 520 250V275H20Z"/>
+    <circle cx="225" cy="220" r="12" fill="#78898c"/><circle cx="270" cy="208" r="13" fill="#78898c"/><circle cx="315" cy="220" r="12" fill="#78898c"/>
+    <text class="body" x="28" y="308">Ondiepe, verharde oversteekplaats.</text>
+    <text class="small" x="28" y="350">Interessant in kleine stromende wateren.</text>
+  </g>
+
+  <!-- 9 Sifon -->
+  <g transform="translate(1200 1060)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">9. Sifon</text>
+    <g transform="translate(365 22)"><rect width="145" height="38" rx="19" fill="#4e7791"/><text class="badge" x="72" y="25" text-anchor="middle">VOORWAARDE</text></g>
+    <rect class="water" x="20" y="140" width="130" height="65"/><rect class="water" x="390" y="140" width="130" height="65"/>
+    <rect class="land" x="175" y="105" width="190" height="65"/>
+    <path class="line" d="M105 175V225Q105 260 145 260H395Q435 260 435 225V175"/>
+    <path class="flow" d="M120 190V230Q120 245 155 245H410" marker-end="url(#arrow)"/>
+    <text class="body" x="28" y="308">Volle buis gaat onder een obstakel door.</text>
+    <text class="small" x="28" y="350">Alleen mondingen kunnen vis aantrekken.</text>
+  </g>
+
+  <!-- 10 Bodemval -->
+  <g transform="translate(60 1480)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">10. Bodemval</text>
+    <g transform="translate(344 22)"><rect width="166" height="38" rx="19" fill="#d49a22"/><text class="badge" x="83" y="25" text-anchor="middle">MIDDEL / HOOG</text></g>
+    <rect class="water" x="20" y="120" width="500" height="145"/>
+    <path class="bed" d="M20 200H255V250H520V280H20Z"/>
+    <path class="flow" d="M170 170H270Q310 180 325 225" marker-end="url(#arrow)"/>
+    <use href="#fish" transform="translate(355 230) scale(.48)"/>
+    <text class="body" x="28" y="308">Plotselinge sprong in de waterbodem.</text>
+    <text class="small" x="28" y="350">Talud, kolk en turbulentie geven hinderlagen.</text>
+  </g>
+
+  <!-- 11 Put -->
+  <g transform="translate(630 1480)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">11. Put</text>
+    <g transform="translate(425 22)"><rect width="85" height="38" rx="19" fill="#7c8c94"/><text class="badge" x="42" y="25" text-anchor="middle">LAAG</text></g>
+    <rect class="land" x="20" y="125" width="500" height="140"/>
+    <path class="structure" d="M215 100H325V265H215Z"/><path class="line" d="M190 100H350M70 220H215M325 220H470"/>
+    <path class="thin" d="M240 140H300M240 175H300M240 210H300"/>
+    <text class="body" x="28" y="308">Inspectie- of aansluitkamer voor leidingen.</text>
+    <text class="small" x="28" y="350">Meestal geen invloed op open viswater.</text>
+  </g>
+
+  <!-- 12 Duiker -->
+  <g transform="translate(1200 1480)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">12. Duiker</text>
+    <g transform="translate(344 22)"><rect width="166" height="38" rx="19" fill="#b9872b"/><text class="badge" x="83" y="25" text-anchor="middle">LAAG / MIDDEL</text></g>
+    <path class="land" d="M20 115H520V250H20Z"/>
+    <path class="line" d="M20 100H520"/><rect class="water" x="20" y="205" width="500" height="60"/>
+    <path class="structure" d="M145 205V170Q145 140 175 140H365Q395 140 395 170V205"/>
+    <path class="flow" d="M75 230H455" marker-end="url(#arrow)"/>
+    <text class="body" x="28" y="308">Buis verbindt water onder weg of dijk.</text>
+    <text class="small" x="28" y="350">Pas relevant bij voldoende echte doorstroming.</text>
+  </g>
+
+  <!-- 13 Vispassage -->
+  <g transform="translate(60 1900)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">13. Vispassage</text>
+    <g transform="translate(355 22)"><rect width="155" height="38" rx="19" fill="#3f7899"/><text class="badge" x="77" y="25" text-anchor="middle">CHECK REGELS</text></g>
+    <path class="water" d="M20 115H155V145H230V175H305V205H380V235H520V265H20Z"/>
+    <path class="line" d="M155 115V145M230 145V175M305 175V205M380 205V235"/>
+    <use href="#fish" transform="translate(95 135) scale(.42) rotate(8)"/><use href="#fish" transform="translate(295 195) scale(.38) rotate(8)"/>
+    <path class="flow" d="M440 245L365 220L290 190L215 160L140 130" marker-end="url(#arrow)"/>
+    <text class="body" x="28" y="308">Bypass of trappen langs een barriere.</text>
+    <text class="small" x="28" y="350">Lokstroom en migratie; houd wettelijke afstand.</text>
+  </g>
+
+  <!-- 14 VasteDam -->
+  <g transform="translate(630 1900)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">14. VasteDam</text>
+    <g transform="translate(344 22)"><rect width="166" height="38" rx="19" fill="#d49a22"/><text class="badge" x="83" y="25" text-anchor="middle">MIDDEL / HOOG</text></g>
+    <rect class="water" x="20" y="160" width="500" height="105"/>
+    <path class="structure" d="M225 95H315L340 265H200Z"/>
+    <path class="flow" d="M80 205H185M355 205H470" marker-end="url(#arrow)"/>
+    <text class="body" x="28" y="308">Vaste afsluiting dwars door het water.</text>
+    <text class="small" x="28" y="350">Goed bij overstort, lekstroom of diepteverschil.</text>
+  </g>
+
+  <!-- 15 Zandvang -->
+  <g transform="translate(1200 1900)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">15. Zandvang</text>
+    <g transform="translate(344 22)"><rect width="166" height="38" rx="19" fill="#d49a22"/><text class="badge" x="83" y="25" text-anchor="middle">MIDDEL / HOOG</text></g>
+    <rect class="water" x="20" y="120" width="500" height="145"/>
+    <path class="bed" d="M20 210H140Q170 210 185 245H355Q370 210 400 210H520V280H20Z"/>
+    <path class="flow" d="M55 165H475" marker-end="url(#arrow)"/>
+    <circle cx="220" cy="245" r="7" fill="#9b7740"/><circle cx="265" cy="250" r="8" fill="#9b7740"/><circle cx="315" cy="245" r="6" fill="#9b7740"/>
+    <use href="#fish" transform="translate(310 210) scale(.42)"/>
+    <text class="body" x="28" y="308">Verdieping waar meegevoerd zand bezinkt.</text>
+    <text class="small" x="28" y="350">Diepe kuil en taluds blijven vaak interessant.</text>
+  </g>
+
+  <!-- 16 Aquaduct -->
+  <g transform="translate(60 2320)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">16. Aquaduct</text>
+    <g transform="translate(405 22)"><rect width="105" height="38" rx="19" fill="#d49a22"/><text class="badge" x="52" y="25" text-anchor="middle">MIDDEL</text></g>
+    <path class="structure" d="M55 120H485V205H55Z"/><rect class="water" x="65" y="130" width="410" height="45"/>
+    <path class="line" d="M140 205V265M400 205V265M20 240H520"/>
+    <path class="flow" d="M95 150H445" marker-end="url(#arrow)"/>
+    <text class="body" x="28" y="308">Open watergoot boven weg of waterloop.</text>
+    <text class="small" x="28" y="350">Harde vernauwde in- en uitgang kan werken.</text>
+  </g>
+
+  <!-- 17 Gemaal -->
+  <g transform="translate(630 2320)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">17. Gemaal</text>
+    <g transform="translate(320 22)"><rect width="190" height="38" rx="19" fill="#c74431"/><text class="badge" x="95" y="25" text-anchor="middle">ZEER HOOG ACTIEF</text></g>
+    <rect class="water" x="20" y="205" width="500" height="60"/>
+    <path class="structure" d="M185 115L270 70L355 115V225H185Z"/>
+    <circle class="structure" cx="270" cy="175" r="45"/><path class="line" d="M270 145V205M240 175H300"/>
+    <path class="flow" d="M65 235H165M375 235H485" marker-end="url(#arrow)"/>
+    <use href="#fish" transform="translate(410 220) scale(.42)"/>
+    <text class="body" x="28" y="308">Pompt water van laag naar hoger peil.</text>
+    <text class="small" x="28" y="350">Uitstroom, zuurstof en prooivis als hij draait.</text>
+  </g>
+
+  <!-- 18 Vuilvang -->
+  <g transform="translate(1200 2320)">
+    <rect class="card" width="540" height="390" rx="16"/>
+    <text class="title" x="28" y="54">18. Vuilvang</text>
+    <g transform="translate(395 22)"><rect width="115" height="38" rx="19" fill="#7c8c94"/><text class="badge" x="57" y="25" text-anchor="middle">LAAG SOLO</text></g>
+    <rect class="water" x="20" y="160" width="500" height="105"/>
+    <path class="line" d="M245 105V265M270 105V265M295 105V265"/>
+    <path class="flow" d="M65 210H205M335 210H475" marker-end="url(#arrow)"/>
+    <path d="M180 175q35-20 55 10" fill="none" stroke="#6f5b36" stroke-width="10" stroke-linecap="round"/><circle cx="215" cy="230" r="13" fill="#87933e"/>
+    <text class="body" x="28" y="308">Rooster of boom houdt drijvend vuil tegen.</text>
+    <text class="small" x="28" y="350">Vooral aanwijzing voor gemaal of inlaat ernaast.</text>
+  </g>
+
+  <text x="70" y="2760" font-family="Arial,sans-serif" font-size="22" fill="#587080">Schetsen zijn vereenvoudigd. Werkelijke uitvoering, stroming, toegankelijkheid en lokale visregels verschillen per locatie.</text>
+</svg>
+
