@@ -1,9 +1,16 @@
 import {
   buildFractalStop,
-  dydxHourlyCandlesToFractalRows
+  dydxHourlyCandlesToFractalRows,
+  nlTime
 } from '../src/services/decentraderGapMonitor';
 
 describe('dynamic SL fractal ordering', () => {
+  test('formats both UTC candle timestamps and ISO timestamps without duplicating the timezone', () => {
+    expect(nlTime('2026-09-17 02:54:26')).toBe('17-09-2026 04:54 NL');
+    expect(nlTime('2026-09-17T02:54:26.652Z')).toBe('17-09-2026 04:54 NL');
+    expect(nlTime('2026-09-17T04:54:26+02:00')).toBe('17-09-2026 04:54 NL');
+  });
+
   const previousWindow = process.env.DECENTRADER_SL_FRACTAL_WINDOW;
   const previousLookback = process.env.DECENTRADER_SL_LOOKBACK_BARS;
   const previousMaxDistance = process.env.DECENTRADER_SL_MAX_DISTANCE_PCT;

@@ -1749,7 +1749,10 @@ async function refreshCoinGlassWhaleLevels(reason: string): Promise<CoinGlassWha
 
 export function nlTime(timestamp: string | undefined): string {
   if (!timestamp) return '-';
-  const date = new Date(timestamp.replace(' ', 'T') + 'Z');
+  const normalized = timestamp.trim().replace(' ', 'T');
+  const date = new Date(
+    /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized) ? normalized : `${normalized}Z`
+  );
   return new Intl.DateTimeFormat('nl-NL', {
     timeZone: 'Europe/Amsterdam',
     day: '2-digit',
