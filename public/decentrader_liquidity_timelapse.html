@@ -432,6 +432,13 @@
       text-align: left;
     }
 
+    .delay-history-stats th,
+    .delay-history-stats td {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+    }
+
     .delay-history-table th {
       color: var(--muted);
       font-size: 9px;
@@ -633,9 +640,10 @@
     }
 
     .dom-observer-table {
-      width: 100%;
+      width: max-content;
+      min-width: 100%;
       border-collapse: collapse;
-      table-layout: fixed;
+      table-layout: auto;
       font-size: 11px;
     }
 
@@ -645,8 +653,6 @@
       border-bottom: 1px solid rgba(236, 242, 248, 0.08);
       text-align: right;
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
 
     .dom-observer-table th:first-child,
@@ -1321,7 +1327,7 @@
         <div class="gap-label">The Delay - SMTP intrusion history</div>
         <div class="gap-status" id="delayHistoryStatus">History starts after deployment</div>
         <div class="delay-history-layout">
-          <table class="delay-history-table" aria-label="SMTP delay statistics in completed one-hour candles">
+          <table class="delay-history-table delay-history-stats" aria-label="SMTP delay statistics in completed one-hour candles">
             <thead>
               <tr><th>Mail type</th><th>Alerts</th><th>Min</th><th>Average</th><th>Max</th></tr>
             </thead>
