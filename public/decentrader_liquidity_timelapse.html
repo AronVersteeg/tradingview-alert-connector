@@ -278,6 +278,12 @@
       line-height: 1.35;
     }
 
+    @media (max-width: 760px) {
+      .gap-alert-card {
+        grid-column: span 2;
+      }
+    }
+
     .gap-alert.is-hot {
       color: var(--new);
     }
@@ -1250,7 +1256,7 @@
         <div class="gap-label">Live check</div>
         <div class="gap-value" id="liveStatus">Off</div>
       </div>
-      <div class="gap-card">
+      <div class="gap-card gap-alert-card">
         <div class="gap-label">Gap alert</div>
         <div class="gap-alert" id="gapAlert">No intrusions</div>
       </div>
@@ -4058,19 +4064,19 @@
 
       for (const bar of leftBars) {
         const visualRight = xFor(bar.price) + leverageOffset(bar.leverage) + BAR_WIDTH / 2 + GAP_EDGE_PADDING;
-        if (!leftEdge || visualRight > leftEdge.visualRight) {
+        if (!leftEdge || bar.price > leftEdge.price || (bar.price === leftEdge.price && visualRight > leftEdge.visualRight)) {
           leftEdge = { ...bar, visualRight };
         }
       }
 
       for (const bar of rightBars) {
         const visualLeft = xFor(bar.price) + leverageOffset(bar.leverage) - BAR_WIDTH / 2 - GAP_EDGE_PADDING;
-        if (!rightEdge || visualLeft < rightEdge.visualLeft) {
+        if (!rightEdge || bar.price < rightEdge.price || (bar.price === rightEdge.price && visualLeft < rightEdge.visualLeft)) {
           rightEdge = { ...bar, visualLeft };
         }
       }
 
-      if (!leftEdge || !rightEdge || leftEdge.visualRight >= rightEdge.visualLeft) return null;
+      if (!leftEdge || !rightEdge) return null;
 
       const left = leftEdge.price;
       const right = rightEdge.price;
@@ -5063,14 +5069,48 @@
         : '<tr><td colspan="6" class="gap-status">No whale levels above the configured threshold</td></tr>';
     }
 
+    function recordedIntrusionLabel(frame) {
+      if (!frame) return '';
+      const historyEntries = (section) => Array.isArray(section?.history)
+        ? section.history
+        : Array.isArray(section?.records)
+          ? section.records
+          : Array.isArray(section?.recent)
+            ? section.recent
+            : [];
+      const records = [
+        ...historyEntries(payload?.intrusionDomStudy),
+        ...historyEntries(payload?.intrusionBenchmarks),
+        ...historyEntries(payload?.delayHistory),
+      ];
+      const seen = new Set();
+      const matching = records.filter((record) => {
+        if ((record.timestamp || record.intrusionTimestamp) !== frame.t) return false;
+        const signature = String(record.signature || '').replace(/^FILTERED\|/, '');
+        if (seen.has(signature)) return false;
+        seen.add(signature);
+        return true;
+      });
+      if (!matching.length) return '';
+      const details = matching.slice(0, 3).map((record) => {
+        const levelText = String(record.signature || '').split('|').pop().split(':')[0];
+        const level = Number(levelText);
+        return `${record.sideCounts || 'gap intrusion'}${Number.isFinite(level) && level > 0 ? ` @${money(level)}` : ''}`;
+      }).join('; ');
+      return `${nlTime(frame.t)}: ${matching.length} recorded intrusion${matching.length === 1 ? '' : 's'} | ${details} | historical record; current map may differ`;
+    }
+
     function updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview) {
+      const recordedAlert = recordedIntrusionLabel(frame);
       if (!gap || !frame) {
         gapWidth.textContent = '-';
         gapLeft.textContent = '-';
         gapPrice.textContent = frame?.price ? money(frame.price) : '-';
         gapRight.textContent = '-';
-        gapStatus.textContent = 'No clean two-sided gap for current filters';
-        gapAlert.textContent = 'No intrusions';
+        gapStatus.textContent = recordedAlert
+          ? 'No clean two-sided gap in the current map; historical record below'
+          : 'No clean two-sided gap for current filters';
+        gapAlert.textContent = recordedAlert || 'No intrusions';
         gapAlert.classList.remove('is-hot', 'is-rsi-long', 'is-rsi-short');
         return;
       }
@@ -5110,7 +5150,7 @@
         gapAlert.classList.toggle('is-rsi-short', rsiSignal?.direction === 'short');
         gapAlert.classList.toggle('is-hot', !rsiSignal || rsiSignal.direction === 'watch');
       } else {
-        gapAlert.textContent = 'No intrusions';
+        gapAlert.textContent = recordedAlert || 'No intrusions';
         gapAlert.classList.remove('is-hot', 'is-rsi-long', 'is-rsi-short');
       }
     }
