@@ -423,6 +423,12 @@
       font-size: 11px;
     }
 
+    .manual-plan-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .manual-plan-edit,
     .manual-plan-cancel {
       min-width: 64px;
     }
@@ -1352,6 +1358,7 @@
           <div class="manual-tp-rows" id="manualTpRows"></div>
           <div class="manual-override-actions">
             <button id="manualOverrideArm" type="submit">Add plan</button>
+            <button id="manualOverrideCancelEdit" type="button" hidden>Cancel edit</button>
           </div>
         </form>
       </div>
@@ -1767,6 +1774,7 @@
     const manualTpRows = document.getElementById('manualTpRows');
     const manualAddTp = document.getElementById('manualAddTp');
     const manualOverrideArm = document.getElementById('manualOverrideArm');
+    const manualOverrideCancelEdit = document.getElementById('manualOverrideCancelEdit');
     const domObserverPanel = document.getElementById('domObserverPanel');
     const domObserverStatus = document.getElementById('domObserverStatus');
     const domWindow = document.getElementById('domWindow');
@@ -1803,6 +1811,7 @@
     let latestTradePlanError = '';
     let manualOverrideSnapshot = null;
     let manualOverrideFormInitialized = false;
+    let manualEditingPlanId = null;
     let tradeZonesVisible = true;
     let canvasScale = 1;
     let canvasCssWidth = 0;
@@ -5344,6 +5353,30 @@
       manualOverrideArm.disabled = !manualOverrideSnapshot?.enabled || executing;
     }
 
+    function resetManualOverrideEditor() {
+      manualEditingPlanId = null;
+      manualOverrideTrigger.value = '';
+      manualOverrideExpiry.value = '24';
+      resetManualTpRows();
+      manualOverrideArm.textContent = 'Add plan';
+      manualOverrideCancelEdit.hidden = true;
+      loadManualOverrideForm(manualOverrideDirection.value);
+    }
+
+    function editManualOverride(planId) {
+      const state = manualOverrides().find((candidate) => candidate.id === planId);
+      if (!state || state.status !== 'ARMED') return;
+      manualEditingPlanId = state.id;
+      manualOverrideDirection.value = state.direction;
+      manualOverrideTrigger.value = state.closeTrigger;
+      const remainingHours = Math.ceil((Date.parse(state.expiresAt) - Date.now()) / (60 * 60 * 1000));
+      manualOverrideExpiry.value = String(Math.max(1, Math.min(168, remainingHours || 24)));
+      resetManualTpRows(Array.isArray(state.takeProfits) ? state.takeProfits : []);
+      manualOverrideArm.textContent = 'Save changes';
+      manualOverrideCancelEdit.hidden = false;
+      loadManualOverrideForm(state.direction);
+    }
+
     function renderManualPlanList(active) {
       manualPlanList.replaceChildren();
       if (!active.length) {
@@ -5363,6 +5396,15 @@
         const tpCount = Array.isArray(state.takeProfits) ? state.takeProfits.length : 0;
         meta.textContent = `Expires ${new Date(state.expiresAt).toLocaleString('nl-NL')}${tpCount ? ` | ${tpCount} locked TP${tpCount === 1 ? '' : 's'}` : ' | dynamic TPs'}`;
         detail.append(heading, meta);
+        const actions = document.createElement('div');
+        actions.className = 'manual-plan-actions';
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'manual-plan-edit';
+        edit.textContent = 'Edit';
+        edit.disabled = state.status !== 'ARMED';
+        edit.dataset.planId = state.id;
+        edit.setAttribute('aria-label', `Edit ${state.direction} plan at ${state.closeTrigger}`);
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.className = 'manual-plan-cancel';
@@ -5370,7 +5412,8 @@
         cancel.disabled = state.status !== 'ARMED';
         cancel.dataset.planId = state.id;
         cancel.setAttribute('aria-label', `Cancel ${state.direction} plan at ${state.closeTrigger}`);
-        row.append(detail, cancel);
+        actions.append(edit, cancel);
+        row.append(detail, actions);
         manualPlanList.appendChild(row);
       });
     }
@@ -5380,6 +5423,9 @@
       manualOverrideSnapshot = snapshot;
       const overrides = manualOverrides();
       const active = overrides.filter((state) => state.status === 'ARMED' || state.status === 'EXECUTING');
+      if (manualEditingPlanId && !active.some((state) => state.id === manualEditingPlanId && state.status === 'ARMED')) {
+        resetManualOverrideEditor();
+      }
       const latestTerminal = overrides
         .filter((state) => !['ARMED', 'EXECUTING'].includes(state.status))
         .sort((left, right) => Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || ''))[0];
@@ -5433,8 +5479,11 @@
       }
       manualOverrideArm.disabled = true;
       try {
-        const response = await fetch(CLOUD_MANUAL_OVERRIDE_URL, {
-          method: 'POST',
+        const requestUrl = manualEditingPlanId
+          ? `${CLOUD_MANUAL_OVERRIDE_URL}?id=${encodeURIComponent(manualEditingPlanId)}`
+          : CLOUD_MANUAL_OVERRIDE_URL;
+        const response = await fetch(requestUrl, {
+          method: manualEditingPlanId ? 'PATCH' : 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Webhook-Token': token },
           body: JSON.stringify({
             direction: manualOverrideDirection.value,
@@ -5446,8 +5495,7 @@
         const result = await response.json();
         if (!response.ok || result.error) throw new Error(result.error || `Manual override ${response.status}`);
         await refreshManualOverride();
-        manualOverrideTrigger.value = '';
-        resetManualTpRows();
+        resetManualOverrideEditor();
       } catch (error) {
         manualOverrideStatus.textContent = String(error.message || error);
       } finally {
@@ -5472,6 +5520,7 @@
         const result = await response.json();
         if (!response.ok || result.error) throw new Error(result.error || `Manual override ${response.status}`);
         await refreshManualOverride();
+        if (manualEditingPlanId === planId) resetManualOverrideEditor();
       } catch (error) {
         manualOverrideStatus.textContent = String(error.message || error);
         button.disabled = false;
@@ -5953,9 +6002,15 @@
       });
       manualAddTp?.addEventListener('click', () => addManualTpRow());
       manualOverrideForm?.addEventListener('submit', armManualOverride);
+      manualOverrideCancelEdit?.addEventListener('click', resetManualOverrideEditor);
       manualPlanList?.addEventListener('click', (event) => {
-        const button = event.target.closest('.manual-plan-cancel');
-        if (button) cancelManualOverride(button.dataset.planId, button);
+        const editButton = event.target.closest('.manual-plan-edit');
+        if (editButton) {
+          editManualOverride(editButton.dataset.planId);
+          return;
+        }
+        const cancelButton = event.target.closest('.manual-plan-cancel');
+        if (cancelButton) cancelManualOverride(cancelButton.dataset.planId, cancelButton);
       });
       zoomOutButton.addEventListener('click', () => zoomPrice(1.25));
       zoomResetButton.addEventListener('click', resetPriceView);

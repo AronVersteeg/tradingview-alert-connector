@@ -597,7 +597,7 @@ router.get('/decentrader/manual-override', async (_req, res) => {
 
 router.options('/decentrader/manual-override', (_req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Webhook-Token');
   res.sendStatus(204);
 });
@@ -612,6 +612,20 @@ router.post('/decentrader/manual-override', async (req, res) => {
     res.send({ ok: true, override: btcManualTradeOverrideMonitor.arm(req.body) });
   } catch (error) {
     res.status(400).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+router.patch('/decentrader/manual-override', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (!isMonitorRequestAuthorized(req)) {
+    return res.status(401).send({ ok: false, error: 'Unauthorized' });
+  }
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const planId = req.body?.id || req.query?.id;
+    res.send({ ok: true, override: btcManualTradeOverrideMonitor.update(planId, req.body) });
+  } catch (error) {
+    res.status(409).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
   }
 });
 

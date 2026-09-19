@@ -458,6 +458,38 @@ export class BtcManualTradeOverrideMonitor {
     return state;
   }
 
+  update(idInput: unknown, input: any): BtcManualTradeOverrideState {
+    if (!btcManualTradeOverrideEnabled()) {
+      throw new Error('MANUAL_ENTRY_TP_OVERRIDE_ENABLED is false.');
+    }
+    const id = String(idInput || '').trim();
+    if (!id) throw new Error('Plan id is required when editing a BTC manual override.');
+    const store = readBtcManualTradeOverrideStore();
+    const previous = store.overrides.find((override) => override.id === id);
+    if (!previous) throw new Error(`No BTC manual plan ${id} exists.`);
+    if (previous.status === 'EXECUTING') {
+      throw new Error(`BTC manual plan ${previous.id} is already executing and can no longer be edited.`);
+    }
+    if (previous.status !== 'ARMED') {
+      throw new Error(`BTC manual plan ${previous.id} is ${previous.status.toLowerCase()} and is not armed.`);
+    }
+    const replacement = {
+      ...normalizeBtcManualTradeOverrideRequest(input),
+      id: previous.id
+    };
+    const withoutPrevious: BtcManualTradeOverrideStore = {
+      ...store,
+      overrides: store.overrides.filter((override) => override.id !== previous.id)
+    };
+    const updatedStore = upsertBtcManualTradeOverride(withoutPrevious, replacement);
+    writeStore(updatedStore);
+    console.log('BTC manual entry/TP override updated:', {
+      previous,
+      replacement
+    });
+    return replacement;
+  }
+
   cancel(idOrDirectionInput?: unknown): BtcManualTradeOverrideState {
     const idOrDirection = String(idOrDirectionInput || '').trim();
     if (!idOrDirection) throw new Error('Plan id is required when cancelling a BTC manual override.');

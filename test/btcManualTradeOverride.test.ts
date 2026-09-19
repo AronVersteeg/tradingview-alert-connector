@@ -174,6 +174,52 @@ describe('BTC manual entry and TP override', () => {
     expect(result.overrides[1].takeProfits?.[0].price).toBe(90000);
   });
 
+  test('edits one armed plan in place without changing another plan', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'btc-manual-edit-'));
+    const previousFile = process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+    const previousEnabled = process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED;
+    process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = path.join(directory, 'state.json');
+    process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED = 'true';
+    try {
+      const monitor = new BtcManualTradeOverrideMonitor();
+      const first = monitor.arm({
+        direction: 'long', closeTrigger: 70000,
+        takeProfits: [{ price: 75000, allocationPct: 100 }]
+      });
+      const second = monitor.arm({
+        direction: 'long', closeTrigger: 80000,
+        takeProfits: [{ price: 90000, allocationPct: 100 }]
+      });
+
+      const edited = monitor.update(first.id, {
+        direction: 'long', closeTrigger: 72000, expiresInHours: 48,
+        takeProfits: [{ price: 76000, allocationPct: 100 }]
+      });
+      const saved = readBtcManualTradeOverrideStore().overrides;
+
+      expect(edited).toMatchObject({
+        id: first.id,
+        status: 'ARMED',
+        closeTrigger: 72000,
+        takeProfits: [{ price: 76000, allocationPct: 100 }]
+      });
+      expect(saved.find((plan) => plan.id === first.id)).toMatchObject({
+        closeTrigger: 72000,
+        takeProfits: [{ price: 76000, allocationPct: 100 }]
+      });
+      expect(saved.find((plan) => plan.id === second.id)).toMatchObject({
+        closeTrigger: 80000,
+        takeProfits: [{ price: 90000, allocationPct: 100 }]
+      });
+    } finally {
+      if (previousFile === undefined) delete process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+      else process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = previousFile;
+      if (previousEnabled === undefined) delete process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED;
+      else process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED = previousEnabled;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test('rejects overlapping long and short triggers', () => {
     const long = normalizeBtcManualTradeOverrideRequest({
       direction: 'long',
