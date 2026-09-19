@@ -622,8 +622,8 @@ router.delete('/decentrader/manual-override', async (req, res) => {
   }
   try {
     res.setHeader('Cache-Control', 'no-store');
-    const direction = req.body?.direction || req.query?.direction;
-    res.send({ ok: true, override: btcManualTradeOverrideMonitor.cancel(direction) });
+    const planId = req.body?.id || req.query?.id || req.body?.direction || req.query?.direction;
+    res.send({ ok: true, override: btcManualTradeOverrideMonitor.cancel(planId) });
   } catch (error) {
     res.status(409).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
   }

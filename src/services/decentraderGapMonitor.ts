@@ -8023,7 +8023,8 @@ export class DecentraderGapMonitor {
         const account = await this.tradeExecutor.getAccountSnapshot([market]);
         const openPosition = existingMarketPosition(account, market);
         if (openPosition) {
-          result.tradeSkipped = `Existing ${market} position detected; manual override skipped.`;
+          result.tradeSkipped = `Existing ${market} position detected; manual plan remains armed.`;
+          result.tradeDeferred = true;
           return result;
         }
         if (state.lastTradeAttemptedSignature === request.signature && !request.recovery) {

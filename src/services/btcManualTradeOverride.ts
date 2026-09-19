@@ -10,6 +10,8 @@ export const MANUAL_OVERRIDE_MAX_ENTRY_DELAY_MS = 15 * 60_000;
 export const MANUAL_OVERRIDE_RECOVERY_MAX_AGE_MS = 4 * HOUR_MS;
 export const MANUAL_OVERRIDE_MAX_RECOVERY_ATTEMPTS = 1;
 const MAX_TAKE_PROFITS = 6;
+const MAX_ACTIVE_OVERRIDES = 20;
+const MAX_TERMINAL_OVERRIDES = 50;
 const BINANCE_FUTURES_KLINES_URL = 'https://fapi.binance.com/fapi/v1/klines';
 
 export type BtcManualHourlyCandle = {
@@ -52,7 +54,7 @@ export type BtcManualEntryHandler = {
 
 export type BtcManualTradeOverrideState = {
   version: 1;
-  id: 'long' | 'short';
+  id: string;
   market: 'BTC-USD';
   status: 'IDLE' | 'ARMED' | 'EXECUTING' | 'TRIGGERED' | 'SKIPPED' | 'ERROR' | 'CANCELLED' | 'EXPIRED';
   direction?: 'long' | 'short';
@@ -75,7 +77,7 @@ export type BtcManualTradeOverrideState = {
 };
 
 export type BtcManualTradeOverrideStore = {
-  version: 2;
+  version: 3;
   market: 'BTC-USD';
   overrides: BtcManualTradeOverrideState[];
   updatedAt: string;
@@ -113,23 +115,47 @@ function stateFile(): string {
 
 function emptyStore(): BtcManualTradeOverrideStore {
   return {
-    version: 2,
+    version: 3,
     market: 'BTC-USD',
     overrides: [],
     updatedAt: new Date().toISOString()
   };
 }
 
+function legacyOverrideId(override: any, index: number): string {
+  const direction = override?.direction === 'short' ? 'short' : 'long';
+  const armedAt = Date.parse(String(override?.armedAt || ''));
+  const timestamp = Number.isFinite(armedAt) ? armedAt : index;
+  return `btc-manual-${direction}-${timestamp}-${Number(override?.closeTrigger) || 0}`;
+}
+
+function normalizeStoredOverrides(overrides: any[]): BtcManualTradeOverrideState[] {
+  const ids = new Set<string>();
+  return overrides
+    .filter((override: any) => override?.direction === 'long' || override?.direction === 'short')
+    .map((override: any, index) => {
+      let id = String(override?.id || '').trim();
+      if (!id || id === 'long' || id === 'short' || ids.has(id)) id = legacyOverrideId(override, index);
+      while (ids.has(id)) id = `${id}-${index}`;
+      ids.add(id);
+      return { ...override, id } as BtcManualTradeOverrideState;
+    });
+}
+
 export function readBtcManualTradeOverrideStore(): BtcManualTradeOverrideStore {
   try {
     const parsed = JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
+    if (parsed?.version === 3 && parsed?.market === 'BTC-USD' && Array.isArray(parsed.overrides)) {
+      return {
+        ...parsed,
+        overrides: normalizeStoredOverrides(parsed.overrides)
+      } as BtcManualTradeOverrideStore;
+    }
     if (parsed?.version === 2 && parsed?.market === 'BTC-USD' && Array.isArray(parsed.overrides)) {
       return {
         ...parsed,
-        overrides: parsed.overrides
-          .filter((override: any) => override?.direction === 'long' || override?.direction === 'short')
-          .map((override: any) => ({ ...override, id: override.direction }))
-          .slice(0, 2)
+        version: 3,
+        overrides: normalizeStoredOverrides(parsed.overrides)
       } as BtcManualTradeOverrideStore;
     }
     if (
@@ -138,9 +164,9 @@ export function readBtcManualTradeOverrideStore(): BtcManualTradeOverrideStore {
       (parsed?.direction === 'long' || parsed?.direction === 'short')
     ) {
       return {
-        version: 2,
+        version: 3,
         market: 'BTC-USD',
-        overrides: [{ ...parsed, id: parsed.direction }],
+        overrides: normalizeStoredOverrides([parsed]),
         updatedAt: parsed.updatedAt || new Date().toISOString()
       };
     }
@@ -210,7 +236,7 @@ export function normalizeBtcManualTradeOverrideRequest(
   const armedAt = new Date(nowMs).toISOString();
   return {
     version: 1,
-    id: direction,
+    id: `btc-manual-${direction}-${nowMs}-${closeTrigger}`,
     market: 'BTC-USD',
     status: 'ARMED',
     direction,
@@ -226,60 +252,51 @@ export function upsertBtcManualTradeOverride(
   store: BtcManualTradeOverrideStore,
   override: BtcManualTradeOverrideState
 ): BtcManualTradeOverrideStore {
-  const executing = store.overrides.find((candidate) => candidate.status === 'EXECUTING');
-  if (executing) {
-    throw new Error(`The ${executing.direction} BTC manual override is already executing and cannot be replaced.`);
-  }
-  const opposite = store.overrides.find((candidate) => (
-    candidate.direction !== override.direction &&
-    (candidate.status === 'ARMED' || candidate.status === 'EXECUTING')
+  const active = store.overrides.filter((candidate) => (
+    candidate.status === 'ARMED' || candidate.status === 'EXECUTING'
   ));
-  if (
-    opposite &&
-    override.direction === 'long' &&
-    Number(override.closeTrigger) <= Number(opposite.closeTrigger)
-  ) {
-    throw new Error(`Long close trigger must be above the armed short trigger ${opposite.closeTrigger}.`);
+  const executing = active.find((candidate) => candidate.status === 'EXECUTING');
+  if (executing) {
+    throw new Error(`BTC manual plan ${executing.id} is executing; add the new plan after it completes.`);
   }
-  if (
-    opposite &&
-    override.direction === 'short' &&
-    Number(override.closeTrigger) >= Number(opposite.closeTrigger)
-  ) {
-    throw new Error(`Short close trigger must be below the armed long trigger ${opposite.closeTrigger}.`);
+  if (active.length >= MAX_ACTIVE_OVERRIDES) {
+    throw new Error(`At most ${MAX_ACTIVE_OVERRIDES} active BTC manual plans are supported.`);
   }
-  const overrides = store.overrides.filter((candidate) => candidate.direction !== override.direction);
-  overrides.push(override);
-  overrides.sort((left, right) => left.direction === 'long' ? -1 : right.direction === 'long' ? 1 : 0);
+  const duplicate = active.find((candidate) => (
+    candidate.direction === override.direction && Number(candidate.closeTrigger) === Number(override.closeTrigger)
+  ));
+  if (duplicate) {
+    throw new Error(`An armed ${override.direction} BTC plan already uses close trigger ${override.closeTrigger}.`);
+  }
+  const opposite = active.filter((candidate) => candidate.direction !== override.direction);
+  const conflictingOpposite = opposite.find((candidate) => override.direction === 'long'
+    ? Number(override.closeTrigger) <= Number(candidate.closeTrigger)
+    : Number(override.closeTrigger) >= Number(candidate.closeTrigger));
+  if (conflictingOpposite && override.direction === 'long') {
+    throw new Error(`Long close trigger must be above the armed short trigger ${conflictingOpposite.closeTrigger}.`);
+  }
+  if (conflictingOpposite && override.direction === 'short') {
+    throw new Error(`Short close trigger must be below the armed long trigger ${conflictingOpposite.closeTrigger}.`);
+  }
+  const overrides = [...store.overrides, override];
+  const activeOverrides = overrides
+    .filter((candidate) => candidate.status === 'ARMED' || candidate.status === 'EXECUTING')
+    .sort((left, right) => {
+      if (left.direction !== right.direction) return left.direction === 'long' ? -1 : 1;
+      const priceDifference = left.direction === 'long'
+        ? Number(left.closeTrigger) - Number(right.closeTrigger)
+        : Number(right.closeTrigger) - Number(left.closeTrigger);
+      return priceDifference || Date.parse(String(left.armedAt || '')) - Date.parse(String(right.armedAt || ''));
+    });
+  const terminalOverrides = overrides
+    .filter((candidate) => candidate.status !== 'ARMED' && candidate.status !== 'EXECUTING')
+    .sort((left, right) => Date.parse(String(right.updatedAt || '')) - Date.parse(String(left.updatedAt || '')))
+    .slice(0, MAX_TERMINAL_OVERRIDES);
   return {
-    version: 2,
+    version: 3,
     market: 'BTC-USD',
-    overrides: overrides.slice(0, 2),
+    overrides: [...activeOverrides, ...terminalOverrides],
     updatedAt: override.updatedAt
-  };
-}
-
-export function cancelAlternativeBtcManualOverrides(
-  store: BtcManualTradeOverrideStore,
-  triggeredDirection: 'long' | 'short',
-  nowIso: string
-): BtcManualTradeOverrideStore {
-  return {
-    ...store,
-    overrides: store.overrides.map((candidate) => {
-      if (candidate.direction === triggeredDirection || candidate.status !== 'ARMED') return candidate;
-      return {
-        ...candidate,
-        status: 'CANCELLED' as const,
-        cancelledAt: nowIso,
-        result: {
-          tradePlaced: false,
-          tradeSkipped: `OCO alternative cancelled after the ${triggeredDirection} close trigger fired.`
-        },
-        updatedAt: nowIso
-      };
-    }),
-    updatedAt: nowIso
   };
 }
 
@@ -441,19 +458,24 @@ export class BtcManualTradeOverrideMonitor {
     return state;
   }
 
-  cancel(directionInput?: unknown): BtcManualTradeOverrideState {
-    const direction = String(directionInput || '').trim().toLowerCase();
-    if (direction !== 'long' && direction !== 'short') {
-      throw new Error('Direction must be long or short when cancelling a BTC manual override.');
-    }
+  cancel(idOrDirectionInput?: unknown): BtcManualTradeOverrideState {
+    const idOrDirection = String(idOrDirectionInput || '').trim();
+    if (!idOrDirection) throw new Error('Plan id is required when cancelling a BTC manual override.');
     const store = readBtcManualTradeOverrideStore();
-    const previous = store.overrides.find((override) => override.direction === direction);
-    if (!previous) throw new Error(`No ${direction} BTC manual override exists.`);
+    const armedDirectionMatches = store.overrides.filter((override) => (
+      override.direction === idOrDirection && override.status === 'ARMED'
+    ));
+    if (armedDirectionMatches.length > 1) {
+      throw new Error(`Multiple ${idOrDirection} BTC plans exist; cancel by plan id.`);
+    }
+    const previous = store.overrides.find((override) => override.id === idOrDirection)
+      || armedDirectionMatches[0];
+    if (!previous) throw new Error(`No BTC manual plan ${idOrDirection} exists.`);
     if (previous.status === 'EXECUTING') {
-      throw new Error(`The ${direction} BTC manual override is already executing and can no longer be cancelled.`);
+      throw new Error(`BTC manual plan ${previous.id} is already executing and can no longer be cancelled.`);
     }
     if (previous.status !== 'ARMED') {
-      throw new Error(`The ${direction} BTC manual override is ${previous.status.toLowerCase()} and is not armed.`);
+      throw new Error(`BTC manual plan ${previous.id} is ${previous.status.toLowerCase()} and is not armed.`);
     }
     const now = new Date().toISOString();
     const state: BtcManualTradeOverrideState = {
@@ -464,7 +486,7 @@ export class BtcManualTradeOverrideMonitor {
     };
     writeStore({
       ...store,
-      overrides: store.overrides.map((override) => override.direction === direction ? state : override),
+      overrides: store.overrides.map((override) => override.id === previous.id ? state : override),
       updatedAt: now
     });
     console.log('BTC manual entry/TP override cancelled:', state);
@@ -555,7 +577,6 @@ export class BtcManualTradeOverrideMonitor {
       state.signalCandleClosedAt = new Date(candle.closeTime).toISOString();
       state.signalClose = Number(candle.close);
       state.updatedAt = state.triggeredAt;
-      store = cancelAlternativeBtcManualOverrides(store, state.direction!, nowIso);
       writeStore(store);
 
       const signature = `btc-manual-override|${state.direction}|${candle.openTime}|${state.closeTrigger}|${state.armedAt}`;
@@ -598,6 +619,24 @@ export class BtcManualTradeOverrideMonitor {
       result = { tradePlaced: false, tradeError: 'No BTC manual entry handler is configured.' };
     } else {
       result = await this.entryHandler.executeManualBtcEntry(entryRequest);
+    }
+    if (result?.tradeDeferred) {
+      state.status = 'ARMED';
+      state.result = result;
+      state.triggeredAt = undefined;
+      state.signalCandleStartedAt = undefined;
+      state.signalCandleClosedAt = undefined;
+      state.signalClose = undefined;
+      state.updatedAt = new Date().toISOString();
+      store.updatedAt = state.updatedAt;
+      writeStore(store);
+      console.log('BTC manual entry/TP override deferred; plan remains armed:', {
+        id: state.id,
+        direction: state.direction,
+        closeTrigger: state.closeTrigger,
+        reason: result.tradeSkipped
+      });
+      return;
     }
     if (this.entryHandler?.sendManualBtcTriggerEmail) {
       const email = await this.entryHandler.sendManualBtcTriggerEmail(entryRequest, result);

@@ -1,11 +1,16 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
 import {
+  BtcManualTradeOverrideMonitor,
   BtcManualTradeOverrideStore,
   BtcManualTradeOverrideState,
   buildManualTakeProfitOrderLevels,
   btcManualTriggerEmailSubject,
-  cancelAlternativeBtcManualOverrides,
   matchingManualOverrideCandle,
   normalizeBtcManualTradeOverrideRequest,
+  readBtcManualTradeOverrideStore,
   recoverableManualOverrideRequest,
   upsertBtcManualTradeOverride
 } from '../src/services/btcManualTradeOverride';
@@ -15,7 +20,7 @@ describe('BTC manual entry and TP override', () => {
 
   function store(overrides: BtcManualTradeOverrideState[] = []): BtcManualTradeOverrideStore {
     return {
-      version: 2,
+      version: 3,
       market: 'BTC-USD',
       overrides,
       updatedAt: '2026-09-10T10:30:00.000Z'
@@ -139,24 +144,34 @@ describe('BTC manual entry and TP override', () => {
     expect(matchingManualOverrideCandle(state, candles, Date.parse('2026-09-10T13:00:20.000Z'))).toBeUndefined();
   });
 
-  test('keeps one armed long and one armed short plan', () => {
+  test('keeps multiple plans in the same direction plus the opposite plan', () => {
     const long = normalizeBtcManualTradeOverrideRequest({
-      direction: 'long',
-      closeTrigger: 81000,
-      takeProfits: []
+      direction: 'long', closeTrigger: 70000,
+      takeProfits: [{ price: 75000, allocationPct: 100 }]
     }, now);
+    const secondLong = normalizeBtcManualTradeOverrideRequest({
+      direction: 'long', closeTrigger: 80000,
+      takeProfits: [{ price: 90000, allocationPct: 100 }]
+    }, now + 500);
     const short = normalizeBtcManualTradeOverrideRequest({
       direction: 'short',
-      closeTrigger: 79000,
+      closeTrigger: 69000,
       takeProfits: []
     }, now + 1000);
 
-    const result = upsertBtcManualTradeOverride(upsertBtcManualTradeOverride(store(), long), short);
+    const result = upsertBtcManualTradeOverride(
+      upsertBtcManualTradeOverride(upsertBtcManualTradeOverride(store(), long), secondLong),
+      short
+    );
 
     expect(result.overrides.map((override) => [override.direction, override.closeTrigger])).toEqual([
-      ['long', 81000],
-      ['short', 79000]
+      ['long', 70000],
+      ['long', 80000],
+      ['short', 69000]
     ]);
+    expect(new Set(result.overrides.map((override) => override.id)).size).toBe(3);
+    expect(result.overrides[0].takeProfits?.[0].price).toBe(75000);
+    expect(result.overrides[1].takeProfits?.[0].price).toBe(90000);
   });
 
   test('rejects overlapping long and short triggers', () => {
@@ -175,23 +190,29 @@ describe('BTC manual entry and TP override', () => {
       .toThrow('Short close trigger must be below');
   });
 
-  test('cancels the opposite armed plan when one trigger fires', () => {
+  test('rejects a duplicate active trigger but does not replace another same-direction plan', () => {
     const long = normalizeBtcManualTradeOverrideRequest({
       direction: 'long',
       closeTrigger: 81000,
       takeProfits: []
     }, now);
-    const short = normalizeBtcManualTradeOverrideRequest({
-      direction: 'short',
-      closeTrigger: 79000,
+    const anotherLong = normalizeBtcManualTradeOverrideRequest({
+      direction: 'long',
+      closeTrigger: 82000,
       takeProfits: []
     }, now + 1000);
-    const armed = upsertBtcManualTradeOverride(upsertBtcManualTradeOverride(store(), long), short);
+    const duplicateLong = normalizeBtcManualTradeOverrideRequest({
+      direction: 'long',
+      closeTrigger: 81000,
+      takeProfits: []
+    }, now + 2000);
+    const result = upsertBtcManualTradeOverride(
+      upsertBtcManualTradeOverride(store(), long),
+      anotherLong
+    );
 
-    const result = cancelAlternativeBtcManualOverrides(armed, 'long', '2026-09-10T12:00:20.000Z');
-
-    expect(result.overrides.find((override) => override.direction === 'long')?.status).toBe('ARMED');
-    expect(result.overrides.find((override) => override.direction === 'short')?.status).toBe('CANCELLED');
+    expect(result.overrides.filter((override) => override.direction === 'long')).toHaveLength(2);
+    expect(() => upsertBtcManualTradeOverride(result, duplicateLong)).toThrow('already uses close trigger');
   });
 
   test('allocates the exact manual TP ladder at dYdX step size', () => {
@@ -216,6 +237,89 @@ describe('BTC manual entry and TP override', () => {
       0.0001,
       80200
     )).toThrow('not beyond the current long entry price');
+  });
+
+  test('keeps a matched plan armed without email when an existing BTC position defers entry', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'btc-manual-override-'));
+    const previousFile = process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+    process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = path.join(directory, 'state.json');
+    try {
+      const state = normalizeBtcManualTradeOverrideRequest({
+        direction: 'long', closeTrigger: 80000, takeProfits: []
+      }, now);
+      state.status = 'EXECUTING';
+      const currentStore = store([state]);
+      const sendEmail = jest.fn(async () => ({ sent: true }));
+      const monitor = new BtcManualTradeOverrideMonitor();
+      monitor.configureEntryHandler({
+        executeManualBtcEntry: async () => ({
+          tradePlaced: false,
+          tradeDeferred: true,
+          tradeSkipped: 'Existing BTC-USD position detected; manual plan remains armed.'
+        }),
+        sendManualBtcTriggerEmail: sendEmail
+      });
+      await (monitor as any).completeExecution(currentStore, state, {
+        market: 'BTC-USD',
+        direction: 'long',
+        signature: 'manual-deferred-test',
+        signalCandleStartedAt: '2026-09-10T11:00:00.000Z',
+        signalCandleClosedAt: '2026-09-10T11:59:59.999Z',
+        signalClose: 80100,
+        closeTrigger: 80000,
+        takeProfits: []
+      });
+
+      expect(readBtcManualTradeOverrideStore().overrides[0]).toMatchObject({
+        id: state.id,
+        status: 'ARMED',
+        result: { tradeDeferred: true }
+      });
+      expect(sendEmail).not.toHaveBeenCalled();
+    } finally {
+      if (previousFile === undefined) delete process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+      else process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = previousFile;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps the opposite plan armed after a successful trigger', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'btc-manual-opposite-'));
+    const previousFile = process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+    process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = path.join(directory, 'state.json');
+    try {
+      const long = normalizeBtcManualTradeOverrideRequest({
+        direction: 'long', closeTrigger: 80000, takeProfits: []
+      }, now);
+      long.status = 'EXECUTING';
+      const short = normalizeBtcManualTradeOverrideRequest({
+        direction: 'short', closeTrigger: 78000, takeProfits: []
+      }, now + 1000);
+      const currentStore = store([long, short]);
+      const monitor = new BtcManualTradeOverrideMonitor();
+      monitor.configureEntryHandler({
+        executeManualBtcEntry: async () => ({ tradePlaced: true }),
+        sendManualBtcTriggerEmail: async () => ({ sent: true })
+      });
+      await (monitor as any).completeExecution(currentStore, long, {
+        market: 'BTC-USD',
+        direction: 'long',
+        signature: 'manual-long-test',
+        signalCandleStartedAt: '2026-09-10T11:00:00.000Z',
+        signalCandleClosedAt: '2026-09-10T11:59:59.999Z',
+        signalClose: 80100,
+        closeTrigger: 80000,
+        takeProfits: []
+      });
+
+      const saved = readBtcManualTradeOverrideStore().overrides;
+      expect(saved.find((plan) => plan.id === long.id)?.status).toBe('TRIGGERED');
+      expect(saved.find((plan) => plan.id === short.id)?.status).toBe('ARMED');
+    } finally {
+      if (previousFile === undefined) delete process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+      else process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = previousFile;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test('recovers one recent manual entry that was fail-safe flattened', () => {
