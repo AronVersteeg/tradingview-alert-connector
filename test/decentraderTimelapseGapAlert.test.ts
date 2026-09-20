@@ -53,4 +53,20 @@ describe('Decentrader historical gap alerts', () => {
     expect(labelFor({ t: '2026-06-01 22:00:00' })).toContain('historical record');
     expect(labelFor({ t: '2026-06-02 00:00:00' })).toBe('');
   });
+
+  test('shows only unbroken daily and weekly fractals in the intact overview', () => {
+    const intactFractalRecords = inlineFunction('intactFractalRecords', 'updateFractalHistory', {});
+    const records = [
+      { id: 'high-intact', type: 'HIGH' },
+      { id: 'low-broken', type: 'LOW', firstBrokenAt: '2026-09-01T00:00:00.000Z' },
+      { id: 'low-intact', type: 'LOW', firstBrokenAt: undefined }
+    ];
+
+    expect(intactFractalRecords(records).map((record: any) => record.id)).toEqual([
+      'high-intact',
+      'low-intact'
+    ]);
+    expect(html).toContain('id="dailyIntactFractalRows"');
+    expect(html).toContain('id="weeklyIntactFractalRows"');
+  });
 });

@@ -563,6 +563,41 @@
       font-weight: 650;
     }
 
+    .fractal-intact-heading {
+      margin-top: 12px;
+    }
+
+    .fractal-intact-scroll {
+      max-height: 132px;
+      margin-top: 6px;
+      overflow: auto;
+      scrollbar-gutter: stable;
+      border-top: 1px solid rgba(129, 148, 170, 0.2);
+    }
+
+    .fractal-intact-table {
+      width: 100%;
+      min-width: 0;
+      table-layout: fixed;
+    }
+
+    .fractal-intact-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--panel);
+    }
+
+    .fractal-intact-table th:nth-child(1) { width: 22%; }
+    .fractal-intact-table th:nth-child(2) { width: 34%; }
+    .fractal-intact-table th:nth-child(3) { width: 44%; }
+
+    .fractal-intact-table td:nth-child(2) {
+      color: var(--price);
+      font-variant-numeric: tabular-nums;
+      font-weight: 650;
+    }
+
     @media (max-width: 900px) {
       .delay-history-card {
         grid-column: 1 / -1;
@@ -1411,6 +1446,15 @@
             </tbody>
           </table>
         </div>
+        <div class="gap-label fractal-intact-heading">Intact daily fractal levels</div>
+        <div class="fractal-intact-scroll">
+          <table class="delay-history-table fractal-intact-table" aria-label="Intact Binance daily Williams fractal levels">
+            <thead><tr><th>Type</th><th>Exact wick</th><th>Pivot day</th></tr></thead>
+            <tbody id="dailyIntactFractalRows">
+              <tr><td colspan="3">Loading intact daily fractals</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
       <div class="gap-card delay-history-card" id="weeklyFractalHistoryCard">
         <div class="gap-label" id="weeklyFractalHistoryTitle">Weekly Williams fractals - Binance Futures</div>
@@ -1422,6 +1466,15 @@
             </thead>
             <tbody id="weeklyFractalHistoryRows">
               <tr><td colspan="6">Loading confirmed weekly fractals</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="gap-label fractal-intact-heading">Intact weekly fractal levels</div>
+        <div class="fractal-intact-scroll">
+          <table class="delay-history-table fractal-intact-table" aria-label="Intact Binance weekly Williams fractal levels">
+            <thead><tr><th>Type</th><th>Exact wick</th><th>Pivot week</th></tr></thead>
+            <tbody id="weeklyIntactFractalRows">
+              <tr><td colspan="3">Loading intact weekly fractals</td></tr>
             </tbody>
           </table>
         </div>
@@ -1753,10 +1806,12 @@
     const dailyFractalHistoryTitle = document.getElementById('dailyFractalHistoryTitle');
     const dailyFractalHistoryStatus = document.getElementById('dailyFractalHistoryStatus');
     const dailyFractalHistoryRows = document.getElementById('dailyFractalHistoryRows');
+    const dailyIntactFractalRows = document.getElementById('dailyIntactFractalRows');
     const weeklyFractalHistoryCard = document.getElementById('weeklyFractalHistoryCard');
     const weeklyFractalHistoryTitle = document.getElementById('weeklyFractalHistoryTitle');
     const weeklyFractalHistoryStatus = document.getElementById('weeklyFractalHistoryStatus');
     const weeklyFractalHistoryRows = document.getElementById('weeklyFractalHistoryRows');
+    const weeklyIntactFractalRows = document.getElementById('weeklyIntactFractalRows');
     const tradeZoneValue = document.getElementById('tradeZoneValue');
     const tradeZoneStatus = document.getElementById('tradeZoneStatus');
     const tradePlanValue = document.getElementById('tradePlanValue');
@@ -3367,13 +3422,18 @@
       return 'REPLACED';
     }
 
-    function updateFractalHistory(history, periodLabel, card, title, status, rows) {
+    function intactFractalRecords(records) {
+      return records.filter((record) => !record.firstBrokenAt);
+    }
+
+    function updateFractalHistory(history, periodLabel, card, title, status, rows, intactRows) {
       if (!card) return;
       card.hidden = false;
 
       const records = Array.isArray(history?.records) ? history.records : [];
       if (!records.length) {
         rows.innerHTML = `<tr><td colspan="6">No confirmed ${periodLabel.toLowerCase()} fractals available</td></tr>`;
+        intactRows.innerHTML = `<tr><td colspan="3">No intact ${periodLabel.toLowerCase()} fractals available</td></tr>`;
         return;
       }
 
@@ -3398,6 +3458,15 @@
           <td>${record.firstBrokenAt ? dailyFractalDate(record.firstBrokenAt) : 'Intact'}</td>
         </tr>`;
       }).join('');
+
+      const intactRecords = intactFractalRecords(records);
+      intactRows.innerHTML = intactRecords.length
+        ? intactRecords.map((record) => `<tr>
+          <td>${record.type === 'HIGH' ? 'High' : 'Low'}</td>
+          <td>${exactDecimalLabel(record.priceExact)}</td>
+          <td>${dailyFractalDate(record.pivotAt)}</td>
+        </tr>`).join('')
+        : `<tr><td colspan="3">No intact ${periodLabel.toLowerCase()} fractals available</td></tr>`;
     }
 
     function updateDailyFractalHistory() {
@@ -3407,7 +3476,8 @@
         dailyFractalHistoryCard,
         dailyFractalHistoryTitle,
         dailyFractalHistoryStatus,
-        dailyFractalHistoryRows
+        dailyFractalHistoryRows,
+        dailyIntactFractalRows
       );
     }
 
@@ -3418,7 +3488,8 @@
         weeklyFractalHistoryCard,
         weeklyFractalHistoryTitle,
         weeklyFractalHistoryStatus,
-        weeklyFractalHistoryRows
+        weeklyFractalHistoryRows,
+        weeklyIntactFractalRows
       );
     }
 
