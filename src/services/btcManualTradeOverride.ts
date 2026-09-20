@@ -29,7 +29,6 @@ export type BtcManualTradeOverrideRequest = {
   direction: 'long' | 'short';
   closeTrigger: number;
   takeProfits: BtcManualTakeProfit[];
-  expiresInHours?: number;
 };
 
 export type BtcManualEntryRequest = {
@@ -138,7 +137,11 @@ function normalizeStoredOverrides(overrides: any[]): BtcManualTradeOverrideState
       if (!id || id === 'long' || id === 'short' || ids.has(id)) id = legacyOverrideId(override, index);
       while (ids.has(id)) id = `${id}-${index}`;
       ids.add(id);
-      return { ...override, id } as BtcManualTradeOverrideState;
+      const normalized = { ...override, id } as BtcManualTradeOverrideState;
+      if (normalized.status === 'ARMED' || normalized.status === 'EXECUTING') {
+        delete normalized.expiresAt;
+      }
+      return normalized;
     });
 }
 
@@ -184,10 +187,9 @@ function writeStore(store: BtcManualTradeOverrideStore): void {
   fs.renameSync(temporary, target);
 }
 
-export function btcManualTradeOverrideIsArmed(nowMs = Date.now()): boolean {
+export function btcManualTradeOverrideIsArmed(): boolean {
   return readBtcManualTradeOverrideStore().overrides.some((state) => (
-    (state.status === 'ARMED' || state.status === 'EXECUTING') &&
-    Date.parse(String(state.expiresAt || '')) > nowMs
+    state.status === 'ARMED' || state.status === 'EXECUTING'
   ));
 }
 
@@ -231,8 +233,6 @@ export function normalizeBtcManualTradeOverrideRequest(
     }
     takeProfits.sort((left, right) => direction === 'long' ? left.price - right.price : right.price - left.price);
   }
-  const requestedHours = Number(input?.expiresInHours ?? 24);
-  const expiresInHours = Number.isFinite(requestedHours) ? Math.max(1, Math.min(168, requestedHours)) : 24;
   const armedAt = new Date(nowMs).toISOString();
   return {
     version: 1,
@@ -243,7 +243,6 @@ export function normalizeBtcManualTradeOverrideRequest(
     closeTrigger,
     takeProfits,
     armedAt,
-    expiresAt: new Date(nowMs + expiresInHours * HOUR_MS).toISOString(),
     updatedAt: armedAt
   };
 }
@@ -307,9 +306,8 @@ export function matchingManualOverrideCandle(
 ): BtcManualHourlyCandle | undefined {
   if (state.status !== 'ARMED' || !state.direction || !(Number(state.closeTrigger) > 0)) return undefined;
   const armedAtMs = Date.parse(String(state.armedAt || ''));
-  const expiresAtMs = Date.parse(String(state.expiresAt || ''));
   const latest = candles
-    .filter((candle) => candle.closeTime > armedAtMs && candle.closeTime <= nowMs && candle.closeTime <= expiresAtMs)
+    .filter((candle) => candle.closeTime > armedAtMs && candle.closeTime <= nowMs)
     .sort((left, right) => right.openTime - left.openTime)[0];
   if (!latest || nowMs - latest.closeTime > MANUAL_OVERRIDE_MAX_ENTRY_DELAY_MS) return undefined;
   return state.direction === 'long'
@@ -326,7 +324,6 @@ export function recoverableManualOverrideRequest(
   const triggeredAtMs = Date.parse(String(state.triggeredAt || ''));
   const signalStartedAtMs = Date.parse(String(state.signalCandleStartedAt || ''));
   const signalClosedAtMs = Date.parse(String(state.signalCandleClosedAt || ''));
-  const expiresAtMs = Date.parse(String(state.expiresAt || ''));
   const attempts = Number(state.recoveryAttempts || 0);
   if (
     !failedFlat ||
@@ -337,8 +334,6 @@ export function recoverableManualOverrideRequest(
     !Number.isFinite(triggeredAtMs) ||
     !Number.isFinite(signalStartedAtMs) ||
     !Number.isFinite(signalClosedAtMs) ||
-    !Number.isFinite(expiresAtMs) ||
-    expiresAtMs <= nowMs ||
     nowMs - triggeredAtMs > MANUAL_OVERRIDE_RECOVERY_MAX_AGE_MS
   ) {
     return undefined;
@@ -557,11 +552,6 @@ export class BtcManualTradeOverrideMonitor {
       let store = readBtcManualTradeOverrideStore();
       const nowMs = Date.now();
       const nowIso = new Date(nowMs).toISOString();
-      store.overrides = store.overrides.map((override) => (
-        override.status === 'ARMED' && Date.parse(String(override.expiresAt || '')) <= nowMs
-          ? { ...override, status: 'EXPIRED' as const, updatedAt: nowIso }
-          : override
-      ));
       const recovery = store.overrides
         .map((override) => ({ override, request: recoverableManualOverrideRequest(override, nowMs) }))
         .find((candidate) => candidate.request);

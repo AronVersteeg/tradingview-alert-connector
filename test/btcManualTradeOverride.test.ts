@@ -7,6 +7,7 @@ import {
   BtcManualTradeOverrideStore,
   BtcManualTradeOverrideState,
   buildManualTakeProfitOrderLevels,
+  btcManualTradeOverrideIsArmed,
   btcManualTriggerEmailSubject,
   matchingManualOverrideCandle,
   normalizeBtcManualTradeOverrideRequest,
@@ -27,11 +28,10 @@ describe('BTC manual entry and TP override', () => {
     };
   }
 
-  test('arms a validated one-shot long override', () => {
+  test('arms a validated persistent long override', () => {
     const state = normalizeBtcManualTradeOverrideRequest({
       direction: 'long',
       closeTrigger: 80000,
-      expiresInHours: 12,
       takeProfits: [
         { price: 81000, allocationPct: 60 },
         { price: 82500, allocationPct: 40 }
@@ -43,9 +43,9 @@ describe('BTC manual entry and TP override', () => {
       status: 'ARMED',
       direction: 'long',
       closeTrigger: 80000,
-      armedAt: '2026-09-10T10:30:00.000Z',
-      expiresAt: '2026-09-10T22:30:00.000Z'
+      armedAt: '2026-09-10T10:30:00.000Z'
     });
+    expect(state.expiresAt).toBeUndefined();
   });
 
   test('builds the requested manual trigger email header', () => {
@@ -90,7 +90,7 @@ describe('BTC manual entry and TP override', () => {
       closeTrigger: 80000,
       takeProfits: [],
       armedAt: '2026-09-10T10:30:00.000Z',
-      expiresAt: '2026-09-11T10:30:00.000Z',
+      expiresAt: '2026-09-10T10:45:00.000Z',
       updatedAt: '2026-09-10T10:30:00.000Z'
     };
     const candles = [
@@ -192,7 +192,7 @@ describe('BTC manual entry and TP override', () => {
       });
 
       const edited = monitor.update(first.id, {
-        direction: 'long', closeTrigger: 72000, expiresInHours: 48,
+        direction: 'long', closeTrigger: 72000,
         takeProfits: [{ price: 76000, allocationPct: 100 }]
       });
       const saved = readBtcManualTradeOverrideStore().overrides;
@@ -203,6 +203,7 @@ describe('BTC manual entry and TP override', () => {
         closeTrigger: 72000,
         takeProfits: [{ price: 76000, allocationPct: 100 }]
       });
+      expect(edited.expiresAt).toBeUndefined();
       expect(saved.find((plan) => plan.id === first.id)).toMatchObject({
         closeTrigger: 72000,
         takeProfits: [{ price: 76000, allocationPct: 100 }]
@@ -216,6 +217,37 @@ describe('BTC manual entry and TP override', () => {
       else process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = previousFile;
       if (previousEnabled === undefined) delete process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED;
       else process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED = previousEnabled;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps an existing armed plan active after its legacy expiry date', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'btc-manual-no-expiry-'));
+    const previousFile = process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+    process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = path.join(directory, 'state.json');
+    try {
+      fs.writeFileSync(process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE, JSON.stringify(store([{
+        version: 1,
+        id: 'existing-long-plan',
+        market: 'BTC-USD',
+        status: 'ARMED',
+        direction: 'long',
+        closeTrigger: 80000,
+        takeProfits: [],
+        armedAt: '2026-09-10T10:30:00.000Z',
+        expiresAt: '2026-09-11T10:30:00.000Z',
+        updatedAt: '2026-09-10T10:30:00.000Z'
+      }])), 'utf8');
+
+      expect(readBtcManualTradeOverrideStore().overrides[0]).toMatchObject({
+        id: 'existing-long-plan',
+        status: 'ARMED'
+      });
+      expect(readBtcManualTradeOverrideStore().overrides[0].expiresAt).toBeUndefined();
+      expect(btcManualTradeOverrideIsArmed()).toBe(true);
+    } finally {
+      if (previousFile === undefined) delete process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+      else process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = previousFile;
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });

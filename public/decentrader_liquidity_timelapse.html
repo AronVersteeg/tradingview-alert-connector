@@ -1379,9 +1379,6 @@
             <label class="manual-field"><span id="manualTriggerLabel">1H close above</span>
               <input id="manualOverrideTrigger" type="number" min="0" step="any" inputmode="decimal" required>
             </label>
-            <label class="manual-field">Valid hours
-              <input id="manualOverrideExpiry" type="number" min="1" max="168" step="1" value="24" required>
-            </label>
             <label class="manual-field">API token
               <input id="manualOverrideToken" type="password" autocomplete="off">
             </label>
@@ -1824,7 +1821,6 @@
     const manualOverrideDirection = document.getElementById('manualOverrideDirection');
     const manualOverrideTrigger = document.getElementById('manualOverrideTrigger');
     const manualTriggerLabel = document.getElementById('manualTriggerLabel');
-    const manualOverrideExpiry = document.getElementById('manualOverrideExpiry');
     const manualOverrideToken = document.getElementById('manualOverrideToken');
     const manualTpRows = document.getElementById('manualTpRows');
     const manualAddTp = document.getElementById('manualAddTp');
@@ -5427,7 +5423,6 @@
     function resetManualOverrideEditor() {
       manualEditingPlanId = null;
       manualOverrideTrigger.value = '';
-      manualOverrideExpiry.value = '24';
       resetManualTpRows();
       manualOverrideArm.textContent = 'Add plan';
       manualOverrideCancelEdit.hidden = true;
@@ -5440,8 +5435,6 @@
       manualEditingPlanId = state.id;
       manualOverrideDirection.value = state.direction;
       manualOverrideTrigger.value = state.closeTrigger;
-      const remainingHours = Math.ceil((Date.parse(state.expiresAt) - Date.now()) / (60 * 60 * 1000));
-      manualOverrideExpiry.value = String(Math.max(1, Math.min(168, remainingHours || 24)));
       resetManualTpRows(Array.isArray(state.takeProfits) ? state.takeProfits : []);
       manualOverrideArm.textContent = 'Save changes';
       manualOverrideCancelEdit.hidden = false;
@@ -5465,7 +5458,7 @@
         heading.textContent = `${state.direction.toUpperCase()} ${state.direction === 'short' ? '<' : '>'} ${money(state.closeTrigger)}${state.status === 'EXECUTING' ? ' (executing)' : ''}`;
         const meta = document.createElement('span');
         const tpCount = Array.isArray(state.takeProfits) ? state.takeProfits.length : 0;
-        meta.textContent = `Expires ${new Date(state.expiresAt).toLocaleString('nl-NL')}${tpCount ? ` | ${tpCount} locked TP${tpCount === 1 ? '' : 's'}` : ' | dynamic TPs'}`;
+        meta.textContent = `Armed indefinitely${tpCount ? ` | ${tpCount} locked TP${tpCount === 1 ? '' : 's'}` : ' | dynamic TPs'}`;
         detail.append(heading, meta);
         const actions = document.createElement('div');
         actions.className = 'manual-plan-actions';
@@ -5559,7 +5552,6 @@
           body: JSON.stringify({
             direction: manualOverrideDirection.value,
             closeTrigger: Number(manualOverrideTrigger.value),
-            expiresInHours: Number(manualOverrideExpiry.value),
             takeProfits: manualTakeProfitsFromForm()
           })
         });
