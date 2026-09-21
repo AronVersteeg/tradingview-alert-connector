@@ -5743,12 +5743,24 @@ export class DecentraderGapMonitor {
   }
 
   private scheduleTakeProfitSync(): void {
-    if (this.takeProfitPromise || !this.tradeExecutor?.syncTakeProfits || !decentraderDynamicTpEnabled()) return;
+    const executor = this.tradeExecutor;
+    if (this.takeProfitPromise || !executor?.syncTakeProfits || !decentraderDynamicTpEnabled()) return;
     this.takeProfitPromise = this.coordinator.withState(async (state) => {
       const managed = state.managedPosition;
       if (!managed) return;
+      if (managed.takeProfitMode === 'manual-locked') {
+        this.managementStatus.dynamicTpSync = {
+          outcome: 'LOCKED',
+          reason: 'Manual BTC TP ladder is locked; dynamic map TP refresh was skipped.',
+          market: managed.market,
+          takeProfits: managed.takeProfits || []
+        };
+        return;
+      }
       const preparedAt = Date.now();
-      const plan = await this.getTradePlan(undefined, decentraderTradeMarket());
+      const market = decentraderTradeMarket();
+      const account = await executor.getAccountSnapshot([market]);
+      const plan = await this.getTradePlan(account, market);
       await this.coordinator.exclusive(async () => {
         if (state.managedPosition !== managed) return;
         if (Date.now() - preparedAt > this.config().pollMinutes * 60_000) {

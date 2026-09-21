@@ -172,8 +172,13 @@ describe('managed position safety independent from entry scanning', () => {
 
   test('BTC management is independent of a failed scanner and runs SL before TP', async () => {
     const monitor = new gap.DecentraderGapMonitor() as any;
-    monitor.configureTradeExecutor(executor('BTC-USD'));
-    monitor.getTradePlan = jest.fn().mockResolvedValue({});
+    const orders = executor('BTC-USD');
+    monitor.configureTradeExecutor(orders);
+    monitor.getTradePlan = jest.fn().mockImplementation(async (account: any, market: string) => {
+      expect(account).toBe(await orders.getAccountSnapshot.mock.results[0].value);
+      expect(market).toBe('BTC-USD');
+      return {};
+    });
     fs.writeFileSync(process.env.DECENTRADER_GAP_ALERT_STATE_FILE!, JSON.stringify(state('BTC-USD')));
     monitor.maybeSyncDynamicStopLoss = jest.fn(async (s, r) => { s.managedPosition.currentStop = 105; r.dynamicSlSync = { outcome: 'UPDATED' }; });
     monitor.maybeSyncDynamicTakeProfits = jest.fn(async () => { throw new Error('TP failed'); });
@@ -184,6 +189,33 @@ describe('managed position safety independent from entry scanning', () => {
     expect(result.ok).toBe(true);
     expect(monitor.managementStatus.dynamicTpSync.outcome).toBe('ERROR');
     expect(JSON.parse(fs.readFileSync(process.env.DECENTRADER_GAP_ALERT_STATE_FILE!, 'utf8')).managedPosition.currentStop).toBe(105);
+  });
+
+  test('BTC manual-locked TP management skips map planning and preserves the locked ladder', async () => {
+    const monitor = new gap.DecentraderGapMonitor() as any;
+    const orders = executor('BTC-USD');
+    monitor.configureTradeExecutor(orders);
+    const managed = state('BTC-USD');
+    managed.managedPosition.takeProfitMode = 'manual-locked';
+    managed.managedPosition.takeProfits = [
+      { price: 90400, allocation_pct: 50 },
+      { price: 97800, allocation_pct: 50 }
+    ];
+    fs.writeFileSync(process.env.DECENTRADER_GAP_ALERT_STATE_FILE!, JSON.stringify(managed));
+    monitor.getTradePlan = jest.fn();
+    monitor.maybeSyncDynamicTakeProfits = jest.fn();
+
+    monitor.scheduleTakeProfitSync();
+    await monitor.takeProfitPromise;
+
+    expect(orders.getAccountSnapshot).not.toHaveBeenCalled();
+    expect(monitor.getTradePlan).not.toHaveBeenCalled();
+    expect(monitor.maybeSyncDynamicTakeProfits).not.toHaveBeenCalled();
+    expect(monitor.managementStatus.dynamicTpSync).toMatchObject({
+      outcome: 'LOCKED',
+      market: 'BTC-USD',
+      takeProfits: managed.managedPosition.takeProfits
+    });
   });
 
   test.each(['BTC', 'ETH'])('%s stop cycles continue while TP preparation is pending', async (asset) => {
