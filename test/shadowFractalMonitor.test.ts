@@ -3,6 +3,7 @@ import {
   ShadowHourlyCandle,
   evaluateShadowFractalBreakout,
   parseBinanceHourlyCandles,
+  shadowFractalEmailEnabled,
   shadowFractalEntryIsFresh
 } from '../src/services/shadowFractalMonitor';
 
@@ -42,6 +43,22 @@ function daily(
 }
 
 describe('Shadow Williams breakout monitor', () => {
+  const originalShadowEmailEnabled = process.env.SHADOW_FRACTAL_EMAIL_ENABLED;
+
+  afterEach(() => {
+    if (originalShadowEmailEnabled === undefined) delete process.env.SHADOW_FRACTAL_EMAIL_ENABLED;
+    else process.env.SHADOW_FRACTAL_EMAIL_ENABLED = originalShadowEmailEnabled;
+  });
+
+  test('keeps Shadow email notifications off by default and permits explicit opt-in', () => {
+    delete process.env.SHADOW_FRACTAL_EMAIL_ENABLED;
+    expect(shadowFractalEmailEnabled()).toBe(false);
+    process.env.SHADOW_FRACTAL_EMAIL_ENABLED = 'true';
+    expect(shadowFractalEmailEnabled()).toBe(true);
+    process.env.SHADOW_FRACTAL_EMAIL_ENABLED = 'false';
+    expect(shadowFractalEmailEnabled()).toBe(false);
+  });
+
   test('ignores the still-open Binance 1H candle and preserves exact decimals', () => {
     const nowMs = Date.UTC(2026, 8, 9, 2);
     const rows = [

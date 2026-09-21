@@ -87,6 +87,10 @@ function boolValue(value: string | undefined, fallback: boolean): boolean {
   return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
 }
 
+export function shadowFractalEmailEnabled(): boolean {
+  return boolValue(process.env.SHADOW_FRACTAL_EMAIL_ENABLED, false);
+}
+
 function stateFile(): string {
   return String(process.env.SHADOW_FRACTAL_HISTORY_FILE || '').trim()
     || path.join(process.cwd(), 'data', 'shadow-fractal-alert-history.json');
@@ -280,6 +284,7 @@ export class ShadowFractalMonitor {
     this.status = {
       ...this.status,
       enabled: this.enabled(),
+      emailEnabled: shadowFractalEmailEnabled(),
       emailConfigured: smtpSettingsFromEnv() !== undefined,
       markets: SHADOW_MARKETS.filter((config) => this.marketEnabled(config.asset)).map((config) => config.market)
     };
@@ -314,6 +319,7 @@ export class ShadowFractalMonitor {
       enabled: this.enabled(),
       readOnly: false,
       liveEntryEnabled: this.enabled(),
+      emailEnabled: shadowFractalEmailEnabled(),
       emailConfigured: smtpSettingsFromEnv() !== undefined,
       historyFile: stateFile(),
       records: state.records.length,
@@ -433,8 +439,9 @@ export class ShadowFractalMonitor {
 
     const timestamp = nlTimestamp(signal.candle.openTime);
     const subject = `${config.asset} Shadow ${signal.direction === 'LONG' ? 'Long' : 'Short'} | ${timestamp}`;
+    const emailEnabled = shadowFractalEmailEnabled();
     let emailSent = Boolean(record.emailSentAt);
-    if (!emailSent && Number(record.emailAttempts || 0) < 3) {
+    if (emailEnabled && !emailSent && Number(record.emailAttempts || 0) < 3) {
       const smtp = smtpSettingsFromEnv();
       if (!smtp) {
         record.emailError = 'SMTP is not configured.';
@@ -503,6 +510,7 @@ export class ShadowFractalMonitor {
       close: signal.candle.close,
       hourlyFractal: signal.hourlyFractal.priceExact,
       dailyFractal: signal.dailyFractal.priceExact,
+      emailEnabled,
       emailSent,
       tradePlaced: Boolean(tradeResult?.tradePlaced),
       tradeSkipped: tradeResult?.tradeSkipped,
@@ -512,9 +520,10 @@ export class ShadowFractalMonitor {
     return {
       market: config.market,
       signal: signal.direction,
+      emailEnabled,
       emailSent,
       emailSentAt: record.emailSentAt,
-      retryEmail: !emailSent && Boolean(smtpSettingsFromEnv()) && Number(record.emailAttempts || 0) < 3,
+      retryEmail: emailEnabled && !emailSent && Boolean(smtpSettingsFromEnv()) && Number(record.emailAttempts || 0) < 3,
       emailError: record.emailError,
       tradeResult
     };
