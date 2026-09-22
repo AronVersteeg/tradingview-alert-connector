@@ -1662,10 +1662,10 @@
       const input = data.input;
       const pressureHpa = Number(input.pressureHpa);
       const hasPressure = input.pressureHpa !== null && input.pressureHpa !== '' && Number.isFinite(pressureHpa);
-      const favorablePressure = hasPressure && pressureHpa >= 1013 && pressureHpa <= 1020;
+      const favorablePressure = hasPressure && pressureHpa >= 1013;
       const pressureValue = hasPressure ? `${esc(pressureHpa)} hPa` : 'Onbekend';
       const pressureCheck = favorablePressure
-        ? '<span class="pressure-check" title="Gunstige luchtdruk: 1013-1020 hPa" aria-label="Gunstige luchtdruk">&#10003;</span>'
+        ? '<span class="pressure-check" title="Gunstige luchtdruk: 1013 hPa of hoger" aria-label="Gunstige luchtdruk">&#10003;</span>'
         : '';
       result.innerHTML = `
         <div class="score-grid">
