@@ -10,6 +10,7 @@ export type SnoekScoutInput = {
   windBft?: number | string;
   cloudCoverPct?: number | string;
   pressureHpa?: number | string | null;
+  pressureChange24hHpa?: number | string | null;
   pressureTrend?: PressureTrend;
   rain?: RainState;
   timeOfDay?: TimeOfDay;
@@ -398,6 +399,7 @@ function normalizeInput(input: SnoekScoutInput) {
     windBft: toNumber(input.windBft, 3),
     cloudCoverPct: clamp(toNumber(input.cloudCoverPct, 70), 0, 100),
     pressureHpa: toOptionalNumber(input.pressureHpa),
+    pressureChange24hHpa: toOptionalNumber(input.pressureChange24hHpa),
     pressureTrend: normalizeEnum(input.pressureTrend, ['falling', 'steady', 'rising'], 'steady'),
     rain: normalizeEnum(input.rain, ['none', 'light', 'heavy'], 'none'),
     timeOfDay: normalizeEnum(input.timeOfDay, ['morning', 'midday', 'evening', 'night'], 'evening')

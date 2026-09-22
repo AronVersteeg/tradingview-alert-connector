@@ -191,6 +191,15 @@
       color: #67e6b7;
     }
 
+    .pressure-value.is-sharp-fall,
+    .pressure-change-warning {
+      color: #ff6b7f;
+    }
+
+    .pressure-change-warning {
+      font-weight: 700;
+    }
+
     .pressure-check {
       margin-left: 4px;
       color: #67e6b7;
@@ -898,6 +907,7 @@
           <div class="panel-body">
             <form id="scout-form">
               <input name="pressureHpa" type="hidden" value="">
+              <input name="pressureChange24hHpa" type="hidden" value="">
               <label>
                 Doel
                 <select name="target">
@@ -1662,8 +1672,16 @@
       const input = data.input;
       const pressureHpa = Number(input.pressureHpa);
       const hasPressure = input.pressureHpa !== null && input.pressureHpa !== '' && Number.isFinite(pressureHpa);
+      const pressureChange24hHpa = Number(input.pressureChange24hHpa);
+      const hasPressureChange = input.pressureChange24hHpa !== null
+        && input.pressureChange24hHpa !== ''
+        && Number.isFinite(pressureChange24hHpa);
+      const sharpPressureFall = hasPressureChange && pressureChange24hHpa < -5;
       const favorablePressure = hasPressure && pressureHpa >= 1013;
       const pressureValue = hasPressure ? `${esc(pressureHpa)} hPa` : 'Onbekend';
+      const pressureChangeLabel = hasPressureChange
+        ? `${pressureChange24hHpa > 0 ? '+' : ''}${esc(pressureChange24hHpa)} hPa / 24u`
+        : '';
       const pressureCheck = favorablePressure
         ? '<span class="pressure-check" title="Gunstige luchtdruk: 1013 hPa of hoger" aria-label="Gunstige luchtdruk">&#10003;</span>'
         : '';
@@ -1683,7 +1701,7 @@
         </div>
         <div class="mini-grid" style="margin-top: 14px;">
           <div class="mini-card"><span class="muted">Weer</span><strong>${esc(input.temperatureC)} C</strong><span class="muted">${esc(input.cloudCoverPct)}% bewolkt</span></div>
-          <div class="mini-card"><span class="muted">Luchtdruk</span><strong class="pressure-value${favorablePressure ? ' is-favorable' : ''}">${pressureValue}${pressureCheck}</strong><span class="muted">${esc(input.pressureTrend)} · Open-Meteo</span></div>
+          <div class="mini-card"><span class="muted">Luchtdruk</span><strong class="pressure-value${favorablePressure ? ' is-favorable' : ''}${sharpPressureFall ? ' is-sharp-fall' : ''}">${pressureValue}${pressureCheck}</strong><span class="muted${sharpPressureFall ? ' pressure-change-warning' : ''}">${esc(input.pressureTrend)}${pressureChangeLabel ? ` · ${pressureChangeLabel}` : ''} · Open-Meteo</span></div>
           <div class="mini-card"><span class="muted">Maan/zon</span><strong>${esc(data.activityWindows[0].times[1])}</strong><span class="muted">grote tijd</span></div>
         </div>
         <div class="cards" style="margin-top: 14px;">
@@ -2051,12 +2069,16 @@
         setField('windBft', data.weather.windBft);
         setField('cloudCoverPct', data.weather.cloudCoverPct);
         setField('pressureHpa', data.weather.pressureHpa);
+        setField('pressureChange24hHpa', data.weather.pressureChange24hHpa);
         setField('pressureTrend', data.weather.pressureTrend);
         setField('rain', data.weather.rain);
         setField('timeOfDay', data.weather.timeOfDay);
 
         const pressure = data.weather.pressureHpa === null ? 'onbekend' : `${data.weather.pressureHpa} hPa`;
-        weatherStatus.textContent = `Live Open-Meteo: ${data.location.name}, ${data.weather.temperatureC} C, wind ${data.weather.windBft} Bft, ${data.weather.cloudCoverPct}% bewolking, druk ${pressure}.`;
+        const pressureChange = data.weather.pressureChange24hHpa === null
+          ? ''
+          : `, 24u ${data.weather.pressureChange24hHpa > 0 ? '+' : ''}${data.weather.pressureChange24hHpa} hPa`;
+        weatherStatus.textContent = `Live Open-Meteo: ${data.location.name}, ${data.weather.temperatureC} C, wind ${data.weather.windBft} Bft, ${data.weather.cloudCoverPct}% bewolking, druk ${pressure}${pressureChange}.`;
         form.dispatchEvent(new Event('submit'));
       } catch (error) {
         weatherStatus.textContent = `Weerdata niet geladen: ${error.message}`;

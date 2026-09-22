@@ -17,6 +17,7 @@ export type SnoekWeatherResult = {
     windBft: number;
     cloudCoverPct: number;
     pressureHpa: number | null;
+    pressureChange24hHpa: number | null;
     pressureTrend: PressureTrend;
     precipitationMm: number;
     rain: RainState;
@@ -65,15 +66,40 @@ function timeOfDayFromIso(value?: string): TimeOfDay {
   return 'night';
 }
 
-function pressureTrendFromHourly(hourly: any, currentPressure: number | null): PressureTrend {
-  if (!hourly?.pressure_msl?.length || currentPressure === null) return 'steady';
-  const futurePressure = numberOrNull(hourly.pressure_msl[Math.min(3, hourly.pressure_msl.length - 1)]);
-  if (futurePressure === null) return 'steady';
+export function pressureMetricsFromHourly(
+  hourly: any,
+  currentPressure: number | null,
+  currentTime?: string
+): { trend: PressureTrend; change24hHpa: number | null } {
+  const pressures = hourly?.pressure_msl;
+  if (!Array.isArray(pressures) || !pressures.length || currentPressure === null) {
+    return { trend: 'steady', change24hHpa: null };
+  }
 
-  const delta = futurePressure - currentPressure;
-  if (delta <= -0.8) return 'falling';
-  if (delta >= 0.8) return 'rising';
-  return 'steady';
+  const times = Array.isArray(hourly.time) ? hourly.time : [];
+  let currentIndex = -1;
+  if (currentTime && times.length) {
+    const currentHour = currentTime.slice(0, 13);
+    currentIndex = times.findIndex((time: unknown) => String(time).slice(0, 13) === currentHour);
+    if (currentIndex < 0) {
+      for (let index = 0; index < times.length; index += 1) {
+        if (String(times[index]) <= currentTime) currentIndex = index;
+      }
+    }
+  }
+  if (currentIndex < 0) currentIndex = Math.max(0, pressures.length - 4);
+
+  const futurePressure = numberOrNull(pressures[Math.min(currentIndex + 3, pressures.length - 1)]);
+  const futureDelta = futurePressure === null ? 0 : futurePressure - currentPressure;
+  const trend: PressureTrend = futureDelta <= -0.8
+    ? 'falling'
+    : futureDelta >= 0.8
+      ? 'rising'
+      : 'steady';
+
+  const pastPressure = currentIndex >= 24 ? numberOrNull(pressures[currentIndex - 24]) : null;
+  const change24hHpa = pastPressure === null ? null : round(currentPressure - pastPressure);
+  return { trend, change24hHpa };
 }
 
 async function fetchJson(url: string): Promise<any> {
@@ -129,6 +155,7 @@ export async function getSnoekWeather(location: string): Promise<SnoekWeatherRes
       'weather_code'
     ].join(','),
     hourly: 'pressure_msl',
+    past_hours: '24',
     forecast_hours: '4',
     timezone: 'auto',
     wind_speed_unit: 'kmh'
@@ -141,7 +168,7 @@ export async function getSnoekWeather(location: string): Promise<SnoekWeatherRes
   const cloudCoverPct = numberOrNull(current.cloud_cover) ?? 50;
   const pressureHpa = numberOrNull(current.pressure_msl);
   const precipitationMm = numberOrNull(current.precipitation) ?? numberOrNull(current.rain) ?? 0;
-  const pressureTrend = pressureTrendFromHourly(payload.hourly, pressureHpa);
+  const pressureMetrics = pressureMetricsFromHourly(payload.hourly, pressureHpa, current.time);
   const timeOfDay = timeOfDayFromIso(current.time);
   const rain = rainFromPrecipitation(precipitationMm);
 
@@ -162,7 +189,8 @@ export async function getSnoekWeather(location: string): Promise<SnoekWeatherRes
       windBft: windKmhToBft(windKmh),
       cloudCoverPct: Math.round(cloudCoverPct),
       pressureHpa: pressureHpa === null ? null : round(pressureHpa),
-      pressureTrend,
+      pressureChange24hHpa: pressureMetrics.change24hHpa,
+      pressureTrend: pressureMetrics.trend,
       precipitationMm: round(precipitationMm),
       rain,
       timeOfDay,
@@ -173,7 +201,9 @@ export async function getSnoekWeather(location: string): Promise<SnoekWeatherRes
       temperatureC: round(temperatureC),
       windBft: windKmhToBft(windKmh),
       cloudCoverPct: Math.round(cloudCoverPct),
-      pressureTrend,
+      pressureHpa: pressureHpa === null ? null : round(pressureHpa),
+      pressureChange24hHpa: pressureMetrics.change24hHpa,
+      pressureTrend: pressureMetrics.trend,
       rain,
       timeOfDay
     }

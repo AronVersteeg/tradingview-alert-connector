@@ -50,10 +50,11 @@ describe('buildSnoekScout', () => {
     expect(result.communityReviews.some((review) => review.source === 'Engelhart Hengelsport advies')).toBe(true);
   });
 
-  it('keeps the measured pressure value in the dashboard response', () => {
-    const result = buildSnoekScout({ pressureHpa: '1017.4' });
+  it('keeps the measured pressure values in the dashboard response', () => {
+    const result = buildSnoekScout({ pressureHpa: '1017.4', pressureChange24hHpa: '-5.6' });
 
     expect(result.input.pressureHpa).toBe(1017.4);
+    expect(result.input.pressureChange24hHpa).toBe(-5.6);
   });
 
   it('places De Ven on the Velsen-Zuid model boat lake', () => {
