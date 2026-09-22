@@ -191,7 +191,7 @@
       color: #67e6b7;
     }
 
-    .pressure-value.is-sharp-fall,
+    .pressure-value.is-sharp-change,
     .pressure-change-warning {
       color: #ff6b7f;
     }
@@ -1676,7 +1676,7 @@
       const hasPressureChange = input.pressureChange24hHpa !== null
         && input.pressureChange24hHpa !== ''
         && Number.isFinite(pressureChange24hHpa);
-      const sharpPressureFall = hasPressureChange && pressureChange24hHpa < -5;
+      const sharpPressureChange = hasPressureChange && Math.abs(pressureChange24hHpa) > 5;
       const favorablePressure = hasPressure && pressureHpa >= 1013;
       const pressureValue = hasPressure ? `${esc(pressureHpa)} hPa` : 'Onbekend';
       const pressureChangeLabel = hasPressureChange
@@ -1701,7 +1701,7 @@
         </div>
         <div class="mini-grid" style="margin-top: 14px;">
           <div class="mini-card"><span class="muted">Weer</span><strong>${esc(input.temperatureC)} C</strong><span class="muted">${esc(input.cloudCoverPct)}% bewolkt</span></div>
-          <div class="mini-card"><span class="muted">Luchtdruk</span><strong class="pressure-value${favorablePressure ? ' is-favorable' : ''}${sharpPressureFall ? ' is-sharp-fall' : ''}">${pressureValue}${pressureCheck}</strong><span class="muted${sharpPressureFall ? ' pressure-change-warning' : ''}">${esc(input.pressureTrend)}${pressureChangeLabel ? ` · ${pressureChangeLabel}` : ''} · Open-Meteo</span></div>
+          <div class="mini-card"><span class="muted">Luchtdruk</span><strong class="pressure-value${favorablePressure ? ' is-favorable' : ''}${sharpPressureChange ? ' is-sharp-change' : ''}">${pressureValue}${pressureCheck}</strong><span class="muted${sharpPressureChange ? ' pressure-change-warning' : ''}">${esc(input.pressureTrend)}${pressureChangeLabel ? ` · ${pressureChangeLabel}` : ''} · Open-Meteo</span></div>
           <div class="mini-card"><span class="muted">Maan/zon</span><strong>${esc(data.activityWindows[0].times[1])}</strong><span class="muted">grote tijd</span></div>
         </div>
         <div class="cards" style="margin-top: 14px;">
