@@ -39,6 +39,7 @@ import {
 import { buildSnoekScout } from '../services/snoekScout';
 import { getSnoekCurrent } from '../services/snoekCurrent';
 import { getSnoekRijnland } from '../services/snoekRijnland';
+import { getSnoekRwsTemperature } from '../services/snoekRwsTemperature';
 import { getSnoekStructures } from '../services/snoekStructures';
 import { getSnoekWeather } from '../services/snoekWeather';
 import { intrusionTheListSnapshot } from '../services/intrusionTheList';
@@ -368,6 +369,19 @@ router.get('/snoek/api/rijnland', async (_req, res) => {
     res.send(await getSnoekRijnland());
   } catch (error) {
     console.error('Snoek Rijnland lookup failed:', error);
+    res.status(502).send({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+router.get('/snoek/api/rws-temperature', async (_req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(await getSnoekRwsTemperature());
+  } catch (error) {
+    console.error('Snoek RWS temperature lookup failed:', error);
     res.status(502).send({
       ok: false,
       error: error instanceof Error ? error.message : String(error)

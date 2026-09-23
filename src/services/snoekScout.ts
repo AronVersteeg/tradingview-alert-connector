@@ -263,6 +263,12 @@ const DATA_SOURCES: SnoekDataSource[] = [
     use: 'Actuele ADCP-puntmetingen van stroomsnelheid en stroomrichting; oude of onbetrouwbare reeksen worden niet als live getoond.'
   },
   {
+    id: 'rws-waterinfo-temperature',
+    label: 'Rijkswaterstaat Waterinfo watertemperatuur',
+    status: 'live',
+    use: 'Actuele puntmetingen en waar beschikbaar temperatuurprofielen op meerdere meetdieptes; oude en afgekeurde waarden worden niet geprojecteerd.'
+  },
+  {
     id: 'pdok-imwa-kunstwerken',
     label: 'PDOK Waterschappen Kunstwerken IMWA',
     status: 'live',

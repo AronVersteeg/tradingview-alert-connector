@@ -467,6 +467,12 @@
       background: linear-gradient(90deg, #38bdf8, #35d09f, #ffd166, #ff7a45);
     }
 
+    .rws-temperature-swatch {
+      border-radius: 2px;
+      background: linear-gradient(90deg, #38bdf8, #35d09f, #ffd166, #ff7a45);
+      box-shadow: inset 0 0 0 2px #ffffff;
+    }
+
     .pump-status-swatch {
       border-radius: 2px;
       background: linear-gradient(90deg, #35d09f 0 50%, #8190a6 50%);
@@ -614,6 +620,7 @@
     }
 
     .rijnland-temperature-marker,
+    .rws-temperature-marker,
     .rijnland-pump-marker {
       display: grid;
       place-items: center;
@@ -630,6 +637,14 @@
       height: 31px;
       border-radius: 50%;
       background: var(--temperature-color);
+    }
+
+    .rws-temperature-marker {
+      width: 31px;
+      height: 31px;
+      border-radius: 6px;
+      background: var(--temperature-color);
+      box-shadow: 0 0 0 2px #06111f, 0 2px 8px rgba(0, 0, 0, 0.62);
     }
 
     .rijnland-pump-marker {
@@ -654,6 +669,7 @@
     }
 
     .rijnland-temperature-marker.is-selected,
+    .rws-temperature-marker.is-selected,
     .rijnland-pump-marker.is-selected {
       border-width: 4px;
       box-shadow: 0 0 0 3px #06111f, 0 4px 11px rgba(0, 0, 0, 0.7);
@@ -999,8 +1015,9 @@
                   <label class="layer-toggle"><input id="layer-current" type="checkbox"><span class="layer-swatch current-swatch"></span> RWS stroming: kracht + richting</label>
                   <label class="layer-toggle"><input id="layer-practice" type="checkbox"><span class="layer-swatch practice-swatch"></span> Lokale praktijkspots</label>
                   <label class="layer-toggle"><input id="layer-hotspots" type="checkbox"><span class="layer-swatch hotspot-swatch"></span> Weloverwogen snoekspots</label>
-                  <span class="layer-section-title">Rijnland actuele metingen</span>
-                  <label class="layer-toggle"><input id="layer-rijnland-temperature" type="checkbox" checked><span class="layer-swatch temperature-swatch"></span> Watertemperatuur + roofvisadvies</label>
+                  <span class="layer-section-title">Actuele watermetingen</span>
+                  <label class="layer-toggle"><input id="layer-rijnland-temperature" type="checkbox" checked><span class="layer-swatch temperature-swatch"></span> Rijnland temperatuur + roofvisadvies</label>
+                  <label class="layer-toggle"><input id="layer-rws-temperature" type="checkbox" checked><span class="layer-swatch rws-temperature-swatch"></span> RWS Waterinfo temperatuur</label>
                   <label class="layer-toggle"><input id="layer-rijnland-pumps" type="checkbox" checked><span class="layer-swatch pump-status-swatch"></span> Gemalen AAN/UIT/? (alle PDOK)</label>
                   <span class="layer-section-title">PDOK IMWA - 18 exacte lagen</span>
                   <label class="layer-toggle"><input data-layer-filter="brug" type="checkbox" checked><span class="layer-swatch" style="--swatch:#ffd166"></span> Brug</label>
@@ -1088,6 +1105,7 @@
     const layerPractice = document.getElementById('layer-practice');
     const layerHotspots = document.getElementById('layer-hotspots');
     const layerRijnlandTemperature = document.getElementById('layer-rijnland-temperature');
+    const layerRwsTemperature = document.getElementById('layer-rws-temperature');
     const layerRijnlandPumps = document.getElementById('layer-rijnland-pumps');
     const layerPanel = document.querySelector('.layer-panel');
     const layerFilters = Array.from(document.querySelectorAll('[data-layer-filter]'));
@@ -1248,12 +1266,14 @@
     const practiceMarkerLayer = L.layerGroup();
     const currentMarkerLayer = L.layerGroup();
     const rijnlandTemperatureLayer = L.layerGroup();
+    const rwsTemperatureLayer = L.layerGroup();
     const rijnlandPumpLayer = L.layerGroup();
     const sourceCanvas = L.canvas({ padding: 0.5 });
     let structuresData = null;
     let scoutData = null;
     let currentData = null;
     let rijnlandData = null;
+    let rwsTemperatureData = null;
     let selectedStructureId = null;
     let selectedPracticeId = null;
     let selectedCurrentId = null;
@@ -1346,6 +1366,7 @@
       renderPracticeSpots();
       renderCurrent();
       renderRijnland();
+      renderRwsTemperature();
     }
 
     function currentColor(strength) {
@@ -1399,6 +1420,7 @@
       renderStructures();
       renderPracticeSpots();
       renderRijnland();
+      renderRwsTemperature();
     }
 
     function renderCurrent() {
@@ -1526,25 +1548,34 @@
       selectedCurrentId = null;
       spotDetail.hidden = false;
       if (kind === 'temperature') {
-        const rows = item.readings.map((reading) => `
-          <div class="temperature-profile-row">
-            <span>${reading.depthM === null ? 'Diepte niet opgegeven' : `${esc(reading.depthM.toFixed(2))} m onder waterspiegel`}</span>
-            <strong>${esc(reading.temperatureC.toFixed(1))} C</strong>
-            <small>${Number.isFinite(reading.chlorideMgL) ? `${esc(Math.round(reading.chlorideMgL))} mg/L Cl` : 'Cl -'}</small>
-            <small>${Number.isFinite(reading.conductivityUsCm) ? `${esc(Math.round(reading.conductivityUsCm))} uS/cm` : 'EGV -'}</small>
-          </div>
-        `).join('');
+        const rows = item.readings.map((reading) => {
+          const levelLabel = reading.depthM !== null
+            ? `${esc(reading.depthM.toFixed(2))} m onder waterspiegel`
+            : Number.isFinite(reading.sampleHeightM) && reading.referencePlane && reading.referencePlane !== 'NVT'
+              ? `Meetniveau ${esc(reading.sampleHeightM.toFixed(2))} m ${esc(reading.referencePlane)}`
+              : 'Diepte niet opgegeven';
+          return `
+            <div class="temperature-profile-row">
+              <span>${levelLabel}</span>
+              <strong>${esc(reading.temperatureC.toFixed(1))} C</strong>
+              <small>${Number.isFinite(reading.chlorideMgL) ? `${esc(Math.round(reading.chlorideMgL))} mg/L Cl` : 'Cl -'}</small>
+              <small>${Number.isFinite(reading.conductivityUsCm) ? `${esc(Math.round(reading.conductivityUsCm))} uS/cm` : 'EGV -'}</small>
+            </div>
+          `;
+        }).join('');
         const sources = (item.scientificSources || []).map((source) => `
           <li><a href="${esc(source.url)}" target="_blank" rel="noreferrer">${esc(source.label)}</a>: ${esc(source.use)}</li>
         `).join('');
         const measured = (item.measuredVariables || ['watertemperatuur']).join(', ');
         const missing = (item.missingVariables || []).join(', ');
+        const sourceLabel = item.sourceLabel || 'Rijnland watertemperatuur';
+        const sourceUrl = item.readings.find((reading) => reading.chartUrl)?.chartUrl;
         spotDetail.innerHTML = `
           <h3>
             <span>${esc(item.name)}</span>
             <button id="spot-detail-close" type="button">x</button>
           </h3>
-          <p class="muted">Rijnland watertemperatuur - ${esc(rijnlandUpdatedLabel(item.sourceUpdatedAt))}</p>
+          <p class="muted">${esc(sourceLabel)} - ${esc(rijnlandUpdatedLabel(item.sourceUpdatedAt))}${sourceUrl ? ` - <a href="${esc(sourceUrl)}" target="_blank" rel="noreferrer">open bron</a>` : ''}</p>
           <div class="temperature-profile">${rows}</div>
           <p>${esc(item.profileNote)}</p>
           <div class="spot-meta">
@@ -1585,6 +1616,7 @@
         selectedRijnlandId = null;
         spotDetail.hidden = true;
         renderRijnland();
+        renderRwsTemperature();
       });
     }
 
@@ -1592,6 +1624,7 @@
       renderRijnlandDetail(kind, item);
       fishingMap.flyTo([item.lat, item.lon], Math.max(fishingMap.getZoom(), 15));
       renderRijnland();
+      renderRwsTemperature();
       renderStructures();
       renderPracticeSpots();
       renderCurrent();
@@ -1649,6 +1682,32 @@
       });
     }
 
+    function renderRwsTemperature() {
+      rwsTemperatureLayer.clearLayers();
+      if (!rwsTemperatureData?.temperatureProfiles) return;
+
+      rwsTemperatureData.temperatureProfiles.forEach((item) => {
+        const reading = item.readings.find((entry) => entry.depthM !== null) || item.readings[0];
+        if (!reading) return;
+        const selected = item.id === selectedRijnlandId;
+        const marker = L.marker([item.lat, item.lon], {
+          pane: 'rijnland',
+          title: `${item.name}, RWS Waterinfo ${reading.temperatureC.toFixed(1)} C`,
+          alt: `${item.name}, RWS watertemperatuur ${reading.temperatureC.toFixed(1)} C`,
+          icon: L.divIcon({
+            className: '',
+            html: `<span class="rws-temperature-marker${selected ? ' is-selected' : ''}" style="--temperature-color:${rijnlandTemperatureColor(reading.temperatureC)}">${esc(reading.temperatureC.toFixed(1))}</span>`,
+            iconSize: [35, 35],
+            iconAnchor: [17, 17]
+          }),
+          zIndexOffset: selected ? 1750 : 1300
+        });
+        marker.bindTooltip(`${item.name} - RWS ${reading.temperatureC.toFixed(1)} C - tik voor profiel en roofvisadvies`, { direction: 'top' });
+        marker.on('click', () => selectRijnland('temperature', item));
+        marker.addTo(rwsTemperatureLayer);
+      });
+    }
+
     function applyBaseLayerVisibility() {
       const setVisible = (layer, visible) => {
         if (visible && !fishingMap.hasLayer(layer)) layer.addTo(fishingMap);
@@ -1665,6 +1724,7 @@
       setVisible(practiceMarkerLayer, layerPractice.checked);
       setVisible(currentMarkerLayer, layerCurrent.checked);
       setVisible(rijnlandTemperatureLayer, layerRijnlandTemperature.checked);
+      setVisible(rwsTemperatureLayer, layerRwsTemperature.checked);
       setVisible(rijnlandPumpLayer, layerRijnlandPumps.checked);
     }
 
@@ -1774,12 +1834,15 @@
     }
 
     function rijnlandLegendHtml() {
-      if (!rijnlandData) return '';
+      if (!rijnlandData && !rwsTemperatureData) return '';
       const parts = [];
-      if (layerRijnlandTemperature.checked && rijnlandData.temperatureProfiles?.length) {
+      if (layerRijnlandTemperature.checked && rijnlandData?.temperatureProfiles?.length) {
         parts.push('<span class="legend-item"><span class="layer-swatch temperature-swatch"></span>Rijnland temperatuur C</span>');
       }
-      if (layerRijnlandPumps.checked && rijnlandData.pumps?.length) {
+      if (layerRwsTemperature.checked && rwsTemperatureData?.temperatureProfiles?.length) {
+        parts.push('<span class="legend-item"><span class="layer-swatch rws-temperature-swatch"></span>RWS Waterinfo temperatuur C</span>');
+      }
+      if (layerRijnlandPumps.checked && rijnlandData?.pumps?.length) {
         const active = rijnlandData.pumps.filter((pump) => pump.active === true).length;
         const inactive = rijnlandData.pumps.filter((pump) => pump.active === false).length;
         const unknown = rijnlandData.pumps.length - active - inactive;
@@ -1893,6 +1956,7 @@
       renderPracticeSpots();
       renderCurrent();
       renderRijnland();
+      renderRwsTemperature();
     }
 
     function renderPracticeSpots() {
@@ -1958,6 +2022,21 @@
         `);
       } else {
         cards.push('<div class="card"><h3>Rijnland live meetlagen</h3><p class="muted">Temperatuurprofielen en gemaalstatus worden geladen...</p></div>');
+      }
+
+      if (rwsTemperatureData) {
+        const rwsDepthProfiles = rwsTemperatureData.temperatureProfiles.filter((profile) => (
+          profile.readings.filter((reading) => reading.depthM !== null).length > 1
+        )).length;
+        cards.push(`
+          <div class="card">
+            <h3>RWS Waterinfo temperatuur <span class="badge">${esc(rwsTemperatureData.temperatureProfiles.length)} locaties</span></h3>
+            <p class="muted">Profielen met meerdere echte meetdieptes: ${esc(rwsDepthProfiles)}. ${esc(rwsTemperatureData.coverageNote)}</p>
+            ${rwsTemperatureData.error ? `<p class="warning" style="margin-top: 7px;">${esc(rwsTemperatureData.error)}</p>` : ''}
+          </div>
+        `);
+      } else {
+        cards.push('<div class="card"><h3>RWS Waterinfo temperatuur</h3><p class="muted">Actuele temperatuurpunten worden geladen...</p></div>');
       }
 
       if (structuresData) {
@@ -2129,6 +2208,27 @@
       renderFeatureList();
     }
 
+    async function loadRwsTemperature() {
+      try {
+        const response = await fetch('/snoek/api/rws-temperature');
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || 'RWS Waterinfo-temperatuur kon niet geladen worden.');
+        }
+        rwsTemperatureData = data;
+      } catch (error) {
+        rwsTemperatureData = {
+          temperatureProfiles: [],
+          error: `RWS Waterinfo-temperatuur niet geladen: ${error.message}`,
+          coverageNote: 'Geen actuele RWS-temperatuurpunten beschikbaar.'
+        };
+      }
+      renderRwsTemperature();
+      applyBaseLayerVisibility();
+      renderStructures();
+      renderFeatureList();
+    }
+
     async function loadStructures() {
       const requestId = ++structuresRequestId;
       const selectedLayers = layerFilters
@@ -2195,6 +2295,10 @@
       applyBaseLayerVisibility();
       renderStructures();
     });
+    layerRwsTemperature.addEventListener('change', () => {
+      applyBaseLayerVisibility();
+      renderStructures();
+    });
     layerRijnlandPumps.addEventListener('change', () => {
       applyBaseLayerVisibility();
       renderStructures();
@@ -2205,6 +2309,7 @@
     fitInterestArea();
     loadCurrent();
     loadRijnland();
+    loadRwsTemperature();
     loadStructures();
     loadWeather();
   </script>

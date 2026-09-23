@@ -146,7 +146,7 @@ function profileName(name: string): string {
   return name.replace(/,\s*[0-9]+(?:[.,][0-9]+)?\s*m\s+onder\s+waterspiegel.*$/i, '').trim();
 }
 
-function profileAdvice(readings: RijnlandTemperatureReading[]): Pick<RijnlandTemperatureProfile, 'depthHintM' | 'profileNote' | 'presentationHint'> {
+export function profileAdvice(readings: RijnlandTemperatureReading[]): Pick<RijnlandTemperatureProfile, 'depthHintM' | 'profileNote' | 'presentationHint'> {
   const knownDepths = readings.filter((reading) => reading.depthM !== null) as Array<RijnlandTemperatureReading & { depthM: number }>;
   if (knownDepths.length < 2) {
     return {
