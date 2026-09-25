@@ -49,7 +49,11 @@ import {
   isDailyFractalMarket
 } from '../services/binanceDailyFractalHistory';
 import { shadowFractalMonitor } from '../services/shadowFractalMonitor';
-import { btcManualTradeOverrideMonitor } from '../services/btcManualTradeOverride';
+import {
+  btcManualTradeOverrideMonitor,
+  manualTradeOverrideMonitorForMarket,
+  manualTradeOverrideMonitors
+} from '../services/btcManualTradeOverride';
 
 const STORE_PATH = path.join(process.cwd(), 'data', 'executed-alerts.json');
 
@@ -179,6 +183,12 @@ function configureDecentraderTradeExecutor() {
   shadowFractalMonitor.configureEntryHandler('PAXG-USD', openLiquidityV2GoldIntrusionMonitor);
   shadowFractalMonitor.configureEntryHandler('XAG-USD', openLiquidityV2SilverIntrusionMonitor);
   btcManualTradeOverrideMonitor.configureEntryHandler(decentraderGapMonitor);
+  manualTradeOverrideMonitorForMarket('ETH-USD')?.configureEntryHandler(openLiquidityV2EthTradeMonitor);
+  manualTradeOverrideMonitorForMarket('INJ-USD')?.configureEntryHandler(openLiquidityV2InjTradeMonitor);
+  manualTradeOverrideMonitorForMarket('SOL-USD')?.configureEntryHandler(openLiquidityV2SolTradeMonitor);
+  manualTradeOverrideMonitorForMarket('ZEC-USD')?.configureEntryHandler(openLiquidityV2ZecTradeMonitor);
+  manualTradeOverrideMonitorForMarket('PAXG-USD')?.configureEntryHandler(openLiquidityV2GoldIntrusionMonitor);
+  manualTradeOverrideMonitorForMarket('XAG-USD')?.configureEntryHandler(openLiquidityV2SilverIntrusionMonitor);
 }
 
 async function initializeExchanges() {
@@ -267,7 +277,7 @@ initializeExchanges()
     openLiquidityV2SilverIntrusionMonitor.start(225_000);
     openLiquidityV2SolTradeMonitor.start(255_000);
     openLiquidityV2ZecTradeMonitor.start(345_000);
-    btcManualTradeOverrideMonitor.start(30_000);
+    [...manualTradeOverrideMonitors.values()].forEach((monitor, index) => monitor.start(30_000 + index * 5_000));
     shadowFractalMonitor.start(390_000);
   })
   .catch((err) => {
@@ -603,10 +613,17 @@ router.get('/research/shadow-fractal/status', async (_req, res) => {
   res.send(shadowFractalMonitor.getStatus());
 });
 
-router.get('/decentrader/manual-override', async (_req, res) => {
+function requestedManualOverrideMonitor(req: express.Request) {
+  const market = req.body?.market || req.query?.market || 'BTC-USD';
+  return manualTradeOverrideMonitorForMarket(market);
+}
+
+router.get('/decentrader/manual-override', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.send(btcManualTradeOverrideMonitor.getStatus());
+  const monitor = requestedManualOverrideMonitor(req);
+  if (!monitor) return res.status(400).send({ ok: false, error: `Unsupported manual override market ${req.query?.market}.` });
+  res.send(monitor.getStatus());
 });
 
 router.options('/decentrader/manual-override', (_req, res) => {
@@ -623,7 +640,9 @@ router.post('/decentrader/manual-override', async (req, res) => {
   }
   try {
     res.setHeader('Cache-Control', 'no-store');
-    res.send({ ok: true, override: btcManualTradeOverrideMonitor.arm(req.body) });
+    const monitor = requestedManualOverrideMonitor(req);
+    if (!monitor) return res.status(400).send({ ok: false, error: `Unsupported manual override market ${req.body?.market || req.query?.market}.` });
+    res.send({ ok: true, override: monitor.arm(req.body) });
   } catch (error) {
     res.status(400).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
   }
@@ -636,8 +655,10 @@ router.patch('/decentrader/manual-override', async (req, res) => {
   }
   try {
     res.setHeader('Cache-Control', 'no-store');
+    const monitor = requestedManualOverrideMonitor(req);
+    if (!monitor) return res.status(400).send({ ok: false, error: `Unsupported manual override market ${req.body?.market || req.query?.market}.` });
     const planId = req.body?.id || req.query?.id;
-    res.send({ ok: true, override: btcManualTradeOverrideMonitor.update(planId, req.body) });
+    res.send({ ok: true, override: monitor.update(planId, req.body) });
   } catch (error) {
     res.status(409).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
   }
@@ -650,8 +671,10 @@ router.delete('/decentrader/manual-override', async (req, res) => {
   }
   try {
     res.setHeader('Cache-Control', 'no-store');
+    const monitor = requestedManualOverrideMonitor(req);
+    if (!monitor) return res.status(400).send({ ok: false, error: `Unsupported manual override market ${req.body?.market || req.query?.market}.` });
     const planId = req.body?.id || req.query?.id || req.body?.direction || req.query?.direction;
-    res.send({ ok: true, override: btcManualTradeOverrideMonitor.cancel(planId) });
+    res.send({ ok: true, override: monitor.cancel(planId) });
   } catch (error) {
     res.status(409).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
   }

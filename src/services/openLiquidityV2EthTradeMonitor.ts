@@ -6,6 +6,14 @@ import {
   delayEntryModelEnabled,
   fractalEntryModelEnabled
 } from './entryModelSwitches';
+import {
+  BtcManualEntryRequest,
+  btcManualTradeOverrideEnabled,
+  btcManualTriggerEmailSubject,
+  btcManualTriggerTimestampNl,
+  buildManualTakeProfitOrderLevels,
+  manualTradeOverrideIsArmed
+} from './btcManualTradeOverride';
 
 import { AlertObject } from '../types';
 
@@ -1038,7 +1046,12 @@ export class OpenLiquidityV2EthTradeMonitor {
     oraclePrice: number,
     plan: any,
     orderAlert: AlertObject,
-    outcome: 'PLACED' | 'ADOPTED' | 'RECOVERED_AFTER_PARTIAL_EXECUTION'
+    outcome: 'PLACED' | 'ADOPTED' | 'RECOVERED_AFTER_PARTIAL_EXECUTION',
+    options: {
+      model?: 'SHADOW_FRACTAL' | 'MANUAL_OVERRIDE';
+      takeProfitMode?: 'dynamic' | 'manual-locked';
+      signal?: any;
+    } = {}
   ): void {
     const stop = plan.activePlan?.stop;
     const registeredAt = nowNlIso();
@@ -1064,26 +1077,33 @@ export class OpenLiquidityV2EthTradeMonitor {
       currentStopFractalPrice: stop?.fractal?.price,
       currentStopFractalSource: stop?.fractal?.source,
       currentStopFractalCandleSource: 'dydx-1h',
+      takeProfitMode: options.takeProfitMode || 'dynamic',
       takeProfits
     };
-    stabilizeManagedTakeProfits(
-      state.managedPosition,
-      takeProfits,
-      Math.abs(finite(position.size)),
-      registeredAt,
-      [],
-      0,
-      { currentPrice: finite(position.entryPrice) || oraclePrice }
-    );
+    if (state.managedPosition.takeProfitMode !== 'manual-locked') {
+      stabilizeManagedTakeProfits(
+        state.managedPosition,
+        takeProfits,
+        Math.abs(finite(position.size)),
+        registeredAt,
+        [],
+        0,
+        { currentPrice: finite(position.entryPrice) || oraclePrice }
+      );
+    }
     state.lastTradeDecision = {
       at: registeredAt,
       outcome,
+      model: options.model || 'SHADOW_FRACTAL',
       market: this.config.market,
       direction,
       signature,
       size: Math.abs(finite(position.size)),
+      entryPrice: finite(position.entryPrice) || oraclePrice,
       stop: finite(stop?.price),
-      takeProfits
+      takeProfitMode: state.managedPosition.takeProfitMode,
+      takeProfits,
+      signal: options.signal
     };
   }
 
@@ -1104,6 +1124,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
         if (!fractalEntryModelEnabled()) {
           result.tradeSkipped = 'SHADOW_FRACTAL_ENTRY_MODEL_ENABLED is false.';
+          return result;
+        }
+        if (manualTradeOverrideIsArmed(this.config.market)) {
+          result.tradeSkipped = `An armed ${this.config.asset} manual entry/TP override has priority over Shadow entries.`;
           return result;
         }
         if (!this.autoTradeEnabled()) {
@@ -1213,6 +1237,205 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
   }
 
+  async executeManualEntry(request: BtcManualEntryRequest): Promise<any> {
+    const result: any = {
+      model: 'MANUAL_OVERRIDE',
+      market: this.config.market,
+      direction: request.direction,
+      signature: request.signature,
+      tradePlaced: false
+    };
+
+    if (normalizedMarket(request.market) !== this.config.market) {
+      return { ...result, tradeSkipped: `Manual entry market ${request.market} does not match ${this.config.market}.` };
+    }
+
+    try {
+      return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
+        if (!btcManualTradeOverrideEnabled()) {
+          result.tradeSkipped = 'MANUAL_ENTRY_TP_OVERRIDE_ENABLED is false.';
+          return result;
+        }
+        if (!this.autoTradeEnabled()) {
+          result.tradeSkipped = `${this.config.asset} auto-trading is disabled by ${this.config.autoTradeEnv}.`;
+          return result;
+        }
+        if (!this.executor) {
+          result.tradeSkipped = `No dYdX executor is configured for ${this.config.asset}.`;
+          return result;
+        }
+        if (state.lastTradeExecutedSignature === request.signature) {
+          result.tradeSkipped = `Duplicate ${this.config.asset} manual override signature.`;
+          result.duplicate = true;
+          return result;
+        }
+
+        const account = await this.executor.getAccountSnapshot([this.config.market]);
+        const openPosition = existingPosition(account, this.config.market);
+        if (openPosition) {
+          result.tradeSkipped = `Existing ${this.config.market} position detected; manual plan remains armed.`;
+          result.tradeDeferred = true;
+          return result;
+        }
+        if (state.lastTradeAttemptedSignature === request.signature && !request.recovery) {
+          result.tradeSkipped = `Duplicate ${this.config.asset} manual override signature.`;
+          result.duplicate = true;
+          return result;
+        }
+        if (state.lastTradeAttemptedSignature === request.signature && request.recovery) {
+          console.warn(`Retrying interrupted ${this.config.asset} manual entry after confirming the dYdX account is flat.`, {
+            market: this.config.market,
+            direction: request.direction,
+            signature: request.signature
+          });
+        }
+
+        const plan = await this.getTradePlan(account, undefined, request.direction);
+        const marketStatus = String(plan.marketInfo?.status || '').trim().toUpperCase();
+        if (marketStatus && marketStatus !== 'ACTIVE') {
+          result.tradeSkipped = `${this.config.market} is ${marketStatus}; no live order was submitted.`;
+          return result;
+        }
+        if (
+          !plan.activePlan ||
+          plan.activePlan.direction !== request.direction ||
+          plan.activePlan.status === 'invalid-stop' ||
+          plan.activePlan.status === 'invalid-size' ||
+          plan.activePlan.stop?.valid === false
+        ) {
+          result.tradeSkipped =
+            plan.activePlan?.statusReason ||
+            plan.activePlan?.stop?.reason ||
+            `Manual ${this.config.asset} entry skipped because the shared Williams SL/risk plan is invalid.`;
+          result.tradePlan = plan;
+          return result;
+        }
+
+        const orderAlert = buildDecentraderOrderAlert(plan, request.signature);
+        const manualTpLocked = request.takeProfits.length > 0;
+        if (manualTpLocked) {
+          (orderAlert as any).take_profits = buildManualTakeProfitOrderLevels(
+            request.direction,
+            request.takeProfits,
+            finite(plan.activePlan.sizing?.size),
+            finite(plan.activePlan.sizing?.minimumOrderSize) || finite(plan.marketInfo?.stepSize),
+            finite(plan.marketInfo?.oraclePrice) || finite(plan.price)
+          );
+        }
+        (orderAlert as any).strategy = `${this.config.strategyPrefix}_manual_entry_tp_override`;
+        (orderAlert as any).manual_entry_override = { ...request, manualTpLocked };
+        (orderAlert as any).decentrader = {
+          ...(orderAlert as any).decentrader,
+          note: manualTpLocked
+            ? `Manual ${this.config.asset} 1H close entry with locked manual TP ladder and automatic Williams SL/trailing.`
+            : `Manual ${this.config.asset} 1H close entry with automatic map TPs and automatic Williams SL/trailing.`
+        };
+        state.lastTradeAttemptedSignature = request.signature;
+        state.lastTradeAttemptedAt = nowNlIso();
+        result.tradePlan = plan;
+        result.tradeAlert = {
+          strategy: (orderAlert as any).strategy,
+          market: orderAlert.market,
+          desired_position: (orderAlert as any).desired_position,
+          size: (orderAlert as any).size,
+          static_sl: (orderAlert as any).static_sl,
+          take_profits: (orderAlert as any).take_profits
+        };
+
+        let placedPosition: DydxOpenPosition | undefined;
+        let outcome: 'PLACED' | 'RECOVERED_AFTER_PARTIAL_EXECUTION' = 'PLACED';
+        try {
+          const placement = await this.executor.placeOrder(orderAlert);
+          if (dydxTargetFailedAndFlattened(placement)) {
+            result.tradeSkipped = placement.reason;
+            result.tradePlacement = placement;
+            return result;
+          }
+          placedPosition = await this.waitForExpectedPosition(request.direction);
+        } catch (error) {
+          placedPosition = await this.waitForExpectedPosition(request.direction);
+          if (!placedPosition || directionForPosition(placedPosition) !== request.direction) throw error;
+          outcome = 'RECOVERED_AFTER_PARTIAL_EXECUTION';
+          result.tradeRecovered = true;
+          result.tradeWarning = error instanceof Error ? error.message : String(error);
+        }
+        if (!placedPosition || directionForPosition(placedPosition) !== request.direction) {
+          throw new Error(`dYdX did not report the requested manual ${this.config.market} ${request.direction} position.`);
+        }
+
+        const oraclePrice = finite(plan.marketInfo?.oraclePrice) || finite(plan.price);
+        this.registerManagedPosition(
+          state,
+          request.signature,
+          request.direction,
+          placedPosition,
+          oraclePrice,
+          plan,
+          orderAlert,
+          outcome,
+          {
+            model: 'MANUAL_OVERRIDE',
+            takeProfitMode: manualTpLocked ? 'manual-locked' : 'dynamic',
+            signal: request
+          }
+        );
+        result.tradePlaced = true;
+        result.tradeDecision = state.lastTradeDecision;
+        if (outcome === 'RECOVERED_AFTER_PARTIAL_EXECUTION') {
+          await this.syncManagedOrders(state, result);
+        }
+        console.log(`${this.config.asset} manual entry/TP override placed:`, state.lastTradeDecision);
+        return result;
+      }));
+    } catch (error) {
+      result.tradeError = error instanceof Error ? error.message : String(error);
+      console.error(`${this.config.asset} manual entry/TP override failed:`, error);
+      return result;
+    }
+  }
+
+  async sendManualTriggerEmail(
+    request: BtcManualEntryRequest,
+    result: any
+  ): Promise<{ sent: boolean; error?: string }> {
+    const smtp = smtpSettingsFromEnv();
+    if (!smtp) return { sent: false, error: 'SMTP is not configured.' };
+    const decision = result?.tradeDecision || {};
+    const outcome = result?.tradePlaced
+      ? 'PLACED'
+      : result?.tradeSkipped
+        ? `SKIPPED: ${result.tradeSkipped}`
+        : `ERROR: ${result?.tradeError || 'Unknown execution result'}`;
+    const takeProfits = Array.isArray(decision.takeProfits)
+      ? decision.takeProfits
+      : Array.isArray(result?.tradeAlert?.take_profits)
+        ? result.tradeAlert.take_profits
+        : [];
+    const tpLines = takeProfits.length
+      ? takeProfits.map((level: any, index: number) => `TP${index + 1}: ${finite(level.price)} | size ${finite(level.size)}`)
+      : ['TPs: dynamic liquidity-map ladder'];
+    const body = [
+      `${this.config.asset} MANUAL ${request.direction.toUpperCase()} TRIGGERED`,
+      `Signal candle: ${btcManualTriggerTimestampNl(request.signalCandleStartedAt)}`,
+      `Binance 1H close: ${request.signalClose}`,
+      `Configured close trigger: ${request.direction === 'long' ? 'above' : 'below'} ${request.closeTrigger}`,
+      `Order result: ${outcome}`,
+      decision.entryPrice ? `dYdX entry: ${decision.entryPrice}` : '',
+      decision.size ? `Position size: ${decision.size}` : '',
+      decision.stop ? `Williams SL: ${decision.stop}` : '',
+      ...tpLines
+    ].filter(Boolean).join('\n');
+    const subject = btcManualTriggerEmailSubject(request);
+    const email = await sendEmailBestEffort(smtp, subject, body);
+    console.log(`${this.config.asset} manual entry trigger email result:`, {
+      subject,
+      sent: email.sent,
+      error: email.error,
+      signature: request.signature
+    });
+    return email;
+  }
+
   private async executeAlert(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
     return this.coordinator.exclusive(() => this.executeAlertExclusive(state, alert, signature, result));
   }
@@ -1220,6 +1443,10 @@ export class OpenLiquidityV2EthTradeMonitor {
   private async executeAlertExclusive(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
     if (!delayEntryModelEnabled()) {
       result.tradeSkipped = 'DECENTRADER_DELAY_ENTRY_MODEL_ENABLED is false; Delay entries and entry emails are disabled.';
+      return;
+    }
+    if (manualTradeOverrideIsArmed(this.config.market)) {
+      result.tradeSkipped = `An armed ${this.config.asset} manual entry/TP override has priority over Delay entries.`;
       return;
     }
     if (!this.autoTradeEnabled()) {
@@ -1445,6 +1672,14 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
     if (options.stopOnly) return;
     if (boolEnv('DECENTRADER_DYNAMIC_TP_ENABLED', true) && executor.syncTakeProfits) {
+      if (managed.takeProfitMode === 'manual-locked') {
+        result.dynamicTpSync = {
+          outcome: 'LOCKED',
+          reason: 'Manual take-profit ladder remains fixed for this position.',
+          takeProfits: managed.takeProfits || []
+        };
+        return;
+      }
       try {
         const plan = options.preparedPlan || await this.getTradePlan(account);
         plan.marketInfo = marketInfo;
@@ -1866,6 +2101,14 @@ export class OpenLiquidityV2EthTradeMonitor {
     this.takeProfitPromise = this.coordinator.withState(async (state) => {
       const managed = state.managedPosition;
       if (!managed) return;
+      if (managed.takeProfitMode === 'manual-locked') {
+        this.managementStatus.dynamicTpSync = {
+          outcome: 'LOCKED',
+          reason: 'Manual take-profit ladder remains fixed for this position.',
+          takeProfits: managed.takeProfits || []
+        };
+        return;
+      }
       // Map preparation is read-only and must not hold the position lock.
       const preparedAt = Date.now();
       const account = await this.executor!.getAccountSnapshot([this.config.market]);

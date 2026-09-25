@@ -1362,7 +1362,7 @@
       <div class="gap-card manual-override-card" id="manualOverrideCard">
         <div class="manual-override-head">
           <div>
-            <div class="gap-label">BTC manual entry / TP override</div>
+            <div class="gap-label" id="manualOverrideTitle">BTC manual entry / TP override</div>
             <div class="gap-value" id="manualOverrideValue">Inactive</div>
           </div>
           <div class="gap-status" id="manualOverrideStatus">Loading status</div>
@@ -1814,6 +1814,7 @@
     const tradePlanValue = document.getElementById('tradePlanValue');
     const tradePlanStatus = document.getElementById('tradePlanStatus');
     const manualOverrideCard = document.getElementById('manualOverrideCard');
+    const manualOverrideTitle = document.getElementById('manualOverrideTitle');
     const manualOverrideValue = document.getElementById('manualOverrideValue');
     const manualOverrideStatus = document.getElementById('manualOverrideStatus');
     const manualPlanList = document.getElementById('manualPlanList');
@@ -1902,7 +1903,9 @@
     pairTabGold?.setAttribute('aria-current', activePair === 'GOLD' ? 'page' : 'false');
     pairTabSilver?.setAttribute('aria-current', activePair === 'SILVER' ? 'page' : 'false');
     if (btcSourceTabs) btcSourceTabs.hidden = activePair !== 'BTC';
-    if (manualOverrideCard) manualOverrideCard.hidden = activeSource !== 'decentrader';
+    const manualOverrideMarket = isOpenV2 ? openV2Market : 'BTC-USD';
+    if (manualOverrideCard) manualOverrideCard.hidden = false;
+    if (manualOverrideTitle) manualOverrideTitle.textContent = `${activePair} manual entry / TP override`;
     sourceTabDecentrader?.classList.toggle('is-active', activeSource === 'decentrader');
     sourceTabOpenV2?.classList.toggle('is-active', activeSource === 'open-v2');
 
@@ -5483,7 +5486,7 @@
     }
 
     function updateManualOverrideMonitor(snapshot) {
-      if (!manualOverrideCard || activeSource !== 'decentrader') return;
+      if (!manualOverrideCard) return;
       manualOverrideSnapshot = snapshot;
       const overrides = manualOverrides();
       const active = overrides.filter((state) => state.status === 'ARMED' || state.status === 'EXECUTING');
@@ -5516,8 +5519,10 @@
     }
 
     async function refreshManualOverride() {
-      if (activeSource !== 'decentrader') return null;
-      const response = await fetch(`${CLOUD_MANUAL_OVERRIDE_URL}?ts=${Date.now()}`, { cache: 'no-store' });
+      const response = await fetch(
+        `${CLOUD_MANUAL_OVERRIDE_URL}?market=${encodeURIComponent(manualOverrideMarket)}&ts=${Date.now()}`,
+        { cache: 'no-store' }
+      );
       const snapshot = await response.json();
       if (!response.ok || snapshot.error) throw new Error(snapshot.error || `Manual override ${response.status}`);
       updateManualOverrideMonitor(snapshot);
@@ -5544,12 +5549,13 @@
       manualOverrideArm.disabled = true;
       try {
         const requestUrl = manualEditingPlanId
-          ? `${CLOUD_MANUAL_OVERRIDE_URL}?id=${encodeURIComponent(manualEditingPlanId)}`
-          : CLOUD_MANUAL_OVERRIDE_URL;
+          ? `${CLOUD_MANUAL_OVERRIDE_URL}?market=${encodeURIComponent(manualOverrideMarket)}&id=${encodeURIComponent(manualEditingPlanId)}`
+          : `${CLOUD_MANUAL_OVERRIDE_URL}?market=${encodeURIComponent(manualOverrideMarket)}`;
         const response = await fetch(requestUrl, {
           method: manualEditingPlanId ? 'PATCH' : 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Webhook-Token': token },
           body: JSON.stringify({
+            market: manualOverrideMarket,
             direction: manualOverrideDirection.value,
             closeTrigger: Number(manualOverrideTrigger.value),
             takeProfits: manualTakeProfitsFromForm()
@@ -5576,7 +5582,7 @@
       if (!planId) return;
       button.disabled = true;
       try {
-        const response = await fetch(`${CLOUD_MANUAL_OVERRIDE_URL}?id=${encodeURIComponent(planId)}`, {
+        const response = await fetch(`${CLOUD_MANUAL_OVERRIDE_URL}?market=${encodeURIComponent(manualOverrideMarket)}&id=${encodeURIComponent(planId)}`, {
           method: 'DELETE',
           headers: { 'X-Webhook-Token': token }
         });

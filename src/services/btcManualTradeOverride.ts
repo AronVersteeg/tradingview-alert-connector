@@ -32,7 +32,7 @@ export type BtcManualTradeOverrideRequest = {
 };
 
 export type BtcManualEntryRequest = {
-  market: 'BTC-USD';
+  market: string;
   direction: 'long' | 'short';
   signature: string;
   signalCandleStartedAt: string;
@@ -44,7 +44,12 @@ export type BtcManualEntryRequest = {
 };
 
 export type BtcManualEntryHandler = {
-  executeManualBtcEntry: (request: BtcManualEntryRequest) => Promise<any>;
+  executeManualEntry?: (request: BtcManualEntryRequest) => Promise<any>;
+  executeManualBtcEntry?: (request: BtcManualEntryRequest) => Promise<any>;
+  sendManualTriggerEmail?: (request: BtcManualEntryRequest, result: any) => Promise<{
+    sent: boolean;
+    error?: string;
+  }>;
   sendManualBtcTriggerEmail?: (request: BtcManualEntryRequest, result: any) => Promise<{
     sent: boolean;
     error?: string;
@@ -54,7 +59,7 @@ export type BtcManualEntryHandler = {
 export type BtcManualTradeOverrideState = {
   version: 1;
   id: string;
-  market: 'BTC-USD';
+  market: string;
   status: 'IDLE' | 'ARMED' | 'EXECUTING' | 'TRIGGERED' | 'SKIPPED' | 'ERROR' | 'CANCELLED' | 'EXPIRED';
   direction?: 'long' | 'short';
   closeTrigger?: number;
@@ -77,7 +82,7 @@ export type BtcManualTradeOverrideState = {
 
 export type BtcManualTradeOverrideStore = {
   version: 3;
-  market: 'BTC-USD';
+  market: string;
   overrides: BtcManualTradeOverrideState[];
   updatedAt: string;
 };
@@ -94,8 +99,38 @@ export function btcManualTriggerTimestampNl(signalCandleStartedAt: string): stri
   }).format(new Date(signalCandleStartedAt)).replace(',', '') + ' NL';
 }
 
+export type ManualTradeOverrideConfig = {
+  market: string;
+  asset: 'BTC' | 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'GOLD' | 'SILVER';
+  symbol: string;
+  stateFileEnv: string;
+  stateFileName: string;
+};
+
+const MANUAL_OVERRIDE_CONFIGS: ManualTradeOverrideConfig[] = [
+  { market: 'BTC-USD', asset: 'BTC', symbol: 'BTCUSDT', stateFileEnv: 'BTC_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'btc-manual-trade-override.json' },
+  { market: 'ETH-USD', asset: 'ETH', symbol: 'ETHUSDT', stateFileEnv: 'ETH_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'eth-manual-trade-override.json' },
+  { market: 'INJ-USD', asset: 'INJ', symbol: 'INJUSDT', stateFileEnv: 'INJ_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'inj-manual-trade-override.json' },
+  { market: 'SOL-USD', asset: 'SOL', symbol: 'SOLUSDT', stateFileEnv: 'SOL_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'sol-manual-trade-override.json' },
+  { market: 'ZEC-USD', asset: 'ZEC', symbol: 'ZECUSDT', stateFileEnv: 'ZEC_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'zec-manual-trade-override.json' },
+  { market: 'PAXG-USD', asset: 'GOLD', symbol: 'XAUUSDT', stateFileEnv: 'GOLD_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'gold-manual-trade-override.json' },
+  { market: 'XAG-USD', asset: 'SILVER', symbol: 'XAGUSDT', stateFileEnv: 'SILVER_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'silver-manual-trade-override.json' }
+];
+
+const BTC_MANUAL_OVERRIDE_CONFIG = MANUAL_OVERRIDE_CONFIGS[0];
+
+function normalizedMarket(value: unknown): string {
+  return String(value || '').replace(/_/g, '-').toUpperCase();
+}
+
+export function manualTradeOverrideConfigForMarket(market: unknown): ManualTradeOverrideConfig | undefined {
+  const normalized = normalizedMarket(market || 'BTC-USD');
+  return MANUAL_OVERRIDE_CONFIGS.find((config) => config.market === normalized);
+}
+
 export function btcManualTriggerEmailSubject(request: BtcManualEntryRequest): string {
-  return `BTC MANUAL ${request.direction.toUpperCase()} TRIGGERED | ${btcManualTriggerTimestampNl(request.signalCandleStartedAt)}`;
+  const asset = manualTradeOverrideConfigForMarket(request.market)?.asset || request.market.replace('-USD', '');
+  return `${asset} MANUAL ${request.direction.toUpperCase()} TRIGGERED | ${btcManualTriggerTimestampNl(request.signalCandleStartedAt)}`;
 }
 
 function boolValue(value: string | undefined, fallback: boolean): boolean {
@@ -107,34 +142,39 @@ export function btcManualTradeOverrideEnabled(): boolean {
   return boolValue(process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED, false);
 }
 
-function stateFile(): string {
-  return String(process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE || '').trim()
-    || path.join(process.cwd(), 'data', 'btc-manual-trade-override.json');
+function stateFile(config = BTC_MANUAL_OVERRIDE_CONFIG): string {
+  const configured = String(process.env[config.stateFileEnv] || '').trim();
+  if (configured) return configured;
+  const btcConfigured = String(process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE || '').trim();
+  if (config.market !== 'BTC-USD' && btcConfigured) {
+    return path.join(path.dirname(btcConfigured), config.stateFileName);
+  }
+  return path.join(process.cwd(), 'data', config.stateFileName);
 }
 
-function emptyStore(): BtcManualTradeOverrideStore {
+function emptyStore(config = BTC_MANUAL_OVERRIDE_CONFIG): BtcManualTradeOverrideStore {
   return {
     version: 3,
-    market: 'BTC-USD',
+    market: config.market,
     overrides: [],
     updatedAt: new Date().toISOString()
   };
 }
 
-function legacyOverrideId(override: any, index: number): string {
+function legacyOverrideId(override: any, index: number, config = BTC_MANUAL_OVERRIDE_CONFIG): string {
   const direction = override?.direction === 'short' ? 'short' : 'long';
   const armedAt = Date.parse(String(override?.armedAt || ''));
   const timestamp = Number.isFinite(armedAt) ? armedAt : index;
-  return `btc-manual-${direction}-${timestamp}-${Number(override?.closeTrigger) || 0}`;
+  return `${config.asset.toLowerCase()}-manual-${direction}-${timestamp}-${Number(override?.closeTrigger) || 0}`;
 }
 
-function normalizeStoredOverrides(overrides: any[]): BtcManualTradeOverrideState[] {
+function normalizeStoredOverrides(overrides: any[], config = BTC_MANUAL_OVERRIDE_CONFIG): BtcManualTradeOverrideState[] {
   const ids = new Set<string>();
   return overrides
     .filter((override: any) => override?.direction === 'long' || override?.direction === 'short')
     .map((override: any, index) => {
       let id = String(override?.id || '').trim();
-      if (!id || id === 'long' || id === 'short' || ids.has(id)) id = legacyOverrideId(override, index);
+      if (!id || id === 'long' || id === 'short' || ids.has(id)) id = legacyOverrideId(override, index, config);
       while (ids.has(id)) id = `${id}-${index}`;
       ids.add(id);
       const normalized = { ...override, id } as BtcManualTradeOverrideState;
@@ -145,42 +185,50 @@ function normalizeStoredOverrides(overrides: any[]): BtcManualTradeOverrideState
     });
 }
 
-export function readBtcManualTradeOverrideStore(): BtcManualTradeOverrideStore {
+export function readManualTradeOverrideStore(
+  config = BTC_MANUAL_OVERRIDE_CONFIG
+): BtcManualTradeOverrideStore {
   try {
-    const parsed = JSON.parse(fs.readFileSync(stateFile(), 'utf8'));
-    if (parsed?.version === 3 && parsed?.market === 'BTC-USD' && Array.isArray(parsed.overrides)) {
+    const parsed = JSON.parse(fs.readFileSync(stateFile(config), 'utf8'));
+    if (parsed?.version === 3 && normalizedMarket(parsed?.market) === config.market && Array.isArray(parsed.overrides)) {
       return {
         ...parsed,
-        overrides: normalizeStoredOverrides(parsed.overrides)
+        market: config.market,
+        overrides: normalizeStoredOverrides(parsed.overrides, config)
       } as BtcManualTradeOverrideStore;
     }
-    if (parsed?.version === 2 && parsed?.market === 'BTC-USD' && Array.isArray(parsed.overrides)) {
+    if (parsed?.version === 2 && normalizedMarket(parsed?.market) === config.market && Array.isArray(parsed.overrides)) {
       return {
         ...parsed,
         version: 3,
-        overrides: normalizeStoredOverrides(parsed.overrides)
+        market: config.market,
+        overrides: normalizeStoredOverrides(parsed.overrides, config)
       } as BtcManualTradeOverrideStore;
     }
     if (
       parsed?.version === 1 &&
-      parsed?.market === 'BTC-USD' &&
+      normalizedMarket(parsed?.market) === config.market &&
       (parsed?.direction === 'long' || parsed?.direction === 'short')
     ) {
       return {
         version: 3,
-        market: 'BTC-USD',
-        overrides: normalizeStoredOverrides([parsed]),
+        market: config.market,
+        overrides: normalizeStoredOverrides([parsed], config),
         updatedAt: parsed.updatedAt || new Date().toISOString()
       };
     }
-    return emptyStore();
+    return emptyStore(config);
   } catch {
-    return emptyStore();
+    return emptyStore(config);
   }
 }
 
-function writeStore(store: BtcManualTradeOverrideStore): void {
-  const target = stateFile();
+export function readBtcManualTradeOverrideStore(): BtcManualTradeOverrideStore {
+  return readManualTradeOverrideStore(BTC_MANUAL_OVERRIDE_CONFIG);
+}
+
+function writeStore(store: BtcManualTradeOverrideStore, config = BTC_MANUAL_OVERRIDE_CONFIG): void {
+  const target = stateFile(config);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const temporary = `${target}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(store, null, 2));
@@ -188,7 +236,13 @@ function writeStore(store: BtcManualTradeOverrideStore): void {
 }
 
 export function btcManualTradeOverrideIsArmed(): boolean {
-  return readBtcManualTradeOverrideStore().overrides.some((state) => (
+  return manualTradeOverrideIsArmed('BTC-USD');
+}
+
+export function manualTradeOverrideIsArmed(market: string): boolean {
+  const config = manualTradeOverrideConfigForMarket(market);
+  if (!config) return false;
+  return readManualTradeOverrideStore(config).overrides.some((state) => (
     state.status === 'ARMED' || state.status === 'EXECUTING'
   ));
 }
@@ -201,7 +255,8 @@ function positiveNumber(value: unknown, label: string): number {
 
 export function normalizeBtcManualTradeOverrideRequest(
   input: any,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  config = BTC_MANUAL_OVERRIDE_CONFIG
 ): BtcManualTradeOverrideState {
   const direction = String(input?.direction || '').trim().toLowerCase();
   if (direction !== 'long' && direction !== 'short') {
@@ -236,8 +291,8 @@ export function normalizeBtcManualTradeOverrideRequest(
   const armedAt = new Date(nowMs).toISOString();
   return {
     version: 1,
-    id: `btc-manual-${direction}-${nowMs}-${closeTrigger}`,
-    market: 'BTC-USD',
+    id: `${config.asset.toLowerCase()}-manual-${direction}-${nowMs}-${closeTrigger}`,
+    market: config.market,
     status: 'ARMED',
     direction,
     closeTrigger,
@@ -249,23 +304,24 @@ export function normalizeBtcManualTradeOverrideRequest(
 
 export function upsertBtcManualTradeOverride(
   store: BtcManualTradeOverrideStore,
-  override: BtcManualTradeOverrideState
+  override: BtcManualTradeOverrideState,
+  config = BTC_MANUAL_OVERRIDE_CONFIG
 ): BtcManualTradeOverrideStore {
   const active = store.overrides.filter((candidate) => (
     candidate.status === 'ARMED' || candidate.status === 'EXECUTING'
   ));
   const executing = active.find((candidate) => candidate.status === 'EXECUTING');
   if (executing) {
-    throw new Error(`BTC manual plan ${executing.id} is executing; add the new plan after it completes.`);
+    throw new Error(`${config.asset} manual plan ${executing.id} is executing; add the new plan after it completes.`);
   }
   if (active.length >= MAX_ACTIVE_OVERRIDES) {
-    throw new Error(`At most ${MAX_ACTIVE_OVERRIDES} active BTC manual plans are supported.`);
+    throw new Error(`At most ${MAX_ACTIVE_OVERRIDES} active ${config.asset} manual plans are supported.`);
   }
   const duplicate = active.find((candidate) => (
     candidate.direction === override.direction && Number(candidate.closeTrigger) === Number(override.closeTrigger)
   ));
   if (duplicate) {
-    throw new Error(`An armed ${override.direction} BTC plan already uses close trigger ${override.closeTrigger}.`);
+    throw new Error(`An armed ${override.direction} ${config.asset} plan already uses close trigger ${override.closeTrigger}.`);
   }
   const opposite = active.filter((candidate) => candidate.direction !== override.direction);
   const conflictingOpposite = opposite.find((candidate) => override.direction === 'long'
@@ -293,7 +349,7 @@ export function upsertBtcManualTradeOverride(
     .slice(0, MAX_TERMINAL_OVERRIDES);
   return {
     version: 3,
-    market: 'BTC-USD',
+    market: config.market,
     overrides: [...activeOverrides, ...terminalOverrides],
     updatedAt: override.updatedAt
   };
@@ -339,10 +395,10 @@ export function recoverableManualOverrideRequest(
     return undefined;
   }
   return {
-    market: 'BTC-USD',
+    market: state.market,
     direction: state.direction,
     signature: String(state.result?.signature || (
-      `btc-manual-override|${state.direction}|${signalStartedAtMs}|${state.closeTrigger}|${state.armedAt}`
+      `${state.market.toLowerCase()}-manual-override|${state.direction}|${signalStartedAtMs}|${state.closeTrigger}|${state.armedAt}`
     )),
     signalCandleStartedAt: new Date(signalStartedAtMs).toISOString(),
     signalCandleClosedAt: new Date(signalClosedAtMs).toISOString(),
@@ -353,9 +409,12 @@ export function recoverableManualOverrideRequest(
   };
 }
 
-async function fetchBtcHourlyCandles(nowMs = Date.now()): Promise<BtcManualHourlyCandle[]> {
+async function fetchHourlyCandles(
+  config = BTC_MANUAL_OVERRIDE_CONFIG,
+  nowMs = Date.now()
+): Promise<BtcManualHourlyCandle[]> {
   const response = await binanceGet<unknown[]>(BINANCE_FUTURES_KLINES_URL, {
-    params: { symbol: 'BTCUSDT', interval: '1h', limit: 12 },
+    params: { symbol: config.symbol, interval: '1h', limit: 12 },
     timeout: 20_000
   });
   const candles = (Array.isArray(response.data) ? response.data : [])
@@ -371,7 +430,7 @@ async function fetchBtcHourlyCandles(nowMs = Date.now()): Promise<BtcManualHourl
     })
     .filter((candle): candle is BtcManualHourlyCandle => Boolean(candle))
     .sort((left, right) => left.openTime - right.openTime);
-  if (!candles.length) throw new Error('Binance BTCUSDT returned no closed 1H candles.');
+  if (!candles.length) throw new Error(`Binance ${config.symbol} returned no closed 1H candles.`);
   return candles;
 }
 
@@ -392,7 +451,7 @@ export function buildManualTakeProfitOrderLevels(
   const fractions = takeProfits.map((level) => level.allocationPct / 100);
   const sizes = allocateStepSizes(positionSize, stepSize, fractions, [0]);
   if (sizes.some((size) => !(size > 0))) {
-    throw new Error('BTC position is too small to allocate every requested manual TP at the dYdX step size.');
+    throw new Error('Position is too small to allocate every requested manual TP at the dYdX step size.');
   }
   return takeProfits.map((level, index) => ({
     label: `${direction === 'long' ? 'L' : 'S'} TP${index + 1}`,
@@ -411,6 +470,8 @@ export class BtcManualTradeOverrideMonitor {
   private entryHandler: BtcManualEntryHandler | undefined;
   private status: any = { running: false };
 
+  constructor(private readonly config: ManualTradeOverrideConfig = BTC_MANUAL_OVERRIDE_CONFIG) {}
+
   configureEntryHandler(handler: BtcManualEntryHandler): void {
     this.entryHandler = handler;
   }
@@ -421,21 +482,25 @@ export class BtcManualTradeOverrideMonitor {
       this.initialTimer = undefined;
       this.runAndReschedule();
     }, initialDelayMs);
-    console.log('BTC manual entry/TP override monitor scheduled:', {
+    console.log(`${this.config.asset} manual entry/TP override monitor scheduled:`, {
       enabled: btcManualTradeOverrideEnabled(),
       initialDelayMs,
-      source: 'Binance Futures BTCUSDT 1H closed candles'
+      source: `Binance Futures ${this.config.symbol} 1H closed candles`,
+      stateFile: stateFile(this.config)
     });
   }
 
   getStatus(): any {
-    const store = readBtcManualTradeOverrideStore();
+    const store = readManualTradeOverrideStore(this.config);
     const activeOverride = store.overrides.find((override) => (
       override.status === 'ARMED' || override.status === 'EXECUTING'
     ));
     return {
       enabled: btcManualTradeOverrideEnabled(),
       configured: Boolean(this.entryHandler),
+      market: this.config.market,
+      asset: this.config.asset,
+      symbol: this.config.symbol,
       ...this.status,
       overrides: store.overrides,
       override: activeOverride || store.overrides[0]
@@ -446,10 +511,10 @@ export class BtcManualTradeOverrideMonitor {
     if (!btcManualTradeOverrideEnabled()) {
       throw new Error('MANUAL_ENTRY_TP_OVERRIDE_ENABLED is false.');
     }
-    const state = normalizeBtcManualTradeOverrideRequest(input);
-    const store = upsertBtcManualTradeOverride(readBtcManualTradeOverrideStore(), state);
-    writeStore(store);
-    console.log('BTC manual entry/TP override armed:', state);
+    const state = normalizeBtcManualTradeOverrideRequest(input, Date.now(), this.config);
+    const store = upsertBtcManualTradeOverride(readManualTradeOverrideStore(this.config), state, this.config);
+    writeStore(store, this.config);
+    console.log(`${this.config.asset} manual entry/TP override armed:`, state);
     return state;
   }
 
@@ -458,27 +523,27 @@ export class BtcManualTradeOverrideMonitor {
       throw new Error('MANUAL_ENTRY_TP_OVERRIDE_ENABLED is false.');
     }
     const id = String(idInput || '').trim();
-    if (!id) throw new Error('Plan id is required when editing a BTC manual override.');
-    const store = readBtcManualTradeOverrideStore();
+    if (!id) throw new Error(`Plan id is required when editing a ${this.config.asset} manual override.`);
+    const store = readManualTradeOverrideStore(this.config);
     const previous = store.overrides.find((override) => override.id === id);
-    if (!previous) throw new Error(`No BTC manual plan ${id} exists.`);
+    if (!previous) throw new Error(`No ${this.config.asset} manual plan ${id} exists.`);
     if (previous.status === 'EXECUTING') {
-      throw new Error(`BTC manual plan ${previous.id} is already executing and can no longer be edited.`);
+      throw new Error(`${this.config.asset} manual plan ${previous.id} is already executing and can no longer be edited.`);
     }
     if (previous.status !== 'ARMED') {
-      throw new Error(`BTC manual plan ${previous.id} is ${previous.status.toLowerCase()} and is not armed.`);
+      throw new Error(`${this.config.asset} manual plan ${previous.id} is ${previous.status.toLowerCase()} and is not armed.`);
     }
     const replacement = {
-      ...normalizeBtcManualTradeOverrideRequest(input),
+      ...normalizeBtcManualTradeOverrideRequest(input, Date.now(), this.config),
       id: previous.id
     };
     const withoutPrevious: BtcManualTradeOverrideStore = {
       ...store,
       overrides: store.overrides.filter((override) => override.id !== previous.id)
     };
-    const updatedStore = upsertBtcManualTradeOverride(withoutPrevious, replacement);
-    writeStore(updatedStore);
-    console.log('BTC manual entry/TP override updated:', {
+    const updatedStore = upsertBtcManualTradeOverride(withoutPrevious, replacement, this.config);
+    writeStore(updatedStore, this.config);
+    console.log(`${this.config.asset} manual entry/TP override updated:`, {
       previous,
       replacement
     });
@@ -487,22 +552,22 @@ export class BtcManualTradeOverrideMonitor {
 
   cancel(idOrDirectionInput?: unknown): BtcManualTradeOverrideState {
     const idOrDirection = String(idOrDirectionInput || '').trim();
-    if (!idOrDirection) throw new Error('Plan id is required when cancelling a BTC manual override.');
-    const store = readBtcManualTradeOverrideStore();
+    if (!idOrDirection) throw new Error(`Plan id is required when cancelling a ${this.config.asset} manual override.`);
+    const store = readManualTradeOverrideStore(this.config);
     const armedDirectionMatches = store.overrides.filter((override) => (
       override.direction === idOrDirection && override.status === 'ARMED'
     ));
     if (armedDirectionMatches.length > 1) {
-      throw new Error(`Multiple ${idOrDirection} BTC plans exist; cancel by plan id.`);
+      throw new Error(`Multiple ${idOrDirection} ${this.config.asset} plans exist; cancel by plan id.`);
     }
     const previous = store.overrides.find((override) => override.id === idOrDirection)
       || armedDirectionMatches[0];
-    if (!previous) throw new Error(`No BTC manual plan ${idOrDirection} exists.`);
+    if (!previous) throw new Error(`No ${this.config.asset} manual plan ${idOrDirection} exists.`);
     if (previous.status === 'EXECUTING') {
-      throw new Error(`BTC manual plan ${previous.id} is already executing and can no longer be cancelled.`);
+      throw new Error(`${this.config.asset} manual plan ${previous.id} is already executing and can no longer be cancelled.`);
     }
     if (previous.status !== 'ARMED') {
-      throw new Error(`BTC manual plan ${previous.id} is ${previous.status.toLowerCase()} and is not armed.`);
+      throw new Error(`${this.config.asset} manual plan ${previous.id} is ${previous.status.toLowerCase()} and is not armed.`);
     }
     const now = new Date().toISOString();
     const state: BtcManualTradeOverrideState = {
@@ -515,8 +580,8 @@ export class BtcManualTradeOverrideMonitor {
       ...store,
       overrides: store.overrides.map((override) => override.id === previous.id ? state : override),
       updatedAt: now
-    });
-    console.log('BTC manual entry/TP override cancelled:', state);
+    }, this.config);
+    console.log(`${this.config.asset} manual entry/TP override cancelled:`, state);
     return state;
   }
 
@@ -530,13 +595,16 @@ export class BtcManualTradeOverrideMonitor {
 
   private runAndReschedule(): void {
     this.checkOnce()
-      .catch((error) => console.error('BTC manual entry/TP override check failed:', error))
+      .catch((error) => console.error(`${this.config.asset} manual entry/TP override check failed:`, error))
       .finally(() => this.scheduleNextRun());
   }
 
   private scheduleNextRun(): void {
     const now = Date.now();
-    const nextRunAt = (Math.floor(now / HOUR_MS) + 1) * HOUR_MS + CLOSE_BUFFER_MS;
+    const marketOffsetMs = Math.max(0, MANUAL_OVERRIDE_CONFIGS.findIndex((config) => (
+      config.market === this.config.market
+    ))) * 5_000;
+    const nextRunAt = (Math.floor(now / HOUR_MS) + 1) * HOUR_MS + CLOSE_BUFFER_MS + marketOffsetMs;
     this.nextTimer = setTimeout(() => {
       this.nextTimer = undefined;
       this.runAndReschedule();
@@ -549,7 +617,7 @@ export class BtcManualTradeOverrideMonitor {
     this.status = { ...this.status, running: true, lastStartedAt: startedAt, lastError: undefined };
     try {
       if (!btcManualTradeOverrideEnabled()) return;
-      let store = readBtcManualTradeOverrideStore();
+      let store = readManualTradeOverrideStore(this.config);
       const nowMs = Date.now();
       const nowIso = new Date(nowMs).toISOString();
       const recovery = store.overrides
@@ -562,8 +630,8 @@ export class BtcManualTradeOverrideMonitor {
         state.recoveredAt = nowIso;
         state.updatedAt = nowIso;
         store.updatedAt = nowIso;
-        writeStore(store);
-        console.warn('Retrying a flat fail-safe BTC manual entry once with fresh market depth:', {
+        writeStore(store, this.config);
+        console.warn(`Retrying a flat fail-safe ${this.config.asset} manual entry once with fresh market depth:`, {
           direction: state.direction,
           signalCandleStartedAt: state.signalCandleStartedAt,
           signalClose: state.signalClose,
@@ -575,10 +643,10 @@ export class BtcManualTradeOverrideMonitor {
       }
       const armed = store.overrides.filter((override) => override.status === 'ARMED');
       if (!armed.length) {
-        writeStore({ ...store, updatedAt: nowIso });
+        writeStore({ ...store, updatedAt: nowIso }, this.config);
         return;
       }
-      const candles = await fetchBtcHourlyCandles(nowMs);
+      const candles = await fetchHourlyCandles(this.config, nowMs);
       const latest = candles[candles.length - 1];
       for (const override of armed) {
         override.lastEvaluatedCandleStartedAt = latest ? new Date(latest.openTime).toISOString() : undefined;
@@ -588,7 +656,7 @@ export class BtcManualTradeOverrideMonitor {
         .map((override) => ({ override, candle: matchingManualOverrideCandle(override, candles, nowMs) }))
         .find((candidate) => candidate.candle);
       if (!matched?.candle) {
-        writeStore({ ...store, updatedAt: nowIso });
+        writeStore({ ...store, updatedAt: nowIso }, this.config);
         return;
       }
       const state = matched.override;
@@ -599,11 +667,11 @@ export class BtcManualTradeOverrideMonitor {
       state.signalCandleClosedAt = new Date(candle.closeTime).toISOString();
       state.signalClose = Number(candle.close);
       state.updatedAt = state.triggeredAt;
-      writeStore(store);
+      writeStore(store, this.config);
 
-      const signature = `btc-manual-override|${state.direction}|${candle.openTime}|${state.closeTrigger}|${state.armedAt}`;
+      const signature = `${this.config.asset.toLowerCase()}-manual-override|${state.direction}|${candle.openTime}|${state.closeTrigger}|${state.armedAt}`;
       const entryRequest: BtcManualEntryRequest = {
-        market: 'BTC-USD',
+        market: this.config.market,
         direction: state.direction!,
         signature,
         signalCandleStartedAt: state.signalCandleStartedAt,
@@ -614,7 +682,7 @@ export class BtcManualTradeOverrideMonitor {
       };
       await this.completeExecution(store, state, entryRequest);
     } catch (error) {
-      const store = readBtcManualTradeOverrideStore();
+      const store = readManualTradeOverrideStore(this.config);
       const message = error instanceof Error ? error.message : String(error);
       const executing = store.overrides.find((state) => state.status === 'EXECUTING');
       if (executing) {
@@ -622,7 +690,7 @@ export class BtcManualTradeOverrideMonitor {
         executing.result = { tradePlaced: false, tradeError: message };
         executing.updatedAt = new Date().toISOString();
         store.updatedAt = executing.updatedAt;
-        writeStore(store);
+        writeStore(store, this.config);
       }
       this.status.lastError = message;
       throw error;
@@ -638,9 +706,12 @@ export class BtcManualTradeOverrideMonitor {
   ): Promise<void> {
     let result: any;
     if (!this.entryHandler) {
-      result = { tradePlaced: false, tradeError: 'No BTC manual entry handler is configured.' };
+      result = { tradePlaced: false, tradeError: `No ${this.config.asset} manual entry handler is configured.` };
     } else {
-      result = await this.entryHandler.executeManualBtcEntry(entryRequest);
+      const execute = this.entryHandler.executeManualEntry || this.entryHandler.executeManualBtcEntry;
+      result = execute
+        ? await execute.call(this.entryHandler, entryRequest)
+        : { tradePlaced: false, tradeError: `No ${this.config.asset} manual entry method is configured.` };
     }
     if (result?.tradeDeferred) {
       state.status = 'ARMED';
@@ -651,8 +722,8 @@ export class BtcManualTradeOverrideMonitor {
       state.signalClose = undefined;
       state.updatedAt = new Date().toISOString();
       store.updatedAt = state.updatedAt;
-      writeStore(store);
-      console.log('BTC manual entry/TP override deferred; plan remains armed:', {
+      writeStore(store, this.config);
+      console.log(`${this.config.asset} manual entry/TP override deferred; plan remains armed:`, {
         id: state.id,
         direction: state.direction,
         closeTrigger: state.closeTrigger,
@@ -660,20 +731,32 @@ export class BtcManualTradeOverrideMonitor {
       });
       return;
     }
-    if (this.entryHandler?.sendManualBtcTriggerEmail) {
-      const email = await this.entryHandler.sendManualBtcTriggerEmail(entryRequest, result);
+    const sendEmail = this.entryHandler?.sendManualTriggerEmail || this.entryHandler?.sendManualBtcTriggerEmail;
+    if (sendEmail) {
+      const email = await sendEmail.call(this.entryHandler, entryRequest, result);
       state.triggerEmailSentAt = email.sent ? new Date().toISOString() : undefined;
       state.triggerEmailError = email.error;
     } else {
-      state.triggerEmailError = 'No manual BTC trigger email handler is configured.';
+      state.triggerEmailError = `No manual ${this.config.asset} trigger email handler is configured.`;
     }
     state.result = result;
     state.status = result?.tradePlaced ? 'TRIGGERED' : result?.tradeError ? 'ERROR' : 'SKIPPED';
     state.updatedAt = new Date().toISOString();
     store.updatedAt = state.updatedAt;
-    writeStore(store);
-    console.log('BTC manual entry/TP override completed:', state);
+    writeStore(store, this.config);
+    console.log(`${this.config.asset} manual entry/TP override completed:`, state);
   }
 }
 
-export const btcManualTradeOverrideMonitor = new BtcManualTradeOverrideMonitor();
+export const manualTradeOverrideMonitors = new Map(
+  MANUAL_OVERRIDE_CONFIGS.map((config) => [
+    config.market,
+    new BtcManualTradeOverrideMonitor(config)
+  ])
+);
+
+export function manualTradeOverrideMonitorForMarket(market: unknown): BtcManualTradeOverrideMonitor | undefined {
+  return manualTradeOverrideMonitors.get(normalizedMarket(market || 'BTC-USD'));
+}
+
+export const btcManualTradeOverrideMonitor = manualTradeOverrideMonitors.get('BTC-USD')!;

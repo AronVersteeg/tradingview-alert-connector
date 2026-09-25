@@ -9,9 +9,12 @@ import {
   buildManualTakeProfitOrderLevels,
   btcManualTradeOverrideIsArmed,
   btcManualTriggerEmailSubject,
+  manualTradeOverrideConfigForMarket,
+  manualTradeOverrideIsArmed,
   matchingManualOverrideCandle,
   normalizeBtcManualTradeOverrideRequest,
   readBtcManualTradeOverrideStore,
+  readManualTradeOverrideStore,
   recoverableManualOverrideRequest,
   upsertBtcManualTradeOverride
 } from '../src/services/btcManualTradeOverride';
@@ -27,6 +30,18 @@ describe('BTC manual entry and TP override', () => {
       updatedAt: '2026-09-10T10:30:00.000Z'
     };
   }
+
+  test.each([
+    ['BTC-USD', 'BTCUSDT'],
+    ['ETH-USD', 'ETHUSDT'],
+    ['INJ-USD', 'INJUSDT'],
+    ['SOL-USD', 'SOLUSDT'],
+    ['ZEC-USD', 'ZECUSDT'],
+    ['PAXG-USD', 'XAUUSDT'],
+    ['XAG-USD', 'XAGUSDT']
+  ])('configures %s manual triggers from %s closed candles', (market, symbol) => {
+    expect(manualTradeOverrideConfigForMarket(market)).toMatchObject({ market, symbol });
+  });
 
   test('arms a validated persistent long override', () => {
     const state = normalizeBtcManualTradeOverrideRequest({
@@ -59,6 +74,55 @@ describe('BTC manual entry and TP override', () => {
       closeTrigger: 80000,
       takeProfits: []
     })).toBe('BTC MANUAL LONG TRIGGERED | 10-09-2026 15:00 NL');
+  });
+
+  test('uses the selected pair in the trigger email header', () => {
+    expect(btcManualTriggerEmailSubject({
+      market: 'PAXG-USD',
+      direction: 'short',
+      signature: 'manual-gold-test',
+      signalCandleStartedAt: '2026-09-10T13:00:00.000Z',
+      signalCandleClosedAt: '2026-09-10T13:59:59.999Z',
+      signalClose: 4_500,
+      closeTrigger: 4_550,
+      takeProfits: []
+    })).toBe('GOLD MANUAL SHORT TRIGGERED | 10-09-2026 15:00 NL');
+  });
+
+  test('keeps manual plans isolated per pair on the shared persistent-data directory', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pair-manual-storage-'));
+    const previousBtcFile = process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+    const previousEthFile = process.env.ETH_MANUAL_TRADE_OVERRIDE_FILE;
+    const previousEnabled = process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED;
+    process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = path.join(directory, 'btc.json');
+    delete process.env.ETH_MANUAL_TRADE_OVERRIDE_FILE;
+    process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED = 'true';
+    try {
+      const ethConfig = manualTradeOverrideConfigForMarket('ETH_USD')!;
+      const ethMonitor = new BtcManualTradeOverrideMonitor(ethConfig);
+      ethMonitor.arm({
+        direction: 'long',
+        closeTrigger: 3_000,
+        takeProfits: [{ price: 3_200, allocationPct: 100 }]
+      });
+
+      expect(readManualTradeOverrideStore(ethConfig)).toMatchObject({
+        market: 'ETH-USD',
+        overrides: [expect.objectContaining({ market: 'ETH-USD', closeTrigger: 3_000 })]
+      });
+      expect(readBtcManualTradeOverrideStore().overrides).toEqual([]);
+      expect(manualTradeOverrideIsArmed('ETH-USD')).toBe(true);
+      expect(btcManualTradeOverrideIsArmed()).toBe(false);
+      expect(fs.existsSync(path.join(directory, 'eth-manual-trade-override.json'))).toBe(true);
+    } finally {
+      if (previousBtcFile === undefined) delete process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE;
+      else process.env.BTC_MANUAL_TRADE_OVERRIDE_FILE = previousBtcFile;
+      if (previousEthFile === undefined) delete process.env.ETH_MANUAL_TRADE_OVERRIDE_FILE;
+      else process.env.ETH_MANUAL_TRADE_OVERRIDE_FILE = previousEthFile;
+      if (previousEnabled === undefined) delete process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED;
+      else process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED = previousEnabled;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test('rejects TP allocations that do not total 100 percent', () => {

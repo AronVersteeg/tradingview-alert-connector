@@ -152,6 +152,77 @@ describe('managed position safety independent from entry scanning', () => {
     expect(JSON.parse(fs.readFileSync(monitor.getStatus().stateFile, 'utf8')).managedPosition).toBeUndefined();
   });
 
+  test('V2 manual entry registers the shared Williams stop, locked TPs and trailing ownership', async () => {
+    process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED = 'true';
+    process.env.OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED = 'true';
+    const monitor = new OpenLiquidityV2EthTradeMonitor({} as any) as any;
+    const orders = {
+      getAccountSnapshot: jest.fn().mockResolvedValue({
+        markets: { 'ETH-USD': { oraclePrice: 120, status: 'ACTIVE', stepSize: 0.001 } },
+        openPositions: []
+      }),
+      placeOrder: jest.fn().mockResolvedValue({ outcome: 'TARGET_REACHED' }),
+      syncTrailingStop: jest.fn(),
+      syncTakeProfits: jest.fn()
+    };
+    monitor.configureTradeExecutor(orders);
+    monitor.getTradePlan = jest.fn().mockResolvedValue({
+      market: 'ETH-USD',
+      price: 120,
+      timestamp: '2026-09-25 13:00:00',
+      marketInfo: { oraclePrice: 120, status: 'ACTIVE', stepSize: 0.001 },
+      activePlan: {
+        direction: 'long',
+        status: 'ready',
+        stop: {
+          price: 110,
+          valid: true,
+          fractal: { index: 10, timestamp: '2026-09-25T10:00:00.000Z', price: 110, source: 'lowRef' }
+        },
+        sizing: { size: 0.05, notional: 6, riskBudgetUsd: 15, minimumOrderSize: 0.001 },
+        takeProfits: [{ label: 'L TP1', price: 130, size: 0.05 }]
+      }
+    });
+    monitor.waitForExpectedPosition = jest.fn().mockResolvedValue({
+      market: 'ETH-USD', size: 0.05, entryPrice: 121
+    });
+
+    const result = await monitor.executeManualEntry({
+      market: 'ETH-USD',
+      direction: 'long',
+      signature: 'eth-manual-override|long|test',
+      signalCandleStartedAt: '2026-09-25T12:00:00.000Z',
+      signalCandleClosedAt: '2026-09-25T12:59:59.999Z',
+      signalClose: 122,
+      closeTrigger: 120,
+      takeProfits: [
+        { price: 135, allocationPct: 60 },
+        { price: 145, allocationPct: 40 }
+      ]
+    });
+
+    expect(result.tradePlaced).toBe(true);
+    expect(orders.placeOrder).toHaveBeenCalledWith(expect.objectContaining({
+      strategy: 'open_liquidity_v2_eth_manual_entry_tp_override',
+      static_sl: 110,
+      take_profits: [
+        expect.objectContaining({ price: 135, size: 0.03, manual_locked: true }),
+        expect.objectContaining({ price: 145, size: 0.02, manual_locked: true })
+      ]
+    }));
+    expect(JSON.parse(fs.readFileSync(monitor.getStatus().stateFile, 'utf8')).managedPosition).toMatchObject({
+      market: 'ETH-USD',
+      direction: 'long',
+      currentStop: 110,
+      currentStopFractalCandleSource: 'dydx-1h',
+      takeProfitMode: 'manual-locked',
+      takeProfits: [
+        expect.objectContaining({ price: 135, manual_locked: true }),
+        expect.objectContaining({ price: 145, manual_locked: true })
+      ]
+    });
+  });
+
   test('management completes while the scanner is still waiting for its payload', async () => {
     let finish!: (payload: any) => void;
     const collector = { getPayload: jest.fn(() => new Promise((resolve) => { finish = resolve; })) };
@@ -214,6 +285,31 @@ describe('managed position safety independent from entry scanning', () => {
     expect(monitor.managementStatus.dynamicTpSync).toMatchObject({
       outcome: 'LOCKED',
       market: 'BTC-USD',
+      takeProfits: managed.managedPosition.takeProfits
+    });
+  });
+
+  test('V2 manual-locked TP management skips map planning and preserves the locked ladder', async () => {
+    const monitor = new OpenLiquidityV2EthTradeMonitor({} as any) as any;
+    const orders = executor('ETH-USD');
+    monitor.configureTradeExecutor(orders);
+    const managed = state('ETH-USD');
+    managed.managedPosition.takeProfitMode = 'manual-locked';
+    managed.managedPosition.takeProfits = [
+      { price: 130, allocation_pct: 50 },
+      { price: 140, allocation_pct: 50 }
+    ];
+    fs.writeFileSync(monitor.getStatus().stateFile, JSON.stringify(managed));
+    monitor.getTradePlan = jest.fn();
+
+    monitor.scheduleTakeProfitSync();
+    await monitor.takeProfitPromise;
+
+    expect(orders.getAccountSnapshot).not.toHaveBeenCalled();
+    expect(monitor.getTradePlan).not.toHaveBeenCalled();
+    expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+    expect(monitor.managementStatus.dynamicTpSync).toMatchObject({
+      outcome: 'LOCKED',
       takeProfits: managed.managedPosition.takeProfits
     });
   });
