@@ -1,7 +1,8 @@
 import {
   mergeRijnlandPumpCoverage,
   parseRijnlandPumpFeatures,
-  parseRijnlandTemperatureFeatures
+  parseRijnlandTemperatureFeatures,
+  selectPolderTemperatureReference
 } from '../src/services/snoekRijnland';
 import { SnoekStructure } from '../src/services/snoekStructures';
 
@@ -77,6 +78,31 @@ describe('Rijnland Snoek map data', () => {
     expect(profiles).toHaveLength(1);
     expect(profiles[0].name).toBe('Meetboei Spaarndam Boezem');
     expect(profiles[0].readings.map((reading) => reading.depthM)).toEqual([0.5, 2]);
+  });
+
+  it('selects Domineeslaan as the polder reference and applies the 15 C threshold', () => {
+    const profiles = parseRijnlandTemperatureFeatures([{
+      attributes: {
+        featureIdentifier: '180-105-00009_polder',
+        name: 'Logger Stuw Domineeslaan, Polder',
+        value: 15,
+        classification: '12 - 15',
+        chartUrl: 'https://example.test/domineeslaan'
+      },
+      geometry: { x: 4.729858, y: 52.373033 }
+    }], '2026-09-28T07:50:37.153Z');
+
+    expect(selectPolderTemperatureReference(profiles)).toMatchObject({
+      name: 'Logger Stuw Domineeslaan, Polder',
+      temperatureC: 15,
+      favorable: true,
+      favorableAtOrBelowC: 15,
+      featureIdentifier: '180-105-00009_polder',
+      sourceUpdatedAt: '2026-09-28T07:50:37.153Z'
+    });
+
+    profiles[0].readings[0].temperatureC = 15.1;
+    expect(selectPolderTemperatureReference(profiles)?.favorable).toBe(false);
   });
 
   it('maps official pump status and signed flow direction', () => {

@@ -170,7 +170,7 @@
 
     .mini-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
     }
 
@@ -191,6 +191,10 @@
       color: #67e6b7;
     }
 
+    .water-temperature-value.is-favorable {
+      color: #67e6b7;
+    }
+
     .pressure-value.is-sharp-change,
     .pressure-change-warning {
       color: #ff6b7f;
@@ -201,6 +205,11 @@
     }
 
     .pressure-check {
+      margin-left: 4px;
+      color: #67e6b7;
+    }
+
+    .water-temperature-check {
       margin-left: 4px;
       color: #67e6b7;
     }
@@ -1745,6 +1754,17 @@
       const pressureCheck = favorablePressure
         ? '<span class="pressure-check" title="Gunstige luchtdruk: 1013 hPa of hoger" aria-label="Gunstige luchtdruk">&#10003;</span>'
         : '';
+      const polderTemperature = rijnlandData?.polderTemperatureReference;
+      const polderTemperatureValue = polderTemperature
+        ? `${esc(polderTemperature.temperatureC.toFixed(1))} C`
+        : rijnlandData === null ? 'Laden...' : 'Onbekend';
+      const favorablePolderTemperature = polderTemperature?.favorable === true;
+      const polderTemperatureCheck = favorablePolderTemperature
+        ? '<span class="water-temperature-check" title="Gunstig polderwater: 15,0 C of lager" aria-label="Gunstige polderwatertemperatuur">&#10003;</span>'
+        : '';
+      const polderTemperatureSource = polderTemperature
+        ? `${esc(polderTemperature.name)} · ${esc(rijnlandUpdatedLabel(polderTemperature.sourceUpdatedAt))} · groen bij ≤ ${esc(polderTemperature.favorableAtOrBelowC.toFixed(1))} C`
+        : 'Logger Stuw Domineeslaan · Rijnland';
       result.innerHTML = `
         <div class="score-grid">
           <div class="dial" style="--score:${data.score}">${data.score}</div>
@@ -1762,6 +1782,7 @@
         <div class="mini-grid" style="margin-top: 14px;">
           <div class="mini-card"><span class="muted">Weer</span><strong>${esc(input.temperatureC)} C</strong><span class="muted">${esc(input.cloudCoverPct)}% bewolkt</span></div>
           <div class="mini-card"><span class="muted">Luchtdruk</span><strong class="pressure-value${favorablePressure ? ' is-favorable' : ''}${sharpPressureChange ? ' is-sharp-change' : ''}">${pressureValue}${pressureCheck}</strong><span class="muted${sharpPressureChange ? ' pressure-change-warning' : ''}">${esc(input.pressureTrend)}${pressureChangeLabel ? ` · ${pressureChangeLabel}` : ''} · Open-Meteo</span></div>
+          <div class="mini-card"><span class="muted">Polderwater</span><strong class="water-temperature-value${favorablePolderTemperature ? ' is-favorable' : ''}">${polderTemperatureValue}${polderTemperatureCheck}</strong><span class="muted">${polderTemperatureSource}</span></div>
           <div class="mini-card"><span class="muted">Maan/zon</span><strong>${esc(data.activityWindows[0].times[1])}</strong><span class="muted">grote tijd</span></div>
         </div>
         <div class="cards" style="margin-top: 14px;">
@@ -2197,6 +2218,7 @@
       } catch (error) {
         rijnlandData = {
           temperatureProfiles: [],
+          polderTemperatureReference: null,
           pumps: [],
           errors: [`Rijnland meetdata niet geladen: ${error.message}`],
           coverageNote: 'Geen live Rijnland-data beschikbaar.'
@@ -2206,6 +2228,7 @@
       applyBaseLayerVisibility();
       renderStructures();
       renderFeatureList();
+      if (scoutData) renderScore(scoutData);
     }
 
     async function loadRwsTemperature() {

@@ -34,6 +34,19 @@ export type RijnlandTemperatureProfile = {
   };
 };
 
+export type RijnlandPolderTemperatureReference = {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  temperatureC: number;
+  favorable: boolean;
+  favorableAtOrBelowC: number;
+  featureIdentifier: string;
+  chartUrl: string;
+  sourceUpdatedAt: string | null;
+};
+
 export type RijnlandPumpStatus = {
   id: string;
   name: string;
@@ -59,6 +72,7 @@ export type SnoekRijnlandResult = {
   attribution: string;
   generatedAt: string;
   temperatureProfiles: RijnlandTemperatureProfile[];
+  polderTemperatureReference: RijnlandPolderTemperatureReference | null;
   pumps: RijnlandPumpStatus[];
   errors: string[];
   coverageNote: string;
@@ -74,6 +88,8 @@ const CHLORIDE_LAYER = 'https://services1.arcgis.com/KXsJqtRt2xEqyDWx/arcgis/res
 const CONDUCTIVITY_LAYER = 'https://services1.arcgis.com/KXsJqtRt2xEqyDWx/arcgis/rest/services/61c1bf48-e5d1-4bdd-9313-e0762046a0df/FeatureServer/0';
 const PUMP_STATUS_LAYER = 'https://services1.arcgis.com/KXsJqtRt2xEqyDWx/arcgis/rest/services/e2d54d5c-4cd4-4476-898e-2effd50d9019/FeatureServer/0';
 const INTEREST_ENVELOPE = '4.47,52.355,4.82,52.505';
+const POLDER_TEMPERATURE_FEATURE_IDENTIFIER = '180-105-00009_polder';
+const FAVORABLE_POLDER_TEMPERATURE_C = 15;
 const CACHE_MS = 5 * 60 * 1000;
 const ERROR_CACHE_MS = 60 * 1000;
 
@@ -258,6 +274,31 @@ export function parseRijnlandTemperatureFeatures(features: ArcGisFeature[], upda
       return hasDepth || !locationsWithDepthProfiles.has(locationKey);
     })
     .sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+}
+
+export function selectPolderTemperatureReference(
+  profiles: RijnlandTemperatureProfile[]
+): RijnlandPolderTemperatureReference | null {
+  for (const profile of profiles) {
+    const reading = profile.readings.find((item) => (
+      item.featureIdentifier.toLowerCase() === POLDER_TEMPERATURE_FEATURE_IDENTIFIER.toLowerCase()
+    ));
+    if (!reading) continue;
+
+    return {
+      id: profile.id,
+      name: profile.name,
+      lat: profile.lat,
+      lon: profile.lon,
+      temperatureC: reading.temperatureC,
+      favorable: reading.temperatureC <= FAVORABLE_POLDER_TEMPERATURE_C,
+      favorableAtOrBelowC: FAVORABLE_POLDER_TEMPERATURE_C,
+      featureIdentifier: reading.featureIdentifier,
+      chartUrl: reading.chartUrl,
+      sourceUpdatedAt: profile.sourceUpdatedAt
+    };
+  }
+  return null;
 }
 
 type WaterQualityMetric = 'chlorideMgL' | 'conductivityUsCm';
@@ -475,6 +516,7 @@ export async function getSnoekRijnland(now = new Date()): Promise<SnoekRijnlandR
     attribution: 'Temperatuur, chloride, EGV en gemaalstatus: Hoogheemraadschap van Rijnland via ArcGIS Online en HydroNET. Gemaallocaties: PDOK Waterschappen Kunstwerken IMWA.',
     generatedAt: now.toISOString(),
     temperatureProfiles,
+    polderTemperatureReference: selectPolderTemperatureReference(temperatureProfiles),
     pumps,
     errors,
     coverageNote: `Temperatuurpunten zijn waar mogelijk verrijkt met chloride en EGV op dezelfde meetdiepte. Alle ${pumps.length} PDOK-gemalen krijgen een statusmarker; ${pumps.filter((pump) => pump.hasLiveStatus).length} hebben een gekoppelde live AAN/UIT-status. Advieszones zijn hypotheses uit meting plus literatuur, geen visdetectie.`
