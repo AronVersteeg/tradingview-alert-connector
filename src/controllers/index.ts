@@ -375,7 +375,8 @@ router.get('/snoek/api/current', async (_req, res) => {
 
 router.get('/snoek/api/rijnland', async (_req, res) => {
   try {
-    res.setHeader('Cache-Control', 'public, max-age=300');
+    // The service already caches upstream data; HTTP caches can otherwise keep an old response shape after deploys.
+    res.setHeader('Cache-Control', 'no-store');
     res.send(await getSnoekRijnland());
   } catch (error) {
     console.error('Snoek Rijnland lookup failed:', error);

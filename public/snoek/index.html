@@ -1737,6 +1737,33 @@
       setVisible(rijnlandPumpLayer, layerRijnlandPumps.checked);
     }
 
+    function getPolderTemperatureReference() {
+      if (rijnlandData?.polderTemperatureReference) {
+        return rijnlandData.polderTemperatureReference;
+      }
+
+      for (const profile of rijnlandData?.temperatureProfiles || []) {
+        const reading = (profile.readings || []).find((item) => (
+          String(item.featureIdentifier || '').toLowerCase() === '180-105-00009_polder'
+        ));
+        if (!reading) continue;
+
+        return {
+          id: profile.id,
+          name: profile.name,
+          lat: profile.lat,
+          lon: profile.lon,
+          temperatureC: reading.temperatureC,
+          favorable: reading.temperatureC <= 15,
+          favorableAtOrBelowC: 15,
+          featureIdentifier: reading.featureIdentifier,
+          chartUrl: reading.chartUrl,
+          sourceUpdatedAt: profile.sourceUpdatedAt
+        };
+      }
+      return null;
+    }
+
     function renderScore(data) {
       const input = data.input;
       const pressureHpa = Number(input.pressureHpa);
@@ -1754,7 +1781,7 @@
       const pressureCheck = favorablePressure
         ? '<span class="pressure-check" title="Gunstige luchtdruk: 1013 hPa of hoger" aria-label="Gunstige luchtdruk">&#10003;</span>'
         : '';
-      const polderTemperature = rijnlandData?.polderTemperatureReference;
+      const polderTemperature = getPolderTemperatureReference();
       const polderTemperatureValue = polderTemperature
         ? `${esc(polderTemperature.temperatureC.toFixed(1))} C`
         : rijnlandData === null ? 'Laden...' : 'Onbekend';
@@ -2209,7 +2236,7 @@
 
     async function loadRijnland() {
       try {
-        const response = await fetch('/snoek/api/rijnland');
+        const response = await fetch('/snoek/api/rijnland?monitor=polder-v1', { cache: 'no-store' });
         const data = await response.json();
         if (!response.ok || !data.ok) {
           throw new Error(data.error || 'Rijnland meetdata kon niet geladen worden.');
