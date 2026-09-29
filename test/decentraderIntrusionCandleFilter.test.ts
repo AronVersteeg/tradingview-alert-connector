@@ -1,5 +1,6 @@
 import {
   binanceFuturesKlineToIntrusionCandle,
+  decentraderBtcGapIntrusionEmailEnabled,
   decentraderRegularIntrusionEmailEnabled,
   intrusionCandleReview
 } from '../src/services/decentraderGapMonitor';
@@ -36,6 +37,25 @@ describe('Decentrader intrusion candle filter', () => {
       } else {
         process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED = original;
       }
+    }
+  });
+
+  test('supports a BTC-only informational gap email override', () => {
+    const originalShared = process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED;
+    const originalBtc = process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED;
+    try {
+      process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED = 'false';
+      delete process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED;
+      expect(decentraderBtcGapIntrusionEmailEnabled()).toBe(false);
+
+      process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED = 'true';
+      expect(decentraderBtcGapIntrusionEmailEnabled()).toBe(true);
+      expect(decentraderRegularIntrusionEmailEnabled()).toBe(false);
+    } finally {
+      if (originalShared === undefined) delete process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED;
+      else process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED = originalShared;
+      if (originalBtc === undefined) delete process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED;
+      else process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED = originalBtc;
     }
   });
 
