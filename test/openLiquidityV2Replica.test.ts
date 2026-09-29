@@ -2,6 +2,7 @@ import {
   buildReplicaSnapshots,
   cohortLevelsForOhlc4,
   detectReplicaGap,
+  OpenLiquidityV2ReplicaCollector,
   ReplicaLiquidityZone,
   summarizeGoldConfirmation,
   SpotCandle
@@ -42,6 +43,21 @@ function zone(input: Partial<ReplicaLiquidityZone>): ReplicaLiquidityZone {
 }
 
 describe('Public Perp V2 Binance Spot replica', () => {
+  test('refreshes the replica only when a newly closed hour is missing', async () => {
+    const collector = new OpenLiquidityV2ReplicaCollector() as any;
+    collector.loaded = true;
+    collector.snapshots = [{ effectiveAt: '2026-08-20T11:00:00.000Z' }];
+    collector.refresh = jest.fn().mockResolvedValue(undefined);
+
+    await expect(collector.refreshForLatestClosedHour(Date.parse('2026-08-20T12:30:00.000Z')))
+      .resolves.toBe(false);
+    expect(collector.refresh).not.toHaveBeenCalled();
+
+    await expect(collector.refreshForLatestClosedHour(Date.parse('2026-08-20T13:00:10.000Z')))
+      .resolves.toBe(true);
+    expect(collector.refresh).toHaveBeenCalledTimes(1);
+  });
+
   test('reproduces the reconstructed Decentrader multipliers and $100 rounding', () => {
     const levels = cohortLevelsForOhlc4(63_051.6425);
     expect(levels.map((level) => [level.side, level.leverage, level.price])).toEqual([

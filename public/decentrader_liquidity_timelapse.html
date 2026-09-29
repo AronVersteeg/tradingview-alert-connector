@@ -1395,7 +1395,7 @@
         </form>
       </div>
       <div class="gap-card delay-history-card" id="delayHistoryCard">
-        <div class="gap-label">The Delay - SMTP intrusion history</div>
+        <div class="gap-label" id="delayHistoryTitle">The Delay - SMTP intrusion history</div>
         <div class="gap-status" id="delayHistoryStatus">History starts after deployment</div>
         <div class="delay-history-layout">
           <table class="delay-history-table delay-history-stats" aria-label="SMTP delay statistics in completed one-hour candles">
@@ -1692,7 +1692,7 @@
               : activeSource === 'open-v2-silver'
                 ? 'SILVER'
                 : 'BTC';
-    const hasIntrusionHistory = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-sol' || activeSource === 'open-v2-zec' || activeSource === 'open-v2-gold' || activeSource === 'open-v2-silver';
+    const hasIntrusionHistory = activeSource === 'decentrader' || isOpenV2;
     const hasLiveTradePlan = activeSource === 'decentrader' || activeSource === 'open-v2-eth' || activeSource === 'open-v2-inj' || activeSource === 'open-v2-sol' || activeSource === 'open-v2-zec' || activeSource === 'open-v2-gold' || activeSource === 'open-v2-silver';
     const openV2Market = openV2Asset === 'GOLD'
       ? 'PAXG-USD'
@@ -1796,6 +1796,7 @@
     const rsiStudyValue = document.getElementById('rsiStudyValue');
     const rsiStudyStatus = document.getElementById('rsiStudyStatus');
     const delayHistoryCard = document.getElementById('delayHistoryCard');
+    const delayHistoryTitle = document.getElementById('delayHistoryTitle');
     const delayHistoryStatus = document.getElementById('delayHistoryStatus');
     const delayHistoryStatsRows = document.getElementById('delayHistoryStatsRows');
     const delayHistoryLatestRows = document.getElementById('delayHistoryLatestRows');
@@ -3180,6 +3181,11 @@
       if (!delayHistoryCard) return;
       delayHistoryCard.hidden = !hasIntrusionHistory;
       if (!hasIntrusionHistory) return;
+      if (delayHistoryTitle) {
+        delayHistoryTitle.textContent = activeSource === 'open-v2'
+          ? 'BTC Public V2 - intrusion history'
+          : 'The Delay - SMTP intrusion history';
+      }
 
       const history = payload?.delayHistory;
       const totalRecords = Number(history?.totalRecords) || 0;
@@ -3387,8 +3393,12 @@
         : '<tr><td colspan="50">No intrusion history recorded yet</td></tr>';
 
       delayHistoryStatus.textContent = tableRecords.length
-        ? `${tableRecords.length} reconstructed intrusion${tableRecords.length === 1 ? '' : 's'} | ${totalRecords} sent mail${totalRecords === 1 ? '' : 's'} | pre-context uses only data available before each alert`
-        : 'Historical intrusion reconstruction starts after deployment';
+        ? activeSource === 'open-v2'
+          ? `${tableRecords.length} Public V2 BTC intrusion${tableRecords.length === 1 ? '' : 's'} | ${totalRecords} sent mail${totalRecords === 1 ? '' : 's'} | Binance Spot closed 1H source`
+          : `${tableRecords.length} reconstructed intrusion${tableRecords.length === 1 ? '' : 's'} | ${totalRecords} sent mail${totalRecords === 1 ? '' : 's'} | pre-context uses only data available before each alert`
+        : activeSource === 'open-v2'
+          ? 'Public V2 BTC intrusion history is ready; no intrusion recorded yet'
+          : 'Historical intrusion reconstruction starts after deployment';
     }
 
     function exactDecimalLabel(value) {

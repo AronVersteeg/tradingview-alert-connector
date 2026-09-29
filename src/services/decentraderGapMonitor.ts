@@ -511,7 +511,6 @@ type MonitorStatus = {
   intrusionCandleFilterEnabled?: boolean;
   intrusionIqTradeFilterEnabled?: boolean;
   regularIntrusionEmailEnabled?: boolean;
-  btcGapIntrusionEmailEnabled?: boolean;
   intrusionCandleSource?: 'binance-futures' | 'dydx';
   intrusionVolumeDeltaEnabled?: boolean;
   lastStartedAt?: string;
@@ -2332,13 +2331,6 @@ function decentraderIntrusionCandleFilterEnabled(): boolean {
 
 export function decentraderRegularIntrusionEmailEnabled(): boolean {
   return parseBool(process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED, false);
-}
-
-export function decentraderBtcGapIntrusionEmailEnabled(): boolean {
-  return parseBool(
-    process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED,
-    decentraderRegularIntrusionEmailEnabled()
-  );
 }
 
 function decentraderIntrusionCandleSource(): 'binance-futures' | 'dydx' {
@@ -5602,7 +5594,6 @@ export class DecentraderGapMonitor {
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       regularIntrusionEmailEnabled: decentraderRegularIntrusionEmailEnabled(),
-      btcGapIntrusionEmailEnabled: decentraderBtcGapIntrusionEmailEnabled(),
       intrusionCandleSource: decentraderIntrusionCandleSource(),
       intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled()
     };
@@ -5621,7 +5612,6 @@ export class DecentraderGapMonitor {
       intrusionCandleFilterEnabled: decentraderIntrusionCandleFilterEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       regularIntrusionEmailEnabled: decentraderRegularIntrusionEmailEnabled(),
-      btcGapIntrusionEmailEnabled: decentraderBtcGapIntrusionEmailEnabled(),
       intrusionCandleSource: decentraderIntrusionCandleSource(),
       intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled(),
       hasTradeExecutor: this.tradeExecutor !== undefined
@@ -5845,7 +5835,6 @@ export class DecentraderGapMonitor {
       const intrusionCandleFilterEnabled = decentraderIntrusionCandleFilterEnabled();
       const delayModelEnabled = delayEntryModelEnabled();
       const regularIntrusionEmailEnabled = decentraderRegularIntrusionEmailEnabled();
-      const btcGapIntrusionEmailEnabled = decentraderBtcGapIntrusionEmailEnabled();
       const pendingCandleSignatures = new Set(
         intrusionCandleFilterEnabled ? state.pendingIntrusionCandleAlertSignatures || [] : []
       );
@@ -5922,7 +5911,6 @@ export class DecentraderGapMonitor {
         tradeDecision: null,
         intrusionCandleFilterEnabled,
         regularIntrusionEmailEnabled,
-        btcGapIntrusionEmailEnabled,
         intrusionCandleReviews: [],
         dynamicSlSync: null,
         dynamicTpSync: null,
@@ -6074,7 +6062,7 @@ export class DecentraderGapMonitor {
           if (pendingCandleReview || emailDuplicate) {
             result.duplicate = true;
           }
-        } else if (btcGapIntrusionEmailEnabled && smtpSettings) {
+        } else if (delayModelEnabled && regularIntrusionEmailEnabled && smtpSettings) {
           const emailResult = await sendEmailBestEffort(
             smtpSettings,
             `${sideCounts(alert)} | ${alert.timestampNl}`,
@@ -6102,7 +6090,7 @@ export class DecentraderGapMonitor {
               error: emailResult.error
             });
           }
-        } else if (!btcGapIntrusionEmailEnabled && intrusionCandleFilterEnabled) {
+        } else if ((!regularIntrusionEmailEnabled || !delayModelEnabled) && intrusionCandleFilterEnabled) {
           // Preserve the original Delay boundary without delivering the raw
           // intrusion email. Filtered mail still follows the Delay model switch.
           normalSmtpSentAt = nowNlIso();

@@ -74,6 +74,7 @@ import {
 import {
   CompactReplicaZone,
   OpenLiquidityV2ReplicaCollector,
+  openLiquidityV2BtcCollector,
   openLiquidityV2EthCollector,
   openLiquidityV2GoldCollector,
   openLiquidityV2InjCollector,
@@ -94,9 +95,13 @@ type WhaleSnapshotProvider = {
 export type OpenLiquidityV2TradeMonitorConfig = {
   market: string;
   symbol: string;
-  asset: 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'GOLD' | 'SILVER';
+  asset: 'BTC' | 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'GOLD' | 'SILVER';
   priceStep: number;
   tradeCapable: boolean;
+  informationalOnly?: boolean;
+  informationalEmailEnv?: string;
+  pollMinutesEnv?: string;
+  refreshLatestClosedHour?: boolean;
   enabledEnv: string;
   autoTradeEnv: string;
   inheritDecentraderAutoTrade: boolean;
@@ -108,6 +113,28 @@ export type OpenLiquidityV2TradeMonitorConfig = {
   coinGlassMaxDistanceEnv: string;
   coinGlassMaxDistanceUsd: number;
   coinGlass?: WhaleSnapshotProvider;
+};
+
+const BTC_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
+  market: 'BTC-USD',
+  symbol: 'BTCUSDT',
+  asset: 'BTC',
+  priceStep: 100,
+  tradeCapable: false,
+  informationalOnly: true,
+  informationalEmailEnv: 'DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED',
+  pollMinutesEnv: 'OPEN_LIQUIDITY_V2_BTC_INTRUSION_POLL_MINUTES',
+  refreshLatestClosedHour: true,
+  enabledEnv: 'OPEN_LIQUIDITY_V2_BTC_INTRUSION_MONITOR_ENABLED',
+  autoTradeEnv: 'OPEN_LIQUIDITY_V2_BTC_AUTO_TRADE_ENABLED',
+  inheritDecentraderAutoTrade: false,
+  stateFileEnv: 'OPEN_LIQUIDITY_V2_BTC_INTRUSION_STATE_FILE',
+  stateFileName: 'open-liquidity-v2-btc-intrusion-state.json',
+  strategyPrefix: 'open_liquidity_v2_btc_observe_only',
+  edgeBufferEnv: 'DECENTRADER_TP1_EDGE_FRONT_RUN_USD',
+  coinGlassMinUsdEnv: 'COINGLASS_TP_CONFLUENCE_MIN_USD',
+  coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD',
+  coinGlassMaxDistanceUsd: 200
 };
 
 const ETH_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
@@ -246,6 +273,8 @@ type EthBenchmarkRecord = {
   timestampNl: string;
   sideCounts: string;
   direction: TradePlanDirection | 'mixed';
+  alertPrice?: number;
+  gap?: { left: number; right: number; width: number };
   filtered: boolean;
   candleReview?: any;
   impulseQuality?: IntrusionImpulseQuality;
@@ -262,6 +291,7 @@ type EthMonitorState = AlertState & {
   filteredSentSignatures?: string[];
   delayRecords?: EthDelayRecord[];
   benchmarkRecords?: EthBenchmarkRecord[];
+  historyBackfilledAt?: string;
 };
 
 function boolEnv(name: string, fallback: boolean): boolean {
@@ -781,6 +811,9 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private pollMinutes(): number {
+    if (this.config.pollMinutesEnv) {
+      return positiveIntegerEnv(this.config.pollMinutesEnv, 1, 1, 60);
+    }
     return positiveIntegerEnv('DECENTRADER_GAP_POLL_MINUTES', 10, 1, 1_440);
   }
 
@@ -788,10 +821,12 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (this.interval || this.initialTimer || this.managementInterval) return;
     const begin = () => {
       this.initialTimer = undefined;
-      const manage = () => this.checkManagedPosition().catch((error) =>
-        console.error(`${this.config.asset} V2 position management failed:`, error));
-      void manage();
-      this.managementInterval = setInterval(manage, this.pollMinutes() * 60_000);
+      if (!this.config.informationalOnly) {
+        const manage = () => this.checkManagedPosition().catch((error) =>
+          console.error(`${this.config.asset} V2 position management failed:`, error));
+        void manage();
+        this.managementInterval = setInterval(manage, this.pollMinutes() * 60_000);
+      }
       if (this.enabled()) {
         this.check().catch((error) => console.error(`${this.config.asset} V2 intrusion monitor initial check failed:`, error));
         this.interval = setInterval(() => {
@@ -806,6 +841,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       autoTradeEnabled: this.autoTradeEnabled(),
       delayEntryModelEnabled: delayEntryModelEnabled(),
       observeOnly: !this.config.tradeCapable,
+      informationalOnly: Boolean(this.config.informationalOnly),
+      informationalEmailEnabled: this.config.informationalEmailEnv
+        ? boolEnv(this.config.informationalEmailEnv, false)
+        : false,
       stateFile: stateFile(this.config),
       inheritsDecentraderRiskAndOrderEnvs: true
     });
@@ -822,6 +861,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       delayEntryModelEnabled: delayEntryModelEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       observeOnly: !this.config.tradeCapable,
+      informationalOnly: Boolean(this.config.informationalOnly),
+      informationalEmailEnabled: this.config.informationalEmailEnv
+        ? boolEnv(this.config.informationalEmailEnv, false)
+        : false,
       hasTradeExecutor: Boolean(this.executor),
       pollMinutes: this.pollMinutes(),
       stateFile: stateFile(this.config),
@@ -831,14 +874,25 @@ export class OpenLiquidityV2EthTradeMonitor {
       lastTradeDecision: state.lastTradeDecision,
       managedPosition: state.managedPosition || null,
       pendingAlerts: Object.keys(state.pendingAlerts || {}).length,
-      intrusionCandleFilter: {
-        enabled: boolEnv('DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED', false),
-        regularEmailEnabled: decentraderRegularIntrusionEmailEnabled(),
-        source: 'binance-futures',
-        symbol: this.config.symbol,
-        volumeDeltaEnabled: boolEnv('DECENTRADER_INTRUSION_VOLUME_DELTA_ENABLED', true),
-        rule: 'all fully closed 1H Delay candles: price color and taker delta must match direction'
-      }
+      intrusionCandleFilter: this.config.informationalOnly
+        ? {
+            enabled: false,
+            regularEmailEnabled: this.config.informationalEmailEnv
+              ? boolEnv(this.config.informationalEmailEnv, false)
+              : false,
+            source: 'binance-spot',
+            symbol: this.config.symbol,
+            volumeDeltaEnabled: false,
+            rule: 'observe-only Public V2 gap intrusion on each newly closed Binance 1H candle'
+          }
+        : {
+            enabled: boolEnv('DECENTRADER_INTRUSION_CANDLE_FILTER_ENABLED', false),
+            regularEmailEnabled: decentraderRegularIntrusionEmailEnabled(),
+            source: 'binance-futures',
+            symbol: this.config.symbol,
+            volumeDeltaEnabled: boolEnv('DECENTRADER_INTRUSION_VOLUME_DELTA_ENABLED', true),
+            rule: 'all fully closed 1H Delay candles: price color and taker delta must match direction'
+          }
     };
   }
 
@@ -897,6 +951,12 @@ export class OpenLiquidityV2EthTradeMonitor {
       timestampNl: alert.timestampNl,
       sideCounts: sideCounts(alert),
       direction: mapDirectionFromAlert(alert) || 'mixed',
+      alertPrice: finite(alert.price),
+      gap: {
+        left: finite(alert.previousGap?.left),
+        right: finite(alert.previousGap?.right),
+        width: finite(alert.previousGap?.width)
+      },
       filtered: false,
       coinGlass: existingRecord?.coinGlass || coinGlassBenchmark(alert, this.config.coinGlass),
       observedAt: nowNlIso(),
@@ -1849,9 +1909,23 @@ export class OpenLiquidityV2EthTradeMonitor {
       tradePlaced: false
     };
     try {
+      if (this.config.refreshLatestClosedHour) {
+        result.publicV2Refreshed = await this.collector.refreshForLatestClosedHour();
+      }
       const payload = await this.collector.getPayload();
       const frames = payload.frames || [];
       const latestTimestamp = String(frames[frames.length - 1]?.t || '');
+      if (this.config.informationalOnly && !state.historyBackfilledAt && frames.length > 1) {
+        const historical = reconstructReplicaIntrusions(payload, String(frames[0]?.t || '')).alerts
+          .filter((alert) => alert.timestamp !== latestTimestamp);
+        for (const alert of historical) {
+          this.addBenchmark(state, alert, signatureForAlert(alert, this.config.market), {
+            tradeOutcome: 'HISTORICAL OBSERVATION'
+          });
+        }
+        result.historyBackfilled = historical.length;
+        state.historyBackfilledAt = nowNlIso();
+      }
       if (!state.lastDataTimestamp) {
         state.lastDataTimestamp = String(frames[Math.max(0, frames.length - 2)]?.t || latestTimestamp);
         result.initializedAtLatestFrame = latestTimestamp;
@@ -1862,6 +1936,9 @@ export class OpenLiquidityV2EthTradeMonitor {
         const smtp = smtpSettingsFromEnv();
         const delayModelEnabled = delayEntryModelEnabled();
         const regularIntrusionEmailEnabled = decentraderRegularIntrusionEmailEnabled();
+        const informationalEmailEnabled = this.config.informationalEmailEnv
+          ? boolEnv(this.config.informationalEmailEnv, false)
+          : false;
         state.pendingAlerts = state.pendingAlerts || {};
         const normalSent = new Set(state.normalSentSignatures || []);
         const filteredSent = new Set(state.filteredSentSignatures || []);
@@ -1882,7 +1959,10 @@ export class OpenLiquidityV2EthTradeMonitor {
             ? { ...pending.alert, frameIndex: currentFrameIndex }
             : pending.alert;
           pending.alert = alert;
-          if (delayModelEnabled && !normalSent.has(signature) && regularIntrusionEmailEnabled && smtp) {
+          const rawEmailEnabled = this.config.informationalOnly
+            ? informationalEmailEnabled
+            : delayModelEnabled && regularIntrusionEmailEnabled;
+          if (!normalSent.has(signature) && rawEmailEnabled && smtp) {
             const sent = await sendEmailBestEffort(
               smtp,
               `${this.config.asset} ${sideCounts(alert)} | ${alert.timestampNl}`,
@@ -1893,7 +1973,17 @@ export class OpenLiquidityV2EthTradeMonitor {
               normalSent.add(signature);
               this.addDelayRecord(state, alert, signature, 'normal', pending.normalSmtpSentAt);
               result.emailSentCount += 1;
+            } else {
+              result.emailErrors = [...(result.emailErrors || []), {
+                signature,
+                error: sent.error || 'SMTP send failed.'
+              }];
             }
+          }
+          if (this.config.informationalOnly) {
+            const waitingForEmailRetry = informationalEmailEnabled && !normalSent.has(signature);
+            if (!waitingForEmailRetry) delete state.pendingAlerts[signature];
+            continue;
           }
           if (filterEnabled && (!regularIntrusionEmailEnabled || !delayModelEnabled) && !pending.normalSmtpSentAt) {
             // Keep a stable Delay cutoff while suppressing the raw intrusion
@@ -2129,6 +2219,11 @@ export class OpenLiquidityV2EthTradeMonitor {
     }).finally(() => { this.takeProfitPromise = undefined; });
   }
 }
+
+export const openLiquidityV2BtcIntrusionMonitor = new OpenLiquidityV2EthTradeMonitor(
+  openLiquidityV2BtcCollector,
+  BTC_MONITOR_CONFIG
+);
 
 export const openLiquidityV2EthTradeMonitor = new OpenLiquidityV2EthTradeMonitor(
   openLiquidityV2EthCollector,

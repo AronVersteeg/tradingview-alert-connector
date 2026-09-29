@@ -768,6 +768,15 @@ export class OpenLiquidityV2ReplicaCollector {
     return this.refreshPromise;
   }
 
+  async refreshForLatestClosedHour(nowMs = Date.now()): Promise<boolean> {
+    this.loadHistory();
+    const latestClosedHour = Math.floor(nowMs / HOUR_MS) * HOUR_MS - HOUR_MS;
+    const latestSnapshotHour = Date.parse(this.snapshots[this.snapshots.length - 1]?.effectiveAt || '');
+    if (Number.isFinite(latestSnapshotHour) && latestSnapshotHour >= latestClosedHour) return false;
+    await this.refresh();
+    return true;
+  }
+
   private clearPayloadCache(): void {
     if (this.payloadCacheTimer) clearTimeout(this.payloadCacheTimer);
     this.payloadCacheTimer = undefined;

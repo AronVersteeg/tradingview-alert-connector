@@ -29,6 +29,7 @@ import {
   openLiquidityV2ZecCollector
 } from '../services/openLiquidityV2Replica';
 import {
+  openLiquidityV2BtcIntrusionMonitor,
   openLiquidityV2EthTradeMonitor,
   openLiquidityV2GoldIntrusionMonitor,
   openLiquidityV2InjTradeMonitor,
@@ -271,6 +272,7 @@ initializeExchanges()
       };
     });
     coinGlassZecWhaleCollector.start(315_000);
+    openLiquidityV2BtcIntrusionMonitor.start(15_000);
     openLiquidityV2EthTradeMonitor.start(75_000);
     openLiquidityV2InjTradeMonitor.start(105_000);
     openLiquidityV2GoldIntrusionMonitor.start(165_000);
@@ -693,6 +695,7 @@ function openLiquidityV2CollectorForMarket(market: string) {
 }
 
 function openLiquidityV2MonitorForMarket(market: string) {
+  if (market === 'BTC-USD') return openLiquidityV2BtcIntrusionMonitor;
   if (market === 'ETH-USD') return openLiquidityV2EthTradeMonitor;
   if (market === 'INJ-USD') return openLiquidityV2InjTradeMonitor;
   if (market === 'SOL-USD') return openLiquidityV2SolTradeMonitor;
@@ -802,7 +805,9 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
         ? {
             ...payload.source,
             note:
-              market === 'PAXG-USD'
+              market === 'BTC-USD'
+                ? 'BTC Public Perp V2 uses the causal Binance Spot BTCUSDT reconstruction for observe-only gap-intrusion emails and persistent intrusion history. It never places trades; manual BTC entries remain handled separately.'
+                : market === 'PAXG-USD'
                 ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. When explicitly enabled, filtered Gold intrusions are independently managed on dYdX PAXG-USD with the shared risk, fractal SL and TP settings.'
                 : market === 'XAG-USD'
                   ? 'SILVER Public Perp V2 uses a causal Binance XAGUSDT Futures liquidation-cohort reconstruction. Filtered intrusions and SMTP Delay history use the shared candle and taker-delta rules; live execution is independently managed on dYdX XAG-USD with the shared dollar-risk, Williams-fractal SL and TP settings.'

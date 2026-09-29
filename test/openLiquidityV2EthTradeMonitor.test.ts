@@ -1,6 +1,8 @@
 import {
   buildReplicaTradeZones,
   capTakeProfitsForStatefulOrderCapacity,
+  OpenLiquidityV2EthTradeMonitor,
+  openLiquidityV2BtcIntrusionMonitor,
   openLiquidityV2GoldIntrusionMonitor,
   openLiquidityV2InjTradeMonitor,
   openLiquidityV2SolTradeMonitor,
@@ -22,6 +24,78 @@ function replicaGap(left: number, right: number) {
 }
 
 describe('ETH Public Perp V2 intrusion execution inputs', () => {
+  test('keeps the BTC Public V2 intrusion monitor strictly observe-only', () => {
+    const previousEmail = process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED;
+    try {
+      process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED = 'true';
+      expect(openLiquidityV2BtcIntrusionMonitor.getStatus()).toMatchObject({
+        market: 'BTC-USD',
+        autoTradeEnabled: false,
+        observeOnly: true,
+        informationalOnly: true,
+        informationalEmailEnabled: true,
+        pollMinutes: 1
+      });
+    } finally {
+      if (previousEmail === undefined) delete process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED;
+      else process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED = previousEmail;
+    }
+  });
+
+  test('stores a BTC Public V2 intrusion without entering the trade path', async () => {
+    const payload = {
+      frames: [
+        { i: 0, t: '2026-08-01 10:00:00', price: 70_000 },
+        { i: 1, t: '2026-08-01 11:00:00', price: 70_300 }
+      ],
+      gaps: [replicaGap(68_000, 72_000), replicaGap(68_500, 72_000)],
+      zoneSeed: [
+        ['L', 10, 68_000, 4],
+        ['S', 10, 72_000, 3]
+      ],
+      zoneDeltas: [[], [['L', 10, 69_000, 1]]]
+    };
+    const collector = {
+      refreshForLatestClosedHour: jest.fn().mockResolvedValue(false),
+      getPayload: jest.fn().mockResolvedValue(payload)
+    };
+    const monitor = new OpenLiquidityV2EthTradeMonitor(collector as any, {
+      market: 'BTC-USD',
+      symbol: 'BTCUSDT',
+      asset: 'BTC',
+      priceStep: 100,
+      tradeCapable: false,
+      informationalOnly: true,
+      informationalEmailEnv: 'TEST_BTC_INFO_EMAIL_ENABLED',
+      refreshLatestClosedHour: true,
+      enabledEnv: 'TEST_BTC_MONITOR_ENABLED',
+      autoTradeEnv: 'TEST_BTC_AUTO_TRADE_ENABLED',
+      inheritDecentraderAutoTrade: false,
+      stateFileEnv: 'TEST_BTC_STATE_FILE',
+      stateFileName: 'test-btc-state.json',
+      strategyPrefix: 'test_btc_observe_only',
+      edgeBufferEnv: 'DECENTRADER_TP1_EDGE_FRONT_RUN_USD',
+      coinGlassMinUsdEnv: 'COINGLASS_TP_CONFLUENCE_MIN_USD',
+      coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD',
+      coinGlassMaxDistanceUsd: 200
+    });
+    const state: any = {};
+
+    const result = await (monitor as any).checkWithState(state);
+
+    expect(result).toMatchObject({ tradePlaced: false, emailSentCount: 0 });
+    expect(result.alerts).toHaveLength(1);
+    expect(state.pendingAlerts).toEqual({});
+    expect(state.benchmarkRecords).toEqual([
+      expect.objectContaining({
+        timestamp: '2026-08-01 11:00:00',
+        direction: 'long',
+        alertPrice: 70_300,
+        gap: { left: 68_000, right: 72_000, width: 4_000 }
+      })
+    ]);
+  });
+
   test('reserves one stop per five positions before evenly dividing TP slots', () => {
     const allocations = allocateStatefulOrderSlots(
       ['XAG-USD', 'BTC_USD', 'PAXG-USD', 'INJ-USD', 'ETH-USD'],
