@@ -3453,7 +3453,7 @@
         latestHigh ? `Latest high ${exactDecimalLabel(latestHigh.priceExact)} (${dailyFractalDate(latestHigh.pivotAt)})` : 'Latest high -',
         latestLow ? `Latest low ${exactDecimalLabel(latestLow.priceExact)} (${dailyFractalDate(latestLow.pivotAt)})` : 'Latest low -',
         history.latestClosedCandleAt ? `closed through ${dailyFractalDate(history.latestClosedCandleAt)}` : '',
-        history.cached ? 'cached' : 'fresh'
+        history.stale ? `STALE - refresh unavailable${history.retryAt ? ` | retry ${dailyFractalDate(history.retryAt)}` : ''}` : history.cached ? 'cached' : 'fresh'
       ].filter(Boolean).join(' | ');
 
       rows.innerHTML = records.map((record) => {

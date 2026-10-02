@@ -1,9 +1,10 @@
-import { binanceGet } from './binanceHttp';
+import { binanceGet, binanceRetryAt } from './binanceHttp';
 
 const BINANCE_FUTURES_KLINES_URL = 'https://fapi.binance.com/fapi/v1/klines';
 const WILLIAMS_WINDOW = 2;
 const HISTORY_LIMIT = 1000;
-const CACHE_TTL_MS = 15 * 60_000;
+const CACHE_TTL_MS = 60_000;
+const failedRefreshes = new Map<string, { retryAt: number; error: string }>();
 
 export type BinanceFractalInterval = '1d' | '1w';
 
@@ -59,6 +60,9 @@ export type DailyFractalHistorySnapshot = {
   fetchedAt: string;
   latestClosedCandleAt?: string;
   cached: boolean;
+  stale?: boolean;
+  lastError?: string;
+  retryAt?: string;
   records: DailyFractalHistoryItem[];
 };
 
@@ -69,6 +73,14 @@ type CachedSnapshot = {
 
 const cachedSnapshots = new Map<string, CachedSnapshot>();
 const pendingSnapshots = new Map<string, Promise<DailyFractalHistorySnapshot>>();
+
+export function latestExpectedFractalClose(interval: BinanceFractalInterval, nowMs = Date.now()): number {
+  const dayMs = 86_400_000;
+  const midnight = Math.floor(nowMs / dayMs) * dayMs;
+  if (interval === '1d') return midnight - 1;
+  const daysSinceMonday = (new Date(midnight).getUTCDay() + 6) % 7;
+  return midnight - daysSinceMonday * dayMs - 1;
+}
 
 function finiteNumber(value: unknown): number | undefined {
   const parsed = Number(value);
@@ -230,7 +242,19 @@ export async function binanceFractalHistory(
   const cacheKey = `${market}|${interval}`;
   const now = Date.now();
   const cachedSnapshot = cachedSnapshots.get(cacheKey);
-  if (!forceRefresh && cachedSnapshot && now - cachedSnapshot.storedAt < CACHE_TTL_MS) {
+  const failed = failedRefreshes.get(cacheKey);
+  if (failed && failed.retryAt > now) {
+    if (!cachedSnapshot) throw new Error(failed.error);
+    return {
+      ...cachedSnapshot.snapshot, cached: true, stale: true,
+      lastError: failed.error, retryAt: new Date(failed.retryAt).toISOString()
+    };
+  }
+  const latestClosedAt = Date.parse(cachedSnapshot?.snapshot.latestClosedCandleAt || '');
+  if (!forceRefresh && cachedSnapshot && (
+    latestClosedAt >= latestExpectedFractalClose(interval, now) ||
+    now - cachedSnapshot.storedAt < CACHE_TTL_MS
+  )) {
     return { ...cachedSnapshot.snapshot, cached: true };
   }
   const pendingSnapshot = pendingSnapshots.get(cacheKey);
@@ -238,10 +262,14 @@ export async function binanceFractalHistory(
 
   const request = fetchSnapshot(market, interval)
     .then((snapshot) => {
+      failedRefreshes.delete(cacheKey);
       cachedSnapshots.set(cacheKey, { storedAt: Date.now(), snapshot });
       return snapshot;
     })
     .catch((error) => {
+      const retryAt = Math.max(Date.now() + 60_000, binanceRetryAt(BINANCE_FUTURES_KLINES_URL) + 1000);
+      const message = error instanceof Error ? error.message : String(error);
+      failedRefreshes.set(cacheKey, { retryAt, error: message });
       const fallback = cachedSnapshots.get(cacheKey);
       if (fallback) {
         console.warn('Binance fractal refresh failed; using cached snapshot.', {
@@ -251,7 +279,10 @@ export async function binanceFractalHistory(
           error: error instanceof Error ? error.message : String(error),
           fetchedAt: fallback.snapshot.fetchedAt
         });
-        return { ...fallback.snapshot, cached: true };
+        return {
+          ...fallback.snapshot, cached: true, stale: true,
+          lastError: message, retryAt: new Date(retryAt).toISOString()
+        };
       }
       throw error;
     })

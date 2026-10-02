@@ -1537,6 +1537,8 @@ export function fetchCoinGlassWhaleLevelsViaWebSocket(
     let handshakeDone = false;
     let handshakeBuffer = Buffer.alloc(0);
     let frameBuffer = Buffer.alloc(0);
+    let receivedFrames = 0;
+    let receivedMessages = 0;
 
     const socket = tls.connect({
       host: COINGLASS_WS_HOST,
@@ -1544,7 +1546,9 @@ export function fetchCoinGlassWhaleLevelsViaWebSocket(
       servername: COINGLASS_WS_HOST
     });
 
-    const timer = setTimeout(() => finish(new Error('CoinGlass whale WebSocket timed out.')), timeoutMs);
+    const timer = setTimeout(() => finish(new Error(
+      `CoinGlass whale WebSocket timed out (${handshakeDone ? 'snapshot' : 'connect/upgrade'}; symbol ${symbol}; frames ${receivedFrames}; messages ${receivedMessages}).`
+    )), timeoutMs);
     const heartbeat = setInterval(() => {
       if (handshakeDone && !settled) {
         socket.write(buildWebSocketFrame('ping'));
@@ -1567,6 +1571,7 @@ export function fetchCoinGlassWhaleLevelsViaWebSocket(
     function handleText(text: string): void {
       const trimmed = text.trim();
       if (!trimmed || trimmed === 'pong' || trimmed === 'ping') return;
+      receivedMessages += 1;
 
       try {
         const parsed = JSON.parse(trimmed);
@@ -1584,6 +1589,7 @@ export function fetchCoinGlassWhaleLevelsViaWebSocket(
       frameBuffer = Buffer.from(parsed.remaining);
 
       for (const frame of parsed.frames) {
+        receivedFrames += 1;
         if (frame.opcode === 0x8) {
           finish(new Error('CoinGlass whale WebSocket closed before a snapshot arrived.'));
           return;
@@ -3777,6 +3783,7 @@ export async function fetchBinanceFuturesHourlyCandlesForSymbol(
   let pagesFetched = 0;
 
   for (let page = 0; page < 12 && fetchFromMs <= targetMs; page += 1) {
+    const pageLimit = Math.min(BINANCE_KLINE_PAGE_SIZE, Math.max(1, Math.ceil((targetMs - fetchFromMs) / HOUR_MS) + 1));
     const response = await binanceGet(`${BINANCE_FUTURES_URL}/fapi/v1/klines`, {
       timeout: 30000,
       params: {
@@ -3784,7 +3791,7 @@ export async function fetchBinanceFuturesHourlyCandlesForSymbol(
         interval: '1h',
         startTime: fetchFromMs,
         endTime: targetMs,
-        limit: BINANCE_KLINE_PAGE_SIZE
+        limit: pageLimit
       }
     });
     if (!Array.isArray(response.data)) {
@@ -3797,7 +3804,7 @@ export async function fetchBinanceFuturesHourlyCandlesForSymbol(
       .filter((candle: DydxRsiCandle | undefined): candle is DydxRsiCandle => candle !== undefined)
       .sort((a: DydxRsiCandle, b: DydxRsiCandle) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
     for (const candle of pageCandles) merged.set(Date.parse(candle.startedAt), candle);
-    if (!pageCandles.length || pageCandles.length < BINANCE_KLINE_PAGE_SIZE) break;
+    if (!pageCandles.length || pageCandles.length < pageLimit) break;
     const nextFromMs = Date.parse(pageCandles[pageCandles.length - 1].startedAt) + HOUR_MS;
     if (nextFromMs <= fetchFromMs) break;
     fetchFromMs = nextFromMs;

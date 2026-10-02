@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 
-import { binanceGet } from './binanceHttp';
+import { binanceGet, binanceRetryAt } from './binanceHttp';
+import { binanceHourlyCloseFeed } from './binanceHourlyCloseFeed';
 import { allocateStepSizes } from './decentraderExecutionPolicy';
 
 const HOUR_MS = 60 * 60_000;
@@ -413,6 +414,8 @@ async function fetchHourlyCandles(
   config = BTC_MANUAL_OVERRIDE_CONFIG,
   nowMs = Date.now()
 ): Promise<BtcManualHourlyCandle[]> {
+  const streamed = binanceHourlyCloseFeed.latest(config.symbol, nowMs);
+  if (streamed) return [streamed];
   const response = await binanceGet<unknown[]>(BINANCE_FUTURES_KLINES_URL, {
     params: { symbol: config.symbol, interval: '1h', limit: 12 },
     timeout: 20_000
@@ -604,7 +607,10 @@ export class BtcManualTradeOverrideMonitor {
     const marketOffsetMs = Math.max(0, MANUAL_OVERRIDE_CONFIGS.findIndex((config) => (
       config.market === this.config.market
     ))) * 5_000;
-    const nextRunAt = (Math.floor(now / HOUR_MS) + 1) * HOUR_MS + CLOSE_BUFFER_MS + marketOffsetMs;
+    const hourlyRunAt = (Math.floor(now / HOUR_MS) + 1) * HOUR_MS + CLOSE_BUFFER_MS + marketOffsetMs;
+    const nextRunAt = this.status.retryData
+      ? Math.min(hourlyRunAt, Math.max(now + 60_000, binanceRetryAt(BINANCE_FUTURES_KLINES_URL) + 1000) + marketOffsetMs)
+      : hourlyRunAt;
     this.nextTimer = setTimeout(() => {
       this.nextTimer = undefined;
       this.runAndReschedule();
@@ -614,7 +620,8 @@ export class BtcManualTradeOverrideMonitor {
 
   private async performCheck(): Promise<void> {
     const startedAt = new Date().toISOString();
-    this.status = { ...this.status, running: true, lastStartedAt: startedAt, lastError: undefined };
+    this.status = { ...this.status, running: true, lastStartedAt: startedAt, lastError: undefined, retryData: false };
+    let readingCandles = false;
     try {
       if (!btcManualTradeOverrideEnabled()) return;
       let store = readManualTradeOverrideStore(this.config);
@@ -646,8 +653,13 @@ export class BtcManualTradeOverrideMonitor {
         writeStore({ ...store, updatedAt: nowIso }, this.config);
         return;
       }
+      readingCandles = true;
       const candles = await fetchHourlyCandles(this.config, nowMs);
       const latest = candles[candles.length - 1];
+      if (latest.openTime !== (Math.floor(Date.now() / HOUR_MS) - 1) * HOUR_MS) {
+        throw new Error(`Binance ${this.config.symbol} has not published the latest closed 1H candle.`);
+      }
+      readingCandles = false;
       for (const override of armed) {
         override.lastEvaluatedCandleStartedAt = latest ? new Date(latest.openTime).toISOString() : undefined;
         override.updatedAt = nowIso;
@@ -693,6 +705,7 @@ export class BtcManualTradeOverrideMonitor {
         writeStore(store, this.config);
       }
       this.status.lastError = message;
+      this.status.retryData = readingCandles;
       throw error;
     } finally {
       this.status = { ...this.status, running: false, lastFinishedAt: new Date().toISOString() };

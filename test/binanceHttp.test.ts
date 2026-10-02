@@ -1,6 +1,11 @@
-import { binanceRateLimitUntil, isBinanceRateLimitError } from '../src/services/binanceHttp';
+import { binanceRateLimitUntil, isBinanceRateLimitError, binanceRequestWeight } from '../src/services/binanceHttp';
 
 describe('Binance REST rate-limit handling', () => {
+  test('accounts for weighted Futures candle and depth requests', () => {
+    expect(binanceRequestWeight('https://fapi.binance.com/fapi/v1/klines', { params: { limit: 12 } })).toBe(1);
+    expect(binanceRequestWeight('https://fapi.binance.com/fapi/v1/klines', { params: { limit: 1500 } })).toBe(10);
+    expect(binanceRequestWeight('https://fapi.binance.com/fapi/v1/depth', { params: { limit: 500 } })).toBe(10);
+  });
   test('recognizes Binance code -1003 and honors the longest cooldown', () => {
     const now = Date.parse('2026-08-26T14:13:14.000Z');
     const bannedUntil = Date.parse('2026-08-26T14:29:57.922Z');

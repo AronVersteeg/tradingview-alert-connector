@@ -50,6 +50,8 @@ import {
   isDailyFractalMarket
 } from '../services/binanceDailyFractalHistory';
 import { shadowFractalMonitor } from '../services/shadowFractalMonitor';
+import { binanceHttpStatus } from '../services/binanceHttp';
+import { binanceHourlyCloseFeed } from '../services/binanceHourlyCloseFeed';
 import {
   btcManualTradeOverrideMonitor,
   manualTradeOverrideMonitorForMarket,
@@ -279,6 +281,7 @@ initializeExchanges()
     openLiquidityV2SilverIntrusionMonitor.start(225_000);
     openLiquidityV2SolTradeMonitor.start(255_000);
     openLiquidityV2ZecTradeMonitor.start(345_000);
+    binanceHourlyCloseFeed.start();
     [...manualTradeOverrideMonitors.values()].forEach((monitor, index) => monitor.start(30_000 + index * 5_000));
     shadowFractalMonitor.start(390_000);
   })
@@ -522,6 +525,11 @@ router.get('/decentrader/liquidity-timelapse', async (req, res) => {
       error: error instanceof Error ? error.message : String(error)
     });
   }
+});
+
+router.get('/research/binance/status', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.send({ hosts: binanceHttpStatus(), hourlyCloseStream: binanceHourlyCloseFeed.status() });
 });
 
 router.get('/research/dom-collector/status', async (req, res) => {

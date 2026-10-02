@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import { binanceGet } from './binanceHttp';
+import { binanceGet, binanceRetryAt } from './binanceHttp';
 import {
   BINANCE_DAILY_FRACTAL_MARKETS,
   BinanceDailyCandle,
@@ -346,7 +346,12 @@ export class ShadowFractalMonitor {
     const retryNeeded = Array.isArray(this.status.lastResult) && this.status.lastResult.some(
       (result: any) => result.retryEmail === true
     );
-    const nextRunAt = retryNeeded
+    const retryData = Array.isArray(this.status.lastResult) && this.status.lastResult.some(
+      (result: any) => result.error
+    );
+    const nextRunAt = retryData
+      ? Math.max(now + 60_000, binanceRetryAt(BINANCE_FUTURES_KLINES_URL) + 1000)
+      : retryNeeded
       ? now + 5 * 60_000
       : (Math.floor(now / HOUR_MS) + 1) * HOUR_MS + CLOSE_BUFFER_MS;
     this.nextTimer = setTimeout(() => {
@@ -362,6 +367,10 @@ export class ShadowFractalMonitor {
     const results: any[] = [];
 
     try {
+      if (!this.enabled()) {
+        this.status = { ...this.status, running: false, lastFinishedAt: new Date().toISOString(), lastResult: [] };
+        return;
+      }
       for (const config of SHADOW_MARKETS) {
         if (!this.marketEnabled(config.asset)) continue;
         try {
@@ -399,6 +408,10 @@ export class ShadowFractalMonitor {
       binanceDailyFractalHistory(config.market)
     ]);
     const latestCandle = hourlyCandles[hourlyCandles.length - 1];
+    if (dailySnapshot.stale) throw new Error(`Binance ${config.symbol} Daily fractal data is stale: ${dailySnapshot.lastError}`);
+    if (latestCandle.openTime !== (Math.floor(Date.now() / HOUR_MS) - 1) * HOUR_MS) {
+      throw new Error(`Binance ${config.symbol} has not published the latest closed 1H candle.`);
+    }
     const signal = evaluateShadowFractalBreakout(hourlyCandles, dailySnapshot.records);
     if (!signal) {
       return {

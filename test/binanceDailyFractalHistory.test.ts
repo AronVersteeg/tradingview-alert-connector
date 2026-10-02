@@ -2,14 +2,17 @@ import {
   BINANCE_DAILY_FRACTAL_MARKETS,
   BinanceDailyCandle,
   binanceWeeklyFractalHistory,
+  binanceDailyFractalHistory,
+  latestExpectedFractalClose,
   buildDailyFractalHistory,
   isDailyFractalMarket,
   parseBinanceDailyCandles
 } from '../src/services/binanceDailyFractalHistory';
-import { binanceGet } from '../src/services/binanceHttp';
+import { binanceGet, binanceRetryAt } from '../src/services/binanceHttp';
 
 jest.mock('../src/services/binanceHttp', () => ({
-  binanceGet: jest.fn()
+  binanceGet: jest.fn(),
+  binanceRetryAt: jest.fn(() => 0)
 }));
 
 function candle(day: number, high: string, low: string): BinanceDailyCandle {
@@ -23,6 +26,58 @@ function candle(day: number, high: string, low: string): BinanceDailyCandle {
 }
 
 describe('Binance daily Williams fractal history', () => {
+  test('computes Daily and Monday UTC Weekly close boundaries', () => {
+    const friday = Date.parse('2026-10-02T12:00:00.000Z');
+    expect(latestExpectedFractalClose('1d', friday)).toBe(Date.parse('2026-10-01T23:59:59.999Z'));
+    expect(latestExpectedFractalClose('1w', friday)).toBe(Date.parse('2026-09-27T23:59:59.999Z'));
+  });
+
+  test('reuses confirmed daily data throughout the day and refreshes after the next daily close', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(Date.parse('2026-10-02T12:00:00.000Z'));
+    const rows = Array.from({ length: 7 }, (_, index) => {
+      const open = Date.UTC(2026, 8, 25 + index);
+      return [open, '10', '12', '8', '11', '1', open + 86_400_000 - 1];
+    });
+    (binanceGet as jest.Mock).mockClear().mockResolvedValue({ data: rows });
+    try {
+      await binanceDailyFractalHistory('ETH-USD', true);
+      jest.setSystemTime(Date.parse('2026-10-02T23:30:00.000Z'));
+      await binanceDailyFractalHistory('ETH-USD');
+      expect(binanceGet).toHaveBeenCalledTimes(1);
+      jest.setSystemTime(Date.parse('2026-10-03T00:00:20.000Z'));
+      await binanceDailyFractalHistory('ETH-USD');
+      expect(binanceGet).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('marks failed refreshes stale and suppresses repeated attempts until the cooldown ends', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(Date.parse('2026-10-02T12:00:00.000Z'));
+    const rows = Array.from({ length: 7 }, (_, index) => {
+      const open = Date.UTC(2026, 8, 25 + index);
+      return [open, '10', '12', '8', '11', '1', open + 86_400_000 - 1];
+    });
+    const get = binanceGet as jest.Mock;
+    get.mockClear().mockResolvedValue({ data: rows });
+    try {
+      const original = await binanceDailyFractalHistory('INJ-USD', true);
+      const retryAt = Date.now() + 3_600_000;
+      (binanceRetryAt as jest.Mock).mockReturnValue(retryAt);
+      get.mockRejectedValue(new Error('cooldown active'));
+      const fallback = await binanceDailyFractalHistory('INJ-USD', true);
+      expect(fallback).toMatchObject({ stale: true, fetchedAt: original.fetchedAt, retryAt: new Date(retryAt + 1000).toISOString() });
+      await binanceDailyFractalHistory('INJ-USD', true);
+      expect(get).toHaveBeenCalledTimes(2);
+      jest.setSystemTime(retryAt + 1001);
+      get.mockResolvedValue({ data: rows });
+      expect((await binanceDailyFractalHistory('INJ-USD', true)).stale).toBeUndefined();
+      expect(get).toHaveBeenCalledTimes(3);
+    } finally {
+      (binanceRetryAt as jest.Mock).mockReturnValue(0);
+      jest.useRealTimers();
+    }
+  });
   test('maps every dashboard pair to its explicit Binance Futures source', () => {
     expect(BINANCE_DAILY_FRACTAL_MARKETS).toEqual({
       'BTC-USD': { symbol: 'BTCUSDT' },
