@@ -1,6 +1,17 @@
-import { binanceRateLimitUntil, isBinanceRateLimitError, binanceRequestWeight } from '../src/services/binanceHttp';
+import { BinanceCooldownError, binanceCooldownHttpResponse, binanceRateLimitUntil, isBinanceRateLimitError, binanceRequestWeight } from '../src/services/binanceHttp';
 
 describe('Binance REST rate-limit handling', () => {
+  test('returns an explicit temporary-unavailability response for known cooldowns only', () => {
+    const until = Date.now() + 15_000;
+    const error = new BinanceCooldownError('fapi.binance.com', until);
+    expect(binanceCooldownHttpResponse(error)).toEqual({
+      status: 503,
+      retryAfter: '15',
+      body: { ok: false, unavailable: true, error: error.message, retryAt: new Date(until).toISOString() }
+    });
+    expect(binanceCooldownHttpResponse(new Error('unexpected network failure'))).toBeUndefined();
+    expect(binanceCooldownHttpResponse(new BinanceCooldownError('fapi.binance.com', Date.now() - 1))?.retryAfter).toBe('1');
+  });
   test('accounts for weighted Futures candle and depth requests', () => {
     expect(binanceRequestWeight('https://fapi.binance.com/fapi/v1/klines', { params: { limit: 12 } })).toBe(1);
     expect(binanceRequestWeight('https://fapi.binance.com/fapi/v1/klines', { params: { limit: 1500 } })).toBe(10);

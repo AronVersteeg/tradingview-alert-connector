@@ -26,6 +26,24 @@ function candle(day: number, high: string, low: string): BinanceDailyCandle {
 }
 
 describe('Binance daily Williams fractal history', () => {
+  test('preserves the cooldown error on repeated cold-cache reads without another transport request', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(Date.parse('2026-10-02T12:00:00.000Z'));
+    const { BinanceCooldownError } = jest.requireActual('../src/services/binanceHttp');
+    const until = Date.now() + 3_600_000;
+    const error = new BinanceCooldownError('fapi.binance.com', until);
+    const get = binanceGet as jest.Mock;
+    get.mockClear().mockRejectedValue(error);
+    (binanceRetryAt as jest.Mock).mockReturnValue(until);
+    try {
+      await expect(binanceDailyFractalHistory('SOL-USD')).rejects.toBe(error);
+      await expect(binanceDailyFractalHistory('SOL-USD')).rejects.toBe(error);
+      expect(get).toHaveBeenCalledTimes(1);
+    } finally {
+      (binanceRetryAt as jest.Mock).mockReturnValue(0);
+      jest.useRealTimers();
+    }
+  });
   test('computes Daily and Monday UTC Weekly close boundaries', () => {
     const friday = Date.parse('2026-10-02T12:00:00.000Z');
     expect(latestExpectedFractalClose('1d', friday)).toBe(Date.parse('2026-10-01T23:59:59.999Z'));

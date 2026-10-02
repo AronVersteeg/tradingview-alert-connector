@@ -16,6 +16,12 @@ IP will never be banned.
   Cooldowns persist in `binance-rest-cooldowns.json`, alongside the configured
   DOM history directory (otherwise `data/`). Keep that directory on the existing
   persistent disk. Separate processes still need shared rate-limit coordination.
+- After a cooldown, requests wait two additional seconds and use at least
+  three-second spacing for the first minute, preventing a queued catch-up burst.
+- Daily/Weekly endpoints return HTTP 503 with `Retry-After` and `retryAt` when
+  no snapshot is available during a known cooldown. Cached failures retain their
+  typed cooldown error, so dashboard polling does not emit repeated stack traces.
+  Unexpected errors still log normally; stale snapshots remain explicitly marked.
 - Confirmed Daily/Weekly fractals remain cached until a new UTC closed candle
   is expected; failed refreshes expose `stale`, `lastError`, and `retryAt`.
 - Manual candle checks retry after data failure; armed plans are not cancelled.
@@ -35,7 +41,9 @@ IP will never be banned.
 ## Diagnosis
 
 Read `GET /research/binance/status` for host bans, observed IP weight, local
-request count, and per-symbol WebSocket close freshness. This endpoint does not
+request count, the latest in-process rate-limit response (HTTP/code, triggering
+endpoint/symbol and counters), recovery pacing, and per-symbol WebSocket close
+freshness. Rate-limit diagnostics reset on restart; cooldowns persist. This endpoint does not
 refresh data or place orders. Ban logs now include endpoint/symbol and counters.
 CoinGlass timeouts separately report whether connect/upgrade or snapshot delivery
 failed, with received frame/message counts; they are not fixed by Binance changes.

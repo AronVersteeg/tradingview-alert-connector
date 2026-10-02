@@ -4,7 +4,7 @@ const BINANCE_FUTURES_KLINES_URL = 'https://fapi.binance.com/fapi/v1/klines';
 const WILLIAMS_WINDOW = 2;
 const HISTORY_LIMIT = 1000;
 const CACHE_TTL_MS = 60_000;
-const failedRefreshes = new Map<string, { retryAt: number; error: string }>();
+const failedRefreshes = new Map<string, { retryAt: number; error: Error }>();
 
 export type BinanceFractalInterval = '1d' | '1w';
 
@@ -244,10 +244,10 @@ export async function binanceFractalHistory(
   const cachedSnapshot = cachedSnapshots.get(cacheKey);
   const failed = failedRefreshes.get(cacheKey);
   if (failed && failed.retryAt > now) {
-    if (!cachedSnapshot) throw new Error(failed.error);
+    if (!cachedSnapshot) throw failed.error;
     return {
       ...cachedSnapshot.snapshot, cached: true, stale: true,
-      lastError: failed.error, retryAt: new Date(failed.retryAt).toISOString()
+      lastError: failed.error.message, retryAt: new Date(failed.retryAt).toISOString()
     };
   }
   const latestClosedAt = Date.parse(cachedSnapshot?.snapshot.latestClosedCandleAt || '');
@@ -269,7 +269,7 @@ export async function binanceFractalHistory(
     .catch((error) => {
       const retryAt = Math.max(Date.now() + 60_000, binanceRetryAt(BINANCE_FUTURES_KLINES_URL) + 1000);
       const message = error instanceof Error ? error.message : String(error);
-      failedRefreshes.set(cacheKey, { retryAt, error: message });
+      failedRefreshes.set(cacheKey, { retryAt, error: error instanceof Error ? error : new Error(message) });
       const fallback = cachedSnapshots.get(cacheKey);
       if (fallback) {
         console.warn('Binance fractal refresh failed; using cached snapshot.', {

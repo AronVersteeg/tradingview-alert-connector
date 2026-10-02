@@ -84,7 +84,10 @@ describe('Binance transport recovery', () => {
     await expect(first).rejects.toMatchObject({ retryAt: until });
     await expect(second).rejects.toMatchObject({ retryAt: until });
     expect(get).toHaveBeenCalledTimes(1);
-    expect(http.binanceHttpStatus()[0]).toMatchObject({ blocked: true, localRequests5m: 1 });
+    expect(http.binanceHttpStatus()[0]).toMatchObject({
+      blocked: true, localRequests5m: 1,
+      lastRateLimit: { status: 418, code: -1003, endpoint: '/fapi/v1/klines', symbol: 'BTCUSDT', retryAt: new Date(until).toISOString() }
+    });
     jest.resetModules();
     http = require('../src/services/binanceHttp');
     get = require('axios').get;
@@ -99,8 +102,29 @@ describe('Binance transport recovery', () => {
     get.mockResolvedValue({ data: [], headers: {} });
     await http.binanceGet('https://api.binance.com/api/v3/klines', config);
     expect(get).toHaveBeenCalledTimes(2);
-    await jest.advanceTimersByTimeAsync(10_001);
+    await jest.advanceTimersByTimeAsync(12_001);
     await http.binanceGet(url, config);
+    expect(get).toHaveBeenCalledTimes(3);
+  });
+
+  test('waits beyond ban expiry and spaces queued recovery requests even with a short configured interval', async () => {
+    const until = Date.now() + 10_000;
+    get.mockRejectedValueOnce({ response: { status: 418, headers: {}, data: { code: -1003, msg: `banned until ${until}` } } });
+    await expect(http.binanceGet(url, config)).rejects.toMatchObject({ retryAt: until });
+    get.mockResolvedValue({ data: [], headers: {} });
+    await jest.advanceTimersByTimeAsync(10_000);
+    const first = http.binanceGet(url, config);
+    const second = http.binanceGet(url, { params: { ...config.params, symbol: 'ETHUSDT' } });
+    await jest.advanceTimersByTimeAsync(1_999);
+    expect(get).toHaveBeenCalledTimes(1);
+    await jest.advanceTimersByTimeAsync(1);
+    await first;
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(http.binanceHttpStatus()[0]).toMatchObject({ blocked: false, recovering: true });
+    await jest.advanceTimersByTimeAsync(2_999);
+    expect(get).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(1);
+    await second;
     expect(get).toHaveBeenCalledTimes(3);
   });
 });

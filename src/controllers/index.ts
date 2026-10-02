@@ -50,7 +50,7 @@ import {
   isDailyFractalMarket
 } from '../services/binanceDailyFractalHistory';
 import { shadowFractalMonitor } from '../services/shadowFractalMonitor';
-import { binanceHttpStatus } from '../services/binanceHttp';
+import { binanceCooldownHttpResponse, binanceHttpStatus } from '../services/binanceHttp';
 import { binanceHourlyCloseFeed } from '../services/binanceHourlyCloseFeed';
 import {
   btcManualTradeOverrideMonitor,
@@ -589,6 +589,11 @@ router.get('/research/binance-daily-fractals', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.send(await binanceDailyFractalHistory(market, req.query.refresh === '1'));
   } catch (error) {
+    const cooldown = binanceCooldownHttpResponse(error);
+    if (cooldown) {
+      res.setHeader('Retry-After', cooldown.retryAfter);
+      return res.status(cooldown.status).send(cooldown.body);
+    }
     console.error('Binance daily fractal history request failed:', error);
     res.status(502).send({
       ok: false,
@@ -610,6 +615,11 @@ router.get('/research/binance-weekly-fractals', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.send(await binanceWeeklyFractalHistory(market, req.query.refresh === '1'));
   } catch (error) {
+    const cooldown = binanceCooldownHttpResponse(error);
+    if (cooldown) {
+      res.setHeader('Retry-After', cooldown.retryAfter);
+      return res.status(cooldown.status).send(cooldown.body);
+    }
     console.error('Binance weekly fractal history request failed:', error);
     res.status(502).send({
       ok: false,
