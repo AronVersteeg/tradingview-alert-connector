@@ -38,6 +38,27 @@ IP will never be banned.
   data defers entry. dYdX SL/TP/trailing calculations are unchanged and do not
   use this Binance REST transport.
 
+## Public V2 intrusion timing
+
+BTC and ETH intrusion monitors check five seconds after each UTC hourly close,
+independently of their startup-relative poll interval. They refresh the replica
+when the newest closed hour is missing and refuse to evaluate a stale replay if
+Binance has not published that hour yet. Failed or busy close checks retry once
+per minute during a bounded five-minute window; the normal poll remains the
+outage fallback. Replica rebuilds remain serialized and concurrent refreshes of
+the same collector share work. The interval for dYdX position management is
+unchanged. No mail or live-trading switch is enabled by this scheduling change.
+
+Alert timestamps identify the candle's opening time, not its closing time.
+New SMTP history records retain the existing `delayMinutes` field and additionally
+store `candleClosedAt`, `firstObservedAt`, `afterCloseDelayMinutes`,
+`detectionDelayMinutes`, and `processingDelayMinutes`. These distinguish the
+normal hour of candle formation from detection and subsequent processing/SMTP
+latency. SMTP success is not confirmation of inbox delivery. Historical records
+cannot retrospectively establish the first detection time. Queueing, provider
+availability, and SMTP can still delay delivery; five seconds is the scheduled
+start of the check, not a guaranteed mail-delivery deadline.
+
 ## Diagnosis
 
 Read `GET /research/binance/status` for host bans, observed IP weight, local

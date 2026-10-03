@@ -225,7 +225,12 @@ describe('managed position safety independent from entry scanning', () => {
 
   test('management completes while the scanner is still waiting for its payload', async () => {
     let finish!: (payload: any) => void;
-    const collector = { getPayload: jest.fn(() => new Promise((resolve) => { finish = resolve; })) };
+    let signalWaiting!: () => void;
+    const waitingForPayload = new Promise<void>((resolve) => { signalWaiting = resolve; });
+    const collector = {
+      refreshForLatestClosedHour: jest.fn().mockResolvedValue(false),
+      getPayload: jest.fn(() => new Promise((resolve) => { finish = resolve; signalWaiting(); }))
+    };
     const monitor = new OpenLiquidityV2EthTradeMonitor(collector as any) as any;
     const orders = executor();
     monitor.configureTradeExecutor(orders);
@@ -233,6 +238,7 @@ describe('managed position safety independent from entry scanning', () => {
     const status = monitor.getStatus();
     fs.writeFileSync(status.stateFile, JSON.stringify(state()));
     const scan = monitor.check();
+    await waitingForPayload;
     const result = await monitor.checkManagedPosition();
     expect(result.ok).toBe(true);
     expect(orders.syncTrailingStop).toHaveBeenCalledTimes(1);

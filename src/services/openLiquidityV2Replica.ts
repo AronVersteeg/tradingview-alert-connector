@@ -774,6 +774,10 @@ export class OpenLiquidityV2ReplicaCollector {
     const latestSnapshotHour = Date.parse(this.snapshots[this.snapshots.length - 1]?.effectiveAt || '');
     if (Number.isFinite(latestSnapshotHour) && latestSnapshotHour >= latestClosedHour) return false;
     await this.refresh();
+    const refreshedHour = Date.parse(this.snapshots[this.snapshots.length - 1]?.effectiveAt || '');
+    if (!Number.isFinite(refreshedHour) || refreshedHour < latestClosedHour) {
+      throw new Error(`Binance ${this.config.symbol} has not published the latest closed 1H candle for Public V2.`);
+    }
     return true;
   }
 

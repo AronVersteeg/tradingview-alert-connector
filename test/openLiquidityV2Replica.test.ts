@@ -53,9 +53,22 @@ describe('Public Perp V2 Binance Spot replica', () => {
       .resolves.toBe(false);
     expect(collector.refresh).not.toHaveBeenCalled();
 
+    collector.refresh.mockImplementation(async () => {
+      collector.snapshots = [{ effectiveAt: '2026-08-20T12:00:00.000Z' }];
+    });
     await expect(collector.refreshForLatestClosedHour(Date.parse('2026-08-20T13:00:10.000Z')))
       .resolves.toBe(true);
     expect(collector.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  test('rejects an incomplete hourly refresh instead of evaluating stale frames', async () => {
+    const collector = new OpenLiquidityV2ReplicaCollector() as any;
+    collector.loaded = true;
+    collector.snapshots = [{ effectiveAt: '2026-08-20T11:00:00.000Z' }];
+    collector.refresh = jest.fn().mockResolvedValue(undefined);
+
+    await expect(collector.refreshForLatestClosedHour(Date.parse('2026-08-20T13:00:05.000Z')))
+      .rejects.toThrow('has not published the latest closed 1H candle');
   });
 
   test('reproduces the reconstructed Decentrader multipliers and $100 rounding', () => {

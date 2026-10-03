@@ -143,6 +143,7 @@ const ETH_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   asset: 'ETH',
   priceStep: PRICE_STEP,
   tradeCapable: true,
+  refreshLatestClosedHour: true,
   enabledEnv: 'OPEN_LIQUIDITY_V2_ETH_INTRUSION_MONITOR_ENABLED',
   autoTradeEnv: 'OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED',
   inheritDecentraderAutoTrade: true,
@@ -265,6 +266,11 @@ type EthDelayRecord = {
   smtpSentAt: string;
   delayMinutes: number;
   completedCandles1h: number;
+  candleClosedAt?: string;
+  firstObservedAt?: string;
+  afterCloseDelayMinutes?: number;
+  detectionDelayMinutes?: number;
+  processingDelayMinutes?: number;
 };
 
 type EthBenchmarkRecord = {
@@ -772,6 +778,8 @@ function writeState(state: EthMonitorState, config: OpenLiquidityV2TradeMonitorC
 
 export class OpenLiquidityV2EthTradeMonitor {
   private interval: NodeJS.Timeout | undefined;
+  private closedHourTimer: NodeJS.Timeout | undefined;
+  private closedHourChecksActive = false;
   private managementInterval: NodeJS.Timeout | undefined;
   private managementPromise: Promise<any> | undefined;
   private takeProfitPromise: Promise<void> | undefined;
@@ -817,6 +825,32 @@ export class OpenLiquidityV2EthTradeMonitor {
     return positiveIntegerEnv('DECENTRADER_GAP_POLL_MINUTES', 10, 1, 1_440);
   }
 
+  private scheduleClosedHourCheck(retryAt?: number): void {
+    if (!this.closedHourChecksActive) return;
+    const now = Date.now();
+    const closeCheckAt = Math.floor(now / HOUR_MS) * HOUR_MS + 5_000;
+    const nextAt = retryAt ?? (closeCheckAt > now ? closeCheckAt : closeCheckAt + HOUR_MS);
+    this.closedHourTimer = setTimeout(async () => {
+      this.closedHourTimer = undefined;
+      let retry = this.running;
+      try {
+        if (!this.running) {
+          const result = await this.check();
+          retry = !result?.ok || Number(result.pendingAlertCount) > 0 || Boolean(result.emailErrors?.length);
+        }
+      } catch (error) {
+        retry = true;
+        console.error(`${this.config.asset} V2 closed-hour check failed:`, error);
+      } finally {
+        // Keep retries bounded; the normal poll remains the outage fallback.
+        const retryAt = Date.now() + 60_000;
+        const withinRetryWindow = Math.floor(retryAt / HOUR_MS) === Math.floor(Date.now() / HOUR_MS) &&
+          retryAt % HOUR_MS < 5 * 60_000;
+        this.scheduleClosedHourCheck(retry && withinRetryWindow ? retryAt : undefined);
+      }
+    }, Math.max(0, nextAt - now));
+  }
+
   start(initialDelayMs = 75_000): void {
     if (this.interval || this.initialTimer || this.managementInterval) return;
     const begin = () => {
@@ -828,6 +862,10 @@ export class OpenLiquidityV2EthTradeMonitor {
         this.managementInterval = setInterval(manage, this.pollMinutes() * 60_000);
       }
       if (this.enabled()) {
+        if (this.config.refreshLatestClosedHour) {
+          this.closedHourChecksActive = true;
+          this.scheduleClosedHourCheck();
+        }
         this.check().catch((error) => console.error(`${this.config.asset} V2 intrusion monitor initial check failed:`, error));
         this.interval = setInterval(() => {
           this.check().catch((error) => console.error(`${this.config.asset} V2 intrusion monitor check failed:`, error));
@@ -838,6 +876,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     console.log(`${this.config.asset} Public Perp V2 intrusion/trade monitor scheduled:`, {
       market: this.config.market,
       pollMinutes: this.pollMinutes(),
+      closedHourRefreshEnabled: Boolean(this.config.refreshLatestClosedHour),
       autoTradeEnabled: this.autoTradeEnabled(),
       delayEntryModelEnabled: delayEntryModelEnabled(),
       observeOnly: !this.config.tradeCapable,
@@ -867,6 +906,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         : false,
       hasTradeExecutor: Boolean(this.executor),
       pollMinutes: this.pollMinutes(),
+      closedHourRefreshEnabled: Boolean(this.config.refreshLatestClosedHour),
       stateFile: stateFile(this.config),
       lastStartedAt: this.lastStartedAt,
       lastFinishedAt: this.lastFinishedAt,
@@ -929,7 +969,11 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private addDelayRecord(state: EthMonitorState, alert: GapAlert, signature: string, emailType: 'normal' | 'filtered', sentAt: string): void {
-    const delayMinutes = Math.max(0, (Date.parse(sentAt) - timestampMs(alert.timestamp)) / 60_000);
+    const sentAtMs = Date.parse(sentAt);
+    const candleClosedAtMs = timestampMs(alert.timestamp) + HOUR_MS;
+    const firstObservedAt = state.pendingAlerts?.[signature]?.firstObservedAt;
+    const observedAtMs = firstObservedAt ? Date.parse(firstObservedAt) : NaN;
+    const delayMinutes = Math.max(0, (sentAtMs - timestampMs(alert.timestamp)) / 60_000);
     const record: EthDelayRecord = {
       signature,
       emailType,
@@ -937,7 +981,14 @@ export class OpenLiquidityV2EthTradeMonitor {
       intrusionTimestamp: alert.timestamp,
       smtpSentAt: sentAt,
       delayMinutes,
-      completedCandles1h: Math.floor(delayMinutes / 60 + 1e-9)
+      completedCandles1h: Math.floor(delayMinutes / 60 + 1e-9),
+      candleClosedAt: new Date(candleClosedAtMs).toISOString(),
+      firstObservedAt,
+      afterCloseDelayMinutes: Math.max(0, (sentAtMs - candleClosedAtMs) / 60_000),
+      detectionDelayMinutes: Number.isFinite(observedAtMs)
+        ? Math.max(0, (observedAtMs - candleClosedAtMs) / 60_000) : undefined,
+      processingDelayMinutes: Number.isFinite(observedAtMs)
+        ? Math.max(0, (sentAtMs - observedAtMs) / 60_000) : undefined
     };
     state.delayRecords = [...(state.delayRecords || []), record].slice(-intrusionHistoryMaxRecords());
   }
@@ -2137,6 +2188,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       if (!state.managedPosition && !result.tradePlaced) {
         await this.recoverUnmanagedFilteredPosition(state, payload, result);
       }
+      result.pendingAlertCount = Object.keys(state.pendingAlerts || {}).length;
       this.lastResult = result;
       return result;
     } catch (error) {
@@ -2153,6 +2205,9 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   stop(): void {
+    this.closedHourChecksActive = false;
+    if (this.closedHourTimer) clearTimeout(this.closedHourTimer);
+    this.closedHourTimer = undefined;
     if (this.initialTimer) clearTimeout(this.initialTimer);
     if (this.interval) clearInterval(this.interval);
     if (this.managementInterval) clearInterval(this.managementInterval);
