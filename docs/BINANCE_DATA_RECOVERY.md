@@ -40,8 +40,9 @@ IP will never be banned.
 
 ## Public V2 intrusion timing
 
-BTC and ETH intrusion monitors check five seconds after each UTC hourly close,
-independently of their startup-relative poll interval. They refresh the replica
+All seven Public V2 intrusion monitors (BTC, ETH, INJ, SOL, ZEC, GOLD and SILVER)
+check five seconds after each UTC hourly close, independently of their
+startup-relative poll interval. They refresh the replica
 when the newest closed hour is missing and refuse to evaluate a stale replay if
 Binance has not published that hour yet. Failed or busy close checks retry once
 per minute during a bounded five-minute window; the normal poll remains the

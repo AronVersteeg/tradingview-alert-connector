@@ -1,7 +1,23 @@
 import {
   OpenLiquidityV2EthTradeMonitor,
-  openLiquidityV2EthTradeMonitor
+  openLiquidityV2BtcIntrusionMonitor,
+  openLiquidityV2EthTradeMonitor,
+  openLiquidityV2InjTradeMonitor,
+  openLiquidityV2SolTradeMonitor,
+  openLiquidityV2ZecTradeMonitor,
+  openLiquidityV2GoldIntrusionMonitor,
+  openLiquidityV2SilverIntrusionMonitor
 } from '../src/services/openLiquidityV2EthTradeMonitor';
+
+const pairs: Array<[string, OpenLiquidityV2EthTradeMonitor]> = [
+  ['BTC', openLiquidityV2BtcIntrusionMonitor],
+  ['ETH', openLiquidityV2EthTradeMonitor],
+  ['INJ', openLiquidityV2InjTradeMonitor],
+  ['SOL', openLiquidityV2SolTradeMonitor],
+  ['ZEC', openLiquidityV2ZecTradeMonitor],
+  ['GOLD', openLiquidityV2GoldIntrusionMonitor],
+  ['SILVER', openLiquidityV2SilverIntrusionMonitor]
+];
 
 describe('Public V2 close-aligned intrusion checks', () => {
   const originalEnv = { ...process.env };
@@ -26,14 +42,22 @@ describe('Public V2 close-aligned intrusion checks', () => {
     process.env = { ...originalEnv };
   });
 
-  test('ETH refreshes the latest closed hour without enabling live trading', () => {
-    expect(openLiquidityV2EthTradeMonitor.getStatus()).toMatchObject({
+  test.each(pairs)('%s refreshes the latest closed hour without enabling live trading', (_asset, configuredMonitor) => {
+    const config = (configuredMonitor as any).config;
+    process.env[config.autoTradeEnv] = 'false';
+    expect(configuredMonitor.getStatus()).toMatchObject({
       closedHourRefreshEnabled: true,
       autoTradeEnabled: false
     });
   });
 
-  test('checks five seconds after close instead of waiting for its startup-relative poll', async () => {
+  test.each(pairs)('%s checks five seconds after close instead of waiting for its startup-relative poll', async (_asset, configuredMonitor) => {
+    const config = (configuredMonitor as any).config;
+    process.env[config.enabledEnv] = 'true';
+    process.env[config.pollMinutesEnv || 'DECENTRADER_GAP_POLL_MINUTES'] = '60';
+    monitor = new OpenLiquidityV2EthTradeMonitor({} as any, config);
+    check = jest.spyOn(monitor, 'check').mockResolvedValue({ ok: true });
+    jest.spyOn(monitor, 'checkManagedPosition').mockResolvedValue({ ok: true });
     monitor.start(0);
     await jest.advanceTimersByTimeAsync(0);
     expect(check).toHaveBeenCalledTimes(1);
