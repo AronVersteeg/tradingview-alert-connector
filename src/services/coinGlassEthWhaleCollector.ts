@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { coinGlassRefreshWaitMs } from './coinGlassRefreshPolicy';
+import { coinGlassFreshness, coinGlassRefreshWaitMs } from './coinGlassRefreshPolicy';
+import { coinGlassSnapshotTimeoutMs } from './coinGlassWhaleSocket';
 
 import {
   CoinGlassWhaleHistoryLevel,
@@ -141,12 +142,8 @@ export class CoinGlassEthWhaleCollector {
   }
 
   private timeoutMs(): number {
-    return positiveIntegerEnv(
-      this.env('TIMEOUT_MS'),
-      positiveIntegerEnv('COINGLASS_WHALE_TIMEOUT_MS', 12_000, 3_000, 30_000),
-      3_000,
-      30_000
-    );
+    const configured = Number(process.env[this.env('TIMEOUT_MS')] || process.env.COINGLASS_WHALE_TIMEOUT_MS);
+    return coinGlassSnapshotTimeoutMs(configured);
   }
 
   private pollMs(): number {
@@ -343,6 +340,7 @@ export class CoinGlassEthWhaleCollector {
         history: this.history.length
       });
     } catch (error) {
+      this.lastAttemptAt = Date.now();
       this.consecutiveFailures += 1;
       this.error = error instanceof Error ? error.message : String(error);
       console.warn(`CoinGlass ${this.config.asset} whale levels refresh failed; using cached levels if available.`, {
@@ -361,8 +359,9 @@ export class CoinGlassEthWhaleCollector {
     gap?: { left: number; right: number; width: number } | null
   ): void {
     this.load();
-    if (!this.enabled() || !this.fetchedAt || !frameTimestamp || !Number.isFinite(currentPrice)) return;
-    const observedAt = new Date().toISOString();
+    if (!this.enabled() || !this.fetchedAt || this.error || !frameTimestamp || !Number.isFinite(currentPrice)) return;
+    if (coinGlassFreshness(this.fetchedAt).freshness !== 'FRESH') return;
+    const observedAt = new Date(this.fetchedAt).toISOString();
     const levels: CoinGlassWhaleObservationLevel[] = this.levels
       .map((level) => ({
         key: levelKey(level),
@@ -373,6 +372,7 @@ export class CoinGlassEthWhaleCollector {
       }))
       .sort((a, b) => a.price - b.price || b.volumeUsd - a.volumeUsd);
     const previous = this.observations[this.observations.length - 1];
+    if (previous?.observedAt === observedAt) return;
     const previousByKey = new Map((previous?.levels || []).map((level) => [level.key, level]));
     const materiallyChanged = !previous || previous.levels.length !== levels.length || levels.some((level) => {
       const earlier = previousByKey.get(level.key);
@@ -398,6 +398,7 @@ export class CoinGlassEthWhaleCollector {
   snapshot(): CoinGlassWhaleSnapshot {
     this.load();
     const refreshWaitMs = this.refreshWaitMs();
+    const freshness = coinGlassFreshness(this.fetchedAt);
     return {
       enabled: this.enabled(),
       source: 'coinglass',
@@ -407,13 +408,14 @@ export class CoinGlassEthWhaleCollector {
       minUsd: this.minUsd(),
       strongUsd: this.strongUsd(),
       fetchedAt: this.fetchedAt ? new Date(this.fetchedAt).toISOString() : undefined,
+      ...freshness,
       lastAttemptAt: this.lastAttemptAt ? new Date(this.lastAttemptAt).toISOString() : undefined,
       consecutiveFailures: this.consecutiveFailures,
       nextAttemptAt: refreshWaitMs > 0
         ? new Date(Date.now() + refreshWaitMs).toISOString()
         : undefined,
       error: this.error,
-      levels: this.levels,
+      levels: freshness.freshness === 'FRESH' ? this.levels : [],
       history: this.history,
       observations: this.observations,
       historyUpdatedAt: this.historyUpdatedAt,

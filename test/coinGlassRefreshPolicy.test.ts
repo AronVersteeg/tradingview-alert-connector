@@ -1,9 +1,18 @@
 import {
+  coinGlassFreshness,
   coinGlassFailureBackoffMs,
   coinGlassRefreshWaitMs
 } from '../src/services/coinGlassRefreshPolicy';
 
 describe('CoinGlass refresh policy', () => {
+  test('distinguishes missing, fresh, stale and future timestamps', () => {
+    const now = 2_000_000;
+    expect(coinGlassFreshness(undefined, now)).toEqual({ freshness: 'MISSING' });
+    expect(coinGlassFreshness(NaN, now)).toEqual({ freshness: 'MISSING' });
+    expect(coinGlassFreshness(now - 60_000, now)).toEqual({ freshness: 'FRESH', ageSeconds: 60 });
+    expect(coinGlassFreshness(now - 900_001, now).freshness).toBe('STALE');
+    expect(coinGlassFreshness(now + 1, now).freshness).toBe('STALE');
+  });
   test('backs off exponentially after consecutive failures and caps the delay', () => {
     expect(coinGlassFailureBackoffMs(1, 60_000, 600_000)).toBe(60_000);
     expect(coinGlassFailureBackoffMs(2, 60_000, 600_000)).toBe(120_000);

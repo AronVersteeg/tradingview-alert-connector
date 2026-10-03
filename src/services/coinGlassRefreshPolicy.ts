@@ -8,6 +8,18 @@ export type CoinGlassRefreshState = {
   failureBackoffMaxMs: number;
 };
 
+export function coinGlassFreshness(fetchedAt?: number, now = Date.now()): {
+  freshness: 'MISSING' | 'FRESH' | 'STALE';
+  ageSeconds?: number;
+} {
+  if (!Number.isFinite(fetchedAt) || !(fetchedAt as number > 0)) return { freshness: 'MISSING' };
+  const ageMs = now - (fetchedAt as number);
+  return {
+    freshness: ageMs >= 0 && ageMs <= 15 * 60_000 ? 'FRESH' : 'STALE',
+    ageSeconds: Math.max(0, Math.floor(ageMs / 1_000))
+  };
+}
+
 export function coinGlassFailureBackoffMs(
   consecutiveFailures: number,
   baseMs: number,
