@@ -67,13 +67,13 @@ describe('Public V2 close-aligned intrusion checks', () => {
     expect(check).toHaveBeenCalledTimes(2);
   });
 
-  test('retries unavailable closed-hour data after a minute and stops retrying on success', async () => {
+  test('retries unavailable closed-hour data after five seconds and stops retrying on success', async () => {
     monitor.start(0);
     await jest.advanceTimersByTimeAsync(0);
     check.mockResolvedValueOnce({ ok: false });
     await jest.advanceTimersByTimeAsync(23 * 60_000 + 5_000);
     expect(check).toHaveBeenCalledTimes(2);
-    await jest.advanceTimersByTimeAsync(60_000);
+    await jest.advanceTimersByTimeAsync(5_000);
     expect(check).toHaveBeenCalledTimes(3);
     await jest.advanceTimersByTimeAsync(5 * 60_000);
     expect(check).toHaveBeenCalledTimes(3);
@@ -84,7 +84,10 @@ describe('Public V2 close-aligned intrusion checks', () => {
     await jest.advanceTimersByTimeAsync(0);
     check.mockResolvedValue({ ok: false });
     await jest.advanceTimersByTimeAsync(30 * 60_000);
-    expect(check).toHaveBeenCalledTimes(6);
+    // Startup, six five-second close checks, then four minute retries.
+    expect(check).toHaveBeenCalledTimes(11);
+    await jest.advanceTimersByTimeAsync(10 * 60_000);
+    expect(check).toHaveBeenCalledTimes(11);
   });
 
   test('starting just after the hour still checks at the upcoming five-second boundary', async () => {
@@ -102,7 +105,7 @@ describe('Public V2 close-aligned intrusion checks', () => {
     check.mockResolvedValueOnce({ ok: true, pendingAlertCount: 1 });
     await jest.advanceTimersByTimeAsync(23 * 60_000 + 5_000);
     expect(check).toHaveBeenCalledTimes(2);
-    await jest.advanceTimersByTimeAsync(60_000);
+    await jest.advanceTimersByTimeAsync(5_000);
     expect(check).toHaveBeenCalledTimes(3);
   });
 

@@ -22,6 +22,28 @@ import {
 describe('BTC manual entry and TP override', () => {
   const now = Date.parse('2026-09-10T10:30:00.000Z');
 
+  test('schedules BTC at close plus five seconds and retries unavailable close data promptly', () => {
+    jest.useFakeTimers();
+    const monitor = new BtcManualTradeOverrideMonitor() as any;
+    try {
+      jest.setSystemTime(new Date('2026-10-07T15:59:50Z'));
+      monitor.scheduleNextRun();
+      expect(monitor.status.nextRunAt).toBe('2026-10-07T16:00:05.000Z');
+      clearTimeout(monitor.nextTimer);
+      jest.setSystemTime(new Date('2026-10-07T16:00:06Z'));
+      monitor.status.retryData = true;
+      monitor.scheduleNextRun();
+      expect(monitor.status.nextRunAt).toBe('2026-10-07T16:00:11.000Z');
+      clearTimeout(monitor.nextTimer);
+      jest.setSystemTime(new Date('2026-10-07T16:00:35Z'));
+      monitor.scheduleNextRun();
+      expect(monitor.status.nextRunAt).toBe('2026-10-07T16:01:35.000Z');
+    } finally {
+      clearTimeout(monitor.nextTimer);
+      jest.useRealTimers();
+    }
+  });
+
   function store(overrides: BtcManualTradeOverrideState[] = []): BtcManualTradeOverrideStore {
     return {
       version: 3,

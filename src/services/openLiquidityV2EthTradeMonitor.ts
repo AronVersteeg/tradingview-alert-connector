@@ -472,27 +472,28 @@ export function reconstructReplicaIntrusions(payload: any, afterTimestamp?: stri
   const alerts: GapAlert[] = [];
 
   for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
-    const previousCounts = new Map(
-      [...active.entries()].map(([key, zone]) => [key, zone[3]])
-    );
+    const evaluating = frameIndex >= detectionStart && frameIndex > 0;
+    const previousCounts = evaluating
+      ? new Map([...active.entries()].map(([key, zone]) => [key, zone[3]]))
+      : undefined;
     for (const zone of deltas[frameIndex] || []) {
       const key = `${zone[0]}|${zone[1]}|${priceKey(zone[2])}`;
       if (zone[3] > 0) active.set(key, zone);
       else active.delete(key);
     }
-    if (frameIndex < detectionStart || frameIndex <= 0) continue;
+    if (!evaluating) continue;
     const frame = frames[frameIndex];
     const previousFrame = frames[frameIndex - 1];
     const previousGap = normalizedGap(payload?.gaps?.[frameIndex - 1], finite(previousFrame?.price));
     if (!previousGap) continue;
     const currentPrice = finite(frame?.price);
     const entrants = [...active.entries()]
-      .filter(([key, zone]) => zone[3] > (previousCounts.get(key) || 0))
+      .filter(([key, zone]) => zone[3] > (previousCounts!.get(key) || 0))
       .map(([, zone]) => replicaBar(zone))
       .filter((bar) => bar.price > previousGap.left && bar.price < previousGap.right)
       .map((bar) => ({
         ...bar,
-        newCount: bar.count - (previousCounts.get(bar.key) || 0),
+        newCount: bar.count - (previousCounts!.get(bar.key) || 0),
         gapSide: bar.price - previousGap.left <= previousGap.right - bar.price ? 'left' : 'right',
         sideOfPrice: bar.price < currentPrice ? 'left' : bar.price > currentPrice ? 'right' : 'price'
       } as LiquidityBar));
@@ -848,7 +849,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         console.error(`${this.config.asset} V2 closed-hour check failed:`, error);
       } finally {
         // Keep retries bounded; the normal poll remains the outage fallback.
-        const retryAt = Date.now() + 60_000;
+        const retryAt = Date.now() + (Date.now() % HOUR_MS < 30_000 ? 5_000 : 60_000);
         const withinRetryWindow = Math.floor(retryAt / HOUR_MS) === Math.floor(Date.now() / HOUR_MS) &&
           retryAt % HOUR_MS < 5 * 60_000;
         this.scheduleClosedHourCheck(retry && withinRetryWindow ? retryAt : undefined);

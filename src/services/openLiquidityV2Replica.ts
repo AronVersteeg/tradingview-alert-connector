@@ -8,14 +8,13 @@ const BINANCE_FUTURES_URL = 'https://fapi.binance.com/fapi/v1/klines';
 const HOUR_MS = 3_600_000;
 const COHORT_WINDOW_HOURS = 8_760;
 const FRAME_LIMIT = 500;
-// The full 500-frame replay is rebuilt from source on every refresh. Keeping
-// more rendered snapshots only inflates Render memory without adding coverage.
+// Keep the rendered replay bounded while the live cohort state advances hourly.
 const HISTORY_LIMIT = FRAME_LIMIT;
 const DISPLAY_ZONE_LIMIT = 150;
 const PAYLOAD_CACHE_TTL_MS = 15_000;
 
-// Replica rebuilds temporarily hold source candles, the old replay and the new
-// replay in memory. Serialize the seven markets so those peaks cannot overlap.
+// Cold replays temporarily hold source candles and old/new histories. Serialize
+// these bootstraps; warmed closes must not wait in this queue.
 let replicaRefreshQueue: Promise<void> = Promise.resolve();
 const binanceCandleCache = new Map<string, SpotCandle[]>();
 let globalReplicaPayloadCache: { token: symbol; clear: () => void } | undefined;
@@ -405,21 +404,22 @@ function sweepBins(bins: Map<string, ActiveBin>, candle: SpotCandle, priceStepUs
 
 function expireBirths(
   bins: Map<string, ActiveBin>,
-  birthKeysByIndex: string[][],
+  birthKeysByIndex: Map<number, string[]>,
   expiredIndex: number
 ): void {
   if (expiredIndex < 0) return;
-  for (const key of birthKeysByIndex[expiredIndex] || []) {
+  for (const key of birthKeysByIndex.get(expiredIndex) || []) {
     const bin = bins.get(key);
     if (!bin || bin.cohorts[0]?.birthIndex !== expiredIndex) continue;
     bin.cohorts.shift();
     if (!bin.cohorts.length) bins.delete(key);
   }
+  birthKeysByIndex.delete(expiredIndex);
 }
 
 function addCandleCohorts(
   bins: Map<string, ActiveBin>,
-  birthKeysByIndex: string[][],
+  birthKeysByIndex: Map<number, string[]>,
   candle: SpotCandle,
   frameIndex: number,
   priceStepUsd: number
@@ -437,20 +437,96 @@ function addCandleCohorts(
     bins.set(key, bin);
     keys.push(key);
   }
-  birthKeysByIndex[frameIndex] = keys;
+  birthKeysByIndex.set(frameIndex, keys);
 }
 
-export function buildReplicaSnapshots(
-  candles: SpotCandle[],
-  options: {
-    observedAt?: string;
-    cohortWindowHours?: number;
-    frameLimit?: number;
-    priceStepUsd?: number;
-    modelVersion?: string;
-    sourceLabel?: string;
-  } = {}
-): ReplicaSnapshot[] {
+type ReplayOptions = {
+  observedAt?: string;
+  cohortWindowHours?: number;
+  frameLimit?: number;
+  priceStepUsd?: number;
+  modelVersion?: string;
+  sourceLabel?: string;
+};
+
+type ReplicaReplayState = {
+  bins: Map<string, ActiveBin>;
+  birthKeysByIndex: Map<number, string[]>;
+  previousZoneCounts: Map<string, CompactReplicaZone>;
+  nextIndex: number;
+  lastCandle?: SpotCandle;
+};
+
+type ReplicaRefreshTiming = {
+  mode: 'bootstrap' | 'incremental';
+  queuedMs: number;
+  fetchMs: number;
+  calculationMs: number;
+  totalMs: number;
+  processedCandles: number;
+  candleStartedAt?: string;
+  candleClosedAt?: string;
+  afterCloseDelayMs?: number;
+};
+
+function replicaSnapshot(
+  candle: SpotCandle,
+  state: ReplicaReplayState,
+  options: ReplayOptions,
+  first: boolean
+): ReplicaSnapshot {
+  const priceStepUsd = Math.max(0.01, finite(options.priceStepUsd) || BTC_CONFIG.priceStepUsd);
+  const sourceLabel = options.sourceLabel || 'binance-spot';
+  const allZones = [...state.bins.values()].map((bin) => zoneFromBin(bin, priceStepUsd, sourceLabel));
+  const referencePrice = ohlc4(candle);
+  const gap = detectReplicaGap(allZones, referencePrice);
+  const zones = selectDisplayZones(allZones, referencePrice, gap);
+  const currentZoneCounts = new Map<string, CompactReplicaZone>(allZones.map((zone) => [
+    binKey(zone.side, zone.leverage, zone.price),
+    [zone.side, zone.leverage, zone.price, zone.relativeCount]
+  ]));
+  const zoneDeltas: CompactReplicaZone[] = [];
+  if (!first) {
+    for (const key of new Set([...state.previousZoneCounts.keys(), ...currentZoneCounts.keys()])) {
+      const previous = state.previousZoneCounts.get(key);
+      const current = currentZoneCounts.get(key);
+      if ((previous?.[3] || 0) === (current?.[3] || 0)) continue;
+      zoneDeltas.push(current || [previous![0], previous![1], previous![2], 0]);
+    }
+  }
+  state.previousZoneCounts = currentZoneCounts;
+  return {
+    version: 2,
+    modelVersion: options.modelVersion || BTC_CONFIG.modelVersion,
+    effectiveAt: new Date(candle.timestampMs).toISOString(),
+    observedAt: options.observedAt || new Date().toISOString(),
+    referencePrice: rounded(referencePrice, 4),
+    open: rounded(candle.open, 4),
+    close: rounded(candle.close, 4),
+    high: rounded(candle.high, 4),
+    low: rounded(candle.low, 4),
+    sourceHours: Math.min(state.nextIndex, options.cohortWindowHours || COHORT_WINDOW_HOURS),
+    availableSources: [sourceLabel],
+    activeCohortCount: allZones.reduce((sum, zone) => sum + zone.relativeCount, 0),
+    zones,
+    zoneSeed: first ? [...currentZoneCounts.values()] : undefined,
+    zoneDeltas,
+    gap: gap || null
+  };
+}
+
+function advanceReplicaState(state: ReplicaReplayState, candle: SpotCandle, options: ReplayOptions): void {
+  const step = Math.max(0.01, finite(options.priceStepUsd) || BTC_CONFIG.priceStepUsd);
+  sweepBins(state.bins, candle, step);
+  expireBirths(state.bins, state.birthKeysByIndex, state.nextIndex - options.cohortWindowHours!);
+  addCandleCohorts(state.bins, state.birthKeysByIndex, candle, state.nextIndex, step);
+  state.nextIndex += 1;
+  state.lastCandle = candle;
+}
+
+function* replayReplicaSnapshots(
+  candles: SpotCandle[], options: ReplayOptions
+): Generator<void, { snapshots: ReplicaSnapshot[]; state: ReplicaReplayState }> {
   const ordered = candles
     .filter((candle) => candle.timestampMs > 0 && candle.close > 0)
     .slice()
@@ -463,73 +539,81 @@ export function buildReplicaSnapshots(
     COHORT_WINDOW_HOURS
   );
   const frameLimit = boundedInteger(options.frameLimit, FRAME_LIMIT, 1, HISTORY_LIMIT);
-  const priceStepUsd = Math.max(0.01, finite(options.priceStepUsd) || BTC_CONFIG.priceStepUsd);
-  const modelVersion = options.modelVersion || BTC_CONFIG.modelVersion;
-  const sourceLabel = options.sourceLabel || 'binance-spot';
   const snapshotStart = Math.max(0, ordered.length - frameLimit);
-  const bins = new Map<string, ActiveBin>();
-  const birthKeysByIndex: string[][] = [];
+  const state: ReplicaReplayState = {
+    bins: new Map(), birthKeysByIndex: new Map(), previousZoneCounts: new Map(), nextIndex: 0
+  };
   const snapshots: ReplicaSnapshot[] = [];
-  let previousZoneCounts = new Map<string, CompactReplicaZone>();
+  const replayOptions = { ...options, observedAt, cohortWindowHours };
 
   for (let frameIndex = 0; frameIndex < ordered.length; frameIndex += 1) {
     const candle = ordered[frameIndex];
     // Existing cohorts can be liquidated by this candle. Cohorts born on this
     // candle are added afterwards, so they can only be swept by a later hour.
-    sweepBins(bins, candle, priceStepUsd);
-    expireBirths(bins, birthKeysByIndex, frameIndex - cohortWindowHours);
-    addCandleCohorts(bins, birthKeysByIndex, candle, frameIndex, priceStepUsd);
-    if (frameIndex < snapshotStart) continue;
-
-    const allZones = [...bins.values()].map((bin) => zoneFromBin(bin, priceStepUsd, sourceLabel));
-    const referencePrice = ohlc4(candle);
-    const gap = detectReplicaGap(allZones, referencePrice);
-    const zones = selectDisplayZones(allZones, referencePrice, gap);
-    const currentZoneCounts = new Map<string, CompactReplicaZone>(
-      allZones.map((zone) => [
-        binKey(zone.side, zone.leverage, zone.price),
-        [zone.side, zone.leverage, zone.price, zone.relativeCount]
-      ])
-    );
-    const zoneSeed = snapshots.length === 0
-      ? [...currentZoneCounts.values()]
-      : undefined;
-    const zoneDeltas: CompactReplicaZone[] = [];
-    if (snapshots.length > 0) {
-      const changedKeys = new Set([
-        ...previousZoneCounts.keys(),
-        ...currentZoneCounts.keys()
-      ]);
-      for (const key of changedKeys) {
-        const previous = previousZoneCounts.get(key);
-        const current = currentZoneCounts.get(key);
-        const previousCount = previous?.[3] || 0;
-        const currentCount = current?.[3] || 0;
-        if (previousCount === currentCount) continue;
-        zoneDeltas.push(current || [previous![0], previous![1], previous![2], 0]);
-      }
-    }
-    previousZoneCounts = currentZoneCounts;
-    snapshots.push({
-      version: 2,
-      modelVersion,
-      effectiveAt: new Date(candle.timestampMs).toISOString(),
-      observedAt,
-      referencePrice: rounded(referencePrice, 4),
-      open: rounded(candle.open, 4),
-      close: rounded(candle.close, 4),
-      high: rounded(candle.high, 4),
-      low: rounded(candle.low, 4),
-      sourceHours: Math.min(frameIndex + 1, cohortWindowHours),
-      availableSources: [sourceLabel],
-      activeCohortCount: allZones.reduce((sum, zone) => sum + zone.relativeCount, 0),
-      zones,
-      zoneSeed,
-      zoneDeltas,
-      gap: gap || null
-    });
+    advanceReplicaState(state, candle, replayOptions);
+    if (frameIndex >= snapshotStart) snapshots.push(replicaSnapshot(candle, state, replayOptions, !snapshots.length));
+    if (frameIndex % 128 === 127) yield;
   }
-  return snapshots;
+  return { snapshots, state };
+}
+
+export function buildReplicaSnapshots(candles: SpotCandle[], options: ReplayOptions = {}): ReplicaSnapshot[] {
+  const replay = replayReplicaSnapshots(candles, options);
+  let step = replay.next();
+  while (!step.done) step = replay.next();
+  return step.value.snapshots;
+}
+
+// Raw cohort prices and birth indices are retained; rounded snapshot counts
+// alone cannot reproduce later sweeps or rolling-window expiry exactly.
+export class IncrementalReplicaReplay {
+  private state: ReplicaReplayState;
+  readonly snapshots: ReplicaSnapshot[];
+  private constructor(replayed: { snapshots: ReplicaSnapshot[]; state: ReplicaReplayState }, private options: ReplayOptions) {
+    this.state = replayed.state;
+    this.snapshots = replayed.snapshots;
+  }
+
+  static async create(candles: SpotCandle[], options: ReplayOptions = {}): Promise<IncrementalReplicaReplay> {
+    const normalized = {
+      ...options,
+      cohortWindowHours: boundedInteger(options.cohortWindowHours, COHORT_WINDOW_HOURS, 1, COHORT_WINDOW_HOURS),
+      frameLimit: boundedInteger(options.frameLimit, FRAME_LIMIT, 1, HISTORY_LIMIT)
+    };
+    const replay = replayReplicaSnapshots(candles, normalized);
+    let step = replay.next();
+    while (!step.done) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      step = replay.next();
+    }
+    return new IncrementalReplicaReplay(step.value, normalized);
+  }
+
+  get lastCandle(): SpotCandle | undefined { return this.state.lastCandle; }
+
+  append(candle: SpotCandle, observedAt = new Date().toISOString()): ReplicaSnapshot {
+    if (this.lastCandle && candle.timestampMs !== this.lastCandle.timestampMs + HOUR_MS) {
+      throw new Error('Public V2 live replay requires consecutive closed 1H candles.');
+    }
+    if (candle.closeTimeMs > Date.now() || !(candle.close > 0)) {
+      throw new Error('Public V2 live replay refuses an open or invalid candle.');
+    }
+    advanceReplicaState(this.state, candle, this.options);
+    const snapshot = replicaSnapshot(candle, this.state, { ...this.options, observedAt }, !this.snapshots.length);
+    this.snapshots.push(snapshot);
+    while (this.snapshots.length > this.options.frameLimit!) {
+      const seed = new Map((this.snapshots[0].zoneSeed || []).map((zone) => [binKey(zone[0], zone[1], zone[2]), zone]));
+      for (const zone of this.snapshots[1].zoneDeltas) {
+        const key = binKey(zone[0], zone[1], zone[2]);
+        if (zone[3] > 0) seed.set(key, zone);
+        else seed.delete(key);
+      }
+      this.snapshots.shift();
+      this.snapshots[0].zoneSeed = [...seed.values()];
+      this.snapshots[0].zoneDeltas = [];
+    }
+    return snapshot;
+  }
 }
 
 async function fetchBinanceCandles(
@@ -660,6 +744,10 @@ export class OpenLiquidityV2ReplicaCollector {
   private interval: NodeJS.Timeout | undefined;
   private initialTimer: NodeJS.Timeout | undefined;
   private refreshPromise: Promise<void> | undefined;
+  private liveReplay: IncrementalReplicaReplay | undefined;
+  private persistenceTimer: NodeJS.Timeout | undefined;
+  private persistencePromise: Promise<void> = Promise.resolve();
+  private lastRefreshTiming: ReplicaRefreshTiming | undefined;
   private snapshots: ReplicaSnapshot[] = [];
   private loaded = false;
   private lastSuccessAt: string | undefined;
@@ -725,6 +813,11 @@ export class OpenLiquidityV2ReplicaCollector {
     if (this.interval) clearInterval(this.interval);
     if (this.initialTimer) clearTimeout(this.initialTimer);
     if (this.payloadCacheTimer) clearTimeout(this.payloadCacheTimer);
+    if (this.persistenceTimer) {
+      clearTimeout(this.persistenceTimer);
+      this.persistenceTimer = undefined;
+      this.persistHistoryLater();
+    }
     this.interval = undefined;
     this.initialTimer = undefined;
     this.payloadCacheTimer = undefined;
@@ -752,17 +845,36 @@ export class OpenLiquidityV2ReplicaCollector {
     }
   }
 
-  private persistHistory(): void {
-    fs.mkdirSync(this.historyDirectory(), { recursive: true });
+  private persistHistoryLater(): void {
     const file = this.historyFile();
     const temporary = `${file}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify(this.snapshots));
-    fs.renameSync(temporary, file);
+    const serialized = JSON.stringify(this.snapshots);
+    this.persistencePromise = this.persistencePromise.then(async () => {
+      await fs.promises.mkdir(this.historyDirectory(), { recursive: true });
+      await fs.promises.writeFile(temporary, serialized);
+      await fs.promises.rename(temporary, file);
+    }).catch((error) => console.error('Public V2 replay persistence failed:', {
+      market: this.config.market, error: error instanceof Error ? error.message : String(error)
+    }));
+  }
+
+  private schedulePersistence(): void {
+    if (this.persistenceTimer) return;
+    // Alerts consume the in-memory close first; disk work is not an entry gate.
+    this.persistenceTimer = setTimeout(() => {
+      this.persistenceTimer = undefined;
+      this.persistHistoryLater();
+    }, 10_000);
+    this.persistenceTimer.unref?.();
   }
 
   async refresh(): Promise<void> {
     if (this.refreshPromise) return this.refreshPromise;
-    this.refreshPromise = enqueueReplicaRefresh(() => this.refreshInternal()).finally(() => {
+    const requestedAt = Date.now();
+    const work = () => this.refreshInternal(requestedAt);
+    // Only cold bootstraps share the memory-protection queue. A warmed market
+    // advances a handful of candles without waiting for another pair's replay.
+    this.refreshPromise = (this.liveReplay ? work() : enqueueReplicaRefresh(work)).finally(() => {
       this.refreshPromise = undefined;
     });
     return this.refreshPromise;
@@ -790,7 +902,8 @@ export class OpenLiquidityV2ReplicaCollector {
     }
   }
 
-  private async refreshInternal(): Promise<void> {
+  private async refreshInternal(requestedAt = Date.now()): Promise<void> {
+    const startedAt = Date.now();
     this.loadHistory();
     this.clearPayloadCache();
     const memoryBefore = memoryUsageMb();
@@ -815,6 +928,7 @@ export class OpenLiquidityV2ReplicaCollector {
         fetchPrimary(sourceHours, nowMs, this.config.symbol),
         confirmationPromise
       ]);
+      const fetchedAt = Date.now();
       const minimumSourceHours = this.config.minimumSourceHours || COHORT_WINDOW_HOURS;
       if (candles.length < minimumSourceHours) {
         const venueName = this.config.venue === 'futures' ? 'Futures' : 'Spot';
@@ -834,17 +948,48 @@ export class OpenLiquidityV2ReplicaCollector {
       const sourceLabel = this.config.venue === 'futures'
         ? `binance-futures-${this.config.symbol.toLowerCase()}`
         : 'binance-spot';
-      const rebuilt = buildReplicaSnapshots(candles, {
+      const replayOptions = {
         frameLimit: FRAME_LIMIT,
         priceStepUsd: this.config.priceStepUsd,
         modelVersion: this.config.modelVersion,
         sourceLabel
-      });
-      // A refresh rebuilds the complete replay window, so retaining and merging
-      // the previous object graph only doubles the temporary heap requirement.
-      this.snapshots = compactReplicaHistoryInPlace(rebuilt.slice(-HISTORY_LIMIT));
-      this.persistHistory();
+      };
+      const previous = this.liveReplay?.lastCandle;
+      const overlap = previous && candles.find((candle) => candle.timestampMs === previous.timestampMs);
+      const corrected = previous && (!overlap || ['open', 'high', 'low', 'close'].some((key) => overlap[key] !== previous[key]));
+      const newCandles = previous ? candles.filter((candle) => candle.timestampMs > previous.timestampMs) : candles;
+      if (previous && !corrected) {
+        // Validate the whole catch-up before mutating state. Never skip an hour.
+        newCandles.forEach((candle, index) => {
+          if (candle.timestampMs !== previous.timestampMs + (index + 1) * HOUR_MS) {
+            throw new Error(`Binance ${this.config.symbol} live replay is missing a closed 1H candle.`);
+          }
+        });
+      }
+      const replayMode = !this.liveReplay || corrected ? 'bootstrap' : 'incremental';
+      if (replayMode === 'bootstrap') {
+        const build = () => IncrementalReplicaReplay.create(candles, replayOptions);
+        this.liveReplay = await (corrected ? enqueueReplicaRefresh(build) : build());
+      } else {
+        for (const candle of newCandles) this.liveReplay!.append(candle);
+      }
+      this.snapshots = compactReplicaHistoryInPlace(this.liveReplay!.snapshots);
+      // A dashboard read may have cached the old replay while fetch was pending.
+      this.clearPayloadCache();
+      if (replayMode === 'bootstrap' || newCandles.length) this.schedulePersistence();
       this.lastSuccessAt = new Date().toISOString();
+      const latest = this.liveReplay!.lastCandle;
+      this.lastRefreshTiming = {
+        mode: replayMode,
+        queuedMs: startedAt - requestedAt,
+        fetchMs: fetchedAt - startedAt,
+        calculationMs: Date.now() - fetchedAt,
+        totalMs: Date.now() - requestedAt,
+        processedCandles: replayMode === 'bootstrap' ? candles.length : newCandles.length,
+        candleStartedAt: latest ? new Date(latest.timestampMs).toISOString() : undefined,
+        candleClosedAt: latest ? new Date(latest.timestampMs + HOUR_MS).toISOString() : undefined,
+        afterCloseDelayMs: latest ? Date.now() - latest.timestampMs - HOUR_MS : undefined
+      };
       this.lastError = undefined;
       console.log('Public Perp V2 replica refreshed:', {
         snapshots: this.snapshots.length,
@@ -855,6 +1000,7 @@ export class OpenLiquidityV2ReplicaCollector {
         confirmationSymbol: this.config.confirmationSymbol,
         confirmationRows: confirmationCandles.length,
         cohortWindowHours: COHORT_WINDOW_HOURS,
+        timing: this.lastRefreshTiming,
         memoryMb: {
           before: memoryBefore,
           after: memoryUsageMb()
@@ -910,7 +1056,9 @@ export class OpenLiquidityV2ReplicaCollector {
       confirmationError: this.confirmationError,
       lastSuccessAt: this.lastSuccessAt,
       lastErrorAt: this.lastErrorAt,
-      lastError: this.lastError
+      lastError: this.lastError,
+      liveReplayReady: Boolean(this.liveReplay),
+      lastRefreshTiming: this.lastRefreshTiming
     };
   }
 

@@ -24,6 +24,27 @@ function replicaGap(left: number, right: number) {
 }
 
 describe('ETH Public Perp V2 intrusion execution inputs', () => {
+  test('checks a closed hour after five seconds and retries unpublished data without waiting a minute', async () => {
+    jest.useFakeTimers();
+    const monitor = openLiquidityV2BtcIntrusionMonitor as any;
+    const check = jest.spyOn(monitor, 'check').mockResolvedValueOnce({ ok: false }).mockResolvedValue({ ok: true });
+    try {
+      jest.setSystemTime(new Date('2026-10-07T15:59:50Z'));
+      monitor.closedHourChecksActive = true;
+      monitor.scheduleClosedHourCheck();
+      await jest.advanceTimersByTimeAsync(15_000);
+      expect(check).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(5_000);
+      expect(check).toHaveBeenCalledTimes(2);
+      await jest.advanceTimersByTimeAsync(10_000);
+      expect(check).toHaveBeenCalledTimes(2);
+    } finally {
+      monitor.stop();
+      check.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
   test('keeps the BTC Public V2 intrusion monitor strictly observe-only', () => {
     const previousEmail = process.env.DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED;
     try {

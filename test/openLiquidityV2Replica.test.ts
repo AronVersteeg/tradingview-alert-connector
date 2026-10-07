@@ -2,11 +2,14 @@ import {
   buildReplicaSnapshots,
   cohortLevelsForOhlc4,
   detectReplicaGap,
+  IncrementalReplicaReplay,
   OpenLiquidityV2ReplicaCollector,
   ReplicaLiquidityZone,
   summarizeGoldConfirmation,
   SpotCandle
 } from '../src/services/openLiquidityV2Replica';
+import * as binanceHttp from '../src/services/binanceHttp';
+import { reconstructReplicaIntrusions } from '../src/services/openLiquidityV2EthTradeMonitor';
 
 function candle(
   timestampMs: number,
@@ -43,6 +46,165 @@ function zone(input: Partial<ReplicaLiquidityZone>): ReplicaLiquidityZone {
 }
 
 describe('Public Perp V2 Binance Spot replica', () => {
+  const hour = 3_600_000;
+  const base = Date.parse('2026-01-01T00:00:00Z');
+  const observations = (count: number, price = 60_000) => Array.from({ length: count }, (_, index) => {
+    const current = price * (1 + Math.sin(index / 9) * 0.14);
+    return candle(base + index * hour, current, current * 1.012, current * 0.989, current * 1.001);
+  });
+  const comparable = (snapshots: any[]) => snapshots.map(({ observedAt, displayZoneCount, ...snapshot }) => ({
+    ...snapshot,
+    zoneSeed: snapshot.zoneSeed?.slice().sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    zoneDeltas: snapshot.zoneDeltas.slice().sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+  }));
+  const payloadFor = (snapshots: any[]) => ({
+    frames: snapshots.map((snapshot, i) => ({ i, t: snapshot.effectiveAt.slice(0, 19).replace('T', ' '), price: snapshot.referencePrice })),
+    gaps: snapshots.map((snapshot) => snapshot.gap),
+    zoneSeed: snapshots[0].zoneSeed,
+    zoneDeltas: snapshots.map((snapshot) => snapshot.zoneDeltas)
+  });
+
+  test.each([100, 5, 0.01, 0.1, 1])('incremental replay matches full replay at bin size %s, including expiry and rolling seeds', async (priceStepUsd) => {
+    const candles = observations(130, priceStepUsd * 600);
+    const options = { frameLimit: 17, cohortWindowHours: 47, priceStepUsd };
+    const live = await IncrementalReplicaReplay.create(candles.slice(0, 60), options);
+    for (let index = 60; index < candles.length; index += 1) {
+      live.append(candles[index]);
+      const full = buildReplicaSnapshots(candles.slice(0, index + 1), options);
+      expect(comparable(live.snapshots)).toEqual(comparable(full));
+      const after = full[full.length - 2].effectiveAt.slice(0, 19).replace('T', ' ');
+      expect(reconstructReplicaIntrusions(payloadFor(live.snapshots), after))
+        .toEqual(reconstructReplicaIntrusions(payloadFor(full), after));
+    }
+  });
+
+  test('rejects duplicate, missing and open live candles without advancing the state', async () => {
+    const candles = observations(5);
+    const live = await IncrementalReplicaReplay.create(candles.slice(0, 3));
+    const before = comparable(live.snapshots);
+    expect(() => live.append(candles[2])).toThrow('consecutive');
+    expect(() => live.append(candles[4])).toThrow('consecutive');
+    expect(() => live.append({ ...candles[3], closeTimeMs: Date.now() + hour })).toThrow('open or invalid');
+    expect(comparable(live.snapshots)).toEqual(before);
+    live.append(candles[3]);
+    expect(comparable(live.snapshots)).toEqual(comparable(buildReplicaSnapshots(candles.slice(0, 4))));
+  });
+
+  test('cold replay yields to timers instead of blocking manual checks', async () => {
+    let yielded = false;
+    const timer = setImmediate(() => { yielded = true; });
+    await IncrementalReplicaReplay.create(observations(300));
+    clearImmediate(timer);
+    expect(yielded).toBe(true);
+  });
+
+  test('a warmed close bypasses another market bootstrap and processes only missing hours', async () => {
+    const candles = observations(6);
+    const pendingCollector = new OpenLiquidityV2ReplicaCollector() as any;
+    let release: () => void;
+    pendingCollector.refreshInternal = jest.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const queued = pendingCollector.refresh();
+    await Promise.resolve();
+    const collector = new OpenLiquidityV2ReplicaCollector({
+      market: 'BTC-USD', symbol: 'BTCUSDT', asset: 'BTC', priceStepUsd: 100,
+      modelVersion: 'test', minimumSourceHours: 1, historyDirectoryName: 'test-live-replay'
+    } as any) as any;
+    collector.loaded = true;
+    collector.liveReplay = await IncrementalReplicaReplay.create(candles.slice(0, 4), { modelVersion: 'test' });
+    collector.snapshots = collector.liveReplay.snapshots;
+    collector.schedulePersistence = jest.fn();
+    const fetch = jest.spyOn(binanceHttp, 'binanceGet').mockImplementation(async () => {
+      // Simulate a dashboard read of the old replay during the awaited request.
+      collector.payloadCache = { at: Date.now(), payload: { frames: [{ t: 'stale' }] } };
+      return { data: candles.map((c) => [c.timestampMs, c.open, c.high, c.low, c.close, 0, c.closeTimeMs]) } as any;
+    });
+    try {
+      await collector.refresh();
+      expect(collector.getStatus()).toMatchObject({ liveReplayReady: true, lastRefreshTiming: {
+        mode: 'incremental', processedCandles: 2, queuedMs: 0
+      } });
+      expect(collector.schedulePersistence).toHaveBeenCalledTimes(1);
+      expect(collector.payloadCache).toBeUndefined();
+      expect(comparable(collector.snapshots).map(({ zones, ...snapshot }) => snapshot))
+        .toEqual(comparable(buildReplicaSnapshots(candles, { modelVersion: 'test' })).map(({ zones, ...snapshot }) => snapshot));
+      await collector.refresh();
+      expect(collector.lastRefreshTiming.processedCandles).toBe(0);
+      expect(collector.schedulePersistence).toHaveBeenCalledTimes(1);
+    } finally {
+      fetch.mockRestore();
+      release!();
+      await queued;
+      collector.stop();
+    }
+  });
+
+  test('defers historical disk work until after the close evaluation', () => {
+    jest.useFakeTimers();
+    const collector = new OpenLiquidityV2ReplicaCollector() as any;
+    collector.persistHistoryLater = jest.fn();
+    try {
+      collector.schedulePersistence();
+      collector.schedulePersistence();
+      jest.advanceTimersByTime(9_999);
+      expect(collector.persistHistoryLater).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1);
+      expect(collector.persistHistoryLater).toHaveBeenCalledTimes(1);
+    } finally {
+      collector.stop();
+      jest.useRealTimers();
+    }
+  });
+
+  test('rebuilds corrected raw prices instead of adding the last candle twice', async () => {
+    const candles = observations(6);
+    const collector = new OpenLiquidityV2ReplicaCollector({
+      market: 'BTC-USD', symbol: 'BTCUSDT', asset: 'BTC', priceStepUsd: 100,
+      modelVersion: 'test', minimumSourceHours: 1, historyDirectoryName: 'test-live-replay'
+    } as any) as any;
+    collector.loaded = true;
+    collector.liveReplay = await IncrementalReplicaReplay.create(candles, { modelVersion: 'test' });
+    collector.snapshots = collector.liveReplay.snapshots;
+    collector.schedulePersistence = jest.fn();
+    const corrected = candles.map((c, index) => index === 5 ? { ...c, high: c.high * 1.7 } : c);
+    const fetch = jest.spyOn(binanceHttp, 'binanceGet').mockResolvedValue({ data: corrected.map((c) => [
+      c.timestampMs, c.open, c.high, c.low, c.close, 0, c.closeTimeMs
+    ]) } as any);
+    try {
+      await collector.refresh();
+      expect(collector.lastRefreshTiming.mode).toBe('bootstrap');
+      expect(comparable(collector.snapshots).map(({ zones, ...snapshot }) => snapshot))
+        .toEqual(comparable(buildReplicaSnapshots(corrected, { modelVersion: 'test' })).map(({ zones, ...snapshot }) => snapshot));
+    } finally {
+      fetch.mockRestore();
+      collector.stop();
+    }
+  });
+
+  test('does not advance any catch-up state when Binance omits an intermediate hour', async () => {
+    const candles = observations(8);
+    const collector = new OpenLiquidityV2ReplicaCollector({
+      market: 'SOL-USD', symbol: 'SOLUSDT', asset: 'SOL', priceStepUsd: 100,
+      modelVersion: 'test', minimumSourceHours: 1, historyDirectoryName: 'test-live-replay'
+    } as any) as any;
+    collector.loaded = true;
+    collector.liveReplay = await IncrementalReplicaReplay.create(candles.slice(0, 6));
+    collector.snapshots = collector.liveReplay.snapshots;
+    const before = comparable(collector.snapshots);
+    collector.schedulePersistence = jest.fn();
+    const missing = [...candles.slice(0, 6), candles[7]];
+    const fetch = jest.spyOn(binanceHttp, 'binanceGet').mockResolvedValue({ data: missing.map((c) => [
+      c.timestampMs, c.open, c.high, c.low, c.close, 0, c.closeTimeMs
+    ]) } as any);
+    try {
+      await expect(collector.refresh()).rejects.toThrow('missing a closed 1H candle');
+      expect(comparable(collector.snapshots)).toEqual(before);
+      expect(collector.schedulePersistence).not.toHaveBeenCalled();
+    } finally {
+      fetch.mockRestore();
+      collector.stop();
+    }
+  });
+
   test('refreshes the replica only when a newly closed hour is missing', async () => {
     const collector = new OpenLiquidityV2ReplicaCollector() as any;
     collector.loaded = true;

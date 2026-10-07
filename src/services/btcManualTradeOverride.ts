@@ -6,7 +6,7 @@ import { binanceHourlyCloseFeed } from './binanceHourlyCloseFeed';
 import { allocateStepSizes } from './decentraderExecutionPolicy';
 
 const HOUR_MS = 60 * 60_000;
-const CLOSE_BUFFER_MS = 20_000;
+const CLOSE_BUFFER_MS = 5_000;
 export const MANUAL_OVERRIDE_MAX_ENTRY_DELAY_MS = 15 * 60_000;
 export const MANUAL_OVERRIDE_RECOVERY_MAX_AGE_MS = 4 * HOUR_MS;
 export const MANUAL_OVERRIDE_MAX_RECOVERY_ATTEMPTS = 1;
@@ -608,8 +608,9 @@ export class BtcManualTradeOverrideMonitor {
       config.market === this.config.market
     ))) * 5_000;
     const hourlyRunAt = (Math.floor(now / HOUR_MS) + 1) * HOUR_MS + CLOSE_BUFFER_MS + marketOffsetMs;
+    const retryMs = now % HOUR_MS < 30_000 ? 5_000 : 60_000;
     const nextRunAt = this.status.retryData
-      ? Math.min(hourlyRunAt, Math.max(now + 60_000, binanceRetryAt(BINANCE_FUTURES_KLINES_URL) + 1000) + marketOffsetMs)
+      ? Math.min(hourlyRunAt, Math.max(now + retryMs, binanceRetryAt(BINANCE_FUTURES_KLINES_URL) + 1000) + marketOffsetMs)
       : hourlyRunAt;
     this.nextTimer = setTimeout(() => {
       this.nextTimer = undefined;
@@ -660,6 +661,16 @@ export class BtcManualTradeOverrideMonitor {
         throw new Error(`Binance ${this.config.symbol} has not published the latest closed 1H candle.`);
       }
       readingCandles = false;
+      const observedAt = new Date().toISOString();
+      this.status.lastCandleObservation = {
+        source: 'binance-futures',
+        symbol: this.config.symbol,
+        candleStartedAt: new Date(latest.openTime).toISOString(),
+        candleClosedAt: new Date(latest.closeTime + 1).toISOString(),
+        close: Number(latest.close),
+        observedAt,
+        afterCloseDelayMs: Date.parse(observedAt) - latest.closeTime - 1
+      };
       for (const override of armed) {
         override.lastEvaluatedCandleStartedAt = latest ? new Date(latest.openTime).toISOString() : undefined;
         override.updatedAt = nowIso;
@@ -674,7 +685,7 @@ export class BtcManualTradeOverrideMonitor {
       const state = matched.override;
       const candle = matched.candle;
       state.status = 'EXECUTING';
-      state.triggeredAt = nowIso;
+      state.triggeredAt = observedAt;
       state.signalCandleStartedAt = new Date(candle.openTime).toISOString();
       state.signalCandleClosedAt = new Date(candle.closeTime).toISOString();
       state.signalClose = Number(candle.close);
