@@ -52,6 +52,7 @@ import {
 import { shadowFractalMonitor } from '../services/shadowFractalMonitor';
 import { binanceCooldownHttpResponse, binanceHttpStatus } from '../services/binanceHttp';
 import { binanceHourlyCloseFeed } from '../services/binanceHourlyCloseFeed';
+import { btcSpotChartRouter } from './btcSpotChart';
 import {
   btcManualTradeOverrideMonitor,
   manualTradeOverrideMonitorForMarket,
@@ -293,6 +294,7 @@ initializeExchanges()
 // ================= ROUTER =================
 
 const router: Router = express.Router();
+router.use(btcSpotChartRouter);
 
 // Health check
 router.get('/', async (req, res) => {
@@ -490,7 +492,7 @@ router.get('/decentrader/map', async (req, res) => {
       "script-src-attr 'none'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
-      "connect-src 'self' https://arons-tradingview-alert-connector.onrender.com",
+      "connect-src 'self' https://arons-tradingview-alert-connector.onrender.com wss://stream.binance.com:9443 wss://stream.binance.com:443",
       "frame-src 'self'",
       "font-src 'self' https: data:",
       "form-action 'self'",

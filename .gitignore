@@ -87,3 +87,5 @@ typings/
 
 .vscode/
 /scripts/*
+!/scripts/preview-btc-spot-chart.ts
+!/scripts/check-btc-spot-chart.cjs

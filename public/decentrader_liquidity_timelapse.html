@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Decentrader BTC Liquidity Timelapse</title>
+  <link rel="stylesheet" href="/assets/btc-spot-chart/chart.css">
   <style>
     :root {
       color-scheme: dark;
@@ -1496,6 +1497,48 @@
       </div>
     </section>
 
+    <section class="spot-chart-panel" id="btcSpotChartPanel" aria-label="BTCUSDT Binance Spot 1H candlestick chart" hidden>
+      <div class="spot-chart-toolbar">
+        <div class="spot-chart-heading">
+          <h2 class="spot-chart-symbol">BTCUSDT</h2>
+          <span class="spot-chart-divider"></span><span class="spot-chart-interval">1H</span>
+          <span class="spot-chart-venue">Binance Spot</span>
+        </div>
+        <div class="spot-chart-actions">
+          <label class="spot-chart-toggle" title="Show traded BTC volume"><input type="checkbox" id="spotChartVolume" checked>Volume</label>
+          <label class="spot-chart-toggle" title="Show grid"><input type="checkbox" id="spotChartGrid" checked><img src="/assets/btc-spot-chart/vendor/lucide/grid-2x2.svg" alt="Grid"></label>
+          <span class="spot-chart-divider"></span>
+          <button class="spot-chart-icon" id="spotChartZoomIn" title="Zoom in" aria-label="Zoom in"><img src="/assets/btc-spot-chart/vendor/lucide/plus.svg" alt=""></button>
+          <button class="spot-chart-icon" id="spotChartZoomOut" title="Zoom out" aria-label="Zoom out"><img src="/assets/btc-spot-chart/vendor/lucide/minus.svg" alt=""></button>
+          <button class="spot-chart-icon" id="spotChartReset" title="Reset chart to latest candles" aria-label="Reset chart to latest candles"><img src="/assets/btc-spot-chart/vendor/lucide/rotate-ccw.svg" alt=""></button>
+          <button class="spot-chart-icon" id="spotChartRefresh" title="Refresh Binance candles" aria-label="Refresh Binance candles"><img src="/assets/btc-spot-chart/vendor/lucide/refresh-cw.svg" alt=""></button>
+          <button class="spot-chart-icon" id="spotChartDownload" title="Download chart image" aria-label="Download chart image"><img src="/assets/btc-spot-chart/vendor/lucide/download.svg" alt=""></button>
+          <button class="spot-chart-icon" id="spotChartFullscreen" title="Full screen" aria-label="Full screen"><img src="/assets/btc-spot-chart/vendor/lucide/maximize.svg" alt=""></button>
+        </div>
+      </div>
+      <div class="spot-chart-ohlc" id="spotChartOhlc">
+        <span class="spot-chart-date" id="spotChartCandleTime">-</span>
+        <span>O <b id="spotChartOpen">-</b></span><span>H <b id="spotChartHigh">-</b></span>
+        <span>L <b id="spotChartLow">-</b></span><span>C <b id="spotChartClose">-</b></span>
+        <span>V <b id="spotChartVolumeValue">-</b> BTC</span>
+      </div>
+      <div class="spot-chart-body">
+        <div class="spot-chart-canvas" id="spotChartCanvas"></div>
+        <div class="spot-chart-message" id="spotChartMessage" role="status">Loading BTCUSDT candles...</div>
+      </div>
+      <div class="spot-chart-footer">
+        <div class="spot-chart-ranges" role="group" aria-label="Visible chart range">
+          <button class="spot-chart-range" data-spot-range="24" aria-pressed="false">1D</button>
+          <button class="spot-chart-range" data-spot-range="120" aria-pressed="true">5D</button>
+          <button class="spot-chart-range" data-spot-range="720" aria-pressed="false">1M</button>
+          <button class="spot-chart-range" data-spot-range="all" aria-pressed="false">All</button>
+        </div>
+        <div class="spot-chart-feed" id="spotChartFeed" data-state="connecting" role="status">Connecting</div>
+        <select class="spot-chart-select" id="spotChartTimezone" aria-label="Chart timezone"><option value="Europe/Amsterdam">Amsterdam</option><option value="UTC">UTC</option></select>
+      </div>
+      <div class="spot-chart-credit">TradingView Lightweight Charts&trade; &middot; Copyright &copy; 2025 <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView, Inc.</a> &middot; <a href="/assets/btc-spot-chart/vendor/LIGHTWEIGHT-CHARTS-LICENSE" target="_blank" rel="noopener">License</a></div>
+    </section>
+
     <section class="dom-observer-panel" id="domObserverPanel" aria-live="polite">
       <div class="dom-observer-inner">
         <div class="dom-observer-head">
@@ -1672,6 +1715,8 @@
   </main>
 
   <script src="data/decentrader_btc_liquidity_timelapse_data.js"></script>
+  <script defer src="/assets/btc-spot-chart/data.js"></script>
+  <script defer src="/assets/btc-spot-chart/chart.js"></script>
   <script>
     const queryParams = new URLSearchParams(window.location.search);
     const requestedSource = queryParams.get('source');

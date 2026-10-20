@@ -1,0 +1,136 @@
+.spot-chart-panel {
+  --spot-up: #26a69a;
+  --spot-down: #ef5350;
+  --spot-text: #d1d4dc;
+  --spot-muted: #9598a1;
+  --spot-border: #2a2e39;
+  min-width: 0;
+  border-top: 1px solid var(--spot-border);
+  border-bottom: 1px solid var(--spot-border);
+  background: #131722;
+  color: var(--spot-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.spot-chart-panel[hidden] { display: none; }
+.spot-chart-panel * { letter-spacing: 0; }
+.spot-chart-toolbar, .spot-chart-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 14px;
+  flex-wrap: wrap;
+}
+.spot-chart-toolbar { border-bottom: 1px solid var(--spot-border); }
+.spot-chart-heading, .spot-chart-actions, .spot-chart-ranges, .spot-chart-feed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.spot-chart-heading h2 { margin: 0; color: #f0f3fa; font-size: 16px; font-weight: 600; }
+.spot-chart-symbol { display: inline-flex; align-items: center; gap: 9px; }
+.spot-chart-symbol::before {
+  content: "B";
+  width: 23px;
+  height: 23px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  background: #f7931a;
+}
+.spot-chart-interval { padding: 4px 9px; color: #90b5ff; background: #253047; border-radius: 3px; font-weight: 600; }
+.spot-chart-venue, .spot-chart-footer, .spot-chart-date { color: var(--spot-muted); }
+.spot-chart-divider { height: 22px; width: 1px; background: var(--spot-border); margin: 0 3px; }
+.spot-chart-panel .spot-chart-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--spot-text);
+  background: transparent;
+  cursor: pointer;
+  padding: 7px;
+}
+.spot-chart-panel .spot-chart-icon:hover, .spot-chart-panel .spot-chart-icon:focus-visible { background: #2a2e39; }
+.spot-chart-panel button:focus-visible, .spot-chart-panel select:focus-visible { outline: 2px solid #769dff; outline-offset: 2px; }
+.spot-chart-panel button:disabled { opacity: .4; cursor: wait; }
+.spot-chart-icon img, .spot-chart-toggle img { width: 18px; height: 18px; filter: invert(.85); }
+.spot-chart-toggle { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; padding: 5px 2px; }
+.spot-chart-toggle input { width: 13px; height: 13px; margin: 0; accent-color: #538af7; }
+.spot-chart-select { border: 1px solid #3b3e49; border-radius: 3px; background: #131722; color: var(--spot-text); padding: 5px; font: inherit; }
+.spot-chart-ohlc {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 15px;
+  padding: 9px 15px;
+  min-height: 37px;
+  border-bottom: 1px solid #1c202b;
+}
+.spot-chart-ohlc span { white-space: nowrap; }
+.spot-chart-ohlc b { font-weight: 500; }
+.spot-chart-ohlc[data-direction="up"] b { color: var(--spot-up); }
+.spot-chart-ohlc[data-direction="down"] b { color: var(--spot-down); }
+.spot-chart-body { position: relative; min-width: 0; height: 550px; }
+.spot-chart-canvas { width: 100%; height: 100%; min-width: 0; }
+.spot-chart-panel canvas {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: inherit;
+}
+.spot-chart-message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #b2b5be;
+  background: #131722;
+  z-index: 2;
+  padding: 20px;
+  text-align: center;
+}
+.spot-chart-message[hidden] { display: none; }
+.spot-chart-message[data-error="true"] { color: #f48b87; background: #131722ed; }
+.spot-chart-footer { border-top: 1px solid var(--spot-border); font-size: 11px; gap: 8px; }
+.spot-chart-panel .spot-chart-range {
+  background: transparent;
+  color: #b2b5be;
+  border: 0;
+  border-radius: 3px;
+  min-height: 28px;
+  min-width: 32px;
+  font: inherit;
+  cursor: pointer;
+}
+.spot-chart-panel .spot-chart-range:hover, .spot-chart-panel .spot-chart-range[aria-pressed="true"] { background: #2a2e39; color: #90b5ff; }
+.spot-chart-feed::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #787b86; }
+.spot-chart-feed[data-state="live"]::before { background: var(--spot-up); }
+.spot-chart-feed[data-state="retry"]::before { background: #e2b853; }
+.spot-chart-credit { padding: 5px 15px 8px; color: #787b86; font-size: 10px; }
+.spot-chart-credit a { color: #9598a1; }
+.spot-chart-panel:fullscreen { display: flex; flex-direction: column; width: 100%; height: 100%; overflow: auto; }
+.spot-chart-panel:fullscreen .spot-chart-body { flex: 1; min-height: 250px; height: auto; }
+@media (max-width: 680px) {
+  .spot-chart-toolbar { gap: 7px; padding: 8px; }
+  .spot-chart-heading { width: 100%; gap: 6px; }
+  .spot-chart-actions { width: 100%; justify-content: flex-end; gap: 5px; }
+  .spot-chart-ohlc { gap: 6px 12px; padding: 8px 10px; min-height: 64px; }
+  .spot-chart-date { width: 100%; }
+  .spot-chart-body { height: 420px; }
+  .spot-chart-footer { padding: 7px 9px; }
+  .spot-chart-feed { flex-basis: 100%; }
+}
