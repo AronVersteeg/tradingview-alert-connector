@@ -3,6 +3,7 @@ import {
   BinanceDailyCandle,
   binanceWeeklyFractalHistory,
   binanceDailyFractalHistory,
+  binanceFractalHistory,
   latestExpectedFractalClose,
   buildDailyFractalHistory,
   isDailyFractalMarket,
@@ -31,7 +32,7 @@ describe('Binance daily Williams fractal history', () => {
     jest.setSystemTime(Date.parse('2026-10-02T12:00:00.000Z'));
     const { BinanceCooldownError } = jest.requireActual('../src/services/binanceHttp');
     const until = Date.now() + 3_600_000;
-    const error = new BinanceCooldownError('fapi.binance.com', until);
+    const error = new BinanceCooldownError('api.binance.com', until);
     const get = binanceGet as jest.Mock;
     get.mockClear().mockRejectedValue(error);
     (binanceRetryAt as jest.Mock).mockReturnValue(until);
@@ -96,15 +97,15 @@ describe('Binance daily Williams fractal history', () => {
       jest.useRealTimers();
     }
   });
-  test('maps every dashboard pair to its explicit Binance Futures source', () => {
+  test('uses Spot for crypto dashboards and explicitly retains Futures for unsupported metal pairs', () => {
     expect(BINANCE_DAILY_FRACTAL_MARKETS).toEqual({
-      'BTC-USD': { symbol: 'BTCUSDT' },
-      'ETH-USD': { symbol: 'ETHUSDT' },
-      'INJ-USD': { symbol: 'INJUSDT' },
-      'SOL-USD': { symbol: 'SOLUSDT' },
-      'ZEC-USD': { symbol: 'ZECUSDT' },
-      'PAXG-USD': { symbol: 'XAUUSDT' },
-      'XAG-USD': { symbol: 'XAGUSDT' }
+      'BTC-USD': { symbol: 'BTCUSDT', venue: 'Binance Spot' },
+      'ETH-USD': { symbol: 'ETHUSDT', venue: 'Binance Spot' },
+      'INJ-USD': { symbol: 'INJUSDT', venue: 'Binance Spot' },
+      'SOL-USD': { symbol: 'SOLUSDT', venue: 'Binance Spot' },
+      'ZEC-USD': { symbol: 'ZECUSDT', venue: 'Binance Spot' },
+      'PAXG-USD': { symbol: 'XAUUSDT', venue: 'Binance Futures' },
+      'XAG-USD': { symbol: 'XAGUSDT', venue: 'Binance Futures' }
     });
     expect(isDailyFractalMarket('SOL-USD')).toBe(true);
     expect(isDailyFractalMarket('DOGE-USD')).toBe(false);
@@ -180,7 +181,7 @@ describe('Binance daily Williams fractal history', () => {
     ]));
   });
 
-  test('requests closed Binance Futures weekly candles for the weekly snapshot', async () => {
+  test('requests closed Binance Spot weekly candles for the weekly snapshot', async () => {
     const rows = Array.from({ length: 7 }, (_, index) => {
       const openTime = Date.UTC(2026, 0, 5 + index * 7);
       return [
@@ -198,17 +199,67 @@ describe('Binance daily Williams fractal history', () => {
     const snapshot = await binanceWeeklyFractalHistory('ZEC-USD', true);
 
     expect(binanceGet).toHaveBeenCalledWith(
-      'https://fapi.binance.com/fapi/v1/klines',
+      'https://api.binance.com/api/v3/klines',
       expect.objectContaining({ params: { symbol: 'ZECUSDT', interval: '1w', limit: 1000 } })
     );
     expect(snapshot).toEqual(expect.objectContaining({
       market: 'ZEC-USD',
       symbol: 'ZECUSDT',
-      venue: 'Binance Futures',
+      venue: 'Binance Spot',
       interval: '1w',
       window: 2,
       cached: false
     }));
     expect(snapshot.records.length).toBeGreaterThan(0);
+  });
+
+  test.each(['BTC-USD', 'ETH-USD', 'INJ-USD', 'SOL-USD', 'ZEC-USD', 'PAXG-USD', 'XAG-USD'] as const)(
+    '%s routes both timeframes to its configured venue without changing the Williams rules', async (market) => {
+      const config = BINANCE_DAILY_FRACTAL_MARKETS[market];
+      const expectedUrl = config.venue === 'Binance Spot'
+        ? 'https://api.binance.com/api/v3/klines'
+        : 'https://fapi.binance.com/fapi/v1/klines';
+      for (const interval of ['1d', '1w'] as const) {
+        const period = (interval === '1w' ? 7 : 1) * 86_400_000;
+        const rows = Array.from({ length: 7 }, (_, index) => {
+          const openTime = Date.UTC(2026, 0, 5) + index * period;
+          return [openTime, '10', index === 2 ? '15.12340000' : '12', '8', '11', '1', openTime + period - 1];
+        });
+        const get = binanceGet as jest.Mock;
+        get.mockClear().mockResolvedValue({ data: rows });
+        const snapshot = await binanceFractalHistory(market, interval, true);
+        expect(get).toHaveBeenCalledWith(expectedUrl, expect.objectContaining({
+          params: { symbol: config.symbol, interval, limit: 1000 }
+        }));
+        expect(snapshot).toMatchObject({ venue: config.venue, symbol: config.symbol, interval, window: 2 });
+        expect(snapshot.records).toEqual(expect.arrayContaining([
+          expect.objectContaining({ type: 'HIGH', priceExact: '15.12340000' })
+        ]));
+        expect(snapshot.records.find((record) => record.type === 'HIGH')?.firstBrokenAt).toBeUndefined();
+      }
+    }
+  );
+
+  test('keeps Spot/Futures caches and failed-refresh fallbacks isolated for the same symbol', async () => {
+    const rows = (high: string) => Array.from({ length: 7 }, (_, index) => {
+      const open = Date.UTC(2026, 0, index + 1);
+      return [open, '10', index === 2 ? high : '12', '8', '11', '1', open + 86_400_000 - 1];
+    });
+    const get = binanceGet as jest.Mock;
+    get.mockResolvedValue({ data: rows('15.12340000') });
+    const spot = await binanceDailyFractalHistory('BTC-USD', true);
+    get.mockResolvedValue({ data: rows('25.98760000') });
+    const futures = await binanceDailyFractalHistory('BTC-USD', true, 'Binance Futures');
+    expect(spot.venue).toBe('Binance Spot');
+    expect(futures.venue).toBe('Binance Futures');
+    expect((await binanceDailyFractalHistory('BTC-USD')).records).toEqual(spot.records);
+    expect(spot.records).not.toEqual(futures.records);
+    get.mockRejectedValue(new Error('Spot temporarily unavailable'));
+    const fallback = await binanceDailyFractalHistory('BTC-USD', true);
+    expect(fallback).toMatchObject({ venue: 'Binance Spot', stale: true, records: spot.records });
+    get.mockResolvedValue({ data: rows('25.98760000') });
+    const retained = await binanceDailyFractalHistory('BTC-USD', true, 'Binance Futures');
+    expect(retained).toMatchObject({ venue: 'Binance Futures', records: futures.records });
+    expect(retained.stale).toBeUndefined();
   });
 });

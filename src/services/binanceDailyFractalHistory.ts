@@ -1,21 +1,24 @@
 import { binanceGet, binanceRetryAt } from './binanceHttp';
 
 const BINANCE_FUTURES_KLINES_URL = 'https://fapi.binance.com/fapi/v1/klines';
+const BINANCE_SPOT_KLINES_URL = 'https://api.binance.com/api/v3/klines';
 const WILLIAMS_WINDOW = 2;
 const HISTORY_LIMIT = 1000;
 const CACHE_TTL_MS = 60_000;
 const failedRefreshes = new Map<string, { retryAt: number; error: Error }>();
 
 export type BinanceFractalInterval = '1d' | '1w';
+export type BinanceFractalVenue = 'Binance Spot' | 'Binance Futures';
 
 export const BINANCE_DAILY_FRACTAL_MARKETS = {
-  'BTC-USD': { symbol: 'BTCUSDT' },
-  'ETH-USD': { symbol: 'ETHUSDT' },
-  'INJ-USD': { symbol: 'INJUSDT' },
-  'SOL-USD': { symbol: 'SOLUSDT' },
-  'ZEC-USD': { symbol: 'ZECUSDT' },
-  'PAXG-USD': { symbol: 'XAUUSDT' },
-  'XAG-USD': { symbol: 'XAGUSDT' }
+  'BTC-USD': { symbol: 'BTCUSDT', venue: 'Binance Spot' },
+  'ETH-USD': { symbol: 'ETHUSDT', venue: 'Binance Spot' },
+  'INJ-USD': { symbol: 'INJUSDT', venue: 'Binance Spot' },
+  'SOL-USD': { symbol: 'SOLUSDT', venue: 'Binance Spot' },
+  'ZEC-USD': { symbol: 'ZECUSDT', venue: 'Binance Spot' },
+  // Binance has no XAUUSDT/XAGUSDT Spot market. Do not substitute a proxy.
+  'PAXG-USD': { symbol: 'XAUUSDT', venue: 'Binance Futures' },
+  'XAG-USD': { symbol: 'XAGUSDT', venue: 'Binance Futures' }
 } as const;
 
 export type DailyFractalMarket = keyof typeof BINANCE_DAILY_FRACTAL_MARKETS;
@@ -54,7 +57,7 @@ export type DailyFractalHistorySnapshot = {
   ok: true;
   market: DailyFractalMarket;
   symbol: string;
-  venue: 'Binance Futures';
+  venue: BinanceFractalVenue;
   interval: BinanceFractalInterval;
   window: 2;
   fetchedAt: string;
@@ -203,11 +206,13 @@ export function buildDailyFractalHistory(
 
 async function fetchSnapshot(
   market: DailyFractalMarket,
-  interval: BinanceFractalInterval
+  interval: BinanceFractalInterval,
+  venue: BinanceFractalVenue
 ): Promise<DailyFractalHistorySnapshot> {
   const symbol = BINANCE_DAILY_FRACTAL_MARKETS[market].symbol;
   const fetchedAt = new Date().toISOString();
-  const response = await binanceGet<unknown[]>(BINANCE_FUTURES_KLINES_URL, {
+  const url = venue === 'Binance Spot' ? BINANCE_SPOT_KLINES_URL : BINANCE_FUTURES_KLINES_URL;
+  const response = await binanceGet<unknown[]>(url, {
     params: { symbol, interval, limit: HISTORY_LIMIT },
     timeout: 20_000
   });
@@ -220,7 +225,7 @@ async function fetchSnapshot(
     ok: true,
     market,
     symbol,
-    venue: 'Binance Futures',
+    venue,
     interval,
     window: WILLIAMS_WINDOW,
     fetchedAt,
@@ -237,9 +242,11 @@ export function isDailyFractalMarket(value: string): value is DailyFractalMarket
 export async function binanceFractalHistory(
   market: DailyFractalMarket,
   interval: BinanceFractalInterval,
-  forceRefresh = false
+  forceRefresh = false,
+  venue: BinanceFractalVenue = BINANCE_DAILY_FRACTAL_MARKETS[market].venue
 ): Promise<DailyFractalHistorySnapshot> {
-  const cacheKey = `${market}|${interval}`;
+  const cacheKey = `${venue}|${market}|${interval}`;
+  const url = venue === 'Binance Spot' ? BINANCE_SPOT_KLINES_URL : BINANCE_FUTURES_KLINES_URL;
   const now = Date.now();
   const cachedSnapshot = cachedSnapshots.get(cacheKey);
   const failed = failedRefreshes.get(cacheKey);
@@ -260,14 +267,14 @@ export async function binanceFractalHistory(
   const pendingSnapshot = pendingSnapshots.get(cacheKey);
   if (pendingSnapshot) return pendingSnapshot;
 
-  const request = fetchSnapshot(market, interval)
+  const request = fetchSnapshot(market, interval, venue)
     .then((snapshot) => {
       failedRefreshes.delete(cacheKey);
       cachedSnapshots.set(cacheKey, { storedAt: Date.now(), snapshot });
       return snapshot;
     })
     .catch((error) => {
-      const retryAt = Math.max(Date.now() + 60_000, binanceRetryAt(BINANCE_FUTURES_KLINES_URL) + 1000);
+      const retryAt = Math.max(Date.now() + 60_000, binanceRetryAt(url) + 1000);
       const message = error instanceof Error ? error.message : String(error);
       failedRefreshes.set(cacheKey, { retryAt, error: error instanceof Error ? error : new Error(message) });
       const fallback = cachedSnapshots.get(cacheKey);
@@ -275,6 +282,7 @@ export async function binanceFractalHistory(
         console.warn('Binance fractal refresh failed; using cached snapshot.', {
           market,
           interval,
+          venue,
           symbol: BINANCE_DAILY_FRACTAL_MARKETS[market].symbol,
           error: error instanceof Error ? error.message : String(error),
           fetchedAt: fallback.snapshot.fetchedAt
@@ -296,9 +304,10 @@ export async function binanceFractalHistory(
 
 export async function binanceDailyFractalHistory(
   market: DailyFractalMarket,
-  forceRefresh = false
+  forceRefresh = false,
+  venue?: BinanceFractalVenue
 ): Promise<DailyFractalHistorySnapshot> {
-  return binanceFractalHistory(market, '1d', forceRefresh);
+  return binanceFractalHistory(market, '1d', forceRefresh, venue);
 }
 
 export async function binanceWeeklyFractalHistory(

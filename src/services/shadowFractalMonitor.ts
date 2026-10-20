@@ -405,7 +405,8 @@ export class ShadowFractalMonitor {
     }
     const [hourlyCandles, dailySnapshot] = await Promise.all([
       fetchHourlyCandles(config.symbol),
-      binanceDailyFractalHistory(config.market)
+      // Preserve the existing Futures entry model independently of the dashboard.
+      binanceDailyFractalHistory(config.market, false, 'Binance Futures')
     ]);
     const latestCandle = hourlyCandles[hourlyCandles.length - 1];
     if (dailySnapshot.stale) throw new Error(`Binance ${config.symbol} Daily fractal data is stale: ${dailySnapshot.lastError}`);
