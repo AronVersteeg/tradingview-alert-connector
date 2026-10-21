@@ -58,7 +58,7 @@ coupling rendering to a trading executor. No strategy checkbox is added.
 - Missing/stale D/W data or gaps in closed 1H coverage leave the previous
   verified projections in place with an explicit pending/stale status. No
   promise of a fixed refresh latency during an upstream outage is made.
-- Daily, Weekly and Broken visibility controls are independent. `Fit DC/WC`
+- Daily, Weekly and Broken visibility controls are independent. `Fit levels`
   optionally includes current intact levels in the price scale. Older distant
   levels cannot squeeze the normal candle scale. At the exact same price,
   Weekly takes visual precedence: only its orange line and W/WC label render.
@@ -87,6 +87,35 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   alert, SL, TP or trailing change. `getHourlyFractalBoxes()` exposes defensive
   copies of the ranges and pivots. PNG export includes the boxes.
 
+## Public V2 Gap Rectangles
+
+- Default-on light-green outlines use exactly `payload.gaps` from the BTC
+  histomap, without recalculating gaps from candles, querying Decentrader or
+  using a different Binance source. The existing histomap refresh publishes a
+  compact, validated timeline to the candle chart; there is no additional gap
+  fetch, Binance request or history file. This also works when the chart is
+  opened after the map has loaded, and is independent of the map's frame slider.
+- Each pair of unchanged lower/upper edges is one rectangle. Changes to either
+  edge close that rectangle and start the next at the same source timestamp.
+  Source frames are candle-open timestamps; the edges become available at
+  candle-open + 1H. New transitions use that close, never the browser fetch time.
+- The active rectangle ends three 1H candle slots beyond the latest candle by
+  default. The `+ h` numeric control adjusts this to 1-72 candle slots without
+  inserting fake candles or moving historical transitions. `Fit levels` can
+  include the current gap bounds alongside current D/W fractals.
+- The 500 retained frames do not in themselves establish the first gap's
+  original birth. Unknown starts remain open on the left. The current
+  79,400-87,400 gap has the user's explicitly supplied start at 2026-09-21
+  10:00 Europe/Amsterdam (08:00 UTC), tagged `startSource: user-confirmed`.
+  Its applicability is bounded by the observed continuity through Oct 21
+  08:00 UTC, so an unrelated future gap at the same prices is not backdated.
+- Missing frames/null gaps interrupt the outline. A stale active gap is dashed
+  and stops at the last verified close instead of projecting an unverified
+  current range into the future. The displayed cutoff makes source lag visible.
+- `getGapProjections()` exposes copied boxes, source cutoff and start provenance.
+  Gap visibility, price formatting and PNG export work like the other layers.
+  No entries, plans, alerts, SL, TP or trailing settings are changed.
+
 ## Libraries
 
 TradingView Lightweight Charts 5.2.1 is vendored as a standalone ES module;
@@ -112,7 +141,7 @@ This separate server binds loopback on port 4318 (override with
 exchange initialization. Do not start the production entry point for UI tests.
 
 Unit tests: `test/binanceSpotChart.test.ts`, `test/btcFractalProjections.test.ts`,
-`test/btcHourlyFractalBoxes.test.ts`.
+`test/btcHourlyFractalBoxes.test.ts`, `test/btcGapBoxes.test.ts`.
 Browser QA: `node scripts/check-btc-spot-chart.cjs <preview URL> <output dir>`
 with Playwright and pngjs available in the test runtime. Set
 `SPOT_CHART_BROWSER_CHANNEL=msedge` to use installed Edge instead of a downloaded

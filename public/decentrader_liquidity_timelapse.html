@@ -1519,12 +1519,15 @@
       <div class="spot-chart-fractals">
         <div class="spot-chart-actions">
           <label class="spot-chart-toggle" title="Confirmed 1H Williams fractal ranges"><input type="checkbox" id="spotChartHourlyBoxes" checked><i class="spot-fractal-swatch hourly-boxes"></i>1H boxes</label>
+          <label class="spot-chart-toggle" title="Public V2 gap edges"><input type="checkbox" id="spotChartGap" checked><i class="spot-fractal-swatch gap-box"></i>Gap</label>
+          <label class="spot-gap-lead" title="Gap right edge: hours beyond the latest candle">+<input type="number" id="spotChartGapLead" value="3" min="1" max="72" step="1" aria-label="Gap right offset in 1H candles">h</label>
           <label class="spot-chart-toggle" title="Daily fractals"><input type="checkbox" id="spotChartDaily" checked><i class="spot-fractal-swatch daily"></i>Daily</label>
           <label class="spot-chart-toggle" title="Weekly fractals"><input type="checkbox" id="spotChartWeekly" checked><i class="spot-fractal-swatch weekly"></i>Weekly</label>
           <label class="spot-chart-toggle" title="Broken fractal segments"><input type="checkbox" id="spotChartBroken" checked>Broken</label>
-          <button class="spot-chart-range" id="spotChartFitFractals" title="Include current intact Daily and Weekly levels in price scale" aria-pressed="false">Fit DC/WC</button>
+          <button class="spot-chart-range" id="spotChartFitFractals" title="Include current Daily, Weekly and gap levels in price scale" aria-pressed="false">Fit levels</button>
         </div>
         <span id="spotChartFractalStatus" role="status">D/W pending</span>
+        <span id="spotChartGapStatus" role="status">Gap pending</span>
       </div>
       <div class="spot-chart-ohlc" id="spotChartOhlc">
         <span class="spot-chart-date" id="spotChartCandleTime">-</span>
@@ -1728,6 +1731,7 @@
   <script defer src="/assets/btc-spot-chart/data.js"></script>
   <script defer src="/assets/btc-spot-chart/fractals.js"></script>
   <script defer src="/assets/btc-spot-chart/hourly-fractal-boxes.js"></script>
+  <script defer src="/assets/btc-spot-chart/gap-boxes.js"></script>
   <script defer src="/assets/btc-spot-chart/chart.js"></script>
   <script>
     const queryParams = new URLSearchParams(window.location.search);
@@ -6053,6 +6057,7 @@
       }
       const nextPayload = loaded.payload;
       payload = nextPayload;
+      publishBtcSpotGapTimeline();
       if (activeSource === 'decentrader') {
         window.DECENTRADER_LIQUIDITY_TIMELAPSE = nextPayload;
       }
@@ -6186,6 +6191,17 @@
         .catch(showRefreshError);
     }
 
+    function publishBtcSpotGapTimeline() {
+      if (activeSource !== 'open-v2' || !payload || !window.BtcSpotGapBoxes) return;
+      try {
+        const timeline = window.BtcSpotGapBoxes.timelineFromPayload(payload);
+        window.BTC_SPOT_GAP_TIMELINE = timeline;
+        window.dispatchEvent(new CustomEvent('btc-spot-chart:gap-timeline', { detail: timeline }));
+      } catch (error) {
+        window.dispatchEvent(new CustomEvent('btc-spot-chart:gap-error', { detail: String(error.message || error) }));
+      }
+    }
+    window.addEventListener('btc-spot-chart:gap-source-ready', publishBtcSpotGapTimeline);
     wireViewer();
   </script>
 </body>

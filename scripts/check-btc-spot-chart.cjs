@@ -53,6 +53,41 @@ async function checkHourlyBoxes(page) {
   return { boxes: model.boxes.length, confirmedPivots: model.fractals.length, grayFillPixels };
 }
 
+function greenPixels(buffer) {
+  const png = PNG.sync.read(buffer);
+  let count = 0;
+  for (let i = 0; i < png.data.length; i += 4) {
+    const [r, g, b] = png.data.subarray(i, i + 3);
+    if (r > 100 && r < 220 && g > 175 && g - r > 30 && g - b > 30) count++;
+  }
+  return count;
+}
+
+async function checkGapBoxes(page) {
+  await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.boxes.length > 0, null, { timeout: 40_000 });
+  assert.equal(await page.locator('#spotChartGap').isChecked(), true);
+  const state = await page.evaluate(() => ({ model: window.btcSpotChart.getGapProjections(), latest: window.BTC_SPOT_GAP_TIMELINE.records.at(-1) }));
+  const current = state.model.boxes.find((box) => box.openEnded);
+  assert.equal(current.lower, state.latest.lower); assert.equal(current.upper, state.latest.upper);
+  const on = greenPixels(await page.locator('#spotChartCanvas').screenshot());
+  assert(on > 100, `Gap rectangle must render light-green edges (${on}).`);
+  await page.locator('#spotChartGap').uncheck();
+  const off = greenPixels(await page.locator('#spotChartCanvas').screenshot());
+  assert(off < on / 2, 'Gap toggle must hide the green rectangle.');
+  await page.locator('#spotChartGap').check();
+  await page.locator('#spotChartGapLead').fill('6');
+  await page.locator('#spotChartGapLead').press('Tab');
+  assert.equal(await page.evaluate(() => window.btcSpotChart.chart.timeScale().options().rightOffset), 8);
+  await page.locator('#spotChartGapLead').fill('3');
+  await page.locator('#spotChartGapLead').press('Tab');
+  await page.waitForFunction(() => {
+    const api = window.btcSpotChart, scale = api.chart.timeScale();
+    const x = scale.logicalToCoordinate(api.getCandles().length - 1 + Number(document.getElementById('spotChartGapLead').value));
+    return x !== null && x > 0 && x < scale.width() - 2;
+  });
+  return { lower: current.lower, upper: current.upper, fromTime: current.fromTime, startSource: current.startSource, greenPixels: on, hiddenPixels: off, adjustableLead: true };
+}
+
 async function checkHourRefresh(browser, url, output) {
   const hour = 3_600_000;
   const initial = Date.parse('2026-10-21T08:00:00Z');
@@ -94,6 +129,12 @@ async function checkHourRefresh(browser, url, output) {
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length === 2);
+    const sendGap = () => page.evaluate((time) => {
+      const records = [{ candleTime: time / 1000 - 3600, availableAt: time / 1000, lower: 80, upper: 105 }];
+      if (Date.now() >= time + 3_600_000) records.push({ candleTime: time / 1000, availableAt: time / 1000 + 3600, lower: 82, upper: 108 });
+      window.dispatchEvent(new CustomEvent('btc-spot-chart:gap-timeline', { detail: { symbol: 'BTCUSDT', venue: 'Binance Spot', records } }));
+    }, initial);
+    await sendGap();
     assert.equal(await page.evaluate(() => window.btcSpotChart.getFractalProjections().levels[0].broken), false, 'Open 1H excursion must not break the level.');
     assert.equal(await page.evaluate(() => window.btcSpotChart.getHourlyFractalBoxes().fractals.some((pivot) => pivot.price === 85)), false, 'Open second right candle must not confirm the 1H pivot.');
     now = initial + hour + 5000;
@@ -107,9 +148,16 @@ async function checkHourRefresh(browser, url, output) {
     assert.equal(hourlyBox.fromTime, (initial - 2 * hour) / 1000, 'Box must anchor at the original wick.');
     assert.equal(hourlyBox.confirmedAt, (initial + hour) / 1000, 'Confirmation must retain its real later availability time.');
     assert.equal(projectionReads, 2, 'Only one projection read per hour.');
+    await page.waitForFunction(() => document.getElementById('spotChartGapStatus').dataset.stale === 'true');
+    await sendGap();
+    const gapModel = await page.evaluate(() => window.btcSpotChart.getGapProjections());
+    assert.equal(gapModel.boxes.length, 2);
+    assert.equal(gapModel.boxes[1].fromTime, (initial + hour) / 1000, 'Gap transition must align with the source candle close, not its fetch time.');
+    assert.equal(gapModel.boxes[1].lower, 82);
+    assert.equal(await page.locator('#spotChartGapStatus').getAttribute('data-stale'), 'false');
     await page.locator('[data-spot-range="all"]').click();
     await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, 'btc-spot-hour-refresh-fixture.png') });
-    return { hourlyRefreshWithoutClick: true, openCandleIgnored: true, exactBreakHour: true, hourlyBoxConfirmedAfterClose: true, projectionReads };
+    return { hourlyRefreshWithoutClick: true, openCandleIgnored: true, exactBreakHour: true, hourlyBoxConfirmedAfterClose: true, gapTransitionAfterClose: true, staleGapIdentified: true, projectionReads };
   } finally { await context.close(); }
 }
 
@@ -173,6 +221,7 @@ async function checkHourRefresh(browser, url, output) {
     const box = await page.locator('#spotChartCanvas').boundingBox();
     await page.mouse.move(box.x + box.width * .6, box.y + box.height * .4);
     const desktopHourlyBoxes = await checkHourlyBoxes(page);
+    const desktopGap = await checkGapBoxes(page);
     const desktopPixels = candlePixels(await page.locator('#spotChartCanvas').screenshot());
     await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, 'btc-spot-desktop.png') });
     const desktopFractals = fractalPixels(await page.locator('#spotChartCanvas').screenshot());
@@ -182,6 +231,7 @@ async function checkHourRefresh(browser, url, output) {
     assert(download.suggestedFilename().startsWith('BTCUSDT-Spot-1H-'));
     await download.saveAs(path.join(output, 'btc-spot-export.png'));
     fractalPixels(fs.readFileSync(path.join(output, 'btc-spot-export.png')));
+    assert(greenPixels(fs.readFileSync(path.join(output, 'btc-spot-export.png'))) > 100, 'PNG export must include gap rectangle edges.');
     let live = true;
     try { await page.waitForFunction(() => document.getElementById('spotChartFeed').dataset.state === 'live', null, { timeout: 12_000 }); }
     catch { live = false; }
@@ -206,12 +256,13 @@ async function checkHourRefresh(browser, url, output) {
     assert.equal(overflow, false, 'Chart must not overflow its mobile container.');
     await phone.locator('#spotChartZoomIn').tap();
     const mobileHourlyBoxes = await checkHourlyBoxes(phone);
+    const mobileGap = await checkGapBoxes(phone);
     const mobilePixels = candlePixels(await phone.locator('#spotChartCanvas').screenshot());
     const mobileFractals = fractalPixels(await phone.locator('#spotChartCanvas').screenshot());
     await phone.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, 'btc-spot-mobile.png') });
     assert.deepEqual(errors, [], 'No uncaught browser exceptions');
     assert.deepEqual(writes, [], 'Chart interactions must not submit orders, plans, settings or SMTP requests');
     const hourlyFixture = await checkHourRefresh(browser, url, output);
-    console.log(JSON.stringify({ feed, currentFractals: currents, projectionCutoff: fractalLevels.evaluatedThrough, controls: 'zoom, range, volume, grid, timezone, fullscreen, PNG export, Daily/Weekly/Broken, Fit DC/WC, 1H boxes', olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, desktopFractals, mobileFractals, desktopHourlyBoxes, mobileHourlyBoxes, hourlyFixture, browserErrors: errors, writeRequests: writes }, null, 2));
+    console.log(JSON.stringify({ feed, currentFractals: currents, projectionCutoff: fractalLevels.evaluatedThrough, controls: 'zoom, range, volume, grid, timezone, fullscreen, PNG export, Daily/Weekly/Broken, Fit levels, 1H boxes, gap rectangles/lead', olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, desktopFractals, mobileFractals, desktopHourlyBoxes, mobileHourlyBoxes, desktopGap, mobileGap, hourlyFixture, browserErrors: errors, writeRequests: writes }, null, 2));
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error.stack); process.exitCode = 1; });
