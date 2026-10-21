@@ -77,7 +77,8 @@ describe('BTC Public V2 gap rectangles', () => {
       const draw = () => primitive.paneViews()[0].renderer().draw({ useMediaCoordinateSpace: (render: any) => render({ context: ctx, mediaSize: { width: 500, height: 300 } }) });
       draw();
       expect(ctx.strokeStyle).toBe('#9edfa5');
-      expect(ctx.lineTo.mock.calls).toContainEqual([70, 110]);
+      expect(primitive.lead).toBe(10);
+      expect(ctx.lineTo.mock.calls).toContainEqual([140, 110]);
       expect(ctx.lineTo.mock.calls).toContainEqual([30, 82]);
       expect(ctx.lineTo.mock.calls).not.toContainEqual([10, 110]); // Unknown first birth stays open on the left.
       primitive.setOptions({ lead: 6 }); ctx.lineTo.mockClear(); draw();

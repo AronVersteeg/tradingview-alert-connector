@@ -71,6 +71,8 @@ describe('read-only manual entry and TP overlays', () => {
   test('draws real independent blue bands behind candles and clears them with their plans', () => {
     const series = fakeSeries(), layer = new ManualLevelLines(series);
     const ctx: any = {};
+    expect(layer.lead).toBe(10);
+    layer.setLead(3);
     for (const name of ['save', 'restore', 'beginPath', 'rect', 'clip', 'fillRect', 'moveTo', 'lineTo', 'stroke']) ctx[name] = jest.fn();
     layer.attached({ chart: { timeScale: () => ({ logicalToCoordinate: (index: number) => index * 10 }) }, requestUpdate: jest.fn() });
     const start = Date.parse(plan().armedAt) / 1000;

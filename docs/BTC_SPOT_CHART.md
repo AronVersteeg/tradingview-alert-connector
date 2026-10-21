@@ -119,7 +119,7 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   edge close that rectangle and start the next at the same source timestamp.
   Source frames are candle-open timestamps; the edges become available at
   candle-open + 1H. New transitions use that close, never the browser fetch time.
-- The active rectangle ends three 1H candle slots beyond the latest candle by
+- The active rectangle ends ten 1H candle slots beyond the latest candle by
   default. The `+ h` numeric control adjusts this to 1-72 candle slots without
   inserting fake candles or moving historical transitions. `Fit levels` can
   include the current gap bounds alongside current D/W/M fractals.

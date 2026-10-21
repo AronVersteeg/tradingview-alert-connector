@@ -68,6 +68,7 @@ function greenPixels(buffer) {
 async function checkGapBoxes(page) {
   await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.boxes.length > 0, null, { timeout: 40_000 });
   assert.equal(await page.locator('#spotChartGap').isChecked(), true);
+  assert.equal(await page.locator('#spotChartGapLead').inputValue(), '10');
   const state = await page.evaluate(() => ({ model: window.btcSpotChart.getGapProjections(), latest: window.BTC_SPOT_GAP_TIMELINE.records.at(-1) }));
   const current = state.model.boxes.find((box) => box.openEnded);
   assert.equal(current.lower, state.latest.lower); assert.equal(current.upper, state.latest.upper);
@@ -95,7 +96,7 @@ async function checkGapBoxes(page) {
   await page.locator('#spotChartGapLead').fill('6');
   await page.locator('#spotChartGapLead').press('Tab');
   assert.equal(await page.evaluate(() => window.btcSpotChart.chart.timeScale().options().rightOffset), 8);
-  await page.locator('#spotChartGapLead').fill('3');
+  await page.locator('#spotChartGapLead').fill('10');
   await page.locator('#spotChartGapLead').press('Tab');
   await page.waitForFunction(() => {
     const api = window.btcSpotChart, scale = api.chart.timeScale();
@@ -227,8 +228,8 @@ async function checkHourRefresh(browser, url, output) {
     assert.equal(await page.evaluate(() => window.btcSpotChart.getCandles().at(-1).time), candleTime);
     await page.locator('#spotChartTimezone').selectOption('Europe/Amsterdam');
     await page.locator('[data-spot-range="24"]').click();
-    await page.waitForFunction(() => { const r = window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(); return r.to - r.from < 32; });
-    assert((await span()) < 32);
+    await page.waitForFunction(() => { const r = window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(); return r.to - r.from <= 37; });
+    assert((await span()) <= 37);
     await page.locator('[data-spot-range="120"]').click();
     await page.locator('#spotChartFullscreen').click();
     await page.waitForFunction(() => document.fullscreenElement?.id === 'btcSpotChartPanel');

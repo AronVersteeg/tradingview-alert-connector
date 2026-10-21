@@ -63,7 +63,7 @@
 
   class GapBoxPrimitive {
     constructor() {
-      this.model = null; this.indices = new Map(); this.visible = true; this.lead = 3; this.lastIndex = 0;
+      this.model = null; this.indices = new Map(); this.visible = true; this.lead = 10; this.lastIndex = 0;
       this.view = { zOrder: () => 'normal', renderer: () => ({ draw: (target) => this.draw(target) }) };
       this.axisViews = ['upper', 'lower'].map((edge) => ({
         coordinate: () => {

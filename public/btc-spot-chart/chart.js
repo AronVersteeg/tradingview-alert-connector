@@ -417,7 +417,7 @@
   });
   byId('spotChartGapLead').addEventListener('change', (event) => {
     const value = Number(event.target.value);
-    if (!Number.isInteger(value) || value < 1 || value > 72) { event.target.value = String(gapLayer?.lead || 3); return; }
+    if (!Number.isInteger(value) || value < 1 || value > 72) { event.target.value = String(gapLayer?.lead || 10); return; }
     gapLayer?.setOptions({ lead: value });
     manualLayer?.setLead(value);
     if (chart) { chart.timeScale().applyOptions({ rightOffset: value + 2 }); chart.timeScale().scrollToPosition(value + 2, false); }

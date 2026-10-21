@@ -65,7 +65,7 @@
 
   class ManualLevelLines {
     constructor(series) {
-      this.series = series; this.lines = new Map(); this.levels = []; this.visible = true; this.candles = []; this.lead = 3;
+      this.series = series; this.lines = new Map(); this.levels = []; this.visible = true; this.candles = []; this.lead = 10;
       this.view = { zOrder: () => 'bottom', renderer: () => ({ draw: (target) => this.draw(target) }) };
     }
     attached({ chart, requestUpdate }) { this.chart = chart; this.requestUpdate = requestUpdate; }
