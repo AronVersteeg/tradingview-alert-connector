@@ -76,7 +76,7 @@ describe('BTC Public V2 gap rectangles', () => {
       primitive.setData(model, candles);
       const draw = () => primitive.paneViews()[0].renderer().draw({ useMediaCoordinateSpace: (render: any) => render({ context: ctx, mediaSize: { width: 500, height: 300 } }) });
       draw();
-      expect(ctx.strokeStyle).toBe('#9edfa5');
+      expect(ctx.strokeStyle).toBe('#00ff00');
       expect(primitive.lead).toBe(10);
       expect(ctx.lineTo.mock.calls).toContainEqual([140, 110]);
       expect(ctx.lineTo.mock.calls).toContainEqual([30, 82]);
@@ -104,7 +104,7 @@ describe('BTC Public V2 gap rectangles', () => {
       expect(labels.map((label: any) => label.text())).toEqual(['112.00', '82.00']);
       expect(labels.map((label: any) => label.coordinate())).toEqual([224, 164]);
       expect(labels.every((label: any) => label.visible() && label.tickVisible())).toBe(true);
-      expect(labels[0].backColor()).toBe('#9edfa5');
+      expect(labels[0].backColor()).toBe('#00ff00');
       primitive.setOptions({ visible: false });
       expect(labels.every((label: any) => !label.visible())).toBe(true);
       primitive.setOptions({ visible: true });

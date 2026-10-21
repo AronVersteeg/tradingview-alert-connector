@@ -134,7 +134,7 @@ coupling rendering to a trading executor. No strategy checkbox is added.
 
 ## Public V2 Gap Rectangles
 
-- Default-on light-green outlines use exactly `payload.gaps` from the BTC
+- Default-on bright-green (`#00ff00`) outlines use exactly `payload.gaps` from the BTC
   histomap, without recalculating gaps from candles, querying Decentrader or
   using a different Binance source. The existing histomap refresh publishes a
   compact, validated timeline to the candle chart; there is no additional gap
@@ -166,7 +166,7 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   current range into the future. The displayed cutoff makes source lag visible.
 - `getGapProjections()` exposes copied boxes, source cutoff and start provenance.
   Gap visibility, price formatting and PNG export work like the other layers.
-  The two active edges also have native light-green right-price-axis labels,
+  The two active edges also have native bright-green right-price-axis labels,
   using the series price formatter. Labels update with the edges and disappear
   when Gap is hidden, no current gap exists or the source is stale. Historical
   rectangles never receive active price labels.

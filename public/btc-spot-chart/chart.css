@@ -33,7 +33,7 @@
 .spot-fractal-swatch.monthly { background: #ff5252; }
 .spot-fractal-swatch.manual { background: #4599ff; }
 .spot-fractal-swatch.hourly-boxes { height: 9px; background: #d2d6e04d; }
-.spot-fractal-swatch.gap-box { height: 9px; border: 1px solid #9edfa5; box-sizing: border-box; }
+.spot-fractal-swatch.gap-box { height: 9px; border: 1px solid #00ff00; box-sizing: border-box; }
 .spot-gap-lead { display: inline-flex; align-items: center; gap: 3px; color: var(--spot-muted); }
 .spot-gap-lead input { width: 48px; min-width: 0; padding: 4px 2px 4px 5px; border: 1px solid var(--spot-border); border-radius: 3px; background: #131722; color: var(--spot-text); font: inherit; }
 .spot-chart-heading, .spot-chart-actions, .spot-chart-ranges, .spot-chart-feed {

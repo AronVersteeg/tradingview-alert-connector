@@ -62,7 +62,7 @@ function greenPixels(buffer) {
   let count = 0;
   for (let i = 0; i < png.data.length; i += 4) {
     const [r, g, b] = png.data.subarray(i, i + 3);
-    if (r > 100 && r < 220 && g > 175 && g - r > 30 && g - b > 30) count++;
+    if (r < 80 && g > 210 && b < 80) count++;
   }
   return count;
 }
@@ -81,7 +81,7 @@ async function checkGapBoxes(page) {
   assert.equal(current.lower, state.latest.lower); assert.equal(current.upper, state.latest.upper);
   const screenshot = await page.locator('#spotChartCanvas').screenshot();
   const on = greenPixels(screenshot);
-  assert(on > 100, `Gap rectangle must render light-green edges (${on}).`);
+  assert(on > 100, `Gap rectangle must render bright-green edges (${on}).`);
   const axis = await page.evaluate((gap) => ({ width: window.btcSpotChart.chart.priceScale('right').width(),
     ys: [gap.upper, gap.lower].map((price) => window.btcSpotChart.candleSeries.priceToCoordinate(price)) }), current);
   const pixels = PNG.sync.read(screenshot);
@@ -91,7 +91,7 @@ async function checkGapBoxes(page) {
       for (let col = pixels.width - axis.width + 4; col < pixels.width - 2; col++) {
         const index = (row * pixels.width + Math.floor(col)) * 4;
         const [r, g, b] = pixels.data.subarray(index, index + 3);
-        if (g > 175 && g - r > 30 && g - b > 30) labelPixels++;
+        if (r < 80 && g > 210 && b < 80) labelPixels++;
       }
     }
     assert(labelPixels > 200, `Each active edge must have a green right-axis price label (${labelPixels}).`);
