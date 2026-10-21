@@ -126,8 +126,8 @@ describe('closed-hour D/W projection geometry', () => {
     const requestUpdate = jest.fn();
     primitive.attached({ chart: {}, series: {}, requestUpdate });
     primitive.setData([
-      { timeframe: 'D', originTime: null, originBeforeHistory: true, broken: false },
-      { timeframe: 'W', originTime: 1, broken: true, brokenTime: 2 },
+      { timeframe: 'D', price: 100, originTime: null, originBeforeHistory: true, broken: false },
+      { timeframe: 'W', price: 80, originTime: 1, broken: true, brokenTime: 2 },
       { timeframe: 'D', originTime: null, originBeforeHistory: false, broken: false },
       { timeframe: 'W', originTime: 1, broken: true, brokenTime: null }
     ]);
@@ -136,6 +136,31 @@ describe('closed-hour D/W projection geometry', () => {
     primitive.setOptions({ daily: false }); expect(primitive.visibleLevels()).toHaveLength(0);
     expect(requestUpdate).toHaveBeenCalledTimes(3);
     primitive.detached();
+  });
+
+  test('Weekly takes display precedence at the exact same price without removing Daily data', () => {
+    const primitive = new FractalPrimitive();
+    const daily = { timeframe: 'D', label: 'DC', price: 100, originTime: 1, broken: false };
+    const weekly = { ...daily, timeframe: 'W', label: 'WC' };
+    const nearbyDaily = { ...daily, price: 100.01 };
+    const levels = [daily, weekly, nearbyDaily];
+    primitive.setData(levels);
+    expect(primitive.visibleLevels()).toEqual([weekly, nearbyDaily]);
+    expect(primitive.levels).toEqual([daily, weekly, nearbyDaily]);
+    primitive.setOptions({ weekly: false });
+    expect(primitive.visibleLevels()).toEqual([daily, nearbyDaily]);
+    primitive.setOptions({ weekly: true });
+    expect(primitive.visibleLevels()).toEqual([weekly, nearbyDaily]);
+  });
+
+  test('broken Weekly segments also take precedence, but unresolved Weekly origins do not hide Daily', () => {
+    const primitive = new FractalPrimitive();
+    const daily = { timeframe: 'D', price: 100, originTime: 1, broken: true, brokenTime: 3 };
+    const weekly = { ...daily, timeframe: 'W' };
+    primitive.setData([daily, weekly]);
+    expect(primitive.visibleLevels()).toEqual([weekly]);
+    primitive.setData([daily, { ...weekly, originTime: null, originBeforeHistory: false }]);
+    expect(primitive.visibleLevels()).toEqual([daily]);
   });
 
   test('canvas renderer actually draws the dashed segment only between origin and breaking hour', () => {

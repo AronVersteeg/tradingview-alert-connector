@@ -73,9 +73,11 @@
     setData(levels) { this.levels = levels; this.requestUpdate?.(); }
     setOptions(options) { Object.assign(this.options, options); this.requestUpdate?.(); }
     visibleLevels() {
-      return this.levels.filter((level) => this.options[level.timeframe === 'D' ? 'daily' : 'weekly'] &&
+      const candidates = this.levels.filter((level) => this.options[level.timeframe === 'D' ? 'daily' : 'weekly'] &&
         (!level.broken || this.options.broken) && !level.breakBeforeHistory &&
         (level.originTime !== null || level.originBeforeHistory) && (!level.broken || level.brokenTime !== null));
+      const weeklyPrices = new Set(candidates.filter((level) => level.timeframe === 'W').map((level) => level.price));
+      return candidates.filter((level) => level.timeframe !== 'D' || !weeklyPrices.has(level.price));
     }
     draw(target) {
       if (!this.chart || !this.series) return;

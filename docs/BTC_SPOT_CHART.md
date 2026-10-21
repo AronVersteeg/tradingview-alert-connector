@@ -60,8 +60,9 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   promise of a fixed refresh latency during an upstream outage is made.
 - Daily, Weekly and Broken visibility controls are independent. `Fit DC/WC`
   optionally includes current intact levels in the price scale. Older distant
-  levels cannot squeeze the normal candle scale. Coincident D/W lines retain
-  both colors with a combined label.
+  levels cannot squeeze the normal candle scale. At the exact same price,
+  Weekly takes visual precedence: only its orange line and W/WC label render.
+  Daily data remains unchanged and becomes visible if Weekly is switched off.
 - `getFractalProjections()` exposes defensive copies of verified projections
   and their closed-hour cutoff for read-only inspection. PNG export includes
   the primitive layer. No entry, SL, TP or trailing logic uses these projections.
