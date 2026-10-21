@@ -38,7 +38,8 @@ describe('read-only manual entry and TP overlays', () => {
       plan({ id: 'short', direction: 'short', closeTrigger: 150, takeProfits: [{ price: 120 }, { price: 140 }, { price: 130 }] })]));
     const bands = buildBands(model.levels);
     expect(bands.map((band: any) => [band.fromPrice, band.toPrice])).toEqual([[100, 110], [110, 120], [120, 130], [150, 140], [140, 130], [130, 120]]);
-    expect(bands.slice(0, 3).map((band: any) => band.color)).toEqual(['22, 76, 166', '55, 125, 218', '110, 175, 245']);
+    expect(bands.slice(0, 3).map((band: any) => band.color)).toEqual(['14, 55, 155', '35, 130, 235', '125, 205, 255']);
+    expect(bands.every((band: any) => band.opacity === .5)).toBe(true);
     expect(buildBands(fromSnapshot(snapshot([plan({ takeProfits: [{ price: 99 }] })])).levels)).toEqual([]);
   });
 
@@ -73,7 +74,7 @@ describe('read-only manual entry and TP overlays', () => {
     const ctx: any = {};
     expect(layer.lead).toBe(10);
     layer.setLead(3);
-    for (const name of ['save', 'restore', 'beginPath', 'rect', 'clip', 'fillRect', 'moveTo', 'lineTo', 'stroke']) ctx[name] = jest.fn();
+    for (const name of ['save', 'restore', 'beginPath', 'rect', 'clip', 'fillRect', 'moveTo', 'lineTo', 'stroke', 'setLineDash']) ctx[name] = jest.fn();
     layer.attached({ chart: { timeScale: () => ({ logicalToCoordinate: (index: number) => index * 10 }) }, requestUpdate: jest.fn() });
     const start = Date.parse(plan().armedAt) / 1000;
     layer.setCandles(Array.from({ length: 12 }, (_, i) => ({ time: start + i * 3600 })));
@@ -82,6 +83,10 @@ describe('read-only manual entry and TP overlays', () => {
     layer.draw(target);
     expect(layer.paneViews()[0].zOrder()).toBe('bottom');
     expect(ctx.fillRect.mock.calls).toEqual([[0, 90, 140, 10], [0, 80, 140, 10], [0, 70, 140, 10]]);
+    expect(ctx.strokeStyle).toBe('rgba(149, 211, 255, 0.9)');
+    expect(ctx.lineWidth).toBe(2);
+    expect(ctx.setLineDash).toHaveBeenCalledWith([]);
+    expect(ctx.lineTo.mock.calls.slice(-3)).toEqual([[140, 90], [140, 80], [140, 70]]);
     // Interpolate sub-hour plan starts; the vendored scale accepts integer indices.
     layer.setData(fromSnapshot(snapshot([plan({ armedAt: new Date((start + 1800) * 1000).toISOString() })])));
     layer.draw(target);
@@ -90,5 +95,12 @@ describe('read-only manual entry and TP overlays', () => {
     expect(ctx.fillRect).toHaveBeenCalledTimes(6);
     layer.setVisible(true); layer.setData(fromSnapshot(snapshot([]))); layer.draw(target);
     expect(ctx.fillRect).toHaveBeenCalledTimes(6);
+  });
+  test('first four blue fills remain visibly separated on the actual dark chart background', () => {
+    const bands = buildBands(fromSnapshot(snapshot([plan({ takeProfits: [110, 120, 130, 140].map((price) => ({ price })) })])).levels);
+    const luminance = bands.map((band: any) => band.color.split(',').map(Number)
+      .map((channel: number, index: number) => channel * band.opacity + [19, 23, 34][index] * (1 - band.opacity))
+      .reduce((sum: number, channel: number, index: number) => sum + channel * [.2126, .7152, .0722][index], 0));
+    for (let i = 1; i < luminance.length; i++) expect(luminance[i] - luminance[i - 1]).toBeGreaterThan(20);
   });
 });
