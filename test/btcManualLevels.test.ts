@@ -125,4 +125,47 @@ describe('read-only manual entry and TP overlays', () => {
       .reduce((sum: number, channel: number, index: number) => sum + channel * [.2126, .7152, .0722][index], 0));
     for (let i = 1; i < luminance.length; i++) expect(luminance[i] - luminance[i - 1]).toBeGreaterThan(20);
   });
+  test('overlapping plans occupy successive right-hand columns, while disjoint and touching zones stay left', () => {
+    const model = fromSnapshot(snapshot([
+      plan({ id: 'first', takeProfits: [{ price: 130 }] }),
+      plan({ id: 'overlap', closeTrigger: 110, takeProfits: [{ price: 140 }] }),
+      plan({ id: 'disjoint', closeTrigger: 200, takeProfits: [{ price: 210 }] }),
+      plan({ id: 'opposite', direction: 'short', closeTrigger: 130, takeProfits: [{ price: 90 }] }),
+      plan({ id: 'touching', closeTrigger: 140, takeProfits: [{ price: 160 }] })
+    ]));
+    expect(buildBands(model.levels).map((band: any) => [band.planId, band.column])).toEqual([
+      ['first', 0], ['overlap', 1], ['disjoint', 0], ['opposite', 2], ['touching', 0]
+    ]);
+    expect(projectionBounds(41, 10, 0)).toEqual({ from: 28, to: 50 });
+    expect(projectionBounds(41, 10, 1)).toEqual({ from: 52, to: 74 });
+    expect(projectionBounds(41, 10, 2)).toEqual({ from: 76, to: 98 });
+  });
+  test('whole-plan columns stay consistent across TPs and reset on removal, editing or cancellation', () => {
+    const first = plan({ id: 'first' }), second = plan({ id: 'second', closeTrigger: 105 });
+    const layer = new ManualLevelLines(fakeSeries());
+    layer.setCandles(Array.from({ length: 41 }, (_, i) => ({ time: 3600 + i * 3600 })));
+    layer.setData(fromSnapshot(snapshot([first, second])));
+    expect(layer.bands.filter((band: any) => band.planId === 'second').map((band: any) => band.column)).toEqual([1, 1, 1]);
+    expect(layer.projectionBoxes()).toEqual([
+      { planId: 'first', column: 0, from: 28, to: 50, low: 100, high: 130 },
+      { planId: 'second', column: 1, from: 52, to: 74, low: 105, high: 130 }
+    ]);
+    expect(layer.rightLead()).toBe(34);
+    layer.setVisible(false); expect(layer.rightLead()).toBe(10); layer.setVisible(true);
+    layer.setLead(20); expect(layer.rightLead()).toBe(54);
+    layer.setData(fromSnapshot(snapshot([{ ...first, status: 'CANCELLED' }, second])));
+    expect(layer.projectionBoxes()[0]).toMatchObject({ planId: 'second', column: 0 });
+    layer.setData(fromSnapshot(snapshot([first, { ...second, closeTrigger: 200, takeProfits: [{ price: 210 }] }])));
+    expect(layer.projectionBoxes().map((box: any) => box.column)).toEqual([0, 0]);
+  });
+  test('the renderer draws overlapping fills beside each other without changing price ranges', () => {
+    const layer = new ManualLevelLines(fakeSeries()), rects: number[][] = [];
+    const ctx: any = { fillRect: (...args: number[]) => rects.push(args) };
+    for (const name of ['save', 'restore', 'beginPath', 'rect', 'clip', 'moveTo', 'lineTo', 'stroke', 'setLineDash']) ctx[name] = jest.fn();
+    layer.attached({ chart: { timeScale: () => ({ logicalToCoordinate: (index: number) => index * 10 }) }, requestUpdate: jest.fn() });
+    layer.setCandles(Array.from({ length: 41 }, (_, i) => ({ time: 3600 + i * 3600 })));
+    layer.setData(fromSnapshot(snapshot([plan({ takeProfits: [{ price: 130 }] }), plan({ id: 'second', closeTrigger: 110, takeProfits: [{ price: 140 }] })])));
+    layer.draw({ useMediaCoordinateSpace: (fn: any) => fn({ context: ctx, mediaSize: { width: 1000, height: 300 } }) });
+    expect(rects).toEqual([[280, 70, 220, 30], [520, 60, 220, 30]]);
+  });
 });

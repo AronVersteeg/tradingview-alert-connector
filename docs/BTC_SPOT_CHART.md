@@ -179,10 +179,20 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   price-axis labels. Titles identify long/short, the parent entry and TP number.
   Equal-price levels share a label. Plans without explicit TPs get only an
   entry line; no targets are inferred. No SL or risk area is drawn.
-- All planned blue boxes share a compact display width: 12 candle slots before
-  the latest candle to the configured right offset, aligned with the gap edge.
+- All planned blue boxes share a compact display width. The first column spans
+  12 candle slots before the latest candle to the configured right offset,
+  aligned with the gap edge.
   The display window rolls forward with candles; old arming timestamps cannot
   stretch a box across weeks of history. Original arming metadata is unchanged.
+  Overlapping entry-to-furthest-TP price zones are assigned separate columns in
+  existing plan order. The first column retains the gap-edge alignment; later
+  conflicting plans sit to its right, with the same width and a two-candle gutter.
+  Disjoint price zones can share the first column; touching endpoints alone do
+  not count as overlap. Changes/cancellation recompute the display layout.
+  Live presets/zoom automatically reserve enough future space for extra columns
+  while retaining at least 50 candle slots beyond the actual gap edge. Explicit
+  historical pans remain undisturbed. `getManualProjections()` exposes copied
+  price intervals and logical column bounds for read-only inspection.
   Consecutive profit-side
   bands run entry-to-TP1, TP1-to-TP2, etc., darkest near entry and progressively
   lighter. Targets are ordered by price in the trade direction for shading.

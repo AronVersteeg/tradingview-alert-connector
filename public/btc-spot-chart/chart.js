@@ -32,11 +32,21 @@
   let manualReadFailed = false;
   let gestures, userPanned = false, gestureActive = false;
   const gapLead = () => Number(byId('spotChartGapLead').value);
+  const projectionLead = () => Math.max(gapLead(), (manualLayer?.rightLead(candles.length) || gapLead()) - viewport.RIGHT_BUFFER + 2);
   const chartCanvas = byId('spotChartCanvas');
+
+  function ensureProjectionRoom() {
+    if (!chart || !candles.length || userPanned || gestureActive) return;
+    const scale = chart.timeScale(), range = scale.getVisibleLogicalRange();
+    if (!range || range.to < candles.length - 1) return;
+    const to = viewport.rightBoundary(candles.length, projectionLead());
+    if (range.to < to) scale.setVisibleLogicalRange({ from: range.from, to });
+  }
 
   function updateManualLevels() {
     if (!manualModel) return;
     manualLayer?.setData(manualModel);
+    ensureProjectionRoom();
     const count = manualModel.planCount;
     byId('spotChartManualStatus').textContent = manualReadFailed ? 'Manual levels stale | last known plans' : `Manual: ${count} plan${count === 1 ? '' : 's'}, ${manualModel.levels.filter((level) => level.kind === 'tp').length} TPs${manualModel.enabled ? '' : ' | disabled'}`;
     byId('spotChartManualStatus').dataset.stale = String(manualReadFailed);
@@ -185,7 +195,7 @@
     if (!wasInitial) {
       selectRange(window.innerWidth < 680 ? '60' : '120');
       window.dispatchEvent(new CustomEvent('btc-spot-chart:ready', { detail: window.btcSpotChart }));
-    } else if (following) chart.timeScale().scrollToPosition(Math.max(gapLead() + viewport.RIGHT_BUFFER, range.to - (previousCount - 1)), false);
+    } else if (following) chart.timeScale().scrollToPosition(Math.max(projectionLead() + viewport.RIGHT_BUFFER, range.to - (previousCount - 1)), false);
     if (!hovering) legend(candles[candles.length - 1]);
     message('');
     feedText();
@@ -205,7 +215,7 @@
     if (!chart || !candles.length) return;
     userPanned = false;
     chart.clearCrosshairPosition();
-    chart.timeScale().setVisibleLogicalRange(viewport.presetRange(candles.length, gapLead(), value === 'all' ? candles.length : Number(value)));
+    chart.timeScale().setVisibleLogicalRange(viewport.presetRange(candles.length, projectionLead(), value === 'all' ? candles.length : Number(value)));
     chart.priceScale('right').applyOptions({ autoScale: true });
     panel.querySelectorAll('[data-spot-range]').forEach((button) => {
       button.setAttribute('aria-pressed', String(button.dataset.spotRange === String(value)));
@@ -226,7 +236,7 @@
         grid: { vertLines: { color: '#242731', visible: byId('spotChartGrid').checked }, horzLines: { color: '#242731', visible: byId('spotChartGrid').checked } },
         crosshair: { mode: library.CrosshairMode.Normal, vertLine: { color: '#787b86', labelBackgroundColor: '#363a45' }, horzLine: { color: '#787b86', labelBackgroundColor: '#363a45' } },
         rightPriceScale: { borderColor: '#2a2e39', minimumWidth: 80, scaleMargins: { top: .08, bottom: byId('spotChartVolume').checked ? .23 : .08 } },
-        timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: gapLead() + viewport.RIGHT_BUFFER, barSpacing: 8,
+        timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: projectionLead() + viewport.RIGHT_BUFFER, barSpacing: 8,
           tickMarkFormatter: (time, type) => dateText(time, type <= library.TickMarkType.DayOfMonth ? { day: 'numeric', month: 'short' } : { hour: '2-digit', minute: '2-digit' }) },
         localization: { locale: 'en-US', priceFormatter: (value) => money.format(value), timeFormatter: (time) => dateText(time, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) },
         handleScroll: false, handleScale: false, kineticScroll: { mouse: false, touch: false }
@@ -264,7 +274,7 @@
           return { time, price, width: chart.timeScale().width(), height: chartCanvas.clientHeight - chart.timeScale().height(),
             priceTopY: top, pricePixels: bottom - top };
         },
-        constraints: () => ({ count: candles.length, lead: gapLead() }),
+        constraints: () => ({ count: candles.length, lead: projectionLead() }),
         apply: (view) => {
           if (destroyed) return;
           if (view.time) chart.timeScale().setVisibleLogicalRange(view.time);
@@ -301,7 +311,8 @@
         getHourlyFractalBoxes: () => hourlyBoxModel ? { evaluatedThrough: hourlyBoxModel.evaluatedThrough,
           boxes: hourlyBoxModel.boxes.map((box) => ({ ...box })), fractals: hourlyBoxModel.fractals.map((fractal) => ({ ...fractal })) } : null,
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
-        getManualLevels: () => manualModel ? { ...manualModel, levels: manualModel.levels.map((level) => ({ ...level })) } : null
+        getManualLevels: () => manualModel ? { ...manualModel, levels: manualModel.levels.map((level) => ({ ...level })) } : null,
+        getManualProjections: () => manualLayer ? manualLayer.projectionBoxes().map((box) => ({ ...box })) : []
       });
       watchdog = setInterval(() => {
         if (!active) return;
@@ -442,6 +453,7 @@
   byId('spotChartHourlyBoxes').addEventListener('change', (event) => hourlyBoxLayer?.setVisible(event.target.checked));
   byId('spotChartManual').addEventListener('change', (event) => {
     manualLayer?.setVisible(event.target.checked);
+    ensureProjectionRoom();
     if (fitFractals) candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
   });
   byId('spotChartGap').addEventListener('change', (event) => {
@@ -455,8 +467,8 @@
     manualLayer?.setLead(value);
     if (chart) {
       const scale = chart.timeScale(), range = scale.getVisibleLogicalRange();
-      scale.applyOptions({ rightOffset: value + viewport.RIGHT_BUFFER });
-      if (range && candles.length) scale.setVisibleLogicalRange(viewport.keepRightSpace(range, candles.length, value));
+      scale.applyOptions({ rightOffset: projectionLead() + viewport.RIGHT_BUFFER });
+      if (range && candles.length) scale.setVisibleLogicalRange(viewport.keepRightSpace(range, candles.length, projectionLead()));
     }
   });
   byId('spotChartZoomIn').addEventListener('click', () => zoom(.8));

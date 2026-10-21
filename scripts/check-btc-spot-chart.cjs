@@ -236,8 +236,13 @@ async function checkHourRefresh(browser, url, output) {
     assert.equal(await page.evaluate(() => window.btcSpotChart.getCandles().at(-1).time), candleTime);
     await page.locator('#spotChartTimezone').selectOption('Europe/Amsterdam');
     await page.locator('[data-spot-range="24"]').click();
-    await page.waitForFunction(() => { const r = window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(); return r.to - r.from <= 84; });
-    assert((await span()) <= 84);
+    const oneDaySpan = await page.evaluate(() => {
+      const api = window.btcSpotChart, count = api.getCandles().length;
+      const gapRight = count - 1 + Number(document.getElementById('spotChartGapLead').value);
+      return Math.max(gapRight + 50, ...api.getManualProjections().map((box) => box.to + 2)) - (count - 24);
+    });
+    await page.waitForFunction((expected) => { const r = window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(); return r.to - r.from <= expected + .1; }, oneDaySpan);
+    assert((await span()) <= oneDaySpan + .1);
     await page.locator('[data-spot-range="120"]').click();
     await page.locator('#spotChartFullscreen').click();
     await page.waitForFunction(() => document.fullscreenElement?.id === 'btcSpotChartPanel');

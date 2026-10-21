@@ -258,6 +258,49 @@ async function checkPanGestures(page, context, mobile) {
           `Old and recent manual boxes must share the same width: ${JSON.stringify(extents)}`);
       }
       await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `manual-uniform-widths-${mobile ? 'mobile' : 'desktop'}-fixture.png`) });
+      const disjointPlans = plans;
+      plans = Array.from({ length: 4 }, (_, index) => makePlan({ id: `fixture-overlap-${index}`, closeTrigger: 80000 + index * 500,
+        takeProfits: [{ price: 84000 + index * 500 }, { price: 86000 + index * 500 }] }));
+      await page.evaluate(() => window.__manualFixtureRefresh()); await settle();
+      const columns = await page.evaluate(() => ({ boxes: window.btcSpotChart.getManualProjections(),
+        range: window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(),
+        gapRight: window.btcSpotChart.getCandles().length - 1 + Number(document.getElementById('spotChartGapLead').value) }));
+      assert.deepEqual(columns.boxes.map((box) => box.column), [0, 1, 2, 3]);
+      assert.equal(columns.boxes[0].to, columns.gapRight, 'The first manual box must retain gap-edge alignment');
+      assert(columns.range.to >= columns.boxes.at(-1).to + 1, 'New columns must expand the live viewport');
+      const coordinates = await page.evaluate(() => window.btcSpotChart.getManualProjections().map((box, index) => ({
+        left: window.btcSpotChart.chart.timeScale().logicalToCoordinate(box.from),
+        right: window.btcSpotChart.chart.timeScale().logicalToCoordinate(box.to),
+        sampleY: window.btcSpotChart.candleSeries.priceToCoordinate(82000 + index * 500)
+      })));
+      const columnPixels = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
+      for (let index = 0; index < coordinates.length; index++) {
+        const box = coordinates[index], previous = coordinates[index - 1];
+        assert(box.right > box.left && box.right < columnPixels.width - 80, 'Every column must be visible in the plot');
+        if (previous) assert(box.left > previous.right + 1, 'Overlapping price zones must have a real horizontal gutter');
+        assert(Math.abs((box.right - box.left) - (coordinates[0].right - coordinates[0].left)) < .1, 'Column widths must remain equal');
+        let fill = 0;
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+          const pixel = ((Math.floor(box.sampleY) + dy) * columnPixels.width + Math.floor((box.left + box.right) / 2) + dx) * 4;
+          const [r, g, b] = columnPixels.data.subarray(pixel, pixel + 3);
+          if (b > 80 && b > g + 20 && b > r * 1.6) fill++;
+        }
+        assert(fill > 5, 'Each separate column must contain actual blue fill');
+      }
+      await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `manual-overlap-columns-${mobile ? 'mobile' : 'desktop'}-fixture.png`) });
+      for (let step = 0; step < 4; step++) {
+        await page.locator('#spotChartZoomIn').click();
+        assert(await page.evaluate(() => window.btcSpotChart.chart.timeScale().getVisibleLogicalRange().to > window.btcSpotChart.getManualProjections().at(-1).to),
+          'Zoom must not clip the extra columns');
+      }
+      await page.locator('#spotChartManual').uncheck(); await page.locator('[data-spot-range="120"]').click();
+      await page.locator('#spotChartManual').check(); await settle();
+      assert(await page.evaluate(() => window.btcSpotChart.chart.timeScale().getVisibleLogicalRange().to > window.btcSpotChart.getManualProjections().at(-1).to),
+        'Showing the layer again must reserve room for all columns');
+      plans.shift(); await page.evaluate(() => window.__manualFixtureRefresh());
+      assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getManualProjections().map((box) => box.column)), [0, 1, 2]);
+      plans = disjointPlans; await page.evaluate(() => window.__manualFixtureRefresh());
+      await page.locator('[data-spot-range="120"]').click();
       plans.pop(); await page.evaluate(() => window.__manualFixtureRefresh());
       plans[0].status = 'TRIGGERED';
       await page.evaluate(() => window.__manualFixtureRefresh());
@@ -275,7 +318,7 @@ async function checkPanGestures(page, context, mobile) {
       assert.equal(await page.locator('#spotChartManualStatus').getAttribute('data-stale'), 'false');
       assert(bluePixels(await page.locator('#spotChartCanvas').screenshot()).lines < pixels.lines / 3, 'Cancelled/removed plans leave no blue lines');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
-      results.push({ mobile, rightBuffer, panGestures, uniformWidths: extents, pixels, hidden: off, bandBlueValues: blues, nativePriceLabels: true, editsAndRemoval: true,
+      results.push({ mobile, rightBuffer, panGestures, overlapColumns: columns.boxes, uniformWidths: extents, pixels, hidden: off, bandBlueValues: blues, nativePriceLabels: true, editsAndRemoval: true,
         independentLongShort: true, staleReadsPreserved: true, export: true, browserErrors: errors, writes });
       await context.close();
     }
