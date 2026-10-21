@@ -179,13 +179,15 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   price-axis labels. Titles identify long/short, the parent entry and TP number.
   Equal-price levels share a label. Plans without explicit TPs get only an
   entry line; no targets are inferred. No SL or risk area is drawn.
-- Per-plan blue boxes start at the plan's arming timestamp, clipped to loaded
-  history, and end at the configured right offset. Consecutive profit-side
+- All planned blue boxes share a compact display width: 12 candle slots before
+  the latest candle to the configured right offset, aligned with the gap edge.
+  The display window rolls forward with candles; old arming timestamps cannot
+  stretch a box across weeks of history. Original arming metadata is unchanged.
+  Consecutive profit-side
   bands run entry-to-TP1, TP1-to-TP2, etc., darkest near entry and progressively
   lighter. Targets are ordered by price in the trade direction for shading.
   The fills use 50% opacity with stronger dark-blue/blue/sky/ice-blue steps;
   solid 2px light-blue separators mark each exact TP boundary within its box.
-  Missing start timestamps use the latest candle, never invented history.
 - Existing successful refreshes publish a compact entry/TP-only event. A
   save/edit/cancel already immediately refreshes plans; remote changes follow
   the dashboard's existing refresh cadence. Failed reads preserve last known

@@ -1,4 +1,4 @@
-const { fromSnapshot, buildBands, ManualLevelLines } = require('../public/btc-spot-chart/manual-levels.js');
+const { fromSnapshot, buildBands, projectionBounds, ManualLevelLines } = require('../public/btc-spot-chart/manual-levels.js');
 
 const plan = (changes: any = {}) => ({ id: 'long-a', market: 'BTC-USD', status: 'ARMED', direction: 'long',
   closeTrigger: 100, armedAt: '2026-10-21T10:00:00Z', takeProfits: [{ price: 110, allocationPct: 50 }, { price: 120, allocationPct: 30 }, { price: 130, allocationPct: 20 }], ...changes });
@@ -87,14 +87,36 @@ describe('read-only manual entry and TP overlays', () => {
     expect(ctx.lineWidth).toBe(2);
     expect(ctx.setLineDash).toHaveBeenCalledWith([]);
     expect(ctx.lineTo.mock.calls.slice(-3)).toEqual([[140, 90], [140, 80], [140, 70]]);
-    // Interpolate sub-hour plan starts; the vendored scale accepts integer indices.
+    // Arming time remains source metadata, not the visual width of a planned box.
     layer.setData(fromSnapshot(snapshot([plan({ armedAt: new Date((start + 1800) * 1000).toISOString() })])));
     layer.draw(target);
-    expect(ctx.fillRect.mock.calls[3]).toEqual([5, 90, 135, 10]);
+    expect(ctx.fillRect.mock.calls[3]).toEqual([0, 90, 140, 10]);
     layer.setVisible(false); layer.draw(target);
     expect(ctx.fillRect).toHaveBeenCalledTimes(6);
     layer.setVisible(true); layer.setData(fromSnapshot(snapshot([]))); layer.draw(target);
     expect(ctx.fillRect).toHaveBeenCalledTimes(6);
+  });
+  test('all plans have the same compact width regardless of age, including the older 61200 short', () => {
+    const series = fakeSeries(), layer = new ManualLevelLines(series), rects: number[][] = [];
+    const ctx: any = { fillRect: (...args: number[]) => rects.push(args) };
+    for (const name of ['save', 'restore', 'beginPath', 'rect', 'clip', 'moveTo', 'lineTo', 'stroke', 'setLineDash']) ctx[name] = jest.fn();
+    layer.attached({ chart: { timeScale: () => ({ logicalToCoordinate: (index: number) => index * 10 }) }, requestUpdate: jest.fn() });
+    const start = Date.parse('2026-10-20T00:00:00Z') / 1000;
+    const candles = Array.from({ length: 41 }, (_, index) => ({ time: start + index * 3600 }));
+    layer.setCandles(candles);
+    const input = snapshot([plan({ takeProfits: [{ price: 110 }] }), plan({ id: 'old-short', direction: 'short',
+      closeTrigger: 61200, armedAt: '2026-09-27T18:57:18.659Z', takeProfits: [{ price: 58000 }] })]);
+    layer.setData(fromSnapshot(input));
+    const draw = () => layer.draw({ useMediaCoordinateSpace: (fn: any) => fn({ context: ctx, mediaSize: { width: 1000, height: 100000 } }) });
+    draw();
+    expect(rects.map((rect) => [rect[0], rect[2]])).toEqual([[280, 220], [280, 220]]);
+    layer.setCandles([...candles, { time: candles.at(-1)!.time + 3600 }]); rects.length = 0; draw();
+    expect(rects.map((rect) => [rect[0], rect[2]])).toEqual([[290, 220], [290, 220]]);
+    layer.setLead(20); rects.length = 0; draw();
+    expect(rects.map((rect) => [rect[0], rect[2]])).toEqual([[290, 320], [290, 320]]);
+    expect(input.overrides[1].armedAt).toBe('2026-09-27T18:57:18.659Z');
+    expect(projectionBounds(0)).toBeNull();
+    expect(projectionBounds(2)).toEqual({ from: 0, to: 11 });
   });
   test('first four blue fills remain visibly separated on the actual dark chart background', () => {
     const bands = buildBands(fromSnapshot(snapshot([plan({ takeProfits: [110, 120, 130, 140].map((price) => ({ price })) })])).levels);

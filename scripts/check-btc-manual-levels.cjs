@@ -210,7 +210,7 @@ async function checkPanGestures(page, context, mobile) {
         assert(blue > 100, 'Every entry/TP needs a native blue price-axis label');
       }
       // Sample one column: each subsequent TP area must be lighter (less blue fill).
-      const shades = await page.evaluate(() => ({ x: window.btcSpotChart.chart.timeScale().logicalToCoordinate(100) + 3,
+      const shades = await page.evaluate(() => ({ x: window.btcSpotChart.chart.timeScale().logicalToCoordinate(window.btcSpotChart.getCandles().length - 7) + 3,
         ys: [81700, 83300, 85300].map((price) => window.btcSpotChart.candleSeries.priceToCoordinate(price)) }));
       const blues = shades.ys.map((y) => Math.max(...Array.from({ length: 7 }, (_, offset) =>
         png.data[(Math.floor(y) * png.width + Math.floor(shades.x) + offset) * 4 + 2])));
@@ -233,6 +233,32 @@ async function checkPanGestures(page, context, mobile) {
       plans.push(makePlan({ id: 'fixture-short', direction: 'short', closeTrigger: 79500, takeProfits: [{ price: 77000 }, { price: 75000 }] }));
       await page.evaluate(() => window.__manualFixtureRefresh());
       assert.equal(await page.evaluate(() => window.btcSpotChart.getManualLevels().planCount), 2);
+      plans.push(makePlan({ id: 'fixture-old-short', direction: 'short', closeTrigger: 61200,
+        armedAt: '2026-09-27T18:57:18.659Z', takeProfits: [{ price: 58000 }, { price: 54000 }, { price: 49000 }, { price: 43000 }] }));
+      await page.evaluate(() => window.__manualFixtureRefresh());
+      await page.evaluate(() => window.btcSpotChart.candleSeries.priceScale().setAutoScale(true)); await settle();
+      const alignment = await page.evaluate(() => ({ width: window.btcSpotChart.chart.timeScale().logicalToCoordinate(
+        window.btcSpotChart.getCandles().length - 1 + Number(document.getElementById('spotChartGapLead').value)) + 1,
+        ys: [81500, 78250, 59600].map((price) => window.btcSpotChart.candleSeries.priceToCoordinate(price)) }));
+      const alignedImage = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
+      const extents = alignment.ys.map((y) => {
+        const xs = [];
+        for (let x = 0; x < alignment.width; x++) {
+          for (let row = Math.floor(y) - 2; row <= Math.floor(y) + 2; row++) {
+            const index = (row * alignedImage.width + x) * 4;
+            const [r, g, b] = alignedImage.data.subarray(index, index + 3);
+            if (b > 80 && b > g + 20 && b > r * 1.6) { xs.push(x); break; }
+          }
+        }
+        assert(xs.length > 5, 'Each plan must have a visible compact box');
+        return { left: xs[0], right: xs.at(-1) };
+      });
+      for (const extent of extents.slice(1)) {
+        assert(Math.abs(extent.left - extents[0].left) <= 2 && Math.abs(extent.right - extents[0].right) <= 2,
+          `Old and recent manual boxes must share the same width: ${JSON.stringify(extents)}`);
+      }
+      await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `manual-uniform-widths-${mobile ? 'mobile' : 'desktop'}-fixture.png`) });
+      plans.pop(); await page.evaluate(() => window.__manualFixtureRefresh());
       plans[0].status = 'TRIGGERED';
       await page.evaluate(() => window.__manualFixtureRefresh());
       assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getManualLevels().levels.map((level) => level.price)), [79500, 77000, 75000]);
@@ -249,7 +275,7 @@ async function checkPanGestures(page, context, mobile) {
       assert.equal(await page.locator('#spotChartManualStatus').getAttribute('data-stale'), 'false');
       assert(bluePixels(await page.locator('#spotChartCanvas').screenshot()).lines < pixels.lines / 3, 'Cancelled/removed plans leave no blue lines');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
-      results.push({ mobile, rightBuffer, panGestures, pixels, hidden: off, bandBlueValues: blues, nativePriceLabels: true, editsAndRemoval: true,
+      results.push({ mobile, rightBuffer, panGestures, uniformWidths: extents, pixels, hidden: off, bandBlueValues: blues, nativePriceLabels: true, editsAndRemoval: true,
         independentLongShort: true, staleReadsPreserved: true, export: true, browserErrors: errors, writes });
       await context.close();
     }

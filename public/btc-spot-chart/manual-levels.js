@@ -8,7 +8,13 @@
 })(typeof window === 'object' ? window : globalThis, function () {
   'use strict';
   const COLOR = '#4599ff';
+  const BOX_HISTORY_CANDLES = 12;
   const positive = (value) => typeof value === 'number' && Number.isFinite(value) && value > 0;
+
+  function projectionBounds(candleCount, lead = 10) {
+    if (candleCount < 1) return null;
+    return { from: Math.max(0, candleCount - 1 - BOX_HISTORY_CANDLES), to: candleCount - 1 + lead };
+  }
 
   function fromSnapshot(snapshot) {
     if (!snapshot || snapshot.market !== 'BTC-USD') throw new Error('Unexpected manual plan market');
@@ -104,18 +110,10 @@
       target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width, height } }) => {
         ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();
         const scale = this.chart.timeScale();
-        const right = scale.logicalToCoordinate(this.candles.length - 1 + this.lead);
+        const bounds = projectionBounds(this.candles.length, this.lead);
+        const left = scale.logicalToCoordinate(bounds.from), right = scale.logicalToCoordinate(bounds.to);
         const separators = [];
         for (const band of this.bands || []) {
-          const start = band.fromTime ?? this.candles.at(-1).time;
-          let index = this.candles.findIndex((candle) => candle.time > start);
-          if (index < 0) index = this.candles.length;
-          const previous = this.candles[Math.max(0, index - 1)];
-          const logical = start < this.candles[0].time ? 0 : Math.max(0, index - 1) + (start - previous.time) / 3600;
-          // The vendored time scale accepts integer logical indices only.
-          const slot = Math.floor(logical), fraction = logical - slot;
-          const anchor = scale.logicalToCoordinate(slot), next = scale.logicalToCoordinate(slot + 1);
-          const left = anchor === null || next === null ? null : anchor + (next - anchor) * fraction;
           const a = this.series.priceToCoordinate(band.fromPrice), b = this.series.priceToCoordinate(band.toPrice);
           if (left === null || right === null || a === null || b === null || right <= left || right < 0 || left > width) continue;
           const x = Math.max(0, left), end = Math.min(width, right);
@@ -135,5 +133,5 @@
     }
     destroy() { for (const line of this.lines.values()) this.series.removePriceLine(line); this.lines.clear(); }
   }
-  return { fromSnapshot, buildBands, ManualLevelLines, COLOR };
+  return { fromSnapshot, buildBands, projectionBounds, ManualLevelLines, COLOR };
 });
