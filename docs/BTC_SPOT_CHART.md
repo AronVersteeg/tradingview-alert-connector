@@ -123,6 +123,13 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   default. The `+ h` numeric control adjusts this to 1-72 candle slots without
   inserting fake candles or moving historical transitions. `Fit levels` can
   include the current gap bounds alongside current D/W/M fractals.
+- Live presets, reset and zoom retain at least 50 empty logical 1H candle slots
+  beyond that projected right edge (not merely beyond the latest candle).
+  Button zoom is anchored to the right; native wheel, pinch and time-axis zoom
+  are constrained while viewing live data. At maximum zoom at least 12 actual
+  candle intervals remain alongside the reserved future area. Historical panning
+  and zooming remain available without snapping a historical view back to live.
+  Live updates, resizing and changes to the edge offset preserve the buffer.
 - The 500 retained frames do not in themselves establish the first gap's
   original birth. Unknown starts remain open on the left. The current
   79,400-87,400 gap has the user's explicitly supplied start at 2026-09-21
@@ -190,7 +197,7 @@ exchange initialization. Do not start the production entry point for UI tests.
 
 Unit tests: `test/binanceSpotChart.test.ts`, `test/btcFractalProjections.test.ts`,
 `test/btcHourlyFractalBoxes.test.ts`, `test/btcGapBoxes.test.ts`,
-`test/btcManualLevels.test.ts`.
+`test/btcManualLevels.test.ts`, `test/btcSpotViewport.test.ts`.
 Browser QA: `node scripts/check-btc-spot-chart.cjs <preview URL> <output dir>`
 with Playwright and pngjs available in the test runtime. Set
 `SPOT_CHART_BROWSER_CHANNEL=msedge` to use installed Edge instead of a downloaded

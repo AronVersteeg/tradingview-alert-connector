@@ -50,7 +50,9 @@ async function checkHourlyBoxes(page) {
     const delta = [0, 1, 2].map((channel) => on.data[i + channel] - off.data[i + channel]);
     if (Math.min(...delta) > 20 && Math.max(...delta) - Math.min(...delta) < 12) grayFillPixels++;
   }
-  assert(grayFillPixels > 500, `Toggle must reveal a real translucent gray box layer (${grayFillPixels}).`);
+  // The reserved future area leaves fewer historical box pixels on a phone.
+  const minimumGrayPixels = Math.min(500, Math.round(on.width * .5));
+  assert(grayFillPixels > minimumGrayPixels, `Toggle must reveal a real translucent gray box layer (${grayFillPixels}).`);
   await page.locator('#spotChartHourlyBoxes').check();
   return { boxes: model.boxes.length, confirmedPivots: model.fractals.length, grayFillPixels };
 }
@@ -95,7 +97,7 @@ async function checkGapBoxes(page) {
   await page.locator('#spotChartGap').check();
   await page.locator('#spotChartGapLead').fill('6');
   await page.locator('#spotChartGapLead').press('Tab');
-  assert.equal(await page.evaluate(() => window.btcSpotChart.chart.timeScale().options().rightOffset), 8);
+  assert((await page.evaluate(() => window.btcSpotChart.chart.timeScale().scrollPosition())) >= 56);
   await page.locator('#spotChartGapLead').fill('10');
   await page.locator('#spotChartGapLead').press('Tab');
   await page.waitForFunction(() => {
@@ -228,8 +230,8 @@ async function checkHourRefresh(browser, url, output) {
     assert.equal(await page.evaluate(() => window.btcSpotChart.getCandles().at(-1).time), candleTime);
     await page.locator('#spotChartTimezone').selectOption('Europe/Amsterdam');
     await page.locator('[data-spot-range="24"]').click();
-    await page.waitForFunction(() => { const r = window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(); return r.to - r.from <= 37; });
-    assert((await span()) <= 37);
+    await page.waitForFunction(() => { const r = window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(); return r.to - r.from <= 84; });
+    assert((await span()) <= 84);
     await page.locator('[data-spot-range="120"]').click();
     await page.locator('#spotChartFullscreen').click();
     await page.waitForFunction(() => document.fullscreenElement?.id === 'btcSpotChartPanel');

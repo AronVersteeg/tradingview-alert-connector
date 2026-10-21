@@ -28,6 +28,61 @@ function bluePixels(buffer) {
   return { lines, fill };
 }
 
+async function checkRightBuffer(page, context, mobile) {
+  const measure = () => page.evaluate(() => {
+    const api = window.btcSpotChart, scale = api.chart.timeScale(), range = scale.getVisibleLogicalRange();
+    const edge = api.getCandles().length - 1 + Number(document.getElementById('spotChartGapLead').value);
+    return { margin: range.to - edge, edgeX: scale.logicalToCoordinate(edge), width: scale.width(), span: range.to - range.from };
+  });
+  const verify = async () => {
+    await page.waitForFunction(() => {
+      const api = window.btcSpotChart, range = api.chart.timeScale().getVisibleLogicalRange();
+      return range.to - (api.getCandles().length - 1 + Number(document.getElementById('spotChartGapLead').value)) >= 49.99;
+    });
+    const value = await measure();
+    assert(value.edgeX > 0 && value.edgeX < value.width, JSON.stringify(value));
+    return value;
+  };
+  await verify();
+  for (let i = 0; i < 10; i++) { await page.locator('#spotChartZoomIn').click(); await verify(); }
+  await page.locator('#spotChartReset').click(); await verify();
+  await page.locator('[data-spot-range="24"]').click(); await verify();
+  await page.locator('#spotChartGapLead').fill('20'); await page.locator('#spotChartGapLead').press('Tab'); await verify();
+  await page.locator('#spotChartGapLead').fill('10'); await page.locator('#spotChartGapLead').press('Tab'); await verify();
+  await page.locator('[data-spot-range="120"]').click();
+  const box = await page.locator('#spotChartCanvas').boundingBox();
+  await page.mouse.move(box.x + box.width * .3, box.y + 100);
+  const before = await measure();
+  await page.mouse.wheel(0, -500);
+  await page.waitForTimeout(200);
+  const wheel = await verify();
+  assert(wheel.span < before.span, 'Real mouse-wheel zoom must zoom in while preserving the buffer');
+  if (mobile) {
+    const beforePinch = await measure();
+    const session = await context.newCDPSession(page);
+    await session.send('Input.synthesizePinchGesture', { x: Math.round(box.x + box.width * .3), y: Math.round(box.y + 100),
+      scaleFactor: 1.4, relativeSpeed: 800, gestureSourceType: 'touch' });
+    const pinched = await verify(); await session.detach();
+    assert(pinched.span < beforePinch.span, 'Touch pinch must really zoom in');
+  } else {
+    const beforeAxis = await measure();
+    await page.mouse.move(box.x + box.width * .45, box.y + box.height - 12);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * .25, box.y + box.height - 12, { steps: 12 });
+    await page.mouse.up(); const axis = await verify();
+    assert(Math.abs(axis.span - beforeAxis.span) > .1, 'Time-axis drag must really change zoom');
+  }
+  // Historical navigation must remain available, not pinned to today's edge.
+  await page.waitForTimeout(550);
+  await page.evaluate(() => window.btcSpotChart.chart.timeScale().setVisibleLogicalRange({ from: 5, to: 45 }));
+  assert((await page.evaluate(() => window.btcSpotChart.chart.timeScale().getVisibleLogicalRange())).to < 100);
+  await page.locator('[data-spot-range="120"]').click();
+  const size = page.viewportSize();
+  await page.setViewportSize({ ...size, width: size.width + 80 }); await verify();
+  await page.setViewportSize(size); await verify();
+  return { minimum: 50, buttons: true, wheel: true, pinch: mobile, timeAxisDrag: !mobile, historyPreserved: true, resize: true, final: await verify() };
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: process.env.SPOT_CHART_BROWSER_CHANNEL || 'msedge' });
   const results = [];
@@ -60,6 +115,7 @@ function bluePixels(buffer) {
       await page.waitForFunction(() => window.btcSpotChart?.getCandles().length === 121 && window.btcSpotChart.getManualLevels()?.levels.length === 4);
       await page.locator('[data-spot-range="120"]').click();
       await page.locator('#spotChartFitFractals').click();
+      const rightBuffer = await checkRightBuffer(page, context, mobile);
       const settle = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await settle();
       await page.mouse.move(0, 0);
@@ -120,7 +176,7 @@ function bluePixels(buffer) {
       assert.equal(await page.locator('#spotChartManualStatus').getAttribute('data-stale'), 'false');
       assert(bluePixels(await page.locator('#spotChartCanvas').screenshot()).lines < pixels.lines / 3, 'Cancelled/removed plans leave no blue lines');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
-      results.push({ mobile, pixels, hidden: off, bandBlueValues: blues, nativePriceLabels: true, editsAndRemoval: true,
+      results.push({ mobile, rightBuffer, pixels, hidden: off, bandBlueValues: blues, nativePriceLabels: true, editsAndRemoval: true,
         independentLongShort: true, staleReadsPreserved: true, export: true, browserErrors: errors, writes });
       await context.close();
     }
