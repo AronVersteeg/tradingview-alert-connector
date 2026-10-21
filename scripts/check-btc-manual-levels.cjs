@@ -83,6 +83,78 @@ async function checkRightBuffer(page, context, mobile) {
   return { minimum: 50, buttons: true, wheel: true, pinch: mobile, timeAxisDrag: !mobile, historyPreserved: true, resize: true, final: await verify() };
 }
 
+async function checkPanGestures(page, context, mobile) {
+  await page.locator('#spotChartReset').click();
+  await page.locator('[data-spot-range="120"]').click();
+  await page.locator('#spotChartCanvas').scrollIntoViewIfNeeded();
+  const read = () => page.evaluate(() => ({ time: window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(),
+    price: window.btcSpotChart.candleSeries.priceScale().getVisibleRange(), scroll: window.scrollY }));
+  const before = await read(), box = await page.locator('#spotChartCanvas').boundingBox();
+  const x = Math.round(box.x + box.width * .4), y = Math.round(Math.max(20, box.y + 110));
+  let session;
+  if (mobile) {
+    session = await context.newCDPSession(page);
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x, y }] });
+    for (let step = 1; step <= 8; step++) await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: x + step * 3, y: y + step * 4 }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  } else {
+    await page.mouse.move(x, y); await page.mouse.down();
+    await page.mouse.move(x + 24, y + 32, { steps: 8 }); await page.mouse.up();
+  }
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const panned = await read();
+  assert(panned.time.from < before.time.from - 1, 'Dragging right must move earlier candles right, not zoom');
+  assert(panned.price.from > before.price.from + 10, 'Dragging down must move prices down');
+  assert(Math.abs((panned.time.to - panned.time.from) - (before.time.to - before.time.from)) < .1, 'Drag must preserve time scale');
+  assert(Math.abs((panned.price.to - panned.price.from) - (before.price.to - before.price.from)) < .1, 'Drag must preserve price scale');
+  assert.equal(panned.scroll, before.scroll, 'A chart drag must not scroll the page');
+  await page.locator('#spotChartRefresh').click();
+  const refreshed = await read();
+  assert(Math.abs(refreshed.time.from - panned.time.from) < .1, 'Read-only refresh must not undo manual pan');
+  assert(Math.abs(refreshed.price.from - panned.price.from) < .1, 'Read-only refresh must not auto-fit the manually panned price');
+  if (mobile) {
+    const a = { id: 1, x: x - 25, y }, b = { id: 2, x: x + 25, y: y + 20 };
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [a, b] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [a, { ...b, x: b.x + 25, y: b.y + 10 }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [a] });
+    const oneFingerStart = await read();
+    await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...a, x: a.x + 12, y: a.y + 12 }] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    const afterTransition = await read();
+    assert(Math.abs((afterTransition.time.to - afterTransition.time.from) - (oneFingerStart.time.to - oneFingerStart.time.from)) < .1,
+      'Lifting one pinch finger must transition to pan without another zoom');
+    // Cancelling a touch must release the gesture and allow subsequent drags.
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [a] });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    assert.equal(await page.locator('#spotChartCanvas').evaluate((node) => node.classList.contains('is-panning')), false);
+    await session.detach();
+  }
+  await page.locator('#spotChartReset').click();
+  assert.equal(await page.evaluate(() => window.btcSpotChart.candleSeries.priceScale().options().autoScale), true, 'Reset restores auto-fit');
+  // Outside the chart, the dashboard remains a normal scrollable page.
+  const status = await page.locator('#spotChartOhlc').boundingBox();
+  const scrollBefore = await page.evaluate(() => window.scrollY);
+  if (mobile) {
+    const outside = await context.newCDPSession(page);
+    const touch = { id: 0, x: Math.round(status.x + 15), y: Math.round(Math.max(110, status.y + 15)) };
+    await outside.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touch] });
+    for (let step = 1; step <= 8; step++) await outside.send('Input.dispatchTouchEvent', {
+      type: 'touchMove', touchPoints: [{ ...touch, y: touch.y - step * 12 }] });
+    await outside.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await outside.detach();
+  } else {
+    await page.mouse.move(status.x + 5, Math.max(10, status.y + 5));
+    await page.mouse.wheel(0, 100);
+  }
+  await page.waitForTimeout(100);
+  const outsideScroll = await page.evaluate(() => window.scrollY);
+  assert(outsideScroll > scrollBefore, `Scrolling outside the canvas must still scroll the dashboard: ${JSON.stringify({ mobile, scrollBefore, outsideScroll, status })}`);
+  await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
+  await page.locator('[data-spot-range="120"]').click();
+  return { directTwoAxisPan: true, noPageScrollInside: true, pageScrollOutside: true, refreshPreservesPan: true,
+    twoToOneFinger: mobile, pointerCancel: mobile, resetAutoFit: true };
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: process.env.SPOT_CHART_BROWSER_CHANNEL || 'msedge' });
   const results = [];
@@ -116,6 +188,7 @@ async function checkRightBuffer(page, context, mobile) {
       await page.locator('[data-spot-range="120"]').click();
       await page.locator('#spotChartFitFractals').click();
       const rightBuffer = await checkRightBuffer(page, context, mobile);
+      const panGestures = await checkPanGestures(page, context, mobile);
       const settle = () => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await settle();
       await page.mouse.move(0, 0);
@@ -176,7 +249,7 @@ async function checkRightBuffer(page, context, mobile) {
       assert.equal(await page.locator('#spotChartManualStatus').getAttribute('data-stale'), 'false');
       assert(bluePixels(await page.locator('#spotChartCanvas').screenshot()).lines < pixels.lines / 3, 'Cancelled/removed plans leave no blue lines');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
-      results.push({ mobile, rightBuffer, pixels, hidden: off, bandBlueValues: blues, nativePriceLabels: true, editsAndRemoval: true,
+      results.push({ mobile, rightBuffer, panGestures, pixels, hidden: off, bandBlueValues: blues, nativePriceLabels: true, editsAndRemoval: true,
         independentLongShort: true, staleReadsPreserved: true, export: true, browserErrors: errors, writes });
       await context.close();
     }

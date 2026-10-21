@@ -11,6 +11,7 @@
   const gapBoxes = window.BtcSpotGapBoxes;
   const manualLevels = window.BtcSpotManualLevels;
   const viewport = window.BtcSpotViewport;
+  const interactions = window.BtcSpotInteractions;
   const byId = (id) => document.getElementById(id);
   const api = '/open-liquidity/v2/btc-spot-candles';
   const streamUrls = ['wss://stream.binance.com:443/ws/btcusdt@kline_1h', 'wss://stream.binance.com:9443/ws/btcusdt@kline_1h'];
@@ -29,23 +30,9 @@
   let gapLayer, gapTimeline = window.BTC_SPOT_GAP_TIMELINE, gapModel;
   let manualLayer, manualModel = window.BTC_SPOT_MANUAL_LEVELS;
   let manualReadFailed = false;
-  let previousViewport, previousSpacing;
-  let nativeZoomUntil = 0;
-  let viewportCorrection;
-  const chartPointers = new Set();
+  let gestures, userPanned = false, gestureActive = false;
   const gapLead = () => Number(byId('spotChartGapLead').value);
   const chartCanvas = byId('spotChartCanvas');
-  chartCanvas.addEventListener('wheel', () => { nativeZoomUntil = performance.now() + 500; }, { passive: true, capture: true });
-  chartCanvas.addEventListener('pointerdown', (event) => {
-    chartPointers.add(event.pointerId); nativeZoomUntil = performance.now() + 500;
-  }, true);
-  chartCanvas.addEventListener('pointermove', () => {
-    if (chartPointers.size) nativeZoomUntil = performance.now() + 500;
-  }, true);
-  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
-    window.addEventListener(type, (event) => chartPointers.delete(event.pointerId), true);
-  }
-  chartCanvas.addEventListener('dblclick', () => { nativeZoomUntil = performance.now() + 500; }, true);
 
   function updateManualLevels() {
     if (!manualModel) return;
@@ -180,7 +167,7 @@
     const range = chart.timeScale().getVisibleLogicalRange();
     const oldFirst = candles[0]?.time;
     const previousCount = candles.length;
-    const following = initialData && range && range.to >= candles.length - 2;
+    const following = initialData && !userPanned && !gestureActive && range && range.to >= candles.length - 2;
     const wasInitial = initialData;
     candles = next;
     if (singleUpdate && wasInitial && oldFirst === next[0]?.time) {
@@ -211,10 +198,13 @@
       updateGapProjection();
     }
     if (key !== fractalKey) { fractalKey = key; projectLoadedCandles(); }
+    if (gestureActive && oldFirst !== candles[0]?.time) gestures?.rebase();
     void refreshFractals();
   }
   function selectRange(value) {
     if (!chart || !candles.length) return;
+    userPanned = false;
+    chart.clearCrosshairPosition();
     chart.timeScale().setVisibleLogicalRange(viewport.presetRange(candles.length, gapLead(), value === 'all' ? candles.length : Number(value)));
     chart.priceScale('right').applyOptions({ autoScale: true });
     panel.querySelectorAll('[data-spot-range]').forEach((button) => {
@@ -222,10 +212,7 @@
     });
   }
   function zoom(factor) {
-    const range = chart?.timeScale().getVisibleLogicalRange();
-    if (!range) return;
-    chart.timeScale().setVisibleLogicalRange(viewport.zoomRange(range, candles.length, gapLead(), factor));
-    panel.querySelectorAll('[data-spot-range]').forEach((button) => button.setAttribute('aria-pressed', 'false'));
+    gestures?.zoom(factor);
   }
 
   async function ensureChart() {
@@ -242,8 +229,7 @@
         timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: gapLead() + viewport.RIGHT_BUFFER, barSpacing: 8,
           tickMarkFormatter: (time, type) => dateText(time, type <= library.TickMarkType.DayOfMonth ? { day: 'numeric', month: 'short' } : { hour: '2-digit', minute: '2-digit' }) },
         localization: { locale: 'en-US', priceFormatter: (value) => money.format(value), timeFormatter: (time) => dateText(time, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) },
-        handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-        handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true }
+        handleScroll: false, handleScale: false, kineticScroll: { mouse: false, touch: false }
       });
       candlesSeries = chart.addSeries(library.CandlestickSeries, {
         upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
@@ -268,33 +254,43 @@
         visible: byId('spotChartVolume').checked
       });
       volumeSeries.priceScale().applyOptions({ scaleMargins: { top: .82, bottom: 0 } });
+      gestures = interactions.install(chartCanvas, {
+        read: () => {
+          if (!initialData || destroyed) return null;
+          const time = chart.timeScale().getVisibleLogicalRange(), price = candlesSeries.priceScale().getVisibleRange();
+          if (!time || !price || price.to <= price.from) return null;
+          const top = candlesSeries.priceToCoordinate(price.to), bottom = candlesSeries.priceToCoordinate(price.from);
+          if (top === null || bottom === null || bottom <= top) return null;
+          return { time, price, width: chart.timeScale().width(), height: chartCanvas.clientHeight - chart.timeScale().height(),
+            priceTopY: top, pricePixels: bottom - top };
+        },
+        constraints: () => ({ count: candles.length, lead: gapLead() }),
+        apply: (view) => {
+          if (destroyed) return;
+          if (view.time) chart.timeScale().setVisibleLogicalRange(view.time);
+          if (view.price) candlesSeries.priceScale().setVisibleRange(view.price);
+        },
+        onStart: () => { gestureActive = true; },
+        onEnd: () => { gestureActive = false; },
+        onChange: (kind) => {
+          if (kind === 'pan') userPanned = true;
+          panel.querySelectorAll('[data-spot-range]').forEach((button) => button.setAttribute('aria-pressed', 'false'));
+        },
+        onTap: (point) => {
+          const range = chart.timeScale().getVisibleLogicalRange();
+          if (!range) return;
+          const candle = candles[Math.round(range.from + point.x / chart.timeScale().width() * (range.to - range.from))];
+          const price = candlesSeries.coordinateToPrice(point.y);
+          if (candle && price !== null) chart.setCrosshairPosition(price, candle.time, candlesSeries);
+        },
+        reset: () => selectRange(window.innerWidth < 680 ? '60' : '120')
+      });
       chart.subscribeCrosshairMove((param) => {
         const value = param.seriesData.get(candlesSeries);
         hovering = Boolean(value && param.point);
         legend(hovering ? candles.find((candle) => candle.time === value.time) : candles[candles.length - 1]);
       });
       chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-        const spacing = chart.timeScale().options().barSpacing;
-        const zooming = previousSpacing !== undefined && Math.abs(spacing - previousSpacing) > .00001;
-        const wasLive = previousViewport && previousViewport.to >= candles.length - 1;
-        previousSpacing = spacing;
-        previousViewport = range;
-        // Native wheel/pinch/axis zoom must preserve the live projection area.
-        // Same-spacing historical drags remain free to leave the current edge.
-        if (range && initialData && zooming && wasLive && performance.now() <= nativeZoomUntil) {
-          // Defer outside the library's range notification to avoid re-entrant layout.
-          if (!viewportCorrection) viewportCorrection = requestAnimationFrame(() => {
-            viewportCorrection = undefined;
-            if (destroyed) return;
-            const scale = chart.timeScale(), current = scale.getVisibleLogicalRange();
-            if (!current) return;
-            const pinned = viewport.keepRightSpace(current, candles.length, gapLead());
-            if (Math.abs(pinned.to - current.to) > .01 || Math.abs(pinned.from - current.from) > .01) {
-              previousViewport = pinned;
-              scale.setVisibleLogicalRange(pinned);
-            }
-          });
-        }
         if (range && range.from < 35 && initialData && active) void loadOlder();
       });
       window.btcSpotChart = Object.freeze({
@@ -418,7 +414,7 @@
   }
   async function syncActivity() {
     active = inView && !document.hidden && navigator.onLine;
-    if (!active) { disconnect(); feedText(); return; }
+    if (!active) { gestures?.cancel(); disconnect(); feedText(); return; }
     try {
       await ensureChart();
       if (!active || destroyed) return;
@@ -463,8 +459,8 @@
       if (range && candles.length) scale.setVisibleLogicalRange(viewport.keepRightSpace(range, candles.length, value));
     }
   });
-  byId('spotChartZoomIn').addEventListener('click', () => zoom(.75));
-  byId('spotChartZoomOut').addEventListener('click', () => zoom(1.33));
+  byId('spotChartZoomIn').addEventListener('click', () => zoom(.8));
+  byId('spotChartZoomOut').addEventListener('click', () => zoom(1.25));
   byId('spotChartReset').addEventListener('click', () => selectRange(window.innerWidth < 680 ? '60' : '120'));
   panel.querySelectorAll('[data-spot-range]').forEach((button) => button.addEventListener('click', () => selectRange(button.dataset.spotRange)));
   byId('spotChartVolume').addEventListener('change', (event) => {
@@ -513,6 +509,6 @@
   observer.observe(panel);
   window.addEventListener('pagehide', () => {
     destroyed = true;
-    observer.disconnect(); disconnect(); clearInterval(watchdog); cancelAnimationFrame(viewportCorrection); manualLayer?.destroy(); chart?.remove();
+    observer.disconnect(); disconnect(); clearInterval(watchdog); gestures?.destroy(); manualLayer?.destroy(); chart?.remove();
   }, { once: true });
 })();

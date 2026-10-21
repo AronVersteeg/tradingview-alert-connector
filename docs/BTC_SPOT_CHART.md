@@ -25,6 +25,28 @@ code consumes this chart.
 - Amsterdam/UTC formatting changes labels only, never candle timestamps.
 - No chart candle histories are written to disk.
 
+## Pan and Zoom
+
+- Like the histomap, the Spot chart uses one pointer/wheel gesture controller
+  with pointer capture, `touch-action: none`, anchored zoom and frame-coalesced
+  movement. Lightweight Charts still owns all rendering and scale calculations;
+  its native scroll/pinch/axis handlers and inertia are disabled to avoid
+  competing gestures or post-zoom snap corrections.
+- Axes retain their candlestick orientation: time horizontal, price vertical.
+  One finger/mouse drag pans both; two fingers pinch both scales around their
+  midpoint and may translate that midpoint. Two-to-one-finger transitions rebase
+  the gesture to avoid jumps. Lifting/cancelling releases capture and stops motion.
+- Wheel zoom uses the histomap's .84/1.18 steps; +/- uses .8/1.25. A drag on
+  the right price axis or bottom time axis scales only that axis. Mouse hover
+  retains the native crosshair; tapping selects a crosshair, double-tap/click
+  and Reset restore the default time view and automatic price fit.
+- Manual pan freezes live following and price auto-fit until a time preset or
+  Reset is chosen. REST refreshes and websocket ticks do not undo that view.
+  History prepends rebase an in-progress gesture. The live 50-slot projection
+  buffer is applied in the gesture calculation, not by a second correcting loop.
+- Only the canvas consumes gestures. Controls and surrounding dashboard content
+  remain normally scrollable. No trading or source/data behavior is changed.
+
 ## Extension Point
 
 After first data load, `window.btcSpotChart` exposes the chart and series,
@@ -125,8 +147,8 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   include the current gap bounds alongside current D/W/M fractals.
 - Live presets, reset and zoom retain at least 50 empty logical 1H candle slots
   beyond that projected right edge (not merely beyond the latest candle).
-  Button zoom is anchored to the right; native wheel, pinch and time-axis zoom
-  are constrained while viewing live data. At maximum zoom at least 12 actual
+  Wheel, pinch, button and time-axis zoom are constrained while viewing live
+  data. At maximum zoom at least 12 actual
   candle intervals remain alongside the reserved future area. Historical panning
   and zooming remain available without snapping a historical view back to live.
   Live updates, resizing and changes to the edge offset preserve the buffer.
@@ -197,7 +219,8 @@ exchange initialization. Do not start the production entry point for UI tests.
 
 Unit tests: `test/binanceSpotChart.test.ts`, `test/btcFractalProjections.test.ts`,
 `test/btcHourlyFractalBoxes.test.ts`, `test/btcGapBoxes.test.ts`,
-`test/btcManualLevels.test.ts`, `test/btcSpotViewport.test.ts`.
+`test/btcManualLevels.test.ts`, `test/btcSpotViewport.test.ts`,
+`test/btcSpotInteractions.test.ts`.
 Browser QA: `node scripts/check-btc-spot-chart.cjs <preview URL> <output dir>`
 with Playwright and pngjs available in the test runtime. Set
 `SPOT_CHART_BROWSER_CHANNEL=msedge` to use installed Edge instead of a downloaded
@@ -215,3 +238,6 @@ uses the actual dashboard read/render bridge, and blocks all non-read requests.
 It checks long/short TP bands and their progressive blue shades, native axis
 labels, edits, removals, stale reads, lazy initialization, toggling and PNG export.
 It never submits or alters a production plan.
+Real browser mouse/touch events also check two-axis dragging, wheel and pinch
+zoom, axis-only zoom, two-to-one-finger transitions, cancellation, reset,
+view preservation across refreshes and scrolling outside the chart.

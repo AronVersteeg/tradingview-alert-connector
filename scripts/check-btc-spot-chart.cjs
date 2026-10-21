@@ -69,6 +69,11 @@ function greenPixels(buffer) {
 
 async function checkGapBoxes(page) {
   await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.boxes.length > 0, null, { timeout: 40_000 });
+  // Isolate green labels from manual plans that may share the exact same price.
+  const manualVisible = await page.locator('#spotChartManual').isChecked();
+  if (manualVisible) await page.locator('#spotChartManual').uncheck();
+  await page.evaluate(() => window.btcSpotChart.candleSeries.priceScale().setAutoScale(true));
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await page.locator('#spotChartGap').isChecked(), true);
   assert.equal(await page.locator('#spotChartGapLead').inputValue(), '10');
   const state = await page.evaluate(() => ({ model: window.btcSpotChart.getGapProjections(), latest: window.BTC_SPOT_GAP_TIMELINE.records.at(-1) }));
@@ -105,6 +110,7 @@ async function checkGapBoxes(page) {
     const x = scale.logicalToCoordinate(api.getCandles().length - 1 + Number(document.getElementById('spotChartGapLead').value));
     return x !== null && x > 0 && x < scale.width() - 2;
   });
+  if (manualVisible) await page.locator('#spotChartManual').check();
   return { lower: current.lower, upper: current.upper, fromTime: current.fromTime, startSource: current.startSource, greenPixels: on, hiddenPixels: off, adjustableLead: true, activePriceAxisLabels: true };
 }
 
