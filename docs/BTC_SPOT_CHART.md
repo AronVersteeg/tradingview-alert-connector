@@ -67,6 +67,26 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   and their closed-hour cutoff for read-only inspection. PNG export includes
   the primitive layer. No entry, SL, TP or trailing logic uses these projections.
 
+## 1H Williams Boxes
+
+- Enabled by default through the independent `1H boxes` checkbox. Translucent
+  light-gray stepped price ranges render behind candles, not in the traded
+  volume histogram. The D/W projection colors and Weekly priority are unchanged.
+- Range bounds are the last confirmed 1H Williams high and low, using the same
+  two-left/two-right rule and newest-equal-pivot tie handling as the existing
+  `confirmedWilliamsFractals` implementation (covered by a parity test).
+- Box transitions are anchored retrospectively at the original pivot wick,
+  matching the reference illustration. A transition is only added after both
+  right-side candles have closed. `confirmedAt` retains the actual availability
+  time; a historical box is not evidence that its pivot was known in advance.
+- The last confirmed range extends across the live candle, but live high/low
+  excursions cannot confirm a pivot. Missing hourly data resets the range;
+  no confirmed bounds are inferred across a gap.
+- Computation runs locally on already loaded Spot candles when closed candles
+  or history change. No extra REST/WebSocket connection, storage, trading rule,
+  alert, SL, TP or trailing change. `getHourlyFractalBoxes()` exposes defensive
+  copies of the ranges and pivots. PNG export includes the boxes.
+
 ## Libraries
 
 TradingView Lightweight Charts 5.2.1 is vendored as a standalone ES module;
@@ -91,7 +111,8 @@ This separate server binds loopback on port 4318 (override with
 `SPOT_CHART_PREVIEW_PORT`) and deliberately never imports the main controller or
 exchange initialization. Do not start the production entry point for UI tests.
 
-Unit tests: `test/binanceSpotChart.test.ts`, `test/btcFractalProjections.test.ts`.
+Unit tests: `test/binanceSpotChart.test.ts`, `test/btcFractalProjections.test.ts`,
+`test/btcHourlyFractalBoxes.test.ts`.
 Browser QA: `node scripts/check-btc-spot-chart.cjs <preview URL> <output dir>`
 with Playwright and pngjs available in the test runtime. Set
 `SPOT_CHART_BROWSER_CHANNEL=msedge` to use installed Edge instead of a downloaded
@@ -99,4 +120,6 @@ Chromium test binary. QA checks actual green/red canvas pixels, desktop/mobile
 layout, pagination, tools, real websocket reception and absence of write requests.
 It also checks exact fractal origins, yellow/orange pixels and PNG export, and
 uses a separate synthetic hour-rollover fixture to verify automatic refresh,
-ignoring open-candle excursions, and the exact broken-line endpoint.
+ignoring open-candle excursions, the exact broken-line endpoint, and a 1H box
+confirming only after its second right candle closes. An on/off pixel comparison
+checks the actual gray fill on desktop and mobile.

@@ -33,6 +33,26 @@ function fractalPixels(buffer) {
   return { daily, weekly };
 }
 
+async function checkHourlyBoxes(page) {
+  assert.equal(await page.locator('#spotChartHourlyBoxes').isChecked(), true, '1H boxes must be enabled by default.');
+  const model = await page.evaluate(() => window.btcSpotChart.getHourlyFractalBoxes());
+  assert(model.boxes.length > 0 && model.fractals.length > 0, 'Confirmed 1H ranges must exist.');
+  await page.mouse.move(0, 0);
+  const on = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
+  await page.locator('#spotChartHourlyBoxes').uncheck();
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const off = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
+  assert.equal(on.width, off.width); assert.equal(on.height, off.height);
+  let grayFillPixels = 0;
+  for (let i = 0; i < on.data.length; i += 4) {
+    const delta = [0, 1, 2].map((channel) => on.data[i + channel] - off.data[i + channel]);
+    if (Math.min(...delta) > 20 && Math.max(...delta) - Math.min(...delta) < 12) grayFillPixels++;
+  }
+  assert(grayFillPixels > 500, `Toggle must reveal a real translucent gray box layer (${grayFillPixels}).`);
+  await page.locator('#spotChartHourlyBoxes').check();
+  return { boxes: model.boxes.length, confirmedPivots: model.fractals.length, grayFillPixels };
+}
+
 async function checkHourRefresh(browser, url, output) {
   const hour = 3_600_000;
   const initial = Date.parse('2026-10-21T08:00:00Z');
@@ -55,7 +75,7 @@ async function checkHourRefresh(browser, url, output) {
         const rows = Array.from({ length: (through - first) / hour + 1 }, (_, i) => {
           const time = first + i * hour;
           return { time: time / 1000, closeTime: time + hour - 1, open: 90, high: time >= initial ? 101 : time / 1000 === origin ? 100 : 91,
-            low: time === Date.parse('2026-09-30T07:00:00Z') ? 80 : 89,
+            low: time === Date.parse('2026-09-30T07:00:00Z') ? 80 : time === initial - 2 * hour ? 85 : 89,
             close: 90, volume: 1, quoteVolume: 90, closed: time < through };
         });
         return route.fulfill({ json: { symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', fetchedAt: new Date(now).toISOString(), candles: rows, hasMore: false } });
@@ -75,16 +95,21 @@ async function checkHourRefresh(browser, url, output) {
     await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length === 2);
     assert.equal(await page.evaluate(() => window.btcSpotChart.getFractalProjections().levels[0].broken), false, 'Open 1H excursion must not break the level.');
+    assert.equal(await page.evaluate(() => window.btcSpotChart.getHourlyFractalBoxes().fractals.some((pivot) => pivot.price === 85)), false, 'Open second right candle must not confirm the 1H pivot.');
     now = initial + hour + 5000;
     await page.evaluate((value) => { window.__fractalTestNow = value; }, now);
     await page.waitForFunction(() => window.btcSpotChart.getFractalProjections().levels[0].broken, null, { timeout: 15_000 });
     const broken = await page.evaluate(() => window.btcSpotChart.getFractalProjections().levels[0]);
     assert.equal(broken.originTime, origin);
     assert.equal(broken.brokenTime, initial / 1000, 'The first closed breaking hour must be the endpoint.');
+    const hourlyBox = await page.evaluate(() => window.btcSpotChart.getHourlyFractalBoxes().boxes.at(-1));
+    assert.equal(hourlyBox.low, 85, 'Newly closed second right candle must confirm the 1H box.');
+    assert.equal(hourlyBox.fromTime, (initial - 2 * hour) / 1000, 'Box must anchor at the original wick.');
+    assert.equal(hourlyBox.confirmedAt, (initial + hour) / 1000, 'Confirmation must retain its real later availability time.');
     assert.equal(projectionReads, 2, 'Only one projection read per hour.');
     await page.locator('[data-spot-range="all"]').click();
     await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, 'btc-spot-hour-refresh-fixture.png') });
-    return { hourlyRefreshWithoutClick: true, openCandleIgnored: true, exactBreakHour: true, projectionReads };
+    return { hourlyRefreshWithoutClick: true, openCandleIgnored: true, exactBreakHour: true, hourlyBoxConfirmedAfterClose: true, projectionReads };
   } finally { await context.close(); }
 }
 
@@ -147,6 +172,7 @@ async function checkHourRefresh(browser, url, output) {
     await page.locator('#spotChartBroken').check();
     const box = await page.locator('#spotChartCanvas').boundingBox();
     await page.mouse.move(box.x + box.width * .6, box.y + box.height * .4);
+    const desktopHourlyBoxes = await checkHourlyBoxes(page);
     const desktopPixels = candlePixels(await page.locator('#spotChartCanvas').screenshot());
     await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, 'btc-spot-desktop.png') });
     const desktopFractals = fractalPixels(await page.locator('#spotChartCanvas').screenshot());
@@ -179,12 +205,13 @@ async function checkHourRefresh(browser, url, output) {
     const overflow = await phone.locator('#btcSpotChartPanel').evaluate((node) => node.scrollWidth > node.clientWidth + 1);
     assert.equal(overflow, false, 'Chart must not overflow its mobile container.');
     await phone.locator('#spotChartZoomIn').tap();
+    const mobileHourlyBoxes = await checkHourlyBoxes(phone);
     const mobilePixels = candlePixels(await phone.locator('#spotChartCanvas').screenshot());
     const mobileFractals = fractalPixels(await phone.locator('#spotChartCanvas').screenshot());
     await phone.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, 'btc-spot-mobile.png') });
     assert.deepEqual(errors, [], 'No uncaught browser exceptions');
     assert.deepEqual(writes, [], 'Chart interactions must not submit orders, plans, settings or SMTP requests');
     const hourlyFixture = await checkHourRefresh(browser, url, output);
-    console.log(JSON.stringify({ feed, currentFractals: currents, projectionCutoff: fractalLevels.evaluatedThrough, controls: 'zoom, range, volume, grid, timezone, fullscreen, PNG export, Daily/Weekly/Broken, Fit DC/WC', olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, desktopFractals, mobileFractals, hourlyFixture, browserErrors: errors, writeRequests: writes }, null, 2));
+    console.log(JSON.stringify({ feed, currentFractals: currents, projectionCutoff: fractalLevels.evaluatedThrough, controls: 'zoom, range, volume, grid, timezone, fullscreen, PNG export, Daily/Weekly/Broken, Fit DC/WC, 1H boxes', olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, desktopFractals, mobileFractals, desktopHourlyBoxes, mobileHourlyBoxes, hourlyFixture, browserErrors: errors, writeRequests: writes }, null, 2));
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error.stack); process.exitCode = 1; });

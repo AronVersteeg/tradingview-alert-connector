@@ -7,6 +7,7 @@
   const assetBase = new URL('.', document.currentScript.src);
   const data = window.BtcSpotChartData;
   const fractals = window.BtcSpotFractals;
+  const hourlyBoxes = window.BtcHourlyFractalBoxes;
   const byId = (id) => document.getElementById(id);
   const api = '/open-liquidity/v2/btc-spot-candles';
   const streamUrls = ['wss://stream.binance.com:443/ws/btcusdt@kline_1h', 'wss://stream.binance.com:9443/ws/btcusdt@kline_1h'];
@@ -21,6 +22,7 @@
   let initialData = false, hovering = false;
   let fractalLayer, fractalBundle, fractalModel, fractalPending, fractalRetryAt = 0, fractalKey;
   let fitFractals = false;
+  let hourlyBoxLayer, hourlyBoxModel;
 
   function projectionStatus(text, stale = false) {
     byId('spotChartFractalStatus').textContent = text;
@@ -137,6 +139,10 @@
     feedText();
     const lastClosed = candles.filter((candle) => candle.closed).at(-1)?.time;
     const key = `${candles[0]?.time}|${lastClosed}|${candles.length}`;
+    if (key !== fractalKey || !singleUpdate) {
+      hourlyBoxModel = hourlyBoxes.buildHourlyFractalBoxes(candles);
+      hourlyBoxLayer.setData(hourlyBoxModel.boxes, candles);
+    }
     if (key !== fractalKey) { fractalKey = key; projectLoadedCandles(); }
     void refreshFractals();
   }
@@ -182,6 +188,9 @@
       });
       fractalLayer = new fractals.FractalPrimitive();
       candlesSeries.attachPrimitive(fractalLayer);
+      hourlyBoxLayer = new hourlyBoxes.HourlyFractalBoxPrimitive();
+      hourlyBoxLayer.setVisible(byId('spotChartHourlyBoxes').checked);
+      candlesSeries.attachPrimitive(hourlyBoxLayer);
       volumeSeries = chart.addSeries(library.HistogramSeries, {
         priceFormat: { type: 'volume' }, priceScaleId: 'volume', lastValueVisible: false, priceLineVisible: false,
         visible: byId('spotChartVolume').checked
@@ -199,7 +208,9 @@
         symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', chart,
         candleSeries: candlesSeries, volumeSeries,
         getCandles: () => candles.map((candle) => ({ ...candle })),
-        getFractalProjections: () => fractalModel ? { ...fractalModel, levels: fractalModel.levels.map((level) => ({ ...level })) } : null
+        getFractalProjections: () => fractalModel ? { ...fractalModel, levels: fractalModel.levels.map((level) => ({ ...level })) } : null,
+        getHourlyFractalBoxes: () => hourlyBoxModel ? { evaluatedThrough: hourlyBoxModel.evaluatedThrough,
+          boxes: hourlyBoxModel.boxes.map((box) => ({ ...box })), fractals: hourlyBoxModel.fractals.map((fractal) => ({ ...fractal })) } : null
       });
       watchdog = setInterval(() => {
         if (!active) return;
@@ -336,6 +347,7 @@
     candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
     chart?.priceScale('right').applyOptions({ autoScale: true });
   });
+  byId('spotChartHourlyBoxes').addEventListener('change', (event) => hourlyBoxLayer?.setVisible(event.target.checked));
   byId('spotChartZoomIn').addEventListener('click', () => zoom(.75));
   byId('spotChartZoomOut').addEventListener('click', () => zoom(1.33));
   byId('spotChartReset').addEventListener('click', () => selectRange(window.innerWidth < 680 ? '60' : '120'));
