@@ -24,6 +24,12 @@
   flex-wrap: wrap;
 }
 .spot-chart-toolbar { border-bottom: 1px solid var(--spot-border); }
+.spot-chart-fractals { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 5px 14px; border-bottom: 1px solid var(--spot-border); }
+.spot-chart-fractals > span { color: var(--spot-muted); font-size: 11px; overflow-wrap: anywhere; }
+.spot-chart-fractals > span[data-stale="true"] { color: #f48b87; }
+.spot-fractal-swatch { display: inline-block; width: 16px; height: 2px; }
+.spot-fractal-swatch.daily { background: #ffeb3b; }
+.spot-fractal-swatch.weekly { background: #ff9800; }
 .spot-chart-heading, .spot-chart-actions, .spot-chart-ranges, .spot-chart-feed {
   display: flex;
   align-items: center;
@@ -127,6 +133,8 @@
 @media (max-width: 680px) {
   .spot-chart-toolbar { gap: 7px; padding: 8px; }
   .spot-chart-heading { width: 100%; gap: 6px; }
+  .spot-chart-fractals { padding: 5px 9px; }
+  .spot-chart-fractals .spot-chart-actions { justify-content: flex-start; width: auto; gap: 9px; }
   .spot-chart-actions { width: 100%; justify-content: flex-end; gap: 5px; }
   .spot-chart-ohlc { gap: 6px 12px; padding: 8px 10px; min-height: 64px; }
   .spot-chart-date { width: 100%; }

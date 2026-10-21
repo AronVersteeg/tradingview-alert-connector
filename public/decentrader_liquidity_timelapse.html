@@ -1516,6 +1516,15 @@
           <button class="spot-chart-icon" id="spotChartFullscreen" title="Full screen" aria-label="Full screen"><img src="/assets/btc-spot-chart/vendor/lucide/maximize.svg" alt=""></button>
         </div>
       </div>
+      <div class="spot-chart-fractals">
+        <div class="spot-chart-actions">
+          <label class="spot-chart-toggle" title="Daily fractals"><input type="checkbox" id="spotChartDaily" checked><i class="spot-fractal-swatch daily"></i>Daily</label>
+          <label class="spot-chart-toggle" title="Weekly fractals"><input type="checkbox" id="spotChartWeekly" checked><i class="spot-fractal-swatch weekly"></i>Weekly</label>
+          <label class="spot-chart-toggle" title="Broken fractal segments"><input type="checkbox" id="spotChartBroken" checked>Broken</label>
+          <button class="spot-chart-range" id="spotChartFitFractals" title="Include current intact Daily and Weekly levels in price scale" aria-pressed="false">Fit DC/WC</button>
+        </div>
+        <span id="spotChartFractalStatus" role="status">D/W pending</span>
+      </div>
       <div class="spot-chart-ohlc" id="spotChartOhlc">
         <span class="spot-chart-date" id="spotChartCandleTime">-</span>
         <span>O <b id="spotChartOpen">-</b></span><span>H <b id="spotChartHigh">-</b></span>
@@ -1716,6 +1725,7 @@
 
   <script src="data/decentrader_btc_liquidity_timelapse_data.js"></script>
   <script defer src="/assets/btc-spot-chart/data.js"></script>
+  <script defer src="/assets/btc-spot-chart/fractals.js"></script>
   <script defer src="/assets/btc-spot-chart/chart.js"></script>
   <script>
     const queryParams = new URLSearchParams(window.location.search);

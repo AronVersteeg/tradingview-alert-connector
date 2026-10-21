@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { binanceSpotChartFeed } from '../services/binanceSpotChart';
 import { binanceCooldownHttpResponse } from '../services/binanceHttp';
+import { btcFractalProjectionFeed } from '../services/btcFractalProjections';
 
 export const btcSpotChartRouter = express.Router();
 
@@ -27,5 +28,19 @@ btcSpotChartRouter.get('/open-liquidity/v2/btc-spot-candles', async (req, res) =
       return;
     }
     res.status(502).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+btcSpotChartRouter.get('/open-liquidity/v2/btc-spot-fractal-projections', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  try {
+    res.send(await btcFractalProjectionFeed.snapshot());
+  } catch (error) {
+    const cooldown = binanceCooldownHttpResponse(error);
+    if (cooldown) res.setHeader('Retry-After', cooldown.retryAfter);
+    res.status(503).send(cooldown?.body || {
+      ok: false, error: error instanceof Error ? error.message : String(error)
+    });
   }
 });

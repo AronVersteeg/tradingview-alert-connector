@@ -6,6 +6,7 @@
   panel.hidden = false;
   const assetBase = new URL('.', document.currentScript.src);
   const data = window.BtcSpotChartData;
+  const fractals = window.BtcSpotFractals;
   const byId = (id) => document.getElementById(id);
   const api = '/open-liquidity/v2/btc-spot-candles';
   const streamUrls = ['wss://stream.binance.com:443/ws/btcusdt@kline_1h', 'wss://stream.binance.com:9443/ws/btcusdt@kline_1h'];
@@ -18,6 +19,62 @@
   let lastTickAt = 0, lastRestAt = 0, lastSourceTime = 0;
   let recentPending, olderPending, olderRetryAt = 0, hasMore = true;
   let initialData = false, hovering = false;
+  let fractalLayer, fractalBundle, fractalModel, fractalPending, fractalRetryAt = 0, fractalKey;
+  let fitFractals = false;
+
+  function projectionStatus(text, stale = false) {
+    byId('spotChartFractalStatus').textContent = text;
+    byId('spotChartFractalStatus').dataset.stale = String(stale);
+  }
+  function projectLoadedCandles() {
+    if (!fractalBundle || !fractalLayer) return;
+    try {
+      fractalModel = fractals.projectFractals(fractalBundle, candles);
+      fractalLayer.setData(fractalModel.levels);
+      projectionStatus(`D/W closed through ${dateText(Date.parse(fractalModel.evaluatedThrough) / 1000, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
+      if (fitFractals) candlesSeries.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
+    } catch (error) {
+      projectionStatus(`D/W pending: ${error.message}`, true);
+    }
+  }
+  function fractalAutoscale(base) {
+    const result = base();
+    if (!result || !fitFractals || !fractalLayer) return result;
+    const prices = fractalLayer.visibleLevels().filter((level) => level.isCurrent && !level.broken).map((level) => level.price);
+    return { ...result, priceRange: {
+      minValue: Math.min(result.priceRange.minValue, ...prices),
+      maxValue: Math.max(result.priceRange.maxValue, ...prices)
+    } };
+  }
+  async function refreshFractals(force = false) {
+    if (!initialData || !active || destroyed || fractalPending) return fractalPending;
+    const hour = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+    if (!force && (Date.parse(fractalModel?.evaluatedThrough || '') >= hour || Date.now() < fractalRetryAt)) return;
+    // One shared higher-timeframe read per closed hour, never one read per live tick.
+    fractalRetryAt = Date.now() + 5000;
+    fractalPending = (async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 25_000);
+      try {
+        const response = await fetch('/open-liquidity/v2/btc-spot-fractal-projections', { signal: controller.signal, cache: 'no-store' });
+        if (!response.ok) {
+          const retry = Number(response.headers.get('Retry-After'));
+          fractalRetryAt = Date.now() + Math.max(60, Number.isFinite(retry) ? retry : 60) * 1000;
+          throw new Error(`source unavailable (${response.status})`);
+        }
+        const bundle = await response.json();
+        if (destroyed) return;
+        if (Date.parse(bundle.evaluatedThrough) < hour) throw new Error('awaiting current closed hour');
+        fractalBundle = bundle;
+        const lastClosed = candles.filter((candle) => candle.closed).at(-1);
+        if (!lastClosed || (lastClosed.time + 3600) * 1000 < Date.parse(bundle.evaluatedThrough)) await loadRecent();
+        if (!destroyed) projectLoadedCandles();
+      } catch (error) {
+        if (!destroyed) projectionStatus(`D/W stale: ${error.name === 'AbortError' ? 'request timed out' : error.message}`, true);
+      } finally { clearTimeout(timeout); fractalPending = undefined; }
+    })();
+    return fractalPending;
+  }
 
   function dateText(time, options) {
     return new Intl.DateTimeFormat('nl-NL', { timeZone: zone, ...options }).format(new Date(time * 1000));
@@ -78,6 +135,10 @@
     if (!hovering) legend(candles[candles.length - 1]);
     message('');
     feedText();
+    const lastClosed = candles.filter((candle) => candle.closed).at(-1)?.time;
+    const key = `${candles[0]?.time}|${lastClosed}|${candles.length}`;
+    if (key !== fractalKey) { fractalKey = key; projectLoadedCandles(); }
+    void refreshFractals();
   }
   function selectRange(value) {
     if (!chart || !candles.length) return;
@@ -117,8 +178,10 @@
       candlesSeries = chart.addSeries(library.CandlestickSeries, {
         upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
         wickUpColor: '#26a69a', wickDownColor: '#ef5350',
-        priceFormat: { type: 'price', precision: 2, minMove: .01 }
+        priceFormat: { type: 'price', precision: 2, minMove: .01 }, autoscaleInfoProvider: fractalAutoscale
       });
+      fractalLayer = new fractals.FractalPrimitive();
+      candlesSeries.attachPrimitive(fractalLayer);
       volumeSeries = chart.addSeries(library.HistogramSeries, {
         priceFormat: { type: 'volume' }, priceScaleId: 'volume', lastValueVisible: false, priceLineVisible: false,
         visible: byId('spotChartVolume').checked
@@ -135,11 +198,13 @@
       window.btcSpotChart = Object.freeze({
         symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', chart,
         candleSeries: candlesSeries, volumeSeries,
-        getCandles: () => candles.map((candle) => ({ ...candle }))
+        getCandles: () => candles.map((candle) => ({ ...candle })),
+        getFractalProjections: () => fractalModel ? { ...fractalModel, levels: fractalModel.levels.map((level) => ({ ...level })) } : null
       });
       watchdog = setInterval(() => {
         if (!active) return;
         feedText();
+        void refreshFractals();
         if (!lastTickAt || Date.now() - lastTickAt > 12_000) {
           if (Date.now() - lastRestAt >= 30_000) void loadRecent();
           if (socket && Date.now() - (lastTickAt || lastRestAt) > 20_000) socket.close();
@@ -257,7 +322,19 @@
   }
 
   byId('spotChartRefresh').addEventListener('click', async () => {
-    try { await ensureChart(); await loadRecent(); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
+    try { await ensureChart(); await loadRecent(); await refreshFractals(true); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
+  });
+  for (const [id, key] of [['spotChartDaily', 'daily'], ['spotChartWeekly', 'weekly'], ['spotChartBroken', 'broken']]) {
+    byId(id).addEventListener('change', (event) => {
+      fractalLayer?.setOptions({ [key]: event.target.checked });
+      if (fitFractals) candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
+    });
+  }
+  byId('spotChartFitFractals').addEventListener('click', () => {
+    fitFractals = !fitFractals;
+    byId('spotChartFitFractals').setAttribute('aria-pressed', String(fitFractals));
+    candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
+    chart?.priceScale('right').applyOptions({ autoScale: true });
   });
   byId('spotChartZoomIn').addEventListener('click', () => zoom(.75));
   byId('spotChartZoomOut').addEventListener('click', () => zoom(1.33));
@@ -273,6 +350,7 @@
     zone = event.target.value;
     if (chart) chart.applyOptions({ localization: { locale: 'en-US' } });
     if (!hovering) legend(candles[candles.length - 1]);
+    projectLoadedCandles();
     feedText();
   });
   byId('spotChartFullscreen').hidden = !panel.requestFullscreen;

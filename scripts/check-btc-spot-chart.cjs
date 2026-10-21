@@ -21,6 +21,73 @@ function candlePixels(buffer) {
   return { up, down, width: png.width, height: png.height };
 }
 
+function fractalPixels(buffer) {
+  const png = PNG.sync.read(buffer);
+  let daily = 0, weekly = 0;
+  for (let i = 0; i < png.data.length; i += 4) {
+    const [r, g, b] = png.data.subarray(i, i + 3);
+    if (r > 225 && g > 200 && b < 100) daily++;
+    if (r > 225 && g > 110 && g < 180 && b < 70) weekly++;
+  }
+  assert(daily > 100 && weekly > 100, `D/W lines must both render (${daily}/${weekly}).`);
+  return { daily, weekly };
+}
+
+async function checkHourRefresh(browser, url, output) {
+  const hour = 3_600_000;
+  const initial = Date.parse('2026-10-21T08:00:00Z');
+  const origin = Date.parse('2026-10-15T07:00:00Z') / 1000;
+  let now = initial + 5000, projectionReads = 0;
+  const context = await browser.newContext({ viewport: { width: 1200, height: 950 } });
+  try {
+    const page = await context.newPage();
+    await page.addInitScript((time) => {
+      window.__fractalTestNow = time;
+      Date.now = () => window.__fractalTestNow;
+      window.WebSocket = class { close() { this.onclose?.(); } };
+    }, now);
+    await page.route('**/*', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.startsWith('/assets/') || path === '/decentrader/map') return route.continue();
+      const through = Math.floor(now / hour) * hour;
+      if (path.endsWith('/btc-spot-candles')) {
+        const first = initial - 999 * hour;
+        const rows = Array.from({ length: (through - first) / hour + 1 }, (_, i) => {
+          const time = first + i * hour;
+          return { time: time / 1000, closeTime: time + hour - 1, open: 90, high: time >= initial ? 101 : time / 1000 === origin ? 100 : 91,
+            low: time === Date.parse('2026-09-30T07:00:00Z') ? 80 : 89,
+            close: 90, volume: 1, quoteVolume: 90, closed: time < through };
+        });
+        return route.fulfill({ json: { symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', fetchedAt: new Date(now).toISOString(), candles: rows, hasMore: false } });
+      }
+      if (path.endsWith('/btc-spot-fractal-projections')) {
+        projectionReads++;
+        const make = (interval, record, latestClosedCandleAt) => ({ symbol: 'BTCUSDT', venue: 'Binance Spot', interval, records: [record], latestClosedCandleAt });
+        return route.fulfill({ json: {
+          symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThrough: new Date(through).toISOString(),
+          daily: make('1d', { id: 'd', type: 'HIGH', priceExact: '100.00', pivotAt: '2026-10-15T00:00:00Z', confirmedAt: '2026-10-17T23:59:59.999Z', isLatestForType: true }, '2026-10-20T23:59:59.999Z'),
+          weekly: make('1w', { id: 'w', type: 'LOW', priceExact: '80.00', pivotAt: '2026-09-28T00:00:00Z', confirmedAt: '2026-10-18T23:59:59.999Z', isLatestForType: true }, '2026-10-18T23:59:59.999Z')
+        } });
+      }
+      return route.fulfill({ status: 503, json: { ok: false } });
+    });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
+    await page.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length === 2);
+    assert.equal(await page.evaluate(() => window.btcSpotChart.getFractalProjections().levels[0].broken), false, 'Open 1H excursion must not break the level.');
+    now = initial + hour + 5000;
+    await page.evaluate((value) => { window.__fractalTestNow = value; }, now);
+    await page.waitForFunction(() => window.btcSpotChart.getFractalProjections().levels[0].broken, null, { timeout: 15_000 });
+    const broken = await page.evaluate(() => window.btcSpotChart.getFractalProjections().levels[0]);
+    assert.equal(broken.originTime, origin);
+    assert.equal(broken.brokenTime, initial / 1000, 'The first closed breaking hour must be the endpoint.');
+    assert.equal(projectionReads, 2, 'Only one projection read per hour.');
+    await page.locator('[data-spot-range="all"]').click();
+    await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, 'btc-spot-hour-refresh-fixture.png') });
+    return { hourlyRefreshWithoutClick: true, openCandleIgnored: true, exactBreakHour: true, projectionReads };
+  } finally { await context.close(); }
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true, ...(process.env.SPOT_CHART_BROWSER_CHANNEL ? { channel: process.env.SPOT_CHART_BROWSER_CHANNEL } : {}) });
   const errors = [];
@@ -35,6 +102,14 @@ function candlePixels(buffer) {
     await page.waitForFunction(() => window.btcSpotChart?.getCandles().length >= 500, null, { timeout: 40_000 });
     const feed = await page.evaluate(() => ({ symbol: window.btcSpotChart.symbol, venue: window.btcSpotChart.venue, count: window.btcSpotChart.getCandles().length }));
     assert.equal(feed.symbol, 'BTCUSDT'); assert.equal(feed.venue, 'Binance Spot');
+    await page.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length > 0, null, { timeout: 40_000 });
+    const fractalLevels = await page.evaluate(() => window.btcSpotChart.getFractalProjections());
+    const currents = fractalLevels.levels.filter((level) => level.isCurrent && !level.broken);
+    assert.equal(currents.length, 4, 'Current Daily and Weekly highs/lows must all be present.');
+    for (const level of fractalLevels.levels.filter((item) => item.originTime !== null)) {
+      const wick = await page.evaluate((time) => window.btcSpotChart.getCandles().find((row) => row.time === time), level.originTime);
+      assert.equal(wick[level.type === 'HIGH' ? 'high' : 'low'], level.price, 'Origin must be the actual Spot 1H wick.');
+    }
     const span = () => page.evaluate(() => { const r = window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(); return r.to - r.from; });
     const originalSpan = await span();
     await page.locator('#spotChartZoomIn').click();
@@ -62,22 +137,32 @@ function candlePixels(buffer) {
     await page.evaluate(() => window.btcSpotChart.chart.timeScale().setVisibleLogicalRange({ from: -5, to: 80 }));
     await page.waitForFunction((previous) => window.btcSpotChart.getCandles().length > previous, count, { timeout: 25_000 });
     await page.locator('#spotChartReset').click();
+    await page.locator('#spotChartFitFractals').click();
+    assert.equal(await page.locator('#spotChartFitFractals').getAttribute('aria-pressed'), 'true');
+    await page.locator('#spotChartDaily').uncheck();
+    await page.locator('#spotChartDaily').check();
+    await page.locator('#spotChartWeekly').uncheck();
+    await page.locator('#spotChartWeekly').check();
+    await page.locator('#spotChartBroken').uncheck();
+    await page.locator('#spotChartBroken').check();
     const box = await page.locator('#spotChartCanvas').boundingBox();
     await page.mouse.move(box.x + box.width * .6, box.y + box.height * .4);
     const desktopPixels = candlePixels(await page.locator('#spotChartCanvas').screenshot());
     await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, 'btc-spot-desktop.png') });
+    const desktopFractals = fractalPixels(await page.locator('#spotChartCanvas').screenshot());
     const downloadPromise = page.waitForEvent('download');
     await page.locator('#spotChartDownload').click();
     const download = await downloadPromise;
     assert(download.suggestedFilename().startsWith('BTCUSDT-Spot-1H-'));
     await download.saveAs(path.join(output, 'btc-spot-export.png'));
+    fractalPixels(fs.readFileSync(path.join(output, 'btc-spot-export.png')));
     let live = true;
     try { await page.waitForFunction(() => document.getElementById('spotChartFeed').dataset.state === 'live', null, { timeout: 12_000 }); }
     catch { live = false; }
 
     const other = await desktop.newPage();
     let btcRequests = 0;
-    other.on('request', (request) => { if (request.url().includes('btc-spot-candles')) btcRequests += 1; });
+    other.on('request', (request) => { if (/btc-spot-(candles|fractal-projections)/.test(request.url())) btcRequests += 1; });
     const otherUrl = new URL(url); otherUrl.searchParams.set('source', 'open-v2-eth');
     await other.goto(otherUrl.href, { waitUntil: 'domcontentloaded' });
     assert.equal(await other.locator('#btcSpotChartPanel').isVisible(), false);
@@ -89,13 +174,17 @@ function candlePixels(buffer) {
     await phone.goto(url, { waitUntil: 'domcontentloaded' });
     await phone.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
     await phone.waitForFunction(() => window.btcSpotChart?.getCandles().length >= 500, null, { timeout: 40_000 });
+    await phone.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length > 0, null, { timeout: 40_000 });
+    await phone.locator('#spotChartFitFractals').tap();
     const overflow = await phone.locator('#btcSpotChartPanel').evaluate((node) => node.scrollWidth > node.clientWidth + 1);
     assert.equal(overflow, false, 'Chart must not overflow its mobile container.');
     await phone.locator('#spotChartZoomIn').tap();
     const mobilePixels = candlePixels(await phone.locator('#spotChartCanvas').screenshot());
+    const mobileFractals = fractalPixels(await phone.locator('#spotChartCanvas').screenshot());
     await phone.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, 'btc-spot-mobile.png') });
     assert.deepEqual(errors, [], 'No uncaught browser exceptions');
     assert.deepEqual(writes, [], 'Chart interactions must not submit orders, plans, settings or SMTP requests');
-    console.log(JSON.stringify({ feed, controls: 'zoom, range, volume, grid, timezone, fullscreen, PNG export', olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, browserErrors: errors, writeRequests: writes }, null, 2));
+    const hourlyFixture = await checkHourRefresh(browser, url, output);
+    console.log(JSON.stringify({ feed, currentFractals: currents, projectionCutoff: fractalLevels.evaluatedThrough, controls: 'zoom, range, volume, grid, timezone, fullscreen, PNG export, Daily/Weekly/Broken, Fit DC/WC', olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, desktopFractals, mobileFractals, hourlyFixture, browserErrors: errors, writeRequests: writes }, null, 2));
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error.stack); process.exitCode = 1; });

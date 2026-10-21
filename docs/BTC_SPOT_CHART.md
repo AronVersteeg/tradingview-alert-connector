@@ -32,6 +32,40 @@ source identity, and `getCandles()` (defensive copies). The browser emits
 `btc-spot-chart:ready`. Future custom visual layers can attach here without
 coupling rendering to a trading executor. No strategy checkbox is added.
 
+## Daily / Weekly Projections
+
+- Same source as the BTC fractal tables: confirmed Binance Spot BTCUSDT Daily
+  and Weekly Williams fractals (two closed candles on either side).
+- Daily yellow, Weekly orange. DC/WC denote the latest confirmed high and low
+  for each timeframe; older levels use D/W. These are exact prices, no buffer.
+- A line starts at the first exact matching 1H wick inside its pivot day/week.
+  This is a retrospective visual anchor: availability is still `confirmedAt`,
+  after the two right-side D/W candles close. It is not an earlier entry signal.
+- Intact levels extend right. A strict high/low wick crossing breaks the level;
+  an exact touch does not. Only closed 1H candles count. The whole broken segment
+  becomes dashed and ends at the first breaking hour, with no extension past it.
+- The existing D/W history supplies older breaks; closed 1H candles resolve
+  their precise hour and any new breaks in the unfinished day/week. This layer
+  does not mutate the D/W tables or any trading source.
+- Origins before loaded history are clipped at the left edge. Partly loaded
+  pivot/break periods are not guessed; scrolling back resolves their exact hours.
+  No per-level historical downloads or additional disk histories are introduced.
+- `GET /open-liquidity/v2/btc-spot-fractal-projections` bundles the existing
+  shared D/W caches once per closed hour. The visible chart refreshes on the
+  closing websocket candle, with a five-second watchdog and shared REST recovery
+  if the final websocket candle was missed. It never treats an old open candle
+  as final just because wall-clock time advanced.
+- Missing/stale D/W data or gaps in closed 1H coverage leave the previous
+  verified projections in place with an explicit pending/stale status. No
+  promise of a fixed refresh latency during an upstream outage is made.
+- Daily, Weekly and Broken visibility controls are independent. `Fit DC/WC`
+  optionally includes current intact levels in the price scale. Older distant
+  levels cannot squeeze the normal candle scale. Coincident D/W lines retain
+  both colors with a combined label.
+- `getFractalProjections()` exposes defensive copies of verified projections
+  and their closed-hour cutoff for read-only inspection. PNG export includes
+  the primitive layer. No entry, SL, TP or trailing logic uses these projections.
+
 ## Libraries
 
 TradingView Lightweight Charts 5.2.1 is vendored as a standalone ES module;
@@ -56,9 +90,12 @@ This separate server binds loopback on port 4318 (override with
 `SPOT_CHART_PREVIEW_PORT`) and deliberately never imports the main controller or
 exchange initialization. Do not start the production entry point for UI tests.
 
-Unit tests: `test/binanceSpotChart.test.ts`.
+Unit tests: `test/binanceSpotChart.test.ts`, `test/btcFractalProjections.test.ts`.
 Browser QA: `node scripts/check-btc-spot-chart.cjs <preview URL> <output dir>`
 with Playwright and pngjs available in the test runtime. Set
 `SPOT_CHART_BROWSER_CHANNEL=msedge` to use installed Edge instead of a downloaded
 Chromium test binary. QA checks actual green/red canvas pixels, desktop/mobile
 layout, pagination, tools, real websocket reception and absence of write requests.
+It also checks exact fractal origins, yellow/orange pixels and PNG export, and
+uses a separate synthetic hour-rollover fixture to verify automatic refresh,
+ignoring open-candle excursions, and the exact broken-line endpoint.
