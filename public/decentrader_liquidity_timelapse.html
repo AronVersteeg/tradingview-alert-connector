@@ -1541,11 +1541,13 @@
           <label class="spot-chart-toggle" title="Daily fractals"><input type="checkbox" id="spotChartDaily" checked><i class="spot-fractal-swatch daily"></i>Daily</label>
           <label class="spot-chart-toggle" title="Weekly fractals"><input type="checkbox" id="spotChartWeekly" checked><i class="spot-fractal-swatch weekly"></i>Weekly</label>
           <label class="spot-chart-toggle" title="Monthly fractals"><input type="checkbox" id="spotChartMonthly" checked><i class="spot-fractal-swatch monthly"></i>Monthly</label>
+          <label class="spot-chart-toggle" title="Planned manual entries and their take profits"><input type="checkbox" id="spotChartManual" checked><i class="spot-fractal-swatch manual"></i>Manual / TP</label>
           <label class="spot-chart-toggle" title="Broken fractal segments"><input type="checkbox" id="spotChartBroken" checked>Broken</label>
-          <button class="spot-chart-range" id="spotChartFitFractals" title="Include current Daily, Weekly, Monthly and gap levels in price scale" aria-pressed="false">Fit levels</button>
+          <button class="spot-chart-range" id="spotChartFitFractals" title="Include current fractal, gap and manual levels in price scale" aria-pressed="false">Fit levels</button>
         </div>
         <span id="spotChartFractalStatus" role="status">D/W/M pending</span>
         <span id="spotChartGapStatus" role="status">Gap pending</span>
+        <span id="spotChartManualStatus" role="status">Manual levels pending</span>
       </div>
       <div class="spot-chart-ohlc" id="spotChartOhlc">
         <span class="spot-chart-date" id="spotChartCandleTime">-</span>
@@ -1750,6 +1752,7 @@
   <script defer src="/assets/btc-spot-chart/fractals.js"></script>
   <script defer src="/assets/btc-spot-chart/hourly-fractal-boxes.js"></script>
   <script defer src="/assets/btc-spot-chart/gap-boxes.js"></script>
+  <script defer src="/assets/btc-spot-chart/manual-levels.js"></script>
   <script defer src="/assets/btc-spot-chart/chart.js"></script>
   <script>
     const queryParams = new URLSearchParams(window.location.search);
@@ -5596,6 +5599,7 @@
     function updateManualOverrideMonitor(snapshot) {
       if (!manualOverrideCard) return;
       manualOverrideSnapshot = snapshot;
+      publishBtcSpotManualLevels();
       const overrides = manualOverrides();
       const active = overrides.filter((state) => state.status === 'ARMED' || state.status === 'EXECUTING');
       if (manualEditingPlanId && !active.some((state) => state.id === manualEditingPlanId && state.status === 'ARMED')) {
@@ -5627,14 +5631,21 @@
     }
 
     async function refreshManualOverride() {
-      const response = await fetch(
-        `${CLOUD_MANUAL_OVERRIDE_URL}?market=${encodeURIComponent(manualOverrideMarket)}&ts=${Date.now()}`,
-        { cache: 'no-store' }
-      );
-      const snapshot = await response.json();
-      if (!response.ok || snapshot.error) throw new Error(snapshot.error || `Manual override ${response.status}`);
-      updateManualOverrideMonitor(snapshot);
-      return snapshot;
+      try {
+        const response = await fetch(
+          `${CLOUD_MANUAL_OVERRIDE_URL}?market=${encodeURIComponent(manualOverrideMarket)}&ts=${Date.now()}`,
+          { cache: 'no-store' }
+        );
+        const snapshot = await response.json();
+        if (!response.ok || snapshot.error) throw new Error(snapshot.error || `Manual override ${response.status}`);
+        updateManualOverrideMonitor(snapshot);
+        return snapshot;
+      } catch (error) {
+        if (activeSource === 'open-v2' && manualOverrideMarket === 'BTC-USD') {
+          window.dispatchEvent(new CustomEvent('btc-spot-chart:manual-error'));
+        }
+        throw error;
+      }
     }
 
     function manualTakeProfitsFromForm() {
@@ -6132,6 +6143,9 @@
     }
 
     function showRefreshError(error) {
+      if (activeSource === 'open-v2' && manualOverrideMarket === 'BTC-USD') {
+        window.dispatchEvent(new CustomEvent('btc-spot-chart:manual-error'));
+      }
       liveStatus.textContent = 'Refresh error';
       gapAlert.textContent = String(error.message || error);
       gapAlert.classList.add('is-hot');
@@ -6239,6 +6253,17 @@
         window.dispatchEvent(new CustomEvent('btc-spot-chart:gap-error', { detail: String(error.message || error) }));
       }
     }
+    function publishBtcSpotManualLevels() {
+      if (activeSource !== 'open-v2' || manualOverrideMarket !== 'BTC-USD' || !manualOverrideSnapshot || !window.BtcSpotManualLevels) return;
+      try {
+        const model = window.BtcSpotManualLevels.fromSnapshot(manualOverrideSnapshot);
+        window.BTC_SPOT_MANUAL_LEVELS = model;
+        window.dispatchEvent(new CustomEvent('btc-spot-chart:manual-levels', { detail: model }));
+      } catch {
+        window.dispatchEvent(new CustomEvent('btc-spot-chart:manual-error'));
+      }
+    }
+    window.addEventListener('btc-spot-chart:manual-source-ready', publishBtcSpotManualLevels);
     window.addEventListener('btc-spot-chart:gap-source-ready', publishBtcSpotGapTimeline);
     wireViewer();
   </script>

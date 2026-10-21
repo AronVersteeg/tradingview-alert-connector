@@ -140,6 +140,30 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   rectangles never receive active price labels.
   No entries, plans, alerts, SL, TP or trailing settings are changed.
 
+## Manual Entry and TP Overlays
+
+- BTC Public V2 mirrors the existing manual plan snapshot, without an extra
+  API poll, Binance read, token, order or plan mutation. Only ARMED/EXECUTING
+  plans are drawn; historical/terminal plans disappear. This is a plan overlay,
+  not a view of actual exchange fills or dynamic exchange TP orders.
+- Blue solid entry lines and dashed individual explicit TP lines have native
+  price-axis labels. Titles identify long/short, the parent entry and TP number.
+  Equal-price levels share a label. Plans without explicit TPs get only an
+  entry line; no targets are inferred. No SL or risk area is drawn.
+- Per-plan blue boxes start at the plan's arming timestamp, clipped to loaded
+  history, and end at the configured right offset. Consecutive profit-side
+  bands run entry-to-TP1, TP1-to-TP2, etc., darkest near entry and progressively
+  lighter. Targets are ordered by price in the trade direction for shading.
+  Missing start timestamps use the latest candle, never invented history.
+- Existing successful refreshes publish a compact entry/TP-only event. A
+  save/edit/cancel already immediately refreshes plans; remote changes follow
+  the dashboard's existing refresh cadence. Failed reads preserve last known
+  levels with an explicit stale status. The event/cache also handles lazy chart
+  initialization and an initially empty plan list.
+- The default-on Manual / TP checkbox toggles lines, labels and boxes together;
+  Fit levels optionally includes them. PNG exports include both lines and bands.
+  All entry execution, emails, SL, TP allocation and trailing behavior is unchanged.
+
 ## Libraries
 
 TradingView Lightweight Charts 5.2.1 is vendored as a standalone ES module;
@@ -165,7 +189,8 @@ This separate server binds loopback on port 4318 (override with
 exchange initialization. Do not start the production entry point for UI tests.
 
 Unit tests: `test/binanceSpotChart.test.ts`, `test/btcFractalProjections.test.ts`,
-`test/btcHourlyFractalBoxes.test.ts`, `test/btcGapBoxes.test.ts`.
+`test/btcHourlyFractalBoxes.test.ts`, `test/btcGapBoxes.test.ts`,
+`test/btcManualLevels.test.ts`.
 Browser QA: `node scripts/check-btc-spot-chart.cjs <preview URL> <output dir>`
 with Playwright and pngjs available in the test runtime. Set
 `SPOT_CHART_BROWSER_CHANNEL=msedge` to use installed Edge instead of a downloaded
@@ -176,3 +201,10 @@ uses a separate synthetic hour-rollover fixture to verify automatic refresh,
 ignoring open-candle excursions, the exact broken-line endpoint, and a 1H box
 confirming only after its second right candle closes. An on/off pixel comparison
 checks the actual gray fill on desktop and mobile.
+
+Manual overlay QA: `node scripts/check-btc-manual-levels.cjs <preview URL> <output dir>`.
+This fully intercepted desktop/mobile fixture serves synthetic plans and candles,
+uses the actual dashboard read/render bridge, and blocks all non-read requests.
+It checks long/short TP bands and their progressive blue shades, native axis
+labels, edits, removals, stale reads, lazy initialization, toggling and PNG export.
+It never submits or alters a production plan.

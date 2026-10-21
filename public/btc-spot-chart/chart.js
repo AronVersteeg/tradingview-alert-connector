@@ -9,6 +9,7 @@
   const fractals = window.BtcSpotFractals;
   const hourlyBoxes = window.BtcHourlyFractalBoxes;
   const gapBoxes = window.BtcSpotGapBoxes;
+  const manualLevels = window.BtcSpotManualLevels;
   const byId = (id) => document.getElementById(id);
   const api = '/open-liquidity/v2/btc-spot-candles';
   const streamUrls = ['wss://stream.binance.com:443/ws/btcusdt@kline_1h', 'wss://stream.binance.com:9443/ws/btcusdt@kline_1h'];
@@ -25,6 +26,23 @@
   let fitFractals = false;
   let hourlyBoxLayer, hourlyBoxModel;
   let gapLayer, gapTimeline = window.BTC_SPOT_GAP_TIMELINE, gapModel;
+  let manualLayer, manualModel = window.BTC_SPOT_MANUAL_LEVELS;
+  let manualReadFailed = false;
+
+  function updateManualLevels() {
+    if (!manualModel) return;
+    manualLayer?.setData(manualModel);
+    const count = manualModel.planCount;
+    byId('spotChartManualStatus').textContent = manualReadFailed ? 'Manual levels stale | last known plans' : `Manual: ${count} plan${count === 1 ? '' : 's'}, ${manualModel.levels.filter((level) => level.kind === 'tp').length} TPs${manualModel.enabled ? '' : ' | disabled'}`;
+    byId('spotChartManualStatus').dataset.stale = String(manualReadFailed);
+    if (fitFractals) candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
+  }
+  window.addEventListener('btc-spot-chart:manual-levels', (event) => { manualReadFailed = false; manualModel = event.detail; updateManualLevels(); });
+  window.addEventListener('btc-spot-chart:manual-error', () => {
+    manualReadFailed = true;
+    byId('spotChartManualStatus').textContent = manualModel ? 'Manual levels stale | last known plans' : 'Manual levels unavailable';
+    byId('spotChartManualStatus').dataset.stale = 'true';
+  });
 
   function updateGapProjection() {
     const status = byId('spotChartGapStatus');
@@ -70,6 +88,7 @@
     const prices = fractalLayer.visibleLevels().filter((level) => level.isCurrent && !level.broken).map((level) => level.price);
     const gap = byId('spotChartGap').checked && gapModel?.boxes.find((box) => box.openEnded);
     if (gap) prices.push(gap.lower, gap.upper);
+    prices.push(...(manualLayer?.visiblePrices() || []));
     return { ...result, priceRange: {
       minValue: Math.min(result.priceRange.minValue, ...prices),
       maxValue: Math.max(result.priceRange.maxValue, ...prices)
@@ -167,6 +186,7 @@
     const lastClosed = candles.filter((candle) => candle.closed).at(-1)?.time;
     const key = `${candles[0]?.time}|${lastClosed}|${candles.length}`;
     if (key !== fractalKey || !singleUpdate) {
+      manualLayer?.setCandles(candles);
       hourlyBoxModel = hourlyBoxes.buildHourlyFractalBoxes(candles);
       hourlyBoxLayer.setData(hourlyBoxModel.boxes, candles);
       updateGapProjection();
@@ -214,6 +234,11 @@
         wickUpColor: '#26a69a', wickDownColor: '#ef5350',
         priceFormat: { type: 'price', precision: 2, minMove: .01 }, autoscaleInfoProvider: fractalAutoscale
       });
+      manualLayer = new manualLevels.ManualLevelLines(candlesSeries);
+      candlesSeries.attachPrimitive(manualLayer);
+      manualLayer.setLead(Number(byId('spotChartGapLead').value));
+      manualLayer.setVisible(byId('spotChartManual').checked);
+      updateManualLevels();
       gapLayer = new gapBoxes.GapBoxPrimitive();
       gapLayer.setOptions({ visible: byId('spotChartGap').checked, lead: Number(byId('spotChartGapLead').value) });
       candlesSeries.attachPrimitive(gapLayer);
@@ -242,7 +267,8 @@
         getFractalProjections: () => fractalModel ? { ...fractalModel, levels: fractalModel.levels.map((level) => ({ ...level })) } : null,
         getHourlyFractalBoxes: () => hourlyBoxModel ? { evaluatedThrough: hourlyBoxModel.evaluatedThrough,
           boxes: hourlyBoxModel.boxes.map((box) => ({ ...box })), fractals: hourlyBoxModel.fractals.map((fractal) => ({ ...fractal })) } : null,
-        getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null
+        getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
+        getManualLevels: () => manualModel ? { ...manualModel, levels: manualModel.levels.map((level) => ({ ...level })) } : null
       });
       watchdog = setInterval(() => {
         if (!active) return;
@@ -381,6 +407,10 @@
     chart?.priceScale('right').applyOptions({ autoScale: true });
   });
   byId('spotChartHourlyBoxes').addEventListener('change', (event) => hourlyBoxLayer?.setVisible(event.target.checked));
+  byId('spotChartManual').addEventListener('change', (event) => {
+    manualLayer?.setVisible(event.target.checked);
+    if (fitFractals) candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
+  });
   byId('spotChartGap').addEventListener('change', (event) => {
     gapLayer?.setOptions({ visible: event.target.checked });
     if (fitFractals) candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
@@ -389,6 +419,7 @@
     const value = Number(event.target.value);
     if (!Number.isInteger(value) || value < 1 || value > 72) { event.target.value = String(gapLayer?.lead || 3); return; }
     gapLayer?.setOptions({ lead: value });
+    manualLayer?.setLead(value);
     if (chart) { chart.timeScale().applyOptions({ rightOffset: value + 2 }); chart.timeScale().scrollToPosition(value + 2, false); }
   });
   byId('spotChartZoomIn').addEventListener('click', () => zoom(.75));
@@ -441,6 +472,6 @@
   observer.observe(panel);
   window.addEventListener('pagehide', () => {
     destroyed = true;
-    observer.disconnect(); disconnect(); clearInterval(watchdog); chart?.remove();
+    observer.disconnect(); disconnect(); clearInterval(watchdog); manualLayer?.destroy(); chart?.remove();
   }, { once: true });
 })();
