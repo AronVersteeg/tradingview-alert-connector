@@ -30,6 +30,7 @@
 .spot-fractal-swatch { display: inline-block; width: 16px; height: 2px; }
 .spot-fractal-swatch.daily { background: #ffeb3b; }
 .spot-fractal-swatch.weekly { background: #ff9800; }
+.spot-fractal-swatch.monthly { background: #ff5252; }
 .spot-fractal-swatch.hourly-boxes { height: 9px; background: #d2d6e04d; }
 .spot-fractal-swatch.gap-box { height: 9px; border: 1px solid #9edfa5; box-sizing: border-box; }
 .spot-gap-lead { display: inline-flex; align-items: center; gap: 3px; color: var(--spot-muted); }

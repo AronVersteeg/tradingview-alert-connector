@@ -2,6 +2,7 @@ import {
   BINANCE_DAILY_FRACTAL_MARKETS,
   BinanceDailyCandle,
   binanceWeeklyFractalHistory,
+  binanceMonthlyFractalHistory,
   binanceDailyFractalHistory,
   binanceFractalHistory,
   latestExpectedFractalClose,
@@ -49,6 +50,36 @@ describe('Binance daily Williams fractal history', () => {
     const friday = Date.parse('2026-10-02T12:00:00.000Z');
     expect(latestExpectedFractalClose('1d', friday)).toBe(Date.parse('2026-10-01T23:59:59.999Z'));
     expect(latestExpectedFractalClose('1w', friday)).toBe(Date.parse('2026-09-27T23:59:59.999Z'));
+  });
+
+  test('computes calendar Monthly boundaries across leap years and December/January', () => {
+    expect(latestExpectedFractalClose('1M', Date.parse('2024-03-01T00:00:00Z'))).toBe(Date.parse('2024-02-29T23:59:59.999Z'));
+    expect(latestExpectedFractalClose('1M', Date.parse('2025-03-01T00:00:00Z'))).toBe(Date.parse('2025-02-28T23:59:59.999Z'));
+    expect(latestExpectedFractalClose('1M', Date.parse('2026-01-01T00:00:00Z'))).toBe(Date.parse('2025-12-31T23:59:59.999Z'));
+  });
+
+  test('uses only closed monthly candles, confirms after two right months and caches until the next month close', async () => {
+    jest.useFakeTimers(); jest.setSystemTime(Date.parse('2026-10-21T12:00:00Z'));
+    const rows = Array.from({ length: 8 }, (_, index) => {
+      const open = Date.UTC(2026, 2 + index, 1), close = Date.UTC(2026, 3 + index, 1) - 1;
+      return [open, '10', index === 2 || index === 7 ? '15.12345678' : '12', index === 3 ? '5.00' : '8', '11', '1', close];
+    });
+    const get = binanceGet as jest.Mock;
+    get.mockClear().mockResolvedValue({ data: rows });
+    try {
+      const monthly = await binanceMonthlyFractalHistory('BTC-USD', true);
+      expect(monthly).toMatchObject({ interval: '1M', venue: 'Binance Spot', latestClosedCandleAt: '2026-09-30T23:59:59.999Z' });
+      expect(monthly.records.find((record) => record.type === 'HIGH')).toMatchObject({
+        priceExact: '15.12345678', pivotAt: '2026-05-01T00:00:00.000Z', confirmedAt: '2026-07-31T23:59:59.999Z'
+      });
+      expect(monthly.records.every((record) => Date.parse(record.confirmedAt) < Date.parse('2026-10-01T00:00:00Z'))).toBe(true);
+      await binanceMonthlyFractalHistory('BTC-USD');
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenCalledWith('https://api.binance.com/api/v3/klines', expect.objectContaining({ params: { symbol: 'BTCUSDT', interval: '1M', limit: 1000 } }));
+      jest.setSystemTime(Date.parse('2026-11-01T00:00:20Z'));
+      await binanceMonthlyFractalHistory('BTC-USD');
+      expect(get).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
   });
 
   test('reuses confirmed daily data throughout the day and refreshes after the next daily close', async () => {
@@ -214,16 +245,17 @@ describe('Binance daily Williams fractal history', () => {
   });
 
   test.each(['BTC-USD', 'ETH-USD', 'INJ-USD', 'SOL-USD', 'ZEC-USD', 'PAXG-USD', 'XAG-USD'] as const)(
-    '%s routes both timeframes to its configured venue without changing the Williams rules', async (market) => {
+    '%s routes all three timeframes to its configured venue without changing the Williams rules', async (market) => {
       const config = BINANCE_DAILY_FRACTAL_MARKETS[market];
       const expectedUrl = config.venue === 'Binance Spot'
         ? 'https://api.binance.com/api/v3/klines'
         : 'https://fapi.binance.com/fapi/v1/klines';
-      for (const interval of ['1d', '1w'] as const) {
+      for (const interval of ['1d', '1w', '1M'] as const) {
         const period = (interval === '1w' ? 7 : 1) * 86_400_000;
         const rows = Array.from({ length: 7 }, (_, index) => {
-          const openTime = Date.UTC(2026, 0, 5) + index * period;
-          return [openTime, '10', index === 2 ? '15.12340000' : '12', '8', '11', '1', openTime + period - 1];
+          const openTime = interval === '1M' ? Date.UTC(2026, index, 1) : Date.UTC(2026, 0, 5) + index * period;
+          const closeTime = interval === '1M' ? Date.UTC(2026, index + 1, 1) - 1 : openTime + period - 1;
+          return [openTime, '10', index === 2 ? '15.12340000' : '12', '8', '11', '1', closeTime];
         });
         const get = binanceGet as jest.Mock;
         get.mockClear().mockResolvedValue({ data: rows });

@@ -7,7 +7,7 @@ const HISTORY_LIMIT = 1000;
 const CACHE_TTL_MS = 60_000;
 const failedRefreshes = new Map<string, { retryAt: number; error: Error }>();
 
-export type BinanceFractalInterval = '1d' | '1w';
+export type BinanceFractalInterval = '1d' | '1w' | '1M';
 export type BinanceFractalVenue = 'Binance Spot' | 'Binance Futures';
 
 export const BINANCE_DAILY_FRACTAL_MARKETS = {
@@ -81,6 +81,10 @@ export function latestExpectedFractalClose(interval: BinanceFractalInterval, now
   const dayMs = 86_400_000;
   const midnight = Math.floor(nowMs / dayMs) * dayMs;
   if (interval === '1d') return midnight - 1;
+  if (interval === '1M') {
+    const now = new Date(nowMs);
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) - 1;
+  }
   const daysSinceMonday = (new Date(midnight).getUTCDay() + 6) % 7;
   return midnight - daysSinceMonday * dayMs - 1;
 }
@@ -321,4 +325,11 @@ export async function binanceBtcDailyFractalHistory(
   forceRefresh = false
 ): Promise<DailyFractalHistorySnapshot> {
   return binanceDailyFractalHistory('BTC-USD', forceRefresh);
+}
+
+export async function binanceMonthlyFractalHistory(
+  market: DailyFractalMarket,
+  forceRefresh = false
+): Promise<DailyFractalHistorySnapshot> {
+  return binanceFractalHistory(market, '1M', forceRefresh);
 }

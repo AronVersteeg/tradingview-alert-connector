@@ -1,6 +1,14 @@
 (function (root) {
   'use strict';
   const HOUR = 3600;
+  const TIMEFRAMES = { D: { option: 'daily', color: '#ffeb3b', rank: 1 },
+    W: { option: 'weekly', color: '#ff9800', rank: 2 }, M: { option: 'monthly', color: '#ff5252', rank: 3 } };
+
+  function periodEnd(time, timeframe) {
+    if (timeframe !== 'M') return time + (timeframe === 'W' ? 168 : 24) * HOUR;
+    const date = new Date(time * 1000);
+    return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) / 1000;
+  }
 
   function projectFractals(bundle, input) {
     if (bundle?.symbol !== 'BTCUSDT' || bundle.venue !== 'Binance Spot') throw new Error('Unexpected fractal source');
@@ -12,13 +20,14 @@
     const times = new Set(candles.map((candle) => candle.time));
     const first = candles[0].time;
     const levels = [];
-    for (const [key, timeframe, period] of [['daily', 'D', 24 * HOUR], ['weekly', 'W', 168 * HOUR]]) {
+    for (const [key, timeframe] of [['daily', 'D'], ['weekly', 'W'], ['monthly', 'M']]) {
       const snapshot = bundle[key];
       if (!snapshot || snapshot.venue !== 'Binance Spot' || snapshot.symbol !== 'BTCUSDT' || snapshot.stale ||
         !Array.isArray(snapshot.records)) throw new Error('Fractal source is stale or invalid');
       const coverageStart = (Date.parse(snapshot.latestClosedCandleAt) + 1) / 1000;
       if (!Number.isSafeInteger(coverageStart) || coverageStart > through) throw new Error('Invalid fractal coverage');
-      // Only the unfinished Daily/Weekly period needs new 1H break validation.
+      if (!snapshot.records.length) continue;
+      // Only the unfinished higher-timeframe period needs new 1H break validation.
       // Earlier breaks are already present in the confirmed higher-timeframe history.
       for (let time = coverageStart; time < through; time += HOUR) {
         if (!times.has(time)) throw new Error('Missing closed 1H candles for fractal verification');
@@ -30,20 +39,27 @@
         if (!Number.isFinite(confirmed) || confirmed >= through || !Number.isSafeInteger(pivot) ||
           !['HIGH', 'LOW'].includes(record.type) || !(price > 0)) continue;
         const column = record.type === 'HIGH' ? 'high' : 'low';
+        const pivotEnd = periodEnd(pivot, timeframe);
         const crosses = (candle) => candle.time > confirmed && (record.type === 'HIGH' ? candle.high > price : candle.low < price);
-        const originBeforeHistory = pivot + period <= first;
-        const originCovered = pivot >= first && pivot + period <= through &&
-          Array.from({ length: period / HOUR }, (_, i) => pivot + i * HOUR).every((time) => times.has(time));
-        const origin = originCovered ? candles.find((candle) => candle.time >= pivot && candle.time < pivot + period && candle[column] === price) : undefined;
+        let originBeforeHistory = pivotEnd <= first;
+        const tailCovered = pivot < first && first < pivotEnd && pivotEnd <= through &&
+          Array.from({ length: (pivotEnd - first) / HOUR }, (_, i) => first + i * HOUR).every((time) => times.has(time));
+        // With a complete pivot-period tail and no matching wick there, the
+        // higher-timeframe extreme necessarily occurred before loaded history.
+        if (tailCovered && !candles.some((candle) => candle.time < pivotEnd && candle[column] === price)) originBeforeHistory = true;
+        const originCovered = pivot >= first && pivotEnd <= through &&
+          Array.from({ length: (pivotEnd - pivot) / HOUR }, (_, i) => pivot + i * HOUR).every((time) => times.has(time));
+        const origin = originCovered ? candles.find((candle) => candle.time >= pivot && candle.time < pivotEnd && candle[column] === price) : undefined;
         const coarseBreak = record.firstBrokenAt ? Date.parse(record.firstBrokenAt) / 1000 : undefined;
         let brokenTime;
         let broken = coarseBreak !== undefined;
         let breakBeforeHistory = false;
         if (coarseBreak !== undefined) {
-          breakBeforeHistory = coarseBreak + period <= first;
-          const covered = coarseBreak >= first && Array.from({ length: period / HOUR }, (_, i) => coarseBreak + i * HOUR)
+          const breakEnd = periodEnd(coarseBreak, timeframe);
+          breakBeforeHistory = breakEnd <= first;
+          const covered = coarseBreak >= first && Array.from({ length: (breakEnd - coarseBreak) / HOUR }, (_, i) => coarseBreak + i * HOUR)
             .filter((time) => time < through).every((time) => times.has(time));
-          if (covered) brokenTime = candles.find((candle) => candle.time >= coarseBreak && candle.time < coarseBreak + period && crosses(candle))?.time;
+          if (covered) brokenTime = candles.find((candle) => candle.time >= coarseBreak && candle.time < breakEnd && crosses(candle))?.time;
         } else {
           const breakCandle = candles.find(crosses);
           if (breakCandle) { broken = true; brokenTime = breakCandle.time; }
@@ -63,7 +79,7 @@
   class FractalPrimitive {
     constructor() {
       this.levels = [];
-      this.options = { daily: true, weekly: true, broken: true };
+      this.options = { daily: true, weekly: true, monthly: true, broken: true };
       this.view = { zOrder: () => 'normal', renderer: () => ({ draw: (target) => this.draw(target) }) };
     }
     attached({ chart, series, requestUpdate }) { this.chart = chart; this.series = series; this.requestUpdate = requestUpdate; }
@@ -73,11 +89,12 @@
     setData(levels) { this.levels = levels; this.requestUpdate?.(); }
     setOptions(options) { Object.assign(this.options, options); this.requestUpdate?.(); }
     visibleLevels() {
-      const candidates = this.levels.filter((level) => this.options[level.timeframe === 'D' ? 'daily' : 'weekly'] &&
+      const candidates = this.levels.filter((level) => this.options[TIMEFRAMES[level.timeframe]?.option] &&
         (!level.broken || this.options.broken) && !level.breakBeforeHistory &&
         (level.originTime !== null || level.originBeforeHistory) && (!level.broken || level.brokenTime !== null));
-      const weeklyPrices = new Set(candidates.filter((level) => level.timeframe === 'W').map((level) => level.price));
-      return candidates.filter((level) => level.timeframe !== 'D' || !weeklyPrices.has(level.price));
+      const highestRank = new Map();
+      for (const level of candidates) highestRank.set(level.price, Math.max(highestRank.get(level.price) || 0, TIMEFRAMES[level.timeframe].rank));
+      return candidates.filter((level) => TIMEFRAMES[level.timeframe].rank === highestRank.get(level.price));
     }
     draw(target) {
       if (!this.chart || !this.series) return;
@@ -91,10 +108,10 @@
           const origin = level.originBeforeHistory ? 0 : this.chart.timeScale().timeToCoordinate(level.originTime);
           const end = level.broken ? this.chart.timeScale().timeToCoordinate(level.brokenTime) : width - 8;
           if (y === null || y < 8 || y > height - 8 || origin === null || end === null || end < 0 || origin > width) continue;
-          const color = level.timeframe === 'D' ? '#ffeb3b' : '#ff9800';
+          const color = TIMEFRAMES[level.timeframe].color;
           ctx.strokeStyle = color;
           ctx.globalAlpha = level.broken ? .65 : 1;
-          ctx.lineWidth = level.timeframe === 'W' ? (level.broken ? 2 : 4) : (level.isCurrent ? 2 : 1.2);
+          ctx.lineWidth = level.timeframe !== 'D' ? (level.broken ? 2 : 4) : (level.isCurrent ? 2 : 1.2);
           ctx.setLineDash(level.broken ? [5, 5] : []);
           ctx.beginPath(); ctx.moveTo(Math.max(0, origin), y); ctx.lineTo(Math.min(width, end), y); ctx.stroke();
           if (level.broken && end <= width && end - Math.max(0, origin) > 15) {

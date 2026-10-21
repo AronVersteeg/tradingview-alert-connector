@@ -1,5 +1,5 @@
 import {
-  binanceDailyFractalHistory, binanceWeeklyFractalHistory,
+  binanceDailyFractalHistory, binanceWeeklyFractalHistory, binanceMonthlyFractalHistory,
   DailyFractalHistorySnapshot, latestExpectedFractalClose
 } from './binanceDailyFractalHistory';
 
@@ -12,6 +12,7 @@ export type BtcFractalProjectionSnapshot = {
   evaluatedThrough: string;
   daily: DailyFractalHistorySnapshot;
   weekly: DailyFractalHistorySnapshot;
+  monthly: DailyFractalHistorySnapshot;
 };
 
 export class BtcFractalProjectionFeed {
@@ -20,7 +21,8 @@ export class BtcFractalProjectionFeed {
 
   constructor(
     private daily = (force = false) => binanceDailyFractalHistory('BTC-USD', force, 'Binance Spot'),
-    private weekly = (force = false) => binanceWeeklyFractalHistory('BTC-USD', force)
+    private weekly = (force = false) => binanceWeeklyFractalHistory('BTC-USD', force),
+    private monthly = (force = false) => binanceMonthlyFractalHistory('BTC-USD', force)
   ) {}
 
   async snapshot(): Promise<BtcFractalProjectionSnapshot> {
@@ -37,9 +39,9 @@ export class BtcFractalProjectionFeed {
   private async fetch(): Promise<BtcFractalProjectionSnapshot> {
     const evaluatedAt = Date.now();
     const snapshots: DailyFractalHistorySnapshot[] = [];
-    for (const [interval, read] of [['1d', this.daily], ['1w', this.weekly]] as const) {
+    for (const [interval, read] of [['1d', this.daily], ['1w', this.weekly], ['1M', this.monthly]] as const) {
       let snapshot = await read();
-      // Daily/Weekly caches can straddle the UTC close by less than their TTL.
+      // Higher-timeframe caches can straddle the UTC close by less than their TTL.
       if (!snapshot.stale && Date.parse(snapshot.latestClosedCandleAt || '') < latestExpectedFractalClose(interval, evaluatedAt)) {
         snapshot = await read(true);
       }
@@ -54,7 +56,7 @@ export class BtcFractalProjectionFeed {
     return {
       symbol: 'BTCUSDT', venue: 'Binance Spot', checkedAt: new Date(now).toISOString(),
       evaluatedThrough: new Date(Math.floor(evaluatedAt / HOUR_MS) * HOUR_MS).toISOString(),
-      daily: snapshots[0], weekly: snapshots[1]
+      daily: snapshots[0], weekly: snapshots[1], monthly: snapshots[2]
     };
   }
 }

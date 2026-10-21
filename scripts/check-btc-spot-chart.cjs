@@ -23,14 +23,16 @@ function candlePixels(buffer) {
 
 function fractalPixels(buffer) {
   const png = PNG.sync.read(buffer);
-  let daily = 0, weekly = 0;
+  let daily = 0, weekly = 0, monthly = 0;
   for (let i = 0; i < png.data.length; i += 4) {
     const [r, g, b] = png.data.subarray(i, i + 3);
     if (r > 225 && g > 200 && b < 100) daily++;
     if (r > 225 && g > 110 && g < 180 && b < 70) weekly++;
+    if (r > 250 && g < 100 && b > 65 && b < 100) monthly++;
   }
   assert(daily > 100 && weekly > 100, `D/W lines must both render (${daily}/${weekly}).`);
-  return { daily, weekly };
+  assert(monthly > 100, `Monthly lines must render red (${monthly}).`);
+  return { daily, weekly, monthly };
 }
 
 async function checkHourlyBoxes(page) {
@@ -136,14 +138,15 @@ async function checkHourRefresh(browser, url, output) {
         return route.fulfill({ json: {
           symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThrough: new Date(through).toISOString(),
           daily: make('1d', { id: 'd', type: 'HIGH', priceExact: '100.00', pivotAt: '2026-10-15T00:00:00Z', confirmedAt: '2026-10-17T23:59:59.999Z', isLatestForType: true }, '2026-10-20T23:59:59.999Z'),
-          weekly: make('1w', { id: 'w', type: 'LOW', priceExact: '80.00', pivotAt: '2026-09-28T00:00:00Z', confirmedAt: '2026-10-18T23:59:59.999Z', isLatestForType: true }, '2026-10-18T23:59:59.999Z')
+          weekly: make('1w', { id: 'w', type: 'LOW', priceExact: '80.00', pivotAt: '2026-09-28T00:00:00Z', confirmedAt: '2026-10-18T23:59:59.999Z', isLatestForType: true }, '2026-10-18T23:59:59.999Z'),
+          monthly: make('1M', { id: 'm', type: 'HIGH', priceExact: '200.00', pivotAt: '2026-07-01T00:00:00Z', confirmedAt: '2026-09-30T23:59:59.999Z', isLatestForType: true }, '2026-09-30T23:59:59.999Z')
         } });
       }
       return route.fulfill({ status: 503, json: { ok: false } });
     });
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length === 2);
+    await page.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length === 3);
     const sendGap = () => page.evaluate((time) => {
       const records = [{ candleTime: time / 1000 - 3600, availableAt: time / 1000, lower: 80, upper: 105 }];
       if (Date.now() >= time + 3_600_000) records.push({ candleTime: time / 1000, availableAt: time / 1000 + 3600, lower: 82, upper: 108 });
@@ -193,7 +196,16 @@ async function checkHourRefresh(browser, url, output) {
     await page.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length > 0, null, { timeout: 40_000 });
     const fractalLevels = await page.evaluate(() => window.btcSpotChart.getFractalProjections());
     const currents = fractalLevels.levels.filter((level) => level.isCurrent && !level.broken);
-    assert.equal(currents.length, 4, 'Current Daily and Weekly highs/lows must all be present.');
+    assert.equal(currents.filter((level) => level.timeframe !== 'M').length, 4, 'Current Daily and Weekly highs/lows must all be present.');
+    assert.equal(fractalLevels.levels.filter((level) => level.timeframe === 'M' && level.isCurrent).length, 2, 'Latest Monthly high and low must both be present, including broken levels.');
+    await page.waitForFunction(() => document.querySelectorAll('#monthlyFractalHistoryRows td').length > 6);
+    const monthlySnapshot = await page.evaluate(async () => (await fetch('/research/binance-monthly-fractals?market=BTC-USD')).json());
+    assert.equal(monthlySnapshot.interval, '1M'); assert.equal(monthlySnapshot.venue, 'Binance Spot');
+    assert.equal(await page.locator('#monthlyFractalHistoryRows tr').count(), monthlySnapshot.records.length);
+    assert.equal(await page.locator('#monthlyIntactFractalRows tr').count(), monthlySnapshot.records.filter((row) => !row.firstBrokenAt).length);
+    await page.locator('#monthlyFractalHistoryCard').scrollIntoViewIfNeeded();
+    await page.locator('#monthlyFractalHistoryCard').screenshot({ path: path.join(output, 'monthly-fractal-tables-desktop.png') });
+    await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
     for (const level of fractalLevels.levels.filter((item) => item.originTime !== null)) {
       const wick = await page.evaluate((time) => window.btcSpotChart.getCandles().find((row) => row.time === time), level.originTime);
       assert.equal(wick[level.type === 'HIGH' ? 'high' : 'low'], level.price, 'Origin must be the actual Spot 1H wick.');
@@ -231,6 +243,8 @@ async function checkHourRefresh(browser, url, output) {
     await page.locator('#spotChartDaily').check();
     await page.locator('#spotChartWeekly').uncheck();
     await page.locator('#spotChartWeekly').check();
+    await page.locator('#spotChartMonthly').uncheck();
+    await page.locator('#spotChartMonthly').check();
     await page.locator('#spotChartBroken').uncheck();
     await page.locator('#spotChartBroken').check();
     const box = await page.locator('#spotChartCanvas').boundingBox();
@@ -258,6 +272,8 @@ async function checkHourRefresh(browser, url, output) {
     await other.goto(otherUrl.href, { waitUntil: 'domcontentloaded' });
     assert.equal(await other.locator('#btcSpotChartPanel').isVisible(), false);
     assert.equal(btcRequests, 0);
+    await other.waitForFunction(() => document.getElementById('monthlyFractalHistoryTitle').textContent.includes('ETH-USD'));
+    assert((await other.locator('#monthlyFractalHistoryRows tr').count()) > 1);
 
     const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     const phone = await mobile.newPage();
@@ -266,6 +282,11 @@ async function checkHourRefresh(browser, url, output) {
     await phone.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
     await phone.waitForFunction(() => window.btcSpotChart?.getCandles().length >= 500, null, { timeout: 40_000 });
     await phone.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length > 0, null, { timeout: 40_000 });
+    await phone.waitForFunction(() => document.querySelectorAll('#monthlyFractalHistoryRows td').length > 6);
+    await phone.locator('#monthlyFractalHistoryCard').scrollIntoViewIfNeeded();
+    assert.equal(await phone.locator('#monthlyFractalHistoryCard').evaluate((node) => node.scrollWidth > node.clientWidth + 1), false);
+    await phone.locator('#monthlyFractalHistoryCard').screenshot({ path: path.join(output, 'monthly-fractal-tables-mobile.png') });
+    await phone.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
     await phone.locator('#spotChartFitFractals').tap();
     const overflow = await phone.locator('#btcSpotChartPanel').evaluate((node) => node.scrollWidth > node.clientWidth + 1);
     assert.equal(overflow, false, 'Chart must not overflow its mobile container.');
@@ -278,6 +299,6 @@ async function checkHourRefresh(browser, url, output) {
     assert.deepEqual(errors, [], 'No uncaught browser exceptions');
     assert.deepEqual(writes, [], 'Chart interactions must not submit orders, plans, settings or SMTP requests');
     const hourlyFixture = await checkHourRefresh(browser, url, output);
-    console.log(JSON.stringify({ feed, currentFractals: currents, projectionCutoff: fractalLevels.evaluatedThrough, controls: 'zoom, range, volume, grid, timezone, fullscreen, PNG export, Daily/Weekly/Broken, Fit levels, 1H boxes, gap rectangles/lead', olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, desktopFractals, mobileFractals, desktopHourlyBoxes, mobileHourlyBoxes, desktopGap, mobileGap, hourlyFixture, browserErrors: errors, writeRequests: writes }, null, 2));
+    console.log(JSON.stringify({ feed, currentFractals: currents, monthlyTables: { records: monthlySnapshot.records.length, intact: monthlySnapshot.records.filter((row) => !row.firstBrokenAt).length, ethVerified: true, mobileOverflow: false }, projectionCutoff: fractalLevels.evaluatedThrough, controls: 'zoom, range, volume, grid, timezone, fullscreen, PNG export, Daily/Weekly/Monthly/Broken, Fit levels, 1H boxes, gap rectangles/lead', olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, desktopFractals, mobileFractals, desktopHourlyBoxes, mobileHourlyBoxes, desktopGap, mobileGap, hourlyFixture, browserErrors: errors, writeRequests: writes }, null, 2));
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error.stack); process.exitCode = 1; });

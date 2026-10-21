@@ -1477,6 +1477,23 @@
           </table>
         </div>
       </div>
+      <div class="gap-card delay-history-card" id="monthlyFractalHistoryCard">
+        <div class="gap-label" id="monthlyFractalHistoryTitle">Monthly Williams fractals - Binance</div>
+        <div class="gap-status" id="monthlyFractalHistoryStatus">Loading confirmed monthly fractals</div>
+        <div class="daily-fractal-scroll">
+          <table class="delay-history-table daily-fractal-table" aria-label="Confirmed Binance monthly Williams fractal history">
+            <thead><tr><th>Type</th><th>Exact wick</th><th>Pivot month</th><th>Confirmed at</th><th>Line state</th><th>First later break</th></tr></thead>
+            <tbody id="monthlyFractalHistoryRows"><tr><td colspan="6">Loading confirmed monthly fractals</td></tr></tbody>
+          </table>
+        </div>
+        <div class="gap-label fractal-intact-heading">Intact monthly fractal levels</div>
+        <div class="fractal-intact-scroll">
+          <table class="delay-history-table fractal-intact-table" aria-label="Intact Binance monthly Williams fractal levels">
+            <thead><tr><th>Type</th><th>Exact wick</th><th>Pivot month</th></tr></thead>
+            <tbody id="monthlyIntactFractalRows"><tr><td colspan="3">Loading intact monthly fractals</td></tr></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <section class="stage">
@@ -1523,10 +1540,11 @@
           <label class="spot-gap-lead" title="Gap right edge: hours beyond the latest candle">+<input type="number" id="spotChartGapLead" value="3" min="1" max="72" step="1" aria-label="Gap right offset in 1H candles">h</label>
           <label class="spot-chart-toggle" title="Daily fractals"><input type="checkbox" id="spotChartDaily" checked><i class="spot-fractal-swatch daily"></i>Daily</label>
           <label class="spot-chart-toggle" title="Weekly fractals"><input type="checkbox" id="spotChartWeekly" checked><i class="spot-fractal-swatch weekly"></i>Weekly</label>
+          <label class="spot-chart-toggle" title="Monthly fractals"><input type="checkbox" id="spotChartMonthly" checked><i class="spot-fractal-swatch monthly"></i>Monthly</label>
           <label class="spot-chart-toggle" title="Broken fractal segments"><input type="checkbox" id="spotChartBroken" checked>Broken</label>
-          <button class="spot-chart-range" id="spotChartFitFractals" title="Include current Daily, Weekly and gap levels in price scale" aria-pressed="false">Fit levels</button>
+          <button class="spot-chart-range" id="spotChartFitFractals" title="Include current Daily, Weekly, Monthly and gap levels in price scale" aria-pressed="false">Fit levels</button>
         </div>
-        <span id="spotChartFractalStatus" role="status">D/W pending</span>
+        <span id="spotChartFractalStatus" role="status">D/W/M pending</span>
         <span id="spotChartGapStatus" role="status">Gap pending</span>
       </div>
       <div class="spot-chart-ohlc" id="spotChartOhlc">
@@ -1782,12 +1800,14 @@
     const CLOUD_WEEKLY_FRACTAL_HISTORY_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/research/binance-weekly-fractals'
       : '/research/binance-weekly-fractals';
+    const CLOUD_MONTHLY_FRACTAL_HISTORY_URL = '/research/binance-monthly-fractals';
     const CLOUD_MANUAL_OVERRIDE_URL = ['127.0.0.1', 'localhost'].includes(window.location.hostname)
       ? 'https://arons-tradingview-alert-connector.onrender.com/decentrader/manual-override'
       : '/decentrader/manual-override';
     let payload = activeSource === 'decentrader' ? window.DECENTRADER_LIQUIDITY_TIMELAPSE : null;
     let dailyFractalHistory = null;
     let weeklyFractalHistory = null;
+    let monthlyFractalHistory = null;
     const canvas = document.getElementById('chart');
     const ctx = canvas.getContext('2d');
     const frameInput = document.getElementById('frame');
@@ -1871,6 +1891,11 @@
     const weeklyFractalHistoryStatus = document.getElementById('weeklyFractalHistoryStatus');
     const weeklyFractalHistoryRows = document.getElementById('weeklyFractalHistoryRows');
     const weeklyIntactFractalRows = document.getElementById('weeklyIntactFractalRows');
+    const monthlyFractalHistoryCard = document.getElementById('monthlyFractalHistoryCard');
+    const monthlyFractalHistoryTitle = document.getElementById('monthlyFractalHistoryTitle');
+    const monthlyFractalHistoryStatus = document.getElementById('monthlyFractalHistoryStatus');
+    const monthlyFractalHistoryRows = document.getElementById('monthlyFractalHistoryRows');
+    const monthlyIntactFractalRows = document.getElementById('monthlyIntactFractalRows');
     const tradeZoneValue = document.getElementById('tradeZoneValue');
     const tradeZoneStatus = document.getElementById('tradeZoneStatus');
     const tradePlanValue = document.getElementById('tradePlanValue');
@@ -3576,6 +3601,17 @@
       }
     }
 
+    function updateMonthlyFractalHistory() {
+      updateFractalHistory(monthlyFractalHistory, 'Monthly', monthlyFractalHistoryCard, monthlyFractalHistoryTitle,
+        monthlyFractalHistoryStatus, monthlyFractalHistoryRows, monthlyIntactFractalRows);
+    }
+
+    async function refreshMonthlyFractalHistory() {
+      monthlyFractalHistory = await fetchFractalHistory(CLOUD_MONTHLY_FRACTAL_HISTORY_URL, 'Monthly', monthlyFractalHistoryStatus);
+      updateMonthlyFractalHistory();
+      return monthlyFractalHistory;
+    }
+
     async function refreshDailyFractalHistory() {
       dailyFractalHistory = await fetchFractalHistory(
         CLOUD_DAILY_FRACTAL_HISTORY_URL,
@@ -3599,7 +3635,8 @@
     function refreshFractalHistories() {
       return Promise.allSettled([
         refreshDailyFractalHistory(),
-        refreshWeeklyFractalHistory()
+        refreshWeeklyFractalHistory(),
+        refreshMonthlyFractalHistory()
       ]);
     }
 
@@ -6110,6 +6147,7 @@
       note.textContent = payload.source.note;
       updateDailyFractalHistory();
       updateWeeklyFractalHistory();
+      updateMonthlyFractalHistory();
       resizeCanvas();
     }
 

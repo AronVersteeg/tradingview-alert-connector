@@ -2,12 +2,14 @@ import express from 'express';
 import path from 'path';
 import helmet from 'helmet';
 import { btcSpotChartRouter } from '../src/controllers/btcSpotChart';
+import { binanceMonthlyFractalsRouter } from '../src/controllers/binanceMonthlyFractals';
 
 // Deliberately do not import src/index or controllers/index: this preview has
 // no exchange initialization, trading executors, plans, collectors or SMTP.
 const app = express();
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(btcSpotChartRouter);
+app.use(binanceMonthlyFractalsRouter);
 app.get('/decentrader/map', (_req, res) => {
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'", "script-src 'self' 'unsafe-inline'", "script-src-attr 'none'",

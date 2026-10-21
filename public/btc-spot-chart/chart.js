@@ -58,10 +58,10 @@
     try {
       fractalModel = fractals.projectFractals(fractalBundle, candles);
       fractalLayer.setData(fractalModel.levels);
-      projectionStatus(`D/W closed through ${dateText(Date.parse(fractalModel.evaluatedThrough) / 1000, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
+      projectionStatus(`D/W/M closed through ${dateText(Date.parse(fractalModel.evaluatedThrough) / 1000, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
       if (fitFractals) candlesSeries.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
     } catch (error) {
-      projectionStatus(`D/W pending: ${error.message}`, true);
+      projectionStatus(`D/W/M pending: ${error.message}`, true);
     }
   }
   function fractalAutoscale(base) {
@@ -99,7 +99,7 @@
         if (!lastClosed || (lastClosed.time + 3600) * 1000 < Date.parse(bundle.evaluatedThrough)) await loadRecent();
         if (!destroyed) projectLoadedCandles();
       } catch (error) {
-        if (!destroyed) projectionStatus(`D/W stale: ${error.name === 'AbortError' ? 'request timed out' : error.message}`, true);
+        if (!destroyed) projectionStatus(`D/W/M stale: ${error.name === 'AbortError' ? 'request timed out' : error.message}`, true);
       } finally { clearTimeout(timeout); fractalPending = undefined; }
     })();
     return fractalPending;
@@ -368,7 +368,7 @@
   byId('spotChartRefresh').addEventListener('click', async () => {
     try { await ensureChart(); await loadRecent(); await refreshFractals(true); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
   });
-  for (const [id, key] of [['spotChartDaily', 'daily'], ['spotChartWeekly', 'weekly'], ['spotChartBroken', 'broken']]) {
+  for (const [id, key] of [['spotChartDaily', 'daily'], ['spotChartWeekly', 'weekly'], ['spotChartMonthly', 'monthly'], ['spotChartBroken', 'broken']]) {
     byId(id).addEventListener('change', (event) => {
       fractalLayer?.setOptions({ [key]: event.target.checked });
       if (fitFractals) candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });

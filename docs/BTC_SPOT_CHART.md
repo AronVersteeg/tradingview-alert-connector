@@ -32,46 +32,66 @@ source identity, and `getCandles()` (defensive copies). The browser emits
 `btc-spot-chart:ready`. Future custom visual layers can attach here without
 coupling rendering to a trading executor. No strategy checkbox is added.
 
-## Daily / Weekly Projections
+## Daily / Weekly / Monthly Projections
 
-- Same source as the BTC fractal tables: confirmed Binance Spot BTCUSDT Daily
-  and Weekly Williams fractals (two closed candles on either side).
-- Daily yellow, Weekly orange. DC/WC denote the latest confirmed high and low
+- Same source as the BTC fractal tables: confirmed Binance Spot BTCUSDT Daily,
+  Weekly and Monthly Williams fractals (two closed candles on either side).
+- Daily yellow, Weekly orange, Monthly red. DC/WC/MC denote the latest confirmed high and low
   for each timeframe; older levels use D/W. These are exact prices, no buffer.
 - A line starts at the first exact matching 1H wick inside its pivot day/week.
   This is a retrospective visual anchor: availability is still `confirmedAt`,
-  after the two right-side D/W candles close. It is not an earlier entry signal.
+  after the two right-side higher-timeframe candles close. It is not an earlier entry signal.
 - Intact levels extend right. A strict high/low wick crossing breaks the level;
   an exact touch does not. Only closed 1H candles count. The whole broken segment
   becomes dashed and ends at the first breaking hour, with no extension past it.
-- The existing D/W history supplies older breaks; closed 1H candles resolve
-  their precise hour and any new breaks in the unfinished day/week. This layer
-  does not mutate the D/W tables or any trading source.
+- The existing D/W/M history supplies older breaks; closed 1H candles resolve
+  their precise hour and any new breaks in the unfinished day/week/month. This layer
+  does not mutate the higher-timeframe tables or any trading source.
 - Origins before loaded history are clipped at the left edge. Partly loaded
   pivot/break periods are not guessed; scrolling back resolves their exact hours.
+  A complete loaded pivot-period tail with no matching wick proves the origin
+  lies to its left, so the line stays clipped rather than disappearing.
   No per-level historical downloads or additional disk histories are introduced.
 - `GET /open-liquidity/v2/btc-spot-fractal-projections` bundles the existing
-  shared D/W caches once per closed hour. The visible chart refreshes on the
+  shared D/W/M caches once per closed hour. The visible chart refreshes on the
   closing websocket candle, with a five-second watchdog and shared REST recovery
   if the final websocket candle was missed. It never treats an old open candle
   as final just because wall-clock time advanced.
-- Missing/stale D/W data or gaps in closed 1H coverage leave the previous
+- Missing/stale D/W/M data or gaps in closed 1H coverage leave the previous
   verified projections in place with an explicit pending/stale status. No
   promise of a fixed refresh latency during an upstream outage is made.
-- Daily, Weekly and Broken visibility controls are independent. `Fit levels`
+- Daily, Weekly, Monthly and Broken visibility controls are independent. `Fit levels`
   optionally includes current intact levels in the price scale. Older distant
   levels cannot squeeze the normal candle scale. At the exact same price,
-  Weekly takes visual precedence: only its orange line and W/WC label render.
-  Daily data remains unchanged and becomes visible if Weekly is switched off.
+  Monthly takes precedence over Weekly, which takes precedence over Daily.
+  Only the highest enabled/renderable timeframe's line and label render.
+  Underlying data stays unchanged and lower-timeframe lines reappear if the
+  higher timeframe is switched off.
 - `getFractalProjections()` exposes defensive copies of verified projections
   and their closed-hour cutoff for read-only inspection. PNG export includes
   the primitive layer. No entry, SL, TP or trailing logic uses these projections.
+
+## Monthly Tables and Calendar Rules
+
+- `GET /research/binance-monthly-fractals?market=BTC-USD` uses Binance's `1M`
+  klines and the same shared Williams engine as D/W. The open month is excluded;
+  two complete right-side months must close before confirmation. Calendar-month
+  ends use UTC dates, including February/leap years and December/January, never
+  a fixed 30-day duration.
+- Monthly high/low history and a separate intact list use the existing D/W
+  table renderer, state rules, exact decimals and mobile scrolling. They appear
+  on the same seven dashboards. Crypto uses Spot; GOLD/XAUUSDT and SILVER/XAGUSDT
+  retain their existing explicit Futures source because those symbols have no
+  Spot market. The candle-chart Monthly projection is BTC Spot only.
+- Monthly history is shared/cached until the next monthly close, with the same
+  cooldown, backoff and stale fallback as D/W. No new disk history, environment
+  variable, entry condition or trading automation is added.
 
 ## 1H Williams Boxes
 
 - Enabled by default through the independent `1H boxes` checkbox. Translucent
   light-gray stepped price ranges render behind candles, not in the traded
-  volume histogram. The D/W projection colors and Weekly priority are unchanged.
+  volume histogram. Higher-timeframe projection styling stays independent.
 - Range bounds are the last confirmed 1H Williams high and low, using the same
   two-left/two-right rule and newest-equal-pivot tie handling as the existing
   `confirmedWilliamsFractals` implementation (covered by a parity test).
@@ -102,7 +122,7 @@ coupling rendering to a trading executor. No strategy checkbox is added.
 - The active rectangle ends three 1H candle slots beyond the latest candle by
   default. The `+ h` numeric control adjusts this to 1-72 candle slots without
   inserting fake candles or moving historical transitions. `Fit levels` can
-  include the current gap bounds alongside current D/W fractals.
+  include the current gap bounds alongside current D/W/M fractals.
 - The 500 retained frames do not in themselves establish the first gap's
   original birth. Unknown starts remain open on the left. The current
   79,400-87,400 gap has the user's explicitly supplied start at 2026-09-21
