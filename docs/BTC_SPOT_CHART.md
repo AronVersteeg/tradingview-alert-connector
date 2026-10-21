@@ -24,6 +24,9 @@ code consumes this chart.
 - OHLC and volumes are actual candle values, not OHLC4 or reconstructed cohorts.
 - Amsterdam/UTC formatting changes labels only, never candle timestamps.
 - No chart candle histories are written to disk.
+- The Spot view has no grid, volume histogram or volume legend, and no Volume/
+  Grid toolbar checkboxes. Candles use the full available price area. Underlying
+  Binance volume/quote-volume data and all strategy/storage inputs are unchanged.
 
 ## Pan and Zoom
 
@@ -112,8 +115,8 @@ coupling rendering to a trading executor. No strategy checkbox is added.
 ## 1H Williams Boxes
 
 - Enabled by default through the independent `1H boxes` checkbox. Translucent
-  light-gray stepped price ranges render behind candles, not in the traded
-  volume histogram. Higher-timeframe projection styling stays independent.
+  light-gray stepped price ranges render behind candles. Higher-timeframe
+  projection styling stays independent.
 - Range bounds are the last confirmed 1H Williams high and low, using the same
   two-left/two-right rule and newest-equal-pivot tie handling as the existing
   `confirmedWilliamsFractals` implementation (covered by a parity test).

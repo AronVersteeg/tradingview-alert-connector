@@ -16,9 +16,8 @@
   const api = '/open-liquidity/v2/btc-spot-candles';
   const streamUrls = ['wss://stream.binance.com:443/ws/btcusdt@kline_1h', 'wss://stream.binance.com:9443/ws/btcusdt@kline_1h'];
   const money = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const volumeFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
   let zone = 'Europe/Amsterdam';
-  let library, chart, candlesSeries, volumeSeries, initialization;
+  let library, chart, candlesSeries, initialization;
   let candles = [], socket, reconnectTimer, watchdog;
   let active = false, inView = false, destroyed = false, failures = 0;
   let lastTickAt = 0, lastRestAt = 0, lastSourceTime = 0;
@@ -164,14 +163,10 @@
     if (!candle) return;
     byId('spotChartOhlc').dataset.direction = candle.close >= candle.open ? 'up' : 'down';
     for (const key of ['open', 'high', 'low', 'close']) byId(`spotChart${key[0].toUpperCase()}${key.slice(1)}`).textContent = money.format(candle[key]);
-    byId('spotChartVolumeValue').textContent = volumeFormat.format(candle.volume);
     byId('spotChartCandleTime').textContent = dateText(candle.time, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
   function bar(candle) {
     return { time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close };
-  }
-  function volumeBar(candle) {
-    return { time: candle.time, value: candle.volume, color: candle.close >= candle.open ? '#26a69a66' : '#ef535066' };
   }
   function applyCandles(next, singleUpdate) {
     const range = chart.timeScale().getVisibleLogicalRange();
@@ -182,10 +177,8 @@
     candles = next;
     if (singleUpdate && wasInitial && oldFirst === next[0]?.time) {
       candlesSeries.update(bar(singleUpdate));
-      volumeSeries.update(volumeBar(singleUpdate));
     } else {
       candlesSeries.setData(candles.map(bar));
-      volumeSeries.setData(candles.map(volumeBar));
       if (wasInitial && range && oldFirst !== undefined) {
         const offset = candles.findIndex((candle) => candle.time === oldFirst);
         if (offset >= 0) chart.timeScale().setVisibleLogicalRange({ from: range.from + offset, to: range.to + offset });
@@ -233,9 +226,9 @@
       chart = library.createChart(byId('spotChartCanvas'), {
         autoSize: true,
         layout: { background: { type: library.ColorType.Solid, color: '#131722' }, textColor: '#b2b5be', fontSize: 12, fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif', attributionLogo: true },
-        grid: { vertLines: { color: '#242731', visible: byId('spotChartGrid').checked }, horzLines: { color: '#242731', visible: byId('spotChartGrid').checked } },
+        grid: { vertLines: { visible: false }, horzLines: { visible: false } },
         crosshair: { mode: library.CrosshairMode.Normal, vertLine: { color: '#787b86', labelBackgroundColor: '#363a45' }, horzLine: { color: '#787b86', labelBackgroundColor: '#363a45' } },
-        rightPriceScale: { borderColor: '#2a2e39', minimumWidth: 80, scaleMargins: { top: .08, bottom: byId('spotChartVolume').checked ? .23 : .08 } },
+        rightPriceScale: { borderColor: '#2a2e39', minimumWidth: 80, scaleMargins: { top: .08, bottom: .08 } },
         timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: projectionLead() + viewport.RIGHT_BUFFER, barSpacing: 8,
           tickMarkFormatter: (time, type) => dateText(time, type <= library.TickMarkType.DayOfMonth ? { day: 'numeric', month: 'short' } : { hour: '2-digit', minute: '2-digit' }) },
         localization: { locale: 'en-US', priceFormatter: (value) => money.format(value), timeFormatter: (time) => dateText(time, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) },
@@ -259,11 +252,6 @@
       hourlyBoxLayer = new hourlyBoxes.HourlyFractalBoxPrimitive();
       hourlyBoxLayer.setVisible(byId('spotChartHourlyBoxes').checked);
       candlesSeries.attachPrimitive(hourlyBoxLayer);
-      volumeSeries = chart.addSeries(library.HistogramSeries, {
-        priceFormat: { type: 'volume' }, priceScaleId: 'volume', lastValueVisible: false, priceLineVisible: false,
-        visible: byId('spotChartVolume').checked
-      });
-      volumeSeries.priceScale().applyOptions({ scaleMargins: { top: .82, bottom: 0 } });
       gestures = interactions.install(chartCanvas, {
         read: () => {
           if (!initialData || destroyed) return null;
@@ -305,7 +293,7 @@
       });
       window.btcSpotChart = Object.freeze({
         symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', chart,
-        candleSeries: candlesSeries, volumeSeries,
+        candleSeries: candlesSeries,
         getCandles: () => candles.map((candle) => ({ ...candle })),
         getFractalProjections: () => fractalModel ? { ...fractalModel, levels: fractalModel.levels.map((level) => ({ ...level })) } : null,
         getHourlyFractalBoxes: () => hourlyBoxModel ? { evaluatedThrough: hourlyBoxModel.evaluatedThrough,
@@ -475,12 +463,6 @@
   byId('spotChartZoomOut').addEventListener('click', () => zoom(1.25));
   byId('spotChartReset').addEventListener('click', () => selectRange(window.innerWidth < 680 ? '60' : '120'));
   panel.querySelectorAll('[data-spot-range]').forEach((button) => button.addEventListener('click', () => selectRange(button.dataset.spotRange)));
-  byId('spotChartVolume').addEventListener('change', (event) => {
-    if (!chart) return;
-    volumeSeries.applyOptions({ visible: event.target.checked });
-    chart.priceScale('right').applyOptions({ scaleMargins: { top: .08, bottom: event.target.checked ? .23 : .08 } });
-  });
-  byId('spotChartGrid').addEventListener('change', (event) => chart?.applyOptions({ grid: { vertLines: { visible: event.target.checked }, horzLines: { visible: event.target.checked } } }));
   byId('spotChartTimezone').addEventListener('change', (event) => {
     zone = event.target.value;
     if (chart) chart.applyOptions({ localization: { locale: 'en-US' } });

@@ -225,12 +225,10 @@ async function checkHourRefresh(browser, url, output) {
     await page.waitForFunction((previous) => { const r = window.btcSpotChart.chart.timeScale().getVisibleLogicalRange(); return r.to - r.from < previous; }, originalSpan);
     assert((await span()) < originalSpan);
     await page.locator('#spotChartZoomOut').click();
-    await page.locator('#spotChartVolume').uncheck();
-    assert.equal(await page.evaluate(() => window.btcSpotChart.volumeSeries.options().visible), false);
-    await page.locator('#spotChartVolume').check();
-    await page.locator('#spotChartGrid').uncheck();
+    assert.equal(await page.locator('#spotChartVolume, #spotChartGrid, #spotChartVolumeValue').count(), 0);
+    assert.equal(await page.evaluate(() => 'volumeSeries' in window.btcSpotChart), false);
     assert.equal(await page.evaluate(() => window.btcSpotChart.chart.options().grid.horzLines.visible), false);
-    await page.locator('#spotChartGrid').check();
+    assert.equal(await page.evaluate(() => window.btcSpotChart.chart.options().grid.vertLines.visible), false);
     const candleTime = await page.evaluate(() => window.btcSpotChart.getCandles().at(-1).time);
     await page.locator('#spotChartTimezone').selectOption('UTC');
     assert.equal(await page.evaluate(() => window.btcSpotChart.getCandles().at(-1).time), candleTime);
@@ -313,6 +311,6 @@ async function checkHourRefresh(browser, url, output) {
     assert.deepEqual(errors, [], 'No uncaught browser exceptions');
     assert.deepEqual(writes, [], 'Chart interactions must not submit orders, plans, settings or SMTP requests');
     const hourlyFixture = await checkHourRefresh(browser, url, output);
-    console.log(JSON.stringify({ feed, currentFractals: currents, monthlyTables: { records: monthlySnapshot.records.length, intact: monthlySnapshot.records.filter((row) => !row.firstBrokenAt).length, ethVerified: true, mobileOverflow: false }, projectionCutoff: fractalLevels.evaluatedThrough, controls: 'zoom, range, volume, grid, timezone, fullscreen, PNG export, Daily/Weekly/Monthly/Broken, Fit levels, 1H boxes, gap rectangles/lead', olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, desktopFractals, mobileFractals, desktopHourlyBoxes, mobileHourlyBoxes, desktopGap, mobileGap, hourlyFixture, browserErrors: errors, writeRequests: writes }, null, 2));
+    console.log(JSON.stringify({ feed, currentFractals: currents, monthlyTables: { records: monthlySnapshot.records.length, intact: monthlySnapshot.records.filter((row) => !row.firstBrokenAt).length, ethVerified: true, mobileOverflow: false }, projectionCutoff: fractalLevels.evaluatedThrough, controls: 'zoom, range, timezone, fullscreen, PNG export, Daily/Weekly/Monthly/Broken, Fit levels, 1H boxes, gap rectangles/lead', volumeRemoved: true, gridDisabled: true, olderHistoryLoaded: true, otherPairsUnaffected: true, actualWebSocketLive: live, desktopPixels, mobilePixels, desktopFractals, mobileFractals, desktopHourlyBoxes, mobileHourlyBoxes, desktopGap, mobileGap, hourlyFixture, browserErrors: errors, writeRequests: writes }, null, 2));
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error.stack); process.exitCode = 1; });
