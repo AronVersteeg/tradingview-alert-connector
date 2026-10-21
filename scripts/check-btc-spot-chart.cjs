@@ -69,8 +69,23 @@ async function checkGapBoxes(page) {
   const state = await page.evaluate(() => ({ model: window.btcSpotChart.getGapProjections(), latest: window.BTC_SPOT_GAP_TIMELINE.records.at(-1) }));
   const current = state.model.boxes.find((box) => box.openEnded);
   assert.equal(current.lower, state.latest.lower); assert.equal(current.upper, state.latest.upper);
-  const on = greenPixels(await page.locator('#spotChartCanvas').screenshot());
+  const screenshot = await page.locator('#spotChartCanvas').screenshot();
+  const on = greenPixels(screenshot);
   assert(on > 100, `Gap rectangle must render light-green edges (${on}).`);
+  const axis = await page.evaluate((gap) => ({ width: window.btcSpotChart.chart.priceScale('right').width(),
+    ys: [gap.upper, gap.lower].map((price) => window.btcSpotChart.candleSeries.priceToCoordinate(price)) }), current);
+  const pixels = PNG.sync.read(screenshot);
+  for (const y of axis.ys) {
+    let labelPixels = 0;
+    for (let row = Math.max(0, Math.floor(y) - 13); row < Math.min(pixels.height, Math.ceil(y) + 14); row++) {
+      for (let col = pixels.width - axis.width + 4; col < pixels.width - 2; col++) {
+        const index = (row * pixels.width + Math.floor(col)) * 4;
+        const [r, g, b] = pixels.data.subarray(index, index + 3);
+        if (g > 175 && g - r > 30 && g - b > 30) labelPixels++;
+      }
+    }
+    assert(labelPixels > 200, `Each active edge must have a green right-axis price label (${labelPixels}).`);
+  }
   await page.locator('#spotChartGap').uncheck();
   const off = greenPixels(await page.locator('#spotChartCanvas').screenshot());
   assert(off < on / 2, 'Gap toggle must hide the green rectangle.');
@@ -85,7 +100,7 @@ async function checkGapBoxes(page) {
     const x = scale.logicalToCoordinate(api.getCandles().length - 1 + Number(document.getElementById('spotChartGapLead').value));
     return x !== null && x > 0 && x < scale.width() - 2;
   });
-  return { lower: current.lower, upper: current.upper, fromTime: current.fromTime, startSource: current.startSource, greenPixels: on, hiddenPixels: off, adjustableLead: true };
+  return { lower: current.lower, upper: current.upper, fromTime: current.fromTime, startSource: current.startSource, greenPixels: on, hiddenPixels: off, adjustableLead: true, activePriceAxisLabels: true };
 }
 
 async function checkHourRefresh(browser, url, output) {

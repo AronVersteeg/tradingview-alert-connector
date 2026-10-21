@@ -90,4 +90,31 @@ describe('BTC Public V2 gap rectangles', () => {
       primitive.detached();
     } finally { jest.useRealTimers(); }
   });
+
+  test('right-axis labels follow only the active exact edges, hide with the overlay and never label stale history as active', () => {
+    jest.useFakeTimers(); jest.setSystemTime((start + 4 * HOUR) * 1000);
+    try {
+      const primitive = new GapBoxPrimitive();
+      primitive.attached({ chart: {}, series: { priceToCoordinate: (price: number) => price * 2,
+        priceFormatter: () => ({ format: (price: number) => price.toFixed(2) }) }, requestUpdate: jest.fn() });
+      const candles = Array.from({ length: 5 }, (_, i) => ({ time: start + i * HOUR }));
+      primitive.setData(buildGapBoxes(timelineFromPayload(payload([gap(), gap(), gap(82, 112), gap(82, 112)])), Date.now()), candles);
+      const labels = primitive.priceAxisViews();
+      expect(labels.map((label: any) => label.text())).toEqual(['112.00', '82.00']);
+      expect(labels.map((label: any) => label.coordinate())).toEqual([224, 164]);
+      expect(labels.every((label: any) => label.visible() && label.tickVisible())).toBe(true);
+      expect(labels[0].backColor()).toBe('#9edfa5');
+      primitive.setOptions({ visible: false });
+      expect(labels.every((label: any) => !label.visible())).toBe(true);
+      primitive.setOptions({ visible: true });
+      primitive.setData(buildGapBoxes(timelineFromPayload(payload([gap(), gap(), gap(83, 114), gap(83, 114)])), Date.now()), candles);
+      expect(labels.map((label: any) => label.text())).toEqual(['114.00', '83.00']);
+      jest.setSystemTime((start + 5 * HOUR) * 1000);
+      expect(labels.every((label: any) => !label.visible())).toBe(true);
+      primitive.setData({ boxes: [], evaluatedThrough: start + 5 * HOUR }, candles);
+      expect(labels.every((label: any) => !label.visible())).toBe(true);
+      primitive.detached();
+      expect(labels.every((label: any) => !label.visible())).toBe(true);
+    } finally { jest.useRealTimers(); }
+  });
 });

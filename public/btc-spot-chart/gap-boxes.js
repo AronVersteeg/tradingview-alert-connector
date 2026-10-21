@@ -65,11 +65,25 @@
     constructor() {
       this.model = null; this.indices = new Map(); this.visible = true; this.lead = 3; this.lastIndex = 0;
       this.view = { zOrder: () => 'normal', renderer: () => ({ draw: (target) => this.draw(target) }) };
+      this.axisViews = ['upper', 'lower'].map((edge) => ({
+        coordinate: () => {
+          const gap = this.model?.boxes.find((box) => box.openEnded);
+          return gap ? this.series?.priceToCoordinate(gap[edge]) ?? -10000 : -10000;
+        },
+        text: () => {
+          const gap = this.model?.boxes.find((box) => box.openEnded);
+          return gap && this.series ? this.series.priceFormatter().format(gap[edge]) : '';
+        },
+        textColor: () => '#131722', backColor: () => '#9edfa5', tickVisible: () => true,
+        visible: () => Boolean(this.visible && this.series && this.model?.boxes.some((box) => box.openEnded) &&
+          this.model.evaluatedThrough >= Math.floor(Date.now() / (HOUR * 1000)) * HOUR)
+      }));
     }
     attached({ chart, series, requestUpdate }) { this.chart = chart; this.series = series; this.requestUpdate = requestUpdate; }
     detached() { this.chart = this.series = this.requestUpdate = undefined; }
     updateAllViews() {}
     paneViews() { return [this.view]; }
+    priceAxisViews() { return this.axisViews; }
     setData(model, candles) {
       this.model = model; this.indices = new Map();
       candles.forEach((candle, index) => { this.indices.set(candle.time, index); this.indices.set(candle.time + HOUR, index + 1); });

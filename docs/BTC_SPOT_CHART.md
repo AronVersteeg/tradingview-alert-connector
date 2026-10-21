@@ -114,6 +114,10 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   current range into the future. The displayed cutoff makes source lag visible.
 - `getGapProjections()` exposes copied boxes, source cutoff and start provenance.
   Gap visibility, price formatting and PNG export work like the other layers.
+  The two active edges also have native light-green right-price-axis labels,
+  using the series price formatter. Labels update with the edges and disappear
+  when Gap is hidden, no current gap exists or the source is stale. Historical
+  rectangles never receive active price labels.
   No entries, plans, alerts, SL, TP or trailing settings are changed.
 
 ## Libraries
