@@ -73,7 +73,7 @@
         });
       }
     }
-    return { levels, evaluatedThrough: bundle.evaluatedThrough };
+    return { symbol: bundle.symbol, venue: bundle.venue, levels, evaluatedThrough: bundle.evaluatedThrough };
   }
 
   class FractalPrimitive {

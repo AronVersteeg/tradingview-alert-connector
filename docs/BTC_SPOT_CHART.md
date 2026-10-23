@@ -225,6 +225,32 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   Fit levels optionally includes them. PNG exports include both lines and bands.
   All entry execution, emails, SL, TP allocation and trailing behavior is unchanged.
 
+## Gap / W Break Overlay
+
+The default-on `Gap / W break` checkbox draws a thin orange vertical line through
+a closed 1H candle only when that candle newly crosses both a gap edge and an
+intact, confirmed Weekly fractal in the same direction. Long requires the previous
+close at or below both the upper edge and a Weekly high, with the new close above
+both; short mirrors this for the lower edge and a Weekly low. Touches and wick-only
+crossings do not qualify.
+
+The gap is the completed box available at the signal candle's open, not the box
+expanded by that candle's close. Weekly confirmation must predate the candle's
+open; a Weekly level already broken by an earlier wick is ineligible. All eligible
+Weekly levels count, independently of their visual visibility or current labels.
+Missing candle/gap hours or unknown break timing never produce guessed signals.
+Open candles are excluded. Updates reuse the existing candle, gap and fractal
+reads; no extra provider requests are added.
+
+The checkbox affects only this overlay. Lines are included in PNG exports and do
+not change entries, filters, emails, plans, SL, TP or trailing behavior.
+
+Unit coverage: `test/btcGapWeeklyBreakouts.test.ts`.
+Browser QA: `node scripts/check-btc-gap-weekly-breakouts.cjs <preview URL> <output dir>`.
+The fully intercepted desktop/mobile fixture verifies both directions, automatic
+hour-close updates, pre-candle gap selection, independent toggling, actual orange
+canvas pixels, PNG export and absence of write requests.
+
 ## Libraries
 
 TradingView Lightweight Charts 5.2.1 is vendored as a standalone ES module;

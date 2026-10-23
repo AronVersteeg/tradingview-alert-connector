@@ -1537,6 +1537,7 @@
           <label class="spot-gap-lead" title="Gap right edge: hours beyond the latest candle">+<input type="number" id="spotChartGapLead" value="10" min="1" max="72" step="1" aria-label="Gap right offset in 1H candles">h</label>
           <label class="spot-chart-toggle" title="Daily fractals"><input type="checkbox" id="spotChartDaily" checked><i class="spot-fractal-swatch daily"></i>Daily</label>
           <label class="spot-chart-toggle" title="Weekly fractals"><input type="checkbox" id="spotChartWeekly" checked><i class="spot-fractal-swatch weekly"></i>Weekly</label>
+          <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Weekly fractal"><input type="checkbox" id="spotChartGapWeeklyBreaks" checked><i class="spot-fractal-swatch gap-weekly-break"></i>Gap / W break</label>
           <label class="spot-chart-toggle" title="Monthly fractals"><input type="checkbox" id="spotChartMonthly" checked><i class="spot-fractal-swatch monthly"></i>Monthly</label>
           <label class="spot-chart-toggle" title="Planned manual entries and their take profits"><input type="checkbox" id="spotChartManual" checked><i class="spot-fractal-swatch manual"></i>Manual / TP</label>
           <label class="spot-chart-toggle" title="Broken fractal segments"><input type="checkbox" id="spotChartBroken" checked>Broken</label>
@@ -1545,6 +1546,7 @@
         <span id="spotChartFractalStatus" role="status">D/W/M pending</span>
         <span id="spotChartGapStatus" role="status">Gap pending</span>
         <span id="spotChartManualStatus" role="status">Manual levels pending</span>
+        <span id="spotChartGapWeeklyStatus" role="status">Gap / W breaks pending</span>
       </div>
       <div class="spot-chart-ohlc" id="spotChartOhlc">
         <span class="spot-chart-date" id="spotChartCandleTime">-</span>
@@ -1748,6 +1750,7 @@
   <script defer src="/assets/btc-spot-chart/fractals.js"></script>
   <script defer src="/assets/btc-spot-chart/hourly-fractal-boxes.js"></script>
   <script defer src="/assets/btc-spot-chart/gap-boxes.js"></script>
+  <script defer src="/assets/btc-spot-chart/gap-weekly-breakouts.js"></script>
   <script defer src="/assets/btc-spot-chart/manual-levels.js"></script>
   <script defer src="/assets/btc-spot-chart/viewport.js"></script>
   <script defer src="/assets/btc-spot-chart/interactions.js"></script>

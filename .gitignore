@@ -94,3 +94,4 @@ typings/
 !/scripts/recover-btc-gap-history.cjs
 !/scripts/check-btc-gap-recovery.cjs
 !/scripts/audit-liquidity-storage.cjs
+!/scripts/check-btc-gap-weekly-breakouts.cjs
