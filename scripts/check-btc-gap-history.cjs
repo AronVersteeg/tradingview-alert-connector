@@ -13,13 +13,14 @@ const html = fs.readFileSync(path.join(__dirname, '../public/decentrader_liquidi
 const hour = 3_600_000, initial = Math.floor(Date.now() / hour) * hour + 5000;
 const start = initial - 5000 - 150 * hour;
 const record = (i, lower, upper) => ({ candleTime: (start + i * hour) / 1000, availableAt: (start + (i + 1) * hour) / 1000, lower, upper });
-const archive = { symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true, historicalAccuracy: 'observed-snapshots',
+const archive = { symbol: 'BTCUSDT', venue: 'Binance Spot', historicalOnly: true, historicalAccuracy: 'causal-model-replay',
+  modelVersion: 'binance-spot-liquidation-cohorts-v2.4',
   records: Array.from({ length: 140 }, (_, i) => record(i, i < 40 ? 74000 : i < 80 ? 76000 : 79400, i < 40 ? 90000 : i < 80 ? 88000 : 87400)) };
 
 function mapPayload(total = 150) {
   const frames = Array.from({ length: total - 100 }, (_, i) => ({ i, startedAtMs: start + (100 + i) * hour,
     t: new Date(start + (100 + i) * hour).toISOString().slice(0, 19).replace('T', ' '), price: 81500, high: 82000, low: 80500 }));
-  return { source: { market: 'BTC-USD', sourceStatuses: [{ name: 'Binance Spot BTCUSDT 1H' }] }, modelVersion: 'fixture',
+  return { source: { market: 'BTC-USD', sourceStatuses: [{ name: 'Binance Spot BTCUSDT 1H' }] }, modelVersion: archive.modelVersion,
     range: { minPrice: 73000, maxPrice: 91000 }, frames, events: [], contextEvents: [], topCurrentZones: [],
     gaps: frames.map((_, i) => ({ left: i < 40 ? 79400 : 80000, right: 87400, width: i < 40 ? 8000 : 7400,
       leftEdge: { leverage: 10, weightedUsd: 1e6 }, rightEdge: { leverage: 10, weightedUsd: 1e6 } })) };
@@ -52,7 +53,7 @@ function greenCount(buffer) {
         if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) { writes.push(request.method()); return route.abort(); }
         if (target.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: html });
         if (target.origin === new URL(url).origin && target.pathname.startsWith('/assets/')) return route.continue();
-        if (target.pathname === '/decentrader/gap-projection-history') {
+        if (target.pathname === '/open-liquidity/v2/gap-projection-history') {
           historyReads++;
           if (untrustedHistory) return route.fulfill({ status: mobile ? 200 : 409, json: mobile
             ? { ...archive, historicalAccuracy: 'current-active-reconstruction' }
@@ -75,7 +76,7 @@ function greenCount(buffer) {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
       await page.waitForFunction(() => window.btcSpotChart?.getGapProjections() &&
-        document.getElementById('spotChartGapStatus').textContent.includes('past state unverified'));
+        document.getElementById('spotChartGapStatus').textContent.includes('Historical recovery unavailable'));
       assert.equal(await page.evaluate(() => window.btcSpotChart.getGapProjections().history), undefined,
         'Untrusted current-active data must never extend the causal Public V2 timeline');
       untrustedHistory = false; now += hour + 1;
@@ -87,7 +88,7 @@ function greenCount(buffer) {
       assert.equal(model.history.mismatches, 0);
       assert.equal(model.history.overlapCompared, 40);
       assert.equal(model.boxes[2].fromTime, archive.records[80].availableAt);
-      assert.equal(model.boxes[2].startSource, 'decentrader-map');
+      assert.equal(model.boxes[2].startSource, 'binance-causal-replay');
       assert.equal(model.boxes.at(-1).lower, 80000);
       await page.locator('[data-spot-range="all"]').click();
       await page.evaluate(() => window.btcSpotChart.candleSeries.priceScale().setVisibleRange({ from: 73000, to: 91000 }));
@@ -133,9 +134,15 @@ function greenCount(buffer) {
       await legacy.goto(legacyUrl.href, { waitUntil: 'domcontentloaded' });
       await legacy.waitForFunction(() => document.getElementById('frame').max === '49');
       await legacy.locator('#frame').evaluate((slider) => { slider.value = '0'; slider.dispatchEvent(new Event('input', { bubbles: true })); });
+      await legacy.waitForFunction(() => document.getElementById('gapStatus').textContent.includes('Binance causal gap reconstruction'));
+      assert((await legacy.locator('#gapRight').textContent()).includes('87'));
+      assert((await legacy.locator('#gapLeft').textContent()).includes('79'));
+      assert((await legacy.locator('#gapAlert').textContent()).includes('Unknown'));
+      await legacy.locator('#lev').selectOption('10');
       assert.equal(await legacy.locator('#gapRight').textContent(), '-');
       assert((await legacy.locator('#gapStatus').textContent()).includes('Historical gap unverified'));
-      assert((await legacy.locator('#gapAlert').textContent()).includes('Unknown'));
+      await legacy.locator('#lev').selectOption('all');
+      await legacy.locator('#chart').screenshot({ path: path.join(output, `gap-recovery-legacy-${mobile ? 'mobile' : 'desktop'}.png`) });
       await legacy.locator('#frame').evaluate((slider) => { slider.value = slider.max; slider.dispatchEvent(new Event('input', { bubbles: true })); });
       assert((await legacy.locator('#gapRight').textContent()).includes('87'));
       await legacy.close();

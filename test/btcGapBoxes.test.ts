@@ -9,6 +9,17 @@ const gap = (left = 80, right = 110) => ({ left, right });
 const now = (start + 10 * HOUR) * 1000;
 
 describe('BTC Public V2 gap rectangles', () => {
+  test('accepts same-model causal recovery, labels its origin and rejects an incompatible model', () => {
+    const live = timelineFromPayload(payload([gap(), gap()]));
+    const archive = { symbol: 'BTCUSDT', venue: 'Binance Spot', historicalOnly: true,
+      historicalAccuracy: 'causal-model-replay', modelVersion: 'binance-spot-liquidation-cohorts-v2.4',
+      records: [row(-2, 70, 120), row(-1), row(0)] };
+    live.modelVersion = archive.modelVersion;
+    const combined = withDecentraderHistory(live, archive);
+    expect(combined.history.historicalAccuracy).toBe('causal-model-replay');
+    expect(buildGapBoxes(combined, now).boxes[1].startSource).toBe('binance-causal-replay');
+    expect(() => withDecentraderHistory({ ...live, modelVersion: 'future-model' }, archive)).toThrow('model');
+  });
   const history = (records: any[]) => ({ symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true,
     historicalAccuracy: 'observed-snapshots', records });
   const row = (index: number, lower = 80, upper = 110) => ({ candleTime: start + index * HOUR,

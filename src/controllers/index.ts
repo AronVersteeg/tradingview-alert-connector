@@ -54,6 +54,7 @@ import { binanceCooldownHttpResponse, binanceHttpStatus } from '../services/bina
 import { binanceHourlyCloseFeed } from '../services/binanceHourlyCloseFeed';
 import { btcSpotChartRouter } from './btcSpotChart';
 import { createBtcGapProjectionHistoryRouter } from './btcGapProjectionHistory';
+import { BtcGapProjectionRecovery } from '../services/btcGapProjectionRecovery';
 import { binanceMonthlyFractalsRouter } from './binanceMonthlyFractals';
 import {
   btcManualTradeOverrideMonitor,
@@ -297,7 +298,8 @@ initializeExchanges()
 
 const router: Router = express.Router();
 router.use(btcSpotChartRouter);
-router.use(createBtcGapProjectionHistoryRouter(() => decentraderGapMonitor.getGapProjectionHistory()));
+const btcGapRecovery = new BtcGapProjectionRecovery(() => openLiquidityV2BtcCollector.historyDirectory());
+router.use(createBtcGapProjectionHistoryRouter(() => decentraderGapMonitor.getGapProjectionHistory(), () => btcGapRecovery.read()));
 router.use(binanceMonthlyFractalsRouter);
 
 // Health check

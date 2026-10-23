@@ -33,6 +33,11 @@ describe('Decentrader historical gap alerts', () => {
     expect(gapStatus.textContent).toContain('Historical gap unverified');
     expect(gapAlert.textContent).toContain('Unknown');
     expect(gapAlert.textContent).not.toBe('No intrusions');
+    update({ i: 0, price: 64000 }, { historicalAccuracy: 'causal-model-replay', left: 61000, right: 67000, width: 6000 });
+    expect(gapRight.textContent).toBe('67000');
+    expect(gapLeft.textContent).toBe('61000');
+    expect(gapStatus.textContent).toContain('Binance causal gap reconstruction');
+    expect(gapAlert.textContent).toContain('Unknown');
   });
 
   test('keeps a price gap even when its edges overlap visually on a narrow chart', () => {

@@ -12,7 +12,7 @@ fs.mkdirSync(output, { recursive: true });
 const capturedGapHistory = process.env.SPOT_CHART_GAP_HISTORY_FIXTURE
   ? JSON.parse(fs.readFileSync(process.env.SPOT_CHART_GAP_HISTORY_FIXTURE, 'utf8')).history : null;
 async function useCapturedGapHistory(context) {
-  if (capturedGapHistory) await context.route('**/decentrader/gap-projection-history?*', (route) => route.fulfill({ json: capturedGapHistory }));
+  if (capturedGapHistory) await context.route('**/open-liquidity/v2/gap-projection-history?*', (route) => route.fulfill({ json: capturedGapHistory }));
 }
 
 function candlePixels(buffer) {
@@ -75,12 +75,12 @@ function greenPixels(buffer) {
 
 async function checkGapBoxes(page) {
   await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.boxes.length > 0, null, { timeout: 40_000 });
-  if (capturedGapHistory?.historicalAccuracy === 'observed-snapshots') {
+  if (['observed-snapshots', 'causal-model-replay'].includes(capturedGapHistory?.historicalAccuracy)) {
     await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.history?.records > 0);
     const history = await page.evaluate(() => window.btcSpotChart.getGapProjections().history);
-    assert.equal(history.mismatches, 0, 'Captured Decentrader edges must agree with the actual Public V2 overlap.');
+    assert.equal(history.mismatches, 0, 'Recovered edges must agree with the actual Public V2 overlap.');
   } else if (capturedGapHistory) {
-    await page.waitForFunction(() => document.getElementById('spotChartGapStatus').textContent.includes('past state unverified'));
+    await page.waitForFunction(() => document.getElementById('spotChartGapStatus').textContent.includes('Historical recovery unavailable'));
     assert.equal(await page.evaluate(() => window.btcSpotChart.getGapProjections().history), undefined,
       'Current-active history must not be accepted as a historical archive.');
   }

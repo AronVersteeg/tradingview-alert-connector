@@ -41,7 +41,7 @@
         if (current) { current.toTime = row.availableAt; current.openEnded = false; }
         current = { fromTime: row.availableAt, toTime: row.availableAt, candleTime: row.candleTime,
           lower: row.lower, upper: row.upper, startKnown: Boolean(contiguous),
-          startSource: contiguous ? (row.source === 'decentrader-map' ? 'decentrader-map' : 'histomap') : 'unknown', openEnded: true };
+          startSource: contiguous ? (row.source || 'histomap') : 'unknown', openEnded: true };
         boxes.push(current);
       }
       previous = row;
@@ -51,19 +51,28 @@
       history: timeline.history ? { ...timeline.history } : undefined };
   }
 
-  function withDecentraderHistory(live, history) {
-    if (live?.symbol !== 'BTCUSDT' || live.venue !== 'Binance Spot' || !live.records?.length ||
-        history?.symbol !== 'BTCUSDT' || history.venue !== 'Decentrader map' || history.historicalOnly !== true ||
-        history.historicalAccuracy !== 'observed-snapshots' ||
-        !Array.isArray(history.records) || !history.records.length) throw new Error('Unexpected Decentrader gap history');
+  function validateHistory(history) {
+    const observed = history?.venue === 'Decentrader map' && history.historicalAccuracy === 'observed-snapshots';
+    const causal = history?.venue === 'Binance Spot' && history.historicalAccuracy === 'causal-model-replay' &&
+      history.modelVersion === 'binance-spot-liquidation-cohorts-v2.4';
+    if (history?.symbol !== 'BTCUSDT' || history.historicalOnly !== true || !(observed || causal) ||
+        !Array.isArray(history.records) || !history.records.length) throw new Error('Unexpected gap history provenance');
     let previous = 0;
     for (const row of history.records) {
       if (!Number.isSafeInteger(row.candleTime) || row.candleTime % HOUR || row.candleTime <= previous ||
           row.availableAt !== row.candleTime + HOUR ||
           !(row.lower === null && row.upper === null || Number.isFinite(row.lower) && Number.isFinite(row.upper) &&
-            row.lower > 0 && row.upper > row.lower)) throw new Error('Invalid Decentrader gap history');
+            row.lower > 0 && row.upper > row.lower)) throw new Error('Invalid gap history');
       previous = row.candleTime;
     }
+    return history;
+  }
+
+  function withDecentraderHistory(live, history) {
+    validateHistory(history);
+    if (live?.symbol !== 'BTCUSDT' || live.venue !== 'Binance Spot' || !live.records?.length ||
+        history.venue === 'Binance Spot' && live.modelVersion !== history.modelVersion) throw new Error('Unexpected live gap model');
+    const causal = history.venue === 'Binance Spot';
     const first = live.records[0], lookup = new Map(history.records.map((row) => [row.candleTime, row]));
     const sameEdges = (a, b) => a && b && a.lower === b.lower && a.upper === b.upper;
     const overlapping = live.records.filter((row) => lookup.has(row.candleTime));
@@ -72,10 +81,10 @@
     // boundary. Public V2 always wins overlap; Decentrader never supplies live data.
     const boundaryMatches = sameEdges(first, lookup.get(first.candleTime));
     const older = history.records.filter((row) => row.candleTime < first.candleTime)
-      .map((row) => ({ ...row, source: 'decentrader-map' }));
+      .map((row) => ({ ...row, source: causal ? 'binance-causal-replay' : 'decentrader-map' }));
     const records = live.records.map((row, index) => ({ ...row, breakBefore: index === 0 && older.length > 0 && !boundaryMatches }));
     return { ...live, records: [...older, ...records], history: {
-      source: 'Decentrader map', historicalOnly: true, records: older.length,
+      source: history.venue, historicalAccuracy: history.historicalAccuracy, historicalOnly: true, records: older.length,
       coverageFrom: history.records[0].availableAt, coverageThrough: history.records.at(-1).availableAt,
       overlapCompared: overlapping.length, mismatches, boundaryMatches
     } };
@@ -140,7 +149,7 @@
     }
   }
 
-  const api = Object.freeze({ timelineFromPayload, withDecentraderHistory, buildGapBoxes, GapBoxPrimitive });
+  const api = Object.freeze({ timelineFromPayload, validateHistory, withDecentraderHistory, buildGapBoxes, GapBoxPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {
     root.BtcSpotGapBoxes = api;

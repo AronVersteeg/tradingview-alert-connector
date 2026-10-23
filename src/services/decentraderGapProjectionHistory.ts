@@ -1,8 +1,11 @@
 export interface GapProjectionHistory {
   symbol: 'BTCUSDT';
-  venue: 'Decentrader map';
+  venue: 'Decentrader map' | 'Binance Spot';
   historicalOnly: true;
-  historicalAccuracy: 'current-active-reconstruction' | 'observed-snapshots';
+  historicalAccuracy: 'current-active-reconstruction' | 'observed-snapshots' | 'causal-model-replay';
+  modelVersion?: string;
+  reconstructedAt?: string;
+  sourceCandleSha256?: string;
   records: Array<{ candleTime: number; availableAt: number; lower: number | null; upper: number | null }>;
 }
 

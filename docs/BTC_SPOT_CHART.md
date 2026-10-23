@@ -280,3 +280,23 @@ historical transition coordinates and green pixels, hourly read reuse, failed
 history reads and recovery. It blocks all non-read requests. The broader chart
 QA can use `SPOT_CHART_GAP_HISTORY_FIXTURE` pointing at a captured JSON object
 with a `history` field when testing before the compact endpoint is deployed.
+
+### Causal Gap Recovery
+
+The Spot chart now reads `/open-liquidity/v2/gap-projection-history?market=BTC-USD`,
+not current Decentrader survivors. Its historical extension is explicitly labelled
+as a Binance causal reconstruction. The generated one-year recovery includes a
+full prior-year candle warmup; later data comes from the existing append-only BTC
+gap archive. Current Public V2 frames win overlap, model versions must match,
+missing hours split boxes, and unknown origins remain open on the left. The
+Decentrader replay can show the same recovered edges for its default filters;
+its historic histogram flags are still not past-state snapshots. See
+`docs/GAP_HISTORY_INTEGRITY.md` for provenance and validation limitations.
+
+Recovery-specific browser QA:
+`node scripts/check-btc-gap-recovery.cjs <preview URL> <offline candle cache> <output dir>`.
+This isolates unrelated live services, reuses the actual recovered Binance
+candles, verifies 432 boxes and the August 19 61,000/67,000 pair on desktop/mobile,
+checks green canvas pixels and blocks every write request. The broader live QA
+also depends on unrelated D/W/M table availability; a provider timeout there is
+not proof of a gap-recovery failure.

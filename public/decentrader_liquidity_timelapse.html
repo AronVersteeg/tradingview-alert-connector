@@ -5330,14 +5330,27 @@
       return !isOpenV2 && frame && frame.i < (payload?.frames?.length || 0) - 1;
     }
 
+    function recoveredHistoricalGap(frame, xFor) {
+      if (!unverifiedDecentraderFrame(frame) || btcSpotGapHistory?.historicalAccuracy !== 'causal-model-replay' ||
+          sideInput.value !== 'all' || levInput.value !== 'all' || modeInput.value !== 'active') return null;
+      const time = Date.parse(frame.t.replace(' ', 'T') + 'Z') / 1000;
+      const row = btcSpotGapHistoryRows.get(time);
+      if (!row || row.lower === null || row.upper === null) return null;
+      return { historicalAccuracy: 'causal-model-replay', left: row.lower, right: row.upper, width: row.upper - row.lower,
+        leftX: xFor(row.lower), rightX: xFor(row.upper) };
+    }
+
     function updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview) {
       const recordedAlert = recordedIntrusionLabel(frame);
       if (unverifiedDecentraderFrame(frame)) {
-        gapWidth.textContent = '-';
-        gapLeft.textContent = '-';
-        gapRight.textContent = '-';
+        if (gap?.historicalAccuracy !== 'causal-model-replay') gap = null;
+        gapWidth.textContent = gap ? money(gap.width) : '-';
+        gapLeft.textContent = gap ? money(gap.left) : '-';
+        gapRight.textContent = gap ? money(gap.right) : '-';
         gapPrice.textContent = frame.price ? money(frame.price) : '-';
-        gapStatus.textContent = 'Historical gap unverified: these histograms use current active flags, not the past state';
+        gapStatus.textContent = gap
+          ? 'Binance causal gap reconstruction | histogram active flags are not historical snapshots'
+          : 'Historical gap unverified: no matching recovery for these filters';
         gapAlert.textContent = recordedAlert || 'Unknown: no saved intrusion record for this hour';
         gapAlert.classList.remove('is-hot', 'is-rsi-long', 'is-rsi-short');
         return;
@@ -5869,7 +5882,8 @@
       }
 
       drawGrid(area, minPrice, maxPrice, maxCount);
-      drawGap(area, gap, priceColor);
+      const displayGap = unverifiedHistory ? recoveredHistoricalGap(frame, xFor) : gap;
+      drawGap(area, displayGap, priceColor);
 
       for (const bar of drawableVisibleBars) {
         const x = xFor(bar.price) + leverageOffset(bar.leverage);
@@ -5975,7 +5989,7 @@
       const sourceEventCount = Number(payload.eventCount ?? payload.events?.length ?? 0);
       meta.textContent = `${sourceName} | ${nlTime(payload.frames[0].t)} NL to ${nlTime(payload.frames[payload.frames.length - 1].t)} NL | ${sourceEventCount.toLocaleString('en-US')} zone events`;
       syncJumpTimeInput(frame);
-      updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview);
+      updateGapMonitor(frame, displayGap, intrusion, rsiSignal, candleReview);
       updateGoldConfirmation(frame);
       try {
         updateDelayHistory();
@@ -6258,26 +6272,30 @@
     }
 
     let btcSpotGapHistory, btcSpotGapHistoryPending, btcSpotGapHistoryRetryAt = 0, btcSpotGapHistoryFailed = false;
+    let btcSpotGapHistoryRows = new Map();
     function refreshBtcSpotGapHistory() {
-      if (activeSource !== 'open-v2' || openV2Market !== 'BTC-USD' || !payload || !window.BtcSpotGapBoxes ||
+      if (!['open-v2', 'decentrader'].includes(activeSource) || !payload || !window.BtcSpotGapBoxes ||
           btcSpotGapHistoryPending || Date.now() < btcSpotGapHistoryRetryAt) return;
       btcSpotGapHistoryRetryAt = Date.now() + 5 * 60_000;
       btcSpotGapHistoryPending = (async () => {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 25_000);
         try {
-          const response = await fetch(`${CLOUD_DECENTRADER_DATA_URL.replace('/liquidity-timelapse', '/gap-projection-history')}?market=BTC-USD`,
+          const response = await fetch(`${CLOUD_DECENTRADER_DATA_URL.replace('/decentrader/liquidity-timelapse', '/open-liquidity/v2/gap-projection-history')}?market=BTC-USD`,
             { cache: 'no-store', signal: controller.signal });
           if (!response.ok) {
             if (response.status === 409) btcSpotGapHistoryRetryAt = Date.now() + 3_600_000;
             throw new Error(`History ${response.status}`);
           }
           const history = await response.json();
-          window.BtcSpotGapBoxes.withDecentraderHistory(window.BtcSpotGapBoxes.timelineFromPayload(payload), history);
+          window.BtcSpotGapBoxes.validateHistory(history);
+          if (isOpenV2) window.BtcSpotGapBoxes.withDecentraderHistory(window.BtcSpotGapBoxes.timelineFromPayload(payload), history);
           btcSpotGapHistory = history;
+          btcSpotGapHistoryRows = new Map(history.records.map(row => [row.candleTime, row]));
           btcSpotGapHistoryFailed = false;
           btcSpotGapHistoryRetryAt = (Math.floor(Date.now() / 3_600_000) + 1) * 3_600_000 + 5_000;
           publishBtcSpotGapTimeline();
+          if (!isOpenV2) draw();
         } catch (error) {
           btcSpotGapHistoryFailed = true;
           publishBtcSpotGapTimeline();
