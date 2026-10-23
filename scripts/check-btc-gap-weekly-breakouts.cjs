@@ -34,20 +34,26 @@ function bundle(now) {
   const record = (id, type, price, pivot, confirmed, broken) => ({ id, type, priceExact: String(price), pivotAt: pivot,
     confirmedAt: confirmed, isLatestForType: true, ...(broken ? { firstBrokenAt: iso(day) } : {}) });
   return { symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThrough: iso(through),
-    daily: snapshot('1d', '2026-10-18T23:59:59.999Z'), monthly: snapshot('1M', '2026-09-30T23:59:59.999Z'),
+    daily: snapshot('1d', '2026-10-18T23:59:59.999Z', [
+      record('high', 'HIGH', 118, '2026-09-29T00:00:00Z', '2026-10-01T23:59:59.999Z', through >= day + 4 * HOUR),
+      record('low', 'LOW', 82, '2026-09-27T00:00:00Z', '2026-09-29T23:59:59.999Z', through >= day + 6 * HOUR)
+    ]), monthly: snapshot('1M', '2026-09-30T23:59:59.999Z'),
     weekly: snapshot('1w', '2026-10-18T23:59:59.999Z', [
       record('high', 'HIGH', 120, '2026-09-28T00:00:00Z', '2026-10-18T23:59:59.999Z', through >= day + 4 * HOUR),
       record('low', 'LOW', 80, '2026-09-21T00:00:00Z', '2026-10-11T23:59:59.999Z', through >= day + 6 * HOUR)
     ]) };
 }
-function orangeColumn(buffer, x) {
+function markerColumn(buffer, x, daily = false) {
   const png = PNG.sync.read(buffer); let count = 0;
   for (let y = 5; y < png.height - 35; y++) for (let atX = Math.max(0, Math.floor(x) - 2); atX <= Math.min(png.width - 1, Math.ceil(x) + 2); atX++) {
     const at = (y * png.width + atX) * 4;
-    if (png.data[at] > 190 && png.data[at + 1] > 100 && png.data[at + 1] < 180 && png.data[at + 2] < 65) count++;
+    if (daily ? png.data[at] > 190 && png.data[at + 1] > 190 && png.data[at + 2] > 100 && png.data[at + 2] < 190
+      : png.data[at] > 190 && png.data[at + 1] > 100 && png.data[at + 1] < 180 && png.data[at + 2] < 65) count++;
   }
   return count;
 }
+const orangeColumn = (buffer, x) => markerColumn(buffer, x);
+const yellowColumn = (buffer, x) => markerColumn(buffer, x, true);
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: process.env.SPOT_CHART_BROWSER_CHANNEL || 'msedge' });
   const results = [];
@@ -74,7 +80,9 @@ function orangeColumn(buffer, x) {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
       await page.waitForFunction(() => window.btcSpotChart?.getGapWeeklyBreakouts()?.signals.length === 1);
+      await page.waitForFunction(() => window.btcSpotChart?.getGapDailyBreakouts()?.signals.length === 1);
       assert.equal(await page.locator('#spotChartGapWeeklyBreaks').isChecked(), true);
+      assert.equal(await page.locator('#spotChartGapDailyBreaks').isChecked(), true);
       let state = await page.evaluate(() => window.btcSpotChart.getGapWeeklyBreakouts());
       assert.equal(state.signals[0].time, (day + 3 * HOUR) / 1000);
       assert.equal(state.signals[0].gap.upper, 115, 'The expanded 140 edge must not be used retroactively');
@@ -86,6 +94,10 @@ function orangeColumn(buffer, x) {
       assert.deepEqual(state.signals.map(s => s.direction), ['long', 'short']);
       assert.equal(state.signals[1].time, (day + 5 * HOUR) / 1000);
       assert.equal(state.signals[1].gap.lower, 85, 'The short must use the old 85 edge, not the new 60 edge');
+      await page.waitForFunction(() => window.btcSpotChart?.getGapDailyBreakouts()?.signals.length === 2);
+      const dailyState = await page.evaluate(() => window.btcSpotChart.getGapDailyBreakouts());
+      assert.deepEqual(dailyState.signals.map(s => [s.time, s.direction]), state.signals.map(s => [s.time, s.direction]));
+      assert.deepEqual(dailyState.signals.map(s => s.dailyLevels[0].price), [118, 82]);
       for (const id of ['spotChartDaily', 'spotChartWeekly', 'spotChartMonthly', 'spotChartHourlyBoxes', 'spotChartGap']) await page.locator('#' + id).uncheck();
       await page.evaluate(time => {
         window.btcSpotChart.chart.timeScale().setVisibleRange({ from: time / 1000 - 6 * 3600, to: time / 1000 + 10 * 3600 });
@@ -101,12 +113,24 @@ function orangeColumn(buffer, x) {
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const off = await page.locator('#spotChartCanvas').screenshot();
       assert(xs.every(x => orangeColumn(off, x) < 20), 'Unchecking must remove the actual orange pixels');
+      const yellowPixels = xs.map(x => yellowColumn(off, x));
+      assert(yellowPixels.every(n => n > 200), `Daily markers remain independently visible: ${yellowPixels}`);
+      await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `gap-daily-${mobile ? 'mobile' : 'desktop'}.png`) });
+      const dailyDownloadEvent = page.waitForEvent('download'); await page.locator('#spotChartDownload').click();
+      const dailyFile = path.join(output, `gap-daily-${mobile ? 'mobile' : 'desktop'}-export.png`);
+      await (await dailyDownloadEvent).saveAs(dailyFile);
+      assert(xs.every(x => yellowColumn(fs.readFileSync(dailyFile), x) > 200), 'Daily markers are included in PNG export');
+      await page.locator('#spotChartGapDailyBreaks').uncheck();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const neither = await page.locator('#spotChartCanvas').screenshot();
+      assert(xs.every(x => yellowColumn(neither, x) < 20), 'Daily checkbox removes only Daily markers');
       await page.locator('#spotChartGapWeeklyBreaks').check();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const downloadEvent = page.waitForEvent('download'); await page.locator('#spotChartDownload').click();
       const download = await downloadEvent; const file = path.join(output, `gap-weekly-${mobile ? 'mobile' : 'desktop'}-export.png`);
       await download.saveAs(file);
       assert(xs.every(x => orangeColumn(fs.readFileSync(file), x) > 200), 'PNG export includes the marker layer');
+      await page.locator('#spotChartGapDailyBreaks').check();
       await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `gap-weekly-${mobile ? 'mobile' : 'desktop'}.png`) });
       const geometry = await page.locator('#btcSpotChartPanel').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth }));
       assert(geometry.scroll <= geometry.client + 1, 'The toolbar must not overflow on mobile');
@@ -117,9 +141,11 @@ function orangeColumn(buffer, x) {
       await page.waitForFunction(time => window.btcSpotChart.getGapWeeklyBreakouts()?.evaluatedThrough === new Date(time - 5000).toISOString(), now);
       assert.equal((await page.evaluate(() => window.btcSpotChart.getGapWeeklyBreakouts())).signals.length, 2,
         'A later close beyond already-broken levels must not add another line');
+      assert.equal((await page.evaluate(() => window.btcSpotChart.getGapDailyBreakouts())).signals.length, 2);
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
       results.push({ mobile, automaticClosedHourUpdate: true, longAndShort: true, previousBoxUsed: true,
-        independentCheckbox: true, orangePixels: pixels, pngIncludesOverlay: true, noHorizontalOverflow: true, writes });
+        independentCheckboxes: true, orangePixels: pixels, yellowPixels, weeklyWinsOverlap: true,
+        pngIncludesBothOverlays: true, noHorizontalOverflow: true, writes });
       await context.close();
     }
     console.log(JSON.stringify(results, null, 2));

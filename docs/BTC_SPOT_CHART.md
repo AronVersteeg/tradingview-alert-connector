@@ -225,31 +225,34 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   Fit levels optionally includes them. PNG exports include both lines and bands.
   All entry execution, emails, SL, TP allocation and trailing behavior is unchanged.
 
-## Gap / W Break Overlay
+## Gap / D and Gap / W Break Overlays
 
-The default-on `Gap / W break` checkbox draws a thin orange vertical line through
-a closed 1H candle only when that candle newly crosses both a gap edge and an
-intact, confirmed Weekly fractal in the same direction. Long requires the previous
-close at or below both the upper edge and a Weekly high, with the new close above
-both; short mirrors this for the lower edge and a Weekly low. Touches and wick-only
-crossings do not qualify.
+The independent, default-on `Gap / W break` and `Gap / D break` checkboxes draw
+thin orange and light-yellow (`#fff59d`) vertical lines respectively. A closed 1H
+candle qualifies only when it newly crosses both a gap edge and an intact,
+confirmed fractal of the selected timeframe in the same direction. Long requires
+the previous close at or below both the upper edge and a fractal high, with the
+new close above both; short mirrors this for the lower edge and a fractal low.
+Touches and wick-only crossings do not qualify. When both mark the same candle,
+orange is drawn on top; disabling Weekly reveals the Daily marker beneath it.
 
 The gap is the completed box available at the signal candle's open, not the box
-expanded by that candle's close. Weekly confirmation must predate the candle's
-open; a Weekly level already broken by an earlier wick is ineligible. All eligible
-Weekly levels count, independently of their visual visibility or current labels.
+expanded by that candle's close. Fractal confirmation must predate the candle's
+open; a level already broken by an earlier wick is ineligible. All eligible levels
+of the selected timeframe count, independently of visual visibility or labels.
 Missing candle/gap hours or unknown break timing never produce guessed signals.
 Open candles are excluded. Updates reuse the existing candle, gap and fractal
 reads; no extra provider requests are added.
 
-The checkbox affects only this overlay. Lines are included in PNG exports and do
+Each checkbox affects only its own overlay. Lines are included in PNG exports and do
 not change entries, filters, emails, plans, SL, TP or trailing behavior.
 
 Unit coverage: `test/btcGapWeeklyBreakouts.test.ts`.
 Browser QA: `node scripts/check-btc-gap-weekly-breakouts.cjs <preview URL> <output dir>`.
 The fully intercepted desktop/mobile fixture verifies both directions, automatic
 hour-close updates, pre-candle gap selection, independent toggling, actual orange
-canvas pixels, PNG export and absence of write requests.
+and light-yellow canvas pixels, overlap priority, PNG export and absence of write
+requests.
 
 ## Libraries
 

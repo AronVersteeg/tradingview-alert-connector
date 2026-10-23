@@ -28,7 +28,11 @@
   let fitFractals = false;
   let hourlyBoxLayer, hourlyBoxModel;
   let gapLayer, gapTimeline = window.BTC_SPOT_GAP_TIMELINE, gapModel;
-  let breakoutLayer, breakoutModel, breakoutInputs, closedDataVersion = 0;
+  let closedDataVersion = 0;
+  const breakoutStates = [
+    { timeframe: 'W', name: 'Weekly', levelsKey: 'weeklyLevels' },
+    { timeframe: 'D', name: 'Daily', levelsKey: 'dailyLevels' }
+  ];
   let manualLayer, manualModel = window.BTC_SPOT_MANUAL_LEVELS;
   let manualReadFailed = false;
   let gestures, userPanned = false, gestureActive = false;
@@ -83,27 +87,35 @@
       status.textContent = `Gap pending: ${error.message}`;
       status.dataset.stale = 'true';
     }
-    updateGapWeeklyBreakouts();
+    updateGapFractalBreakouts();
   }
 
-  function updateGapWeeklyBreakouts() {
-    const status = byId('spotChartGapWeeklyStatus');
+  function updateGapFractalBreakouts() {
     if (!fractalModel || !gapTimeline) return;
     const hour = Math.floor(Date.now() / 3_600_000);
-    if (breakoutInputs?.gap === gapTimeline && breakoutInputs.fractals === fractalModel &&
-        breakoutInputs.version === closedDataVersion && breakoutInputs.hour === hour) return;
-    try {
-      breakoutModel = gapWeeklyBreaks.buildGapWeeklyBreakouts(candles, gapTimeline, fractalModel);
-      breakoutLayer?.setData(breakoutModel.signals);
-      breakoutInputs = { gap: gapTimeline, fractals: fractalModel, version: closedDataVersion, hour };
-      const stale = Date.parse(breakoutModel.evaluatedThrough || '') < hour * 3_600_000 || !breakoutModel.evaluatedThrough;
-      status.textContent = `Gap / W breaks: ${breakoutModel.signals.length}${stale ? ' | stale' : ''}`;
-      status.dataset.stale = String(stale);
-    } catch (error) {
-      breakoutInputs = undefined; breakoutModel = undefined; breakoutLayer?.setData([]);
-      status.textContent = `Gap / W breaks pending: ${error.message}`;
-      status.dataset.stale = 'true';
+    for (const state of breakoutStates) {
+      const status = byId(`spotChartGap${state.name}Status`), inputs = state.inputs;
+      if (inputs?.gap === gapTimeline && inputs.fractals === fractalModel &&
+          inputs.version === closedDataVersion && inputs.hour === hour) continue;
+      try {
+        state.model = gapWeeklyBreaks[`buildGap${state.name}Breakouts`](candles, gapTimeline, fractalModel);
+        state.layer?.setData(state.model.signals);
+        state.inputs = { gap: gapTimeline, fractals: fractalModel, version: closedDataVersion, hour };
+        const stale = Date.parse(state.model.evaluatedThrough || '') < hour * 3_600_000 || !state.model.evaluatedThrough;
+        status.textContent = `Gap / ${state.timeframe} breaks: ${state.model.signals.length}${stale ? ' | stale' : ''}`;
+        status.dataset.stale = String(stale);
+      } catch (error) {
+        state.inputs = undefined; state.model = undefined; state.layer?.setData([]);
+        status.textContent = `Gap / ${state.timeframe} breaks pending: ${error.message}`;
+        status.dataset.stale = 'true';
+      }
     }
+  }
+
+  function breakoutSnapshot(timeframe) {
+    const state = breakoutStates.find(item => item.timeframe === timeframe), model = state.model;
+    return model ? { ...model, signals: model.signals.map(signal => ({ ...signal, gap: { ...signal.gap },
+      [state.levelsKey]: signal[state.levelsKey].map(level => ({ ...level })) })) } : null;
   }
   window.addEventListener('btc-spot-chart:gap-timeline', (event) => { gapTimeline = event.detail; updateGapProjection(); });
   window.addEventListener('btc-spot-chart:gap-error', (event) => {
@@ -120,7 +132,7 @@
     try {
       fractalModel = fractals.projectFractals(fractalBundle, candles);
       fractalLayer.setData(fractalModel.levels);
-      updateGapWeeklyBreakouts();
+      updateGapFractalBreakouts();
       projectionStatus(`D/W/M closed through ${dateText(Date.parse(fractalModel.evaluatedThrough) / 1000, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
       if (fitFractals) candlesSeries.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
     } catch (error) {
@@ -284,10 +296,13 @@
       hourlyBoxLayer = new hourlyBoxes.HourlyFractalBoxPrimitive();
       hourlyBoxLayer.setVisible(byId('spotChartHourlyBoxes').checked);
       candlesSeries.attachPrimitive(hourlyBoxLayer);
-      breakoutLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive();
-      breakoutLayer.setVisible(byId('spotChartGapWeeklyBreaks').checked);
-      candlesSeries.attachPrimitive(breakoutLayer);
-      updateGapWeeklyBreakouts();
+      // Draw Weekly last so orange remains visible when both mark the same candle.
+      for (const state of [...breakoutStates].reverse()) {
+        state.layer = new gapWeeklyBreaks[`Gap${state.name}BreakoutPrimitive`]();
+        state.layer.setVisible(byId(`spotChartGap${state.name}Breaks`).checked);
+        candlesSeries.attachPrimitive(state.layer);
+      }
+      updateGapFractalBreakouts();
       gestures = interactions.install(chartCanvas, {
         read: () => {
           if (!initialData || destroyed) return null;
@@ -335,8 +350,8 @@
         getHourlyFractalBoxes: () => hourlyBoxModel ? { evaluatedThrough: hourlyBoxModel.evaluatedThrough,
           boxes: hourlyBoxModel.boxes.map((box) => ({ ...box })), fractals: hourlyBoxModel.fractals.map((fractal) => ({ ...fractal })) } : null,
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
-        getGapWeeklyBreakouts: () => breakoutModel ? { ...breakoutModel, signals: breakoutModel.signals.map(signal => ({
-          ...signal, gap: { ...signal.gap }, weeklyLevels: signal.weeklyLevels.map(level => ({ ...level })) })) } : null,
+        getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
+        getGapDailyBreakouts: () => breakoutSnapshot('D'),
         getManualLevels: () => manualModel ? { ...manualModel, levels: manualModel.levels.map((level) => ({ ...level })) } : null,
         getManualProjections: () => manualLayer ? manualLayer.projectionBoxes().map((box) => ({ ...box })) : []
       });
@@ -477,7 +492,9 @@
     chart?.priceScale('right').applyOptions({ autoScale: true });
   });
   byId('spotChartHourlyBoxes').addEventListener('change', (event) => hourlyBoxLayer?.setVisible(event.target.checked));
-  byId('spotChartGapWeeklyBreaks').addEventListener('change', (event) => breakoutLayer?.setVisible(event.target.checked));
+  for (const state of breakoutStates) {
+    byId(`spotChartGap${state.name}Breaks`).addEventListener('change', (event) => state.layer?.setVisible(event.target.checked));
+  }
   byId('spotChartManual').addEventListener('change', (event) => {
     manualLayer?.setVisible(event.target.checked);
     ensureProjectionRoom();
