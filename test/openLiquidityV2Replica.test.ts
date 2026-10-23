@@ -48,6 +48,20 @@ function zone(input: Partial<ReplicaLiquidityZone>): ReplicaLiquidityZone {
 describe('Public Perp V2 Binance Spot replica', () => {
   const hour = 3_600_000;
   const base = Date.parse('2026-01-01T00:00:00Z');
+  test('later sweeps cannot erase or move either edge or intrusion of an earlier causal snapshot', () => {
+    const before = [candle(base, 60000, 60100, 59900, 60000), candle(base + hour, 61000, 61100, 60900, 61000)];
+    const earlier = buildReplicaSnapshots(before, { frameLimit: 10 });
+    const original = JSON.stringify(earlier);
+    const after = buildReplicaSnapshots([...before, candle(base + 2 * hour, 85000, 88000, 58000, 86000)], { frameLimit: 10 });
+    expect(comparable(after.slice(0, before.length))).toEqual(comparable(earlier));
+    const afterTimestamp = payloadFor(earlier).frames[0].t;
+    const originalAlerts = reconstructReplicaIntrusions(payloadFor(earlier), afterTimestamp).alerts;
+    expect(originalAlerts.length).toBeGreaterThan(0);
+    expect(reconstructReplicaIntrusions(payloadFor(after), afterTimestamp).alerts.filter((row) => row.frameIndex < before.length))
+      .toEqual(originalAlerts);
+    expect(JSON.stringify(earlier)).toBe(original);
+    expect(after.at(-1)?.gap?.right).not.toBe(earlier[0].gap?.right);
+  });
   const observations = (count: number, price = 60_000) => Array.from({ length: count }, (_, index) => {
     const current = price * (1 + Math.sin(index / 9) * 0.14);
     return candle(base + index * hour, current, current * 1.012, current * 0.989, current * 1.001);

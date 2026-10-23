@@ -15,6 +15,26 @@ function inlineFunction(name: string, nextName: string, bindings: Record<string,
 }
 
 describe('Decentrader historical gap alerts', () => {
+  test('quarantines past current-active gaps while keeping the latest frame and Public V2 available', () => {
+    const payload = { frames: [{ i: 0 }, { i: 1 }] };
+    const historical = inlineFunction('unverifiedDecentraderFrame', 'updateGapMonitor', { isOpenV2: false, payload });
+    expect(historical({ i: 0 })).toBe(true);
+    expect(historical({ i: 1 })).toBe(false);
+    const causal = inlineFunction('unverifiedDecentraderFrame', 'updateGapMonitor', { isOpenV2: true, payload });
+    expect(causal({ i: 0 })).toBe(false);
+    const cell = () => ({ textContent: '', classList: { remove: jest.fn() } });
+    const gapWidth = cell(), gapLeft = cell(), gapRight = cell(), gapPrice = cell(), gapStatus = cell(), gapAlert = cell();
+    const update = inlineFunction('updateGapMonitor', 'updateTradeZoneMonitor', {
+      unverifiedDecentraderFrame: historical, recordedIntrusionLabel: () => '',
+      gapWidth, gapLeft, gapRight, gapPrice, gapStatus, gapAlert, money: (value: number) => String(value)
+    });
+    update({ i: 0, price: 64000 }, { left: 61000, right: 87400 });
+    expect(gapRight.textContent).toBe('-');
+    expect(gapStatus.textContent).toContain('Historical gap unverified');
+    expect(gapAlert.textContent).toContain('Unknown');
+    expect(gapAlert.textContent).not.toBe('No intrusions');
+  });
+
   test('keeps a price gap even when its edges overlap visually on a narrow chart', () => {
     const getGap = inlineFunction('getVisualGapForBars', 'liquiditySourcePriceStep', {
       isOpenV2: false,

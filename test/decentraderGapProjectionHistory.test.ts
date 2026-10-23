@@ -13,7 +13,8 @@ describe('Stored Decentrader map gap reconstruction, display only', () => {
   test('uses only compact gap fields and the same nearest active bars as the default map', () => {
     const input = payload(), before = JSON.stringify(input);
     const history = buildDecentraderGapProjectionHistory(input);
-    expect(history).toMatchObject({ symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true });
+    expect(history).toMatchObject({ symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true,
+      historicalAccuracy: 'current-active-reconstruction' });
     expect(history.records).toEqual([
       { candleTime: start, availableAt: start + 3600, lower: 80, upper: 120 },
       { candleTime: start + 3600, availableAt: start + 7200, lower: 90, upper: 120 },
@@ -68,7 +69,7 @@ describe('Read-only compact gap-history route', () => {
     return res;
   };
   test('returns only the stored snapshot and supports compressed reads', async () => {
-    const history = buildDecentraderGapProjectionHistory(payload());
+    const history = { ...buildDecentraderGapProjectionHistory(payload()), historicalAccuracy: 'observed-snapshots' as const };
     const read = jest.fn(() => history);
     const plain = await call(read);
     expect(JSON.parse(plain.body)).toEqual(history);
@@ -76,6 +77,12 @@ describe('Read-only compact gap-history route', () => {
     expect(JSON.parse(zlib.gunzipSync(compressed.body).toString())).toEqual(history);
     expect(compressed.headers).toMatchObject({ 'Content-Encoding': 'gzip', 'Cache-Control': 'no-store' });
     expect(read).toHaveBeenCalledTimes(2);
+  });
+  test('quarantines current-active reconstructions rather than serving them as historical truth', async () => {
+    const response = await call(() => buildDecentraderGapProjectionHistory(payload()));
+    expect(response.statusCode).toBe(409);
+    expect(response.body.code).toBe('HISTORICAL_STATE_UNVERIFIED');
+    expect(response.body.records).toBeUndefined();
   });
   test('does not read unsupported markets and fails clearly before stored history is ready', async () => {
     const read = jest.fn(() => { throw new Error('Awaiting stored history'); });

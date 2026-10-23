@@ -168,6 +168,7 @@ export type IntrusionDomStudyRecord = {
   direction: Direction;
   alertPrice?: number;
   gap?: StudyGap;
+  gapRevisions?: Array<{ observedAt: string; gap: StudyGap }>;
   mapContext?: {
     frameIndex: number;
     frame: StudyFrame;
@@ -982,7 +983,14 @@ export function refreshIntrusionDomStudy(input: {
     record.timestampNl = alert.timestampNl || record.timestampNl;
     record.sideCounts = alert.sideCounts || record.sideCounts;
     record.alertPrice = finiteNumber(alert.price) || record.alertPrice;
-    record.gap = alert.gap || alert.previousGap || record.gap;
+    const incomingGap = alert.gap || alert.previousGap;
+    if (record.gap && incomingGap && (record.gap.left !== incomingGap.left || record.gap.right !== incomingGap.right)) {
+      record.gapRevisions = record.gapRevisions || [];
+      if (!record.gapRevisions.some((revision) => revision.gap.left === incomingGap.left && revision.gap.right === incomingGap.right)) {
+        record.gapRevisions.push({ observedAt: now, gap: incomingGap });
+      }
+    }
+    record.gap = record.gap || incomingGap;
     if (alert.entrants) alertEntrants.set(signature, alert.entrants);
     record.candleReview = candleReviewFor(
       direction,
@@ -1235,6 +1243,7 @@ export function intrusionDomStudySnapshot(): any {
       direction: record.direction,
       alertPrice: record.alertPrice,
       gap: record.gap,
+      gapRevisions: record.gapRevisions,
       mapContext: record.mapContext,
       delayContext: record.delayContext,
       filtered: record.filtered,

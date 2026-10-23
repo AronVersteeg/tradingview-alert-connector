@@ -3,7 +3,8 @@ import fs from 'fs';
 import net from 'net';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
-import { buildDecentraderGapProjectionHistory, GapProjectionHistory } from './decentraderGapProjectionHistory';
+import { GapProjectionHistory } from './decentraderGapProjectionHistory';
+import { ReplicaGapArchive } from './replicaGapArchive';
 import {
   BtcManualEntryRequest,
   btcManualTriggerEmailSubject,
@@ -481,6 +482,7 @@ export function dydxTargetFailedAndFlattened(result: any): boolean {
 }
 
 type MonitorStatus = {
+  gapArchive?: ReturnType<ReplicaGapArchive['status']>;
   positionManagement?: any;
   enabled: boolean;
   running: boolean;
@@ -4126,6 +4128,9 @@ function buildTimelapsePayload(rows: DecentraderRow[], symbol: string): any {
       api: API_URL,
       method: 'getOHLCHourlyCalculations',
       params: [symbol],
+      historicalStateAvailable: false,
+      historicalReplayAccuracy: 'current-active-reconstruction',
+      historicalReplayWarning: 'Active flags describe the latest fetched snapshot, not the active state at each past frame. Use saved observations for historical gap/intrusion evidence.',
       note:
         'Live cloud payload served by the Render Decentrader gap monitor. Times are Decentrader UTC and shown in the chart as Europe/Amsterdam.'
     },
@@ -5354,7 +5359,7 @@ export class DecentraderGapMonitor {
   private checkPromise: Promise<any> | undefined;
   private latestRows: DecentraderRow[] | undefined;
   private latestTimelapsePayload: any | undefined;
-  private gapProjectionHistoryCache?: { frames: any; events: any; history: GapProjectionHistory };
+  private readonly gapObservationArchive = new ReplicaGapArchive();
   private tradeExecutor: DecentraderTradeExecutor | undefined;
   private status: MonitorStatus = {
     enabled: false,
@@ -5457,6 +5462,7 @@ export class DecentraderGapMonitor {
 
     return {
       ...this.status,
+      gapArchive: this.gapObservationArchive.status(),
       positionManagement: this.managementStatus,
       lastResult,
       enabled: config.enabled,
@@ -5596,6 +5602,7 @@ export class DecentraderGapMonitor {
     try {
       const rows = await fetchSnapshot(config.symbol);
       this.latestRows = rows;
+      this.archiveObservedGap(rows);
       void refreshCoinGlassWhaleLevels('gap-check', () => this.latestRows);
       const intrusionCandleCandles = await fetchHourlyCandlesForIntrusionFilter(rows[0]?.timestamp).catch((error) => {
         console.warn('Authoritative intrusion candle filter refresh failed; filtered alerts will remain pending if enabled.', {
@@ -7585,14 +7592,30 @@ export class DecentraderGapMonitor {
     }
   }
 
+  private archiveObservedGap(rows: DecentraderRow[]): void {
+    try {
+      if (!rows.length || this.config().symbol.toLowerCase() !== 'btcusdt') return;
+      const latest = rows[rows.length - 1];
+      const gap = cleanGapForBars(latest, activeBarsForFrame(rows, rows.length - 1));
+      const record = {
+        effectiveAt: new Date(Date.parse(String(latest.timestamp).replace(' ', 'T') + 'Z')).toISOString(),
+        observedAt: new Date().toISOString(), referencePrice: parseNumber(latest.ohlc4), sourceHours: rows.length,
+        gap: gap ? { left: gap.left, right: gap.right,
+          leftEdge: { relativeCount: gap.leftEdge.count }, rightEdge: { relativeCount: gap.rightEdge.count } } : null
+      };
+      void this.gapObservationArchive.append(path.dirname(this.config().stateFile), {
+        market: 'BTC-USD', symbol: 'BTCUSDT', modelVersion: 'decentrader-btc-observed-v1', accuracy: 'provider-observed-snapshot'
+      }, [record]).catch((error) => console.error('Decentrader observed gap archive failed; execution unchanged:', error.message));
+    } catch (error) {
+      console.error('Decentrader observed gap capture failed; execution unchanged:', error instanceof Error ? error.message : String(error));
+    }
+  }
+
   getGapProjectionHistory(): GapProjectionHistory {
-    const payload = this.latestTimelapsePayload;
-    if (!payload) throw new Error('Awaiting stored BTC Decentrader map history.');
-    const cached = this.gapProjectionHistoryCache;
-    if (cached?.frames === payload.frames && cached?.events === payload.events) return cached.history;
-    const history = buildDecentraderGapProjectionHistory(payload);
-    this.gapProjectionHistoryCache = { frames: payload.frames, events: payload.events, history };
-    return history;
+    // The source does not provide past active-state snapshots. Never compute or
+    // serve a year of current survivors as a historical gap projection.
+    return { symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true,
+      historicalAccuracy: 'current-active-reconstruction', records: [] };
   }
 
   async getTimelapsePayload(): Promise<any> {
@@ -7609,6 +7632,7 @@ export class DecentraderGapMonitor {
 
     const rows = await fetchSnapshot(config.symbol);
     this.latestRows = rows;
+    this.archiveObservedGap(rows);
     recordCoinGlassWhaleObservation(rows);
     this.latestTimelapsePayload = buildTimelapsePayload(rows, config.symbol);
     this.latestTimelapsePayload.delayHistory = decentraderDelaySnapshot();

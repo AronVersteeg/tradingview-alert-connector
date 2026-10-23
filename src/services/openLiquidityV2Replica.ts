@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { binanceGet } from './binanceHttp';
+import { ReplicaGapArchive } from './replicaGapArchive';
 
 const BINANCE_SPOT_URL = 'https://api.binance.com/api/v3/klines';
 const BINANCE_FUTURES_URL = 'https://fapi.binance.com/fapi/v1/klines';
@@ -747,6 +748,7 @@ export class OpenLiquidityV2ReplicaCollector {
   private liveReplay: IncrementalReplicaReplay | undefined;
   private persistenceTimer: NodeJS.Timeout | undefined;
   private persistencePromise: Promise<void> = Promise.resolve();
+  private readonly gapArchive = new ReplicaGapArchive();
   private lastRefreshTiming: ReplicaRefreshTiming | undefined;
   private snapshots: ReplicaSnapshot[] = [];
   private loaded = false;
@@ -849,7 +851,13 @@ export class OpenLiquidityV2ReplicaCollector {
     const file = this.historyFile();
     const temporary = `${file}.tmp`;
     const serialized = JSON.stringify(this.snapshots);
+    const archive = this.gapArchive.append(this.historyDirectory(), {
+      market: this.config.market, symbol: this.config.symbol, modelVersion: this.config.modelVersion
+    }, this.snapshots).catch((error) => console.error('Public V2 gap observation archive failed; live execution unchanged:', {
+      market: this.config.market, error: error instanceof Error ? error.message : String(error)
+    }));
     this.persistencePromise = this.persistencePromise.then(async () => {
+      await archive;
       await fs.promises.mkdir(this.historyDirectory(), { recursive: true });
       await fs.promises.writeFile(temporary, serialized);
       await fs.promises.rename(temporary, file);
@@ -1042,6 +1050,7 @@ export class OpenLiquidityV2ReplicaCollector {
       pollMinutes: this.pollMinutes(),
       historyDirectory: this.historyDirectory(),
       observations: this.snapshots.length,
+      gapArchive: this.gapArchive.status(),
       coverage: this.snapshots.length ? {
         from: this.snapshots[0].effectiveAt,
         to: this.snapshots[this.snapshots.length - 1].effectiveAt

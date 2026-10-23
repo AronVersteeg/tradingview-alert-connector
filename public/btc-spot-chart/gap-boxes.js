@@ -1,13 +1,6 @@
 (function (root) {
   'use strict';
   const HOUR = 3600;
-  const KNOWN_STARTS = Object.freeze([Object.freeze({
-    lower: 79400, upper: 87400,
-    fromTime: Date.parse('2026-09-21T08:00:00Z') / 1000,
-    // User-supplied 10:00 Europe/Amsterdam; retained frames verify continuity
-    // from Sep 30 through this observed cutoff, not the earlier birth itself.
-    verifiedThrough: Date.parse('2026-10-21T08:00:00Z') / 1000
-  })]);
 
   function timelineFromPayload(payload) {
     if (payload?.source?.market !== 'BTC-USD' ||
@@ -49,11 +42,6 @@
         current = { fromTime: row.availableAt, toTime: row.availableAt, candleTime: row.candleTime,
           lower: row.lower, upper: row.upper, startKnown: Boolean(contiguous),
           startSource: contiguous ? (row.source === 'decentrader-map' ? 'decentrader-map' : 'histomap') : 'unknown', openEnded: true };
-        if (!boxes.length && !previous) {
-          const anchor = KNOWN_STARTS.find((item) => item.lower === current.lower && item.upper === current.upper &&
-            item.fromTime <= current.fromTime && current.fromTime <= item.verifiedThrough);
-          if (anchor) { current.fromTime = anchor.fromTime; current.startKnown = true; current.startSource = 'user-confirmed'; }
-        }
         boxes.push(current);
       }
       previous = row;
@@ -66,6 +54,7 @@
   function withDecentraderHistory(live, history) {
     if (live?.symbol !== 'BTCUSDT' || live.venue !== 'Binance Spot' || !live.records?.length ||
         history?.symbol !== 'BTCUSDT' || history.venue !== 'Decentrader map' || history.historicalOnly !== true ||
+        history.historicalAccuracy !== 'observed-snapshots' ||
         !Array.isArray(history.records) || !history.records.length) throw new Error('Unexpected Decentrader gap history');
     let previous = 0;
     for (const row of history.records) {

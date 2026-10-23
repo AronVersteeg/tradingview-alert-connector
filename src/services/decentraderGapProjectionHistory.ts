@@ -2,6 +2,7 @@ export interface GapProjectionHistory {
   symbol: 'BTCUSDT';
   venue: 'Decentrader map';
   historicalOnly: true;
+  historicalAccuracy: 'current-active-reconstruction' | 'observed-snapshots';
   records: Array<{ candleTime: number; availableAt: number; lower: number | null; upper: number | null }>;
 }
 
@@ -50,5 +51,6 @@ export function buildDecentraderGapProjectionHistory(payload: any): GapProjectio
     const valid = Number.isFinite(frame.price) && frame.price > 0 && lower !== undefined && upper !== undefined;
     return { candleTime, availableAt: candleTime + 3600, lower: valid ? lower : null, upper: valid ? upper : null };
   });
-  return { symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true, records };
+  return { symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true,
+    historicalAccuracy: 'current-active-reconstruction', records };
 }

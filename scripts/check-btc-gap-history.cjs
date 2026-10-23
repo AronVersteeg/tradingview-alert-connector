@@ -13,7 +13,7 @@ const html = fs.readFileSync(path.join(__dirname, '../public/decentrader_liquidi
 const hour = 3_600_000, initial = Math.floor(Date.now() / hour) * hour + 5000;
 const start = initial - 5000 - 150 * hour;
 const record = (i, lower, upper) => ({ candleTime: (start + i * hour) / 1000, availableAt: (start + (i + 1) * hour) / 1000, lower, upper });
-const archive = { symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true,
+const archive = { symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true, historicalAccuracy: 'observed-snapshots',
   records: Array.from({ length: 140 }, (_, i) => record(i, i < 40 ? 74000 : i < 80 ? 76000 : 79400, i < 40 ? 90000 : i < 80 ? 88000 : 87400)) };
 
 function mapPayload(total = 150) {
@@ -40,23 +40,30 @@ function greenCount(buffer) {
       const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 },
         isMobile: mobile, hasTouch: mobile });
       const page = await context.newPage(), errors = [], writes = [];
-      let now = initial, historyReads = 0, failHistory = false;
+      let now = initial, historyReads = 0, failHistory = false, untrustedHistory = true;
       page.on('pageerror', (error) => errors.push(error.message));
       await page.addInitScript((value) => {
         window.__gapFixtureNow = value;
         Date.now = () => window.__gapFixtureNow;
         window.WebSocket = class { close() {} };
       }, now);
-      await page.route('**/*', async (route) => {
+      await context.route('**/*', async (route) => {
         const request = route.request(), target = new URL(request.url());
         if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) { writes.push(request.method()); return route.abort(); }
         if (target.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: html });
         if (target.origin === new URL(url).origin && target.pathname.startsWith('/assets/')) return route.continue();
         if (target.pathname === '/decentrader/gap-projection-history') {
           historyReads++;
+          if (untrustedHistory) return route.fulfill({ status: mobile ? 200 : 409, json: mobile
+            ? { ...archive, historicalAccuracy: 'current-active-reconstruction' }
+            : { code: 'HISTORICAL_STATE_UNVERIFIED' } });
           return route.fulfill({ status: failHistory ? 503 : 200, json: failHistory ? { error: 'Stored history unavailable' } : archive });
         }
         if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return route.fulfill({ json: mapPayload(now > initial + hour ? 151 : 150) });
+        if (target.pathname === '/decentrader/liquidity-timelapse') return route.fulfill({ json: {
+          ...mapPayload(), source: { method: 'getOHLCHourlyCalculations', params: ['btcusdt'] },
+          events: [{ i: 0, s: 'L', l: 10, p: 79400, a: 1, n: 1 }, { i: 0, s: 'S', l: 10, p: 87400, a: 1, n: 1 }]
+        } });
         if (target.pathname === '/decentrader/manual-override') return route.fulfill({ json: { enabled: true, market: 'BTC-USD', overrides: [] } });
         if (target.pathname.endsWith('/btc-spot-candles')) return route.fulfill({ json: { symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h',
           fetchedAt: new Date(now).toISOString(), hasMore: false, candles: Array.from({ length: 151 }, (_, i) => ({
@@ -67,6 +74,13 @@ function greenCount(buffer) {
       });
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => window.btcSpotChart?.getGapProjections() &&
+        document.getElementById('spotChartGapStatus').textContent.includes('past state unverified'));
+      assert.equal(await page.evaluate(() => window.btcSpotChart.getGapProjections().history), undefined,
+        'Untrusted current-active data must never extend the causal Public V2 timeline');
+      untrustedHistory = false; now += hour + 1;
+      await page.evaluate((time) => { window.__gapFixtureNow = time; }, now);
+      await page.evaluate(() => window.__gapFixtureRefresh());
       await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.history?.records === 100);
       const model = await page.evaluate(() => window.btcSpotChart.getGapProjections());
       assert.equal(model.boxes.length, 4);
@@ -101,21 +115,33 @@ function greenCount(buffer) {
       assert(greenCount(await page.locator('#spotChartCanvas').screenshot()) < green / 2);
       await page.locator('#spotChartGap').check();
       await page.evaluate(() => window.__gapFixtureRefresh());
-      assert.equal(historyReads, 1, 'Map refresh must not refetch the archive within an hour');
-      failHistory = true; now = initial + hour + 1000;
+      assert.equal(historyReads, 2, 'Map refresh must not refetch the archive within an hour');
+      failHistory = true; now += hour + 1000;
       await page.evaluate((time) => { window.__gapFixtureNow = time; }, now);
       await page.evaluate(() => window.__gapFixtureRefresh());
-      await page.waitForFunction(() => document.getElementById('spotChartGapStatus').textContent.includes('history unavailable'));
-      assert.equal(historyReads, 2);
+      await page.waitForFunction(() => document.getElementById('spotChartGapStatus').textContent.includes('History read failed'));
+      assert.equal(historyReads, 3);
       assert.equal(await page.evaluate(() => window.btcSpotChart.getGapProjections().boxes.length), 4, 'Failed archive read must retain known rectangles');
       failHistory = false; now += 5 * 60_000 + 1;
       await page.evaluate((time) => { window.__gapFixtureNow = time; }, now);
       await page.evaluate(() => window.__gapFixtureRefresh());
-      await page.waitForFunction(() => !document.getElementById('spotChartGapStatus').textContent.includes('history unavailable'));
-      assert.equal(historyReads, 3);
+      await page.waitForFunction(() => !document.getElementById('spotChartGapStatus').textContent.includes('History read failed'));
+      assert.equal(historyReads, 4);
+      const legacy = await context.newPage();
+      legacy.on('pageerror', (error) => errors.push(error.message));
+      const legacyUrl = new URL(url); legacyUrl.searchParams.set('source', 'decentrader');
+      await legacy.goto(legacyUrl.href, { waitUntil: 'domcontentloaded' });
+      await legacy.waitForFunction(() => document.getElementById('frame').max === '49');
+      await legacy.locator('#frame').evaluate((slider) => { slider.value = '0'; slider.dispatchEvent(new Event('input', { bubbles: true })); });
+      assert.equal(await legacy.locator('#gapRight').textContent(), '-');
+      assert((await legacy.locator('#gapStatus').textContent()).includes('Historical gap unverified'));
+      assert((await legacy.locator('#gapAlert').textContent()).includes('Unknown'));
+      await legacy.locator('#frame').evaluate((slider) => { slider.value = slider.max; slider.dispatchEvent(new Event('input', { bubbles: true })); });
+      assert((await legacy.locator('#gapRight').textContent()).includes('87'));
+      await legacy.close();
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
       results.push({ mobile, historyBoxes: model.boxes.length, olderHours: model.history.records, green, verticalGreen,
-        hourlyCache: true, sourceFailurePreservesBoxes: true, recovery: true, writeRequests: writes });
+        untrustedHistoryQuarantined: true, hourlyCache: true, sourceFailurePreservesBoxes: true, recovery: true, writeRequests: writes });
       await context.close();
     }
     console.log(JSON.stringify(results, null, 2));

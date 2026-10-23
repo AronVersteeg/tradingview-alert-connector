@@ -5326,8 +5326,22 @@
       return `${nlTime(frame.t)}: ${matching.length} recorded intrusion${matching.length === 1 ? '' : 's'} | ${details} | historical record; current map may differ`;
     }
 
+    function unverifiedDecentraderFrame(frame) {
+      return !isOpenV2 && frame && frame.i < (payload?.frames?.length || 0) - 1;
+    }
+
     function updateGapMonitor(frame, gap, intrusion, rsiSignal, candleReview) {
       const recordedAlert = recordedIntrusionLabel(frame);
+      if (unverifiedDecentraderFrame(frame)) {
+        gapWidth.textContent = '-';
+        gapLeft.textContent = '-';
+        gapRight.textContent = '-';
+        gapPrice.textContent = frame.price ? money(frame.price) : '-';
+        gapStatus.textContent = 'Historical gap unverified: these histograms use current active flags, not the past state';
+        gapAlert.textContent = recordedAlert || 'Unknown: no saved intrusion record for this hour';
+        gapAlert.classList.remove('is-hot', 'is-rsi-long', 'is-rsi-short');
+        return;
+      }
       if (!gap || !frame) {
         gapWidth.textContent = '-';
         gapLeft.textContent = '-';
@@ -5821,8 +5835,9 @@
         return zoneColors[`${side}${leverage}`] || newColor;
       }
 
-      const gap = getVisualGapForBars(frame, monitorBars, xFor, xToPrice);
-      const intrusion = getGapIntrusion(frameIndex, xFor, xToPrice);
+      const unverifiedHistory = unverifiedDecentraderFrame(frame);
+      const gap = unverifiedHistory ? null : getVisualGapForBars(frame, monitorBars, xFor, xToPrice);
+      const intrusion = unverifiedHistory ? null : getGapIntrusion(frameIndex, xFor, xToPrice);
       const rsiContext = getRsiContext(frameIndex);
       const previousRsiSide = previousIntrusionRsiSide(frameIndex, xFor, xToPrice);
       const masterContext = masterIntrusionContext(frameIndex, intrusion, rsiContext, xFor, xToPrice);
@@ -6253,7 +6268,10 @@
         try {
           const response = await fetch(`${CLOUD_DECENTRADER_DATA_URL.replace('/liquidity-timelapse', '/gap-projection-history')}?market=BTC-USD`,
             { cache: 'no-store', signal: controller.signal });
-          if (!response.ok) throw new Error(`History ${response.status}`);
+          if (!response.ok) {
+            if (response.status === 409) btcSpotGapHistoryRetryAt = Date.now() + 3_600_000;
+            throw new Error(`History ${response.status}`);
+          }
           const history = await response.json();
           window.BtcSpotGapBoxes.withDecentraderHistory(window.BtcSpotGapBoxes.timelineFromPayload(payload), history);
           btcSpotGapHistory = history;

@@ -134,18 +134,19 @@ coupling rendering to a trading executor. No strategy checkbox is added.
 
 ## Public V2 Gap Rectangles
 
-- Default-on bright-green (`#00ff00`) outlines use exactly `payload.gaps` from the BTC
-  Public V2 histomap for the recent/live part. Older rectangles come from the
-  stored Decentrader map's default active/all-sides/all-leverages histogram data.
-  `GET /decentrader/gap-projection-history?market=BTC-USD` supplies only compact
-  gap records, reconstructed from existing in-memory frames/events and cached
-  until those change. It never fetches Binance/Decentrader, refreshes CoinGlass,
-  sends SMTP or invokes a trading executor. Before stored data is ready it
-  returns 503, without starting a collector.
-  The browser reads this compressed history at most once per hour (five-minute
-  retry after failure), without blocking the map or live overlay. Other pair
-  tabs do not request it. The existing histomap refresh publishes a combined,
-  validated timeline to the candle chart. This also works when the chart is
+- Default-on bright-green (`#00ff00`) outlines use exactly `payload.gaps` from
+  the BTC Public V2 causal histomap. The Decentrader historical extension from
+  commit 048d355 is quarantined: matching recent edges did not prove that older
+  current-active flags reproduced the then-active state.
+  `GET /decentrader/gap-projection-history?market=BTC-USD` now returns HTTP 409
+  `HISTORICAL_STATE_UNVERIFIED` for such reconstructions, without serving their
+  records as historical truth. The browser also rejects older servers' HTTP 200
+  responses unless explicitly classified as observed snapshots. No unverified
+  historical boxes are prepended. This endpoint never fetches Binance/Decentrader,
+  refreshes CoinGlass, sends SMTP or invokes a trading executor.
+  The browser retries a quarantined history at most once per hour, without
+  blocking the map or Public V2 live overlay. Other pair tabs do not request it.
+  The existing Public V2 refresh publishes its validated timeline. This also works when the chart is
   opened after the map has loaded, and is independent of the map's frame slider.
 - Each pair of unchanged lower/upper edges is one rectangle. Changes to either
   edge close that rectangle and start the next at the same source timestamp.
@@ -162,21 +163,19 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   candle intervals remain alongside the reserved future area. Historical panning
   and zooming remain available without snapping a historical view back to live.
   Live updates, resizing and changes to the edge offset preserve the buffer.
-- Public V2 wins every overlapping hour and remains the only recent/live source.
-  Older history may join a live rectangle only if the sources agree at the
+- Public V2 remains the only recent/live source. Any future verified observed
+  history may join a live rectangle only if the sources agree at the
   handover timestamp; otherwise the outlines are interrupted with an unknown
   live start. Overlap comparisons/differences are exposed in `getGapProjections()`
   and in the source status. Source failures retain the last known historical
   boxes with a warning, without changing Public V2 data or signals.
-  Reconstructed history reflects currently stored active flags, not proof of
-  when a historical gap was originally observed; it is display-only and must
-  not be used for retrospective timing/backtest claims.
-- The 500 retained Public V2 frames do not in themselves establish the first gap's
-  original birth. Unknown starts remain open on the left. The current
-  79,400-87,400 gap has the user's explicitly supplied start at 2026-09-21
-  10:00 Europe/Amsterdam (08:00 UTC), tagged `startSource: user-confirmed`.
-  Its applicability is bounded by the observed continuity through Oct 21
-  08:00 UTC, so an unrelated future gap at the same prices is not backdated.
+  Decentrader current-active reconstructions cannot be used for retrospective
+  timing/backtest claims. Its own historical-frame gap/intrusion UI now also
+  withholds unverified computed edges and distinguishes an unknown hour from
+  a saved intrusion record. The latest source frame is unchanged.
+- The 500 retained Public V2 frames do not establish the first gap's original
+  birth. Unknown starts remain open on the left. The earlier manual Sep 21
+  anchor is removed: continuity cannot be assumed from a later matching range.
 - Missing frames/null gaps interrupt the outline. A stale active gap is dashed
   and stops at the last verified close instead of projecting an unverified
   current range into the future. The displayed cutoff makes source lag visible.

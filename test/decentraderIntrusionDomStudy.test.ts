@@ -1,11 +1,16 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   aggregateIntrusionDomWindow,
   buildIntrusionDomEvidence,
   buildIntrusionFlowFlipEvidence,
   buildResponseHypothesis,
-  IntrusionDomWindow
+  IntrusionDomWindow,
+  refreshIntrusionDomStudy,
+  intrusionDomStudySnapshot
 } from '../src/services/decentraderIntrusionDomStudy';
-import { DomMinuteRecord } from '../src/services/decentralizedDomCollector';
+import { DomMinuteRecord, decentralizedDomCollector } from '../src/services/decentralizedDomCollector';
 
 function minute(input: {
   at: string;
@@ -77,6 +82,28 @@ function window(overrides: Partial<IntrusionDomWindow> = {}): IntrusionDomWindow
 }
 
 describe('Decentrader intrusion DOM study', () => {
+  test('preserves the originally stored alert gap and records later recomputed edges separately', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'intrusion-gap-evidence-'));
+    const previous = process.env.DECENTRADER_INTRUSION_DOM_STUDY_FILE;
+    process.env.DECENTRADER_INTRUSION_DOM_STUDY_FILE = path.join(directory, 'study.json');
+    const history = jest.spyOn(decentralizedDomCollector, 'getHistory').mockReturnValue({ records: [] } as any);
+    try {
+      const alert = { signature: '2026-08-19 12:00:00|L|10|61000:1', timestamp: '2026-08-19 12:00:00',
+        sideCounts: '1 left edge', gap: { left: 61000, right: 67000 } };
+      refreshIntrusionDomStudy({ alerts: [alert], now: '2026-08-19T14:00:00Z' });
+      refreshIntrusionDomStudy({ alerts: [{ ...alert, gap: { left: 61000, right: 87400 } }], now: '2026-10-23T12:00:00Z' });
+      refreshIntrusionDomStudy({ alerts: [{ ...alert, gap: { left: 61000, right: 87400 } }], now: '2026-10-23T12:05:00Z' });
+      const record = intrusionDomStudySnapshot().history[0];
+      expect(record.gap.right).toBe(67000);
+      expect(record.gapRevisions).toEqual([{ observedAt: '2026-10-23T12:00:00Z', gap: { left: 61000, right: 87400 } }]);
+    } finally {
+      history.mockRestore();
+      if (previous === undefined) delete process.env.DECENTRADER_INTRUSION_DOM_STUDY_FILE;
+      else process.env.DECENTRADER_INTRUSION_DOM_STUDY_FILE = previous;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test('normalizes price, taker flow and visible book pressure to the signal direction', () => {
     const from = Date.parse('2026-07-21T05:00:00.000Z');
     const result = aggregateIntrusionDomWindow([

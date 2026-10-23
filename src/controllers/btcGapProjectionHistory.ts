@@ -13,7 +13,13 @@ export function createBtcGapProjectionHistoryRouter(readHistory: () => GapProjec
       return;
     }
     try {
-      const json = JSON.stringify(readHistory());
+      const history = readHistory();
+      if (history.historicalAccuracy !== 'observed-snapshots') {
+        res.status(409).json({ ok: false, code: 'HISTORICAL_STATE_UNVERIFIED',
+          error: 'Current Decentrader active flags do not establish historical gap edges. Historical boxes withheld.' });
+        return;
+      }
+      const json = JSON.stringify(history);
       if (/\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
         const compressed = await new Promise<Buffer>((resolve, reject) => {
           zlib.gzip(json, (error, result) => error ? reject(error) : resolve(result));

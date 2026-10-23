@@ -75,10 +75,14 @@ function greenPixels(buffer) {
 
 async function checkGapBoxes(page) {
   await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.boxes.length > 0, null, { timeout: 40_000 });
-  if (capturedGapHistory) {
+  if (capturedGapHistory?.historicalAccuracy === 'observed-snapshots') {
     await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.history?.records > 0);
     const history = await page.evaluate(() => window.btcSpotChart.getGapProjections().history);
     assert.equal(history.mismatches, 0, 'Captured Decentrader edges must agree with the actual Public V2 overlap.');
+  } else if (capturedGapHistory) {
+    await page.waitForFunction(() => document.getElementById('spotChartGapStatus').textContent.includes('past state unverified'));
+    assert.equal(await page.evaluate(() => window.btcSpotChart.getGapProjections().history), undefined,
+      'Current-active history must not be accepted as a historical archive.');
   }
   // Isolate green labels from manual plans that may share the exact same price.
   const manualVisible = await page.locator('#spotChartManual').isChecked();

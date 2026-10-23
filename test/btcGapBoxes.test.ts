@@ -9,7 +9,8 @@ const gap = (left = 80, right = 110) => ({ left, right });
 const now = (start + 10 * HOUR) * 1000;
 
 describe('BTC Public V2 gap rectangles', () => {
-  const history = (records: any[]) => ({ symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true, records });
+  const history = (records: any[]) => ({ symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true,
+    historicalAccuracy: 'observed-snapshots', records });
   const row = (index: number, lower = 80, upper = 110) => ({ candleTime: start + index * HOUR,
     availableAt: start + (index + 1) * HOUR, lower, upper });
 
@@ -40,6 +41,8 @@ describe('BTC Public V2 gap rectangles', () => {
   test('rejects malformed historical sources, preserving the standalone live model as fallback', () => {
     const live = timelineFromPayload(payload([gap()]));
     for (const archive of [history([]), { ...history([row(-1)]), symbol: 'ETHUSDT' },
+      { ...history([row(-1)]), historicalAccuracy: 'current-active-reconstruction' },
+      { ...history([row(-1)]), historicalAccuracy: undefined },
       history([row(-1), row(-1)]), history([{ ...row(-1), lower: '80' }]), history([{ ...row(-1), availableAt: start + 1 }])]) {
       expect(() => withDecentraderHistory(live, archive)).toThrow();
     }
@@ -81,11 +84,11 @@ describe('BTC Public V2 gap rectangles', () => {
     expect(boxes[1]).toMatchObject({ startKnown: false, startSource: 'unknown' });
   });
 
-  test('retains the user-confirmed Sep 21 10:00 Amsterdam origin, explicitly separate from observed history', () => {
+  test('does not backdate a gap to a manual anchor when its earlier continuity cannot be verified', () => {
     const data = payload([gap(79400, 87400)]);
     data.frames[0].startedAtMs = Date.parse('2026-09-30T12:00:00Z');
     const box = buildGapBoxes(timelineFromPayload(data), Date.parse('2026-10-21T08:00:00Z')).boxes[0];
-    expect(box).toMatchObject({ fromTime: Date.parse('2026-09-21T08:00:00Z') / 1000, startKnown: true, startSource: 'user-confirmed' });
+    expect(box).toMatchObject({ fromTime: Date.parse('2026-09-30T13:00:00Z') / 1000, startKnown: false, startSource: 'unknown' });
     data.frames[0].startedAtMs = Date.parse('2026-11-21T08:00:00Z');
     expect(buildGapBoxes(timelineFromPayload(data), Date.parse('2026-11-21T10:00:00Z')).boxes[0].startSource).toBe('unknown');
   });

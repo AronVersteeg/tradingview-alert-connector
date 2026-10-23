@@ -71,7 +71,9 @@
       if (gapModel.history) {
         status.textContent += ` | Decentrader history: ${gapModel.history.records}h${gapModel.history.mismatches ? ` | ${gapModel.history.mismatches} source differences (Public V2 leading)` : ''}`;
       }
-      if (gapTimeline?.historyReadFailed) status.textContent += ' | Decentrader history unavailable (Public V2 unchanged)';
+      if (gapTimeline?.historyReadFailed) status.textContent += gapModel.history
+        ? ' | History read failed; last verified history retained'
+        : ' | Decentrader past state unverified; historical boxes withheld';
       status.dataset.stale = String(stale);
       if (fitFractals) candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
     } catch (error) {
