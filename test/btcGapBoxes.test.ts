@@ -1,4 +1,4 @@
-const { timelineFromPayload, buildGapBoxes, GapBoxPrimitive } = require('../public/btc-spot-chart/gap-boxes.js');
+const { timelineFromPayload, withDecentraderHistory, buildGapBoxes, GapBoxPrimitive } = require('../public/btc-spot-chart/gap-boxes.js');
 
 const HOUR = 3600;
 const start = Date.parse('2026-10-20T00:00:00Z') / 1000;
@@ -9,6 +9,43 @@ const gap = (left = 80, right = 110) => ({ left, right });
 const now = (start + 10 * HOUR) * 1000;
 
 describe('BTC Public V2 gap rectangles', () => {
+  const history = (records: any[]) => ({ symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true, records });
+  const row = (index: number, lower = 80, upper = 110) => ({ candleTime: start + index * HOUR,
+    availableAt: start + (index + 1) * HOUR, lower, upper });
+
+  test('prepends older map boxes, verifies the handover and keeps Public V2 leading at every overlapping hour', () => {
+    const live = timelineFromPayload(payload([gap(), gap(), gap(85)]));
+    const archive = history([row(-3, 70, 120), row(-2), row(-1), row(0), row(1), row(2), row(3, 99, 200)]);
+    const before = JSON.stringify({ live, archive });
+    const combined = withDecentraderHistory(live, archive);
+    expect(combined.records).toHaveLength(6);
+    expect(combined.records.at(-1).lower).toBe(85); // Never extend the live feed with a newer Decentrader frame.
+    expect(combined.history).toMatchObject({ records: 3, overlapCompared: 3, mismatches: 1, boundaryMatches: true });
+    const boxes = buildGapBoxes(combined, now).boxes;
+    expect(boxes[1]).toMatchObject({ fromTime: start - HOUR, lower: 80, startKnown: true, startSource: 'decentrader-map' });
+    expect(boxes.at(-1)).toMatchObject({ lower: 85, openEnded: true, startSource: 'histomap' });
+    expect(JSON.stringify({ live, archive })).toBe(before);
+  });
+
+  test('refuses to join mismatching or unverified source boundaries and retains missing-hour breaks', () => {
+    const live = timelineFromPayload(payload([gap(), gap()]));
+    for (const archive of [history([row(-2), row(-1), row(0, 81)]), history([row(-2), row(-1)])]) {
+      const model = buildGapBoxes(withDecentraderHistory(live, archive), now);
+      expect(model.boxes).toHaveLength(2);
+      expect(model.boxes[1]).toMatchObject({ fromTime: start + HOUR, startKnown: false, startSource: 'unknown' });
+    }
+    expect(buildGapBoxes(withDecentraderHistory(live, history([row(-4), row(-1), row(0)])), now).boxes).toHaveLength(2);
+  });
+
+  test('rejects malformed historical sources, preserving the standalone live model as fallback', () => {
+    const live = timelineFromPayload(payload([gap()]));
+    for (const archive of [history([]), { ...history([row(-1)]), symbol: 'ETHUSDT' },
+      history([row(-1), row(-1)]), history([{ ...row(-1), lower: '80' }]), history([{ ...row(-1), availableAt: start + 1 }])]) {
+      expect(() => withDecentraderHistory(live, archive)).toThrow();
+    }
+    expect(buildGapBoxes(live, now).boxes).toHaveLength(1);
+  });
+
   test('reuses exact histomap edges, converting candle-open to actual close availability', () => {
     const original = payload([gap(79400, 87400), gap(79400, 87400)]);
     const timeline = timelineFromPayload(original);

@@ -8,6 +8,12 @@ const url = process.argv[2] || 'http://127.0.0.1:4318/decentrader/map?source=ope
 const output = process.argv[3];
 if (!output) throw new Error('Supply an output directory for chart screenshots.');
 fs.mkdirSync(output, { recursive: true });
+// Optional captured compact history for testing before the new endpoint deploys.
+const capturedGapHistory = process.env.SPOT_CHART_GAP_HISTORY_FIXTURE
+  ? JSON.parse(fs.readFileSync(process.env.SPOT_CHART_GAP_HISTORY_FIXTURE, 'utf8')).history : null;
+async function useCapturedGapHistory(context) {
+  if (capturedGapHistory) await context.route('**/decentrader/gap-projection-history?*', (route) => route.fulfill({ json: capturedGapHistory }));
+}
 
 function candlePixels(buffer) {
   const png = PNG.sync.read(buffer);
@@ -69,6 +75,11 @@ function greenPixels(buffer) {
 
 async function checkGapBoxes(page) {
   await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.boxes.length > 0, null, { timeout: 40_000 });
+  if (capturedGapHistory) {
+    await page.waitForFunction(() => window.btcSpotChart?.getGapProjections()?.history?.records > 0);
+    const history = await page.evaluate(() => window.btcSpotChart.getGapProjections().history);
+    assert.equal(history.mismatches, 0, 'Captured Decentrader edges must agree with the actual Public V2 overlap.');
+  }
   // Isolate green labels from manual plans that may share the exact same price.
   const manualVisible = await page.locator('#spotChartManual').isChecked();
   if (manualVisible) await page.locator('#spotChartManual').uncheck();
@@ -111,7 +122,8 @@ async function checkGapBoxes(page) {
     return x !== null && x > 0 && x < scale.width() - 2;
   });
   if (manualVisible) await page.locator('#spotChartManual').check();
-  return { lower: current.lower, upper: current.upper, fromTime: current.fromTime, startSource: current.startSource, greenPixels: on, hiddenPixels: off, adjustableLead: true, activePriceAxisLabels: true };
+  return { lower: current.lower, upper: current.upper, fromTime: current.fromTime, startSource: current.startSource,
+    history: state.model.history, boxes: state.model.boxes.length, greenPixels: on, hiddenPixels: off, adjustableLead: true, activePriceAxisLabels: true };
 }
 
 async function checkHourRefresh(browser, url, output) {
@@ -194,6 +206,7 @@ async function checkHourRefresh(browser, url, output) {
   const writes = [];
   try {
     const desktop = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
+    await useCapturedGapHistory(desktop);
     const page = await desktop.newPage();
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('request', (request) => { if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) writes.push(request.url()); });
@@ -205,7 +218,8 @@ async function checkHourRefresh(browser, url, output) {
     await page.waitForFunction(() => window.btcSpotChart?.getFractalProjections()?.levels.length > 0, null, { timeout: 40_000 });
     const fractalLevels = await page.evaluate(() => window.btcSpotChart.getFractalProjections());
     const currents = fractalLevels.levels.filter((level) => level.isCurrent && !level.broken);
-    assert.equal(currents.filter((level) => level.timeframe !== 'M').length, 4, 'Current Daily and Weekly highs/lows must all be present.');
+    assert.equal(fractalLevels.levels.filter((level) => level.isCurrent && level.timeframe !== 'M').length, 4,
+      'Current Daily and Weekly highs/lows must all be present, including levels that have since broken.');
     assert.equal(fractalLevels.levels.filter((level) => level.timeframe === 'M' && level.isCurrent).length, 2, 'Latest Monthly high and low must both be present, including broken levels.');
     await page.waitForFunction(() => document.querySelectorAll('#monthlyFractalHistoryRows td').length > 6);
     const monthlySnapshot = await page.evaluate(async () => (await fetch('/research/binance-monthly-fractals?market=BTC-USD')).json());
@@ -288,6 +302,7 @@ async function checkHourRefresh(browser, url, output) {
     assert((await other.locator('#monthlyFractalHistoryRows tr').count()) > 1);
 
     const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    await useCapturedGapHistory(mobile);
     const phone = await mobile.newPage();
     phone.on('pageerror', (error) => errors.push(error.message));
     await phone.goto(url, { waitUntil: 'domcontentloaded' });

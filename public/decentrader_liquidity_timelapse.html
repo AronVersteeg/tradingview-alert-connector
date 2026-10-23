@@ -6104,6 +6104,7 @@
       const nextPayload = loaded.payload;
       payload = nextPayload;
       publishBtcSpotGapTimeline();
+      refreshBtcSpotGapHistory();
       if (activeSource === 'decentrader') {
         window.DECENTRADER_LIQUIDITY_TIMELAPSE = nextPayload;
       }
@@ -6241,10 +6242,37 @@
         .catch(showRefreshError);
     }
 
+    let btcSpotGapHistory, btcSpotGapHistoryPending, btcSpotGapHistoryRetryAt = 0, btcSpotGapHistoryFailed = false;
+    function refreshBtcSpotGapHistory() {
+      if (activeSource !== 'open-v2' || openV2Market !== 'BTC-USD' || !payload || !window.BtcSpotGapBoxes ||
+          btcSpotGapHistoryPending || Date.now() < btcSpotGapHistoryRetryAt) return;
+      btcSpotGapHistoryRetryAt = Date.now() + 5 * 60_000;
+      btcSpotGapHistoryPending = (async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 25_000);
+        try {
+          const response = await fetch(`${CLOUD_DECENTRADER_DATA_URL.replace('/liquidity-timelapse', '/gap-projection-history')}?market=BTC-USD`,
+            { cache: 'no-store', signal: controller.signal });
+          if (!response.ok) throw new Error(`History ${response.status}`);
+          const history = await response.json();
+          window.BtcSpotGapBoxes.withDecentraderHistory(window.BtcSpotGapBoxes.timelineFromPayload(payload), history);
+          btcSpotGapHistory = history;
+          btcSpotGapHistoryFailed = false;
+          btcSpotGapHistoryRetryAt = (Math.floor(Date.now() / 3_600_000) + 1) * 3_600_000 + 5_000;
+          publishBtcSpotGapTimeline();
+        } catch (error) {
+          btcSpotGapHistoryFailed = true;
+          publishBtcSpotGapTimeline();
+        } finally { clearTimeout(timeout); btcSpotGapHistoryPending = null; }
+      })();
+    }
+
     function publishBtcSpotGapTimeline() {
       if (activeSource !== 'open-v2' || !payload || !window.BtcSpotGapBoxes) return;
       try {
-        const timeline = window.BtcSpotGapBoxes.timelineFromPayload(payload);
+        const live = window.BtcSpotGapBoxes.timelineFromPayload(payload);
+        const timeline = btcSpotGapHistory ? window.BtcSpotGapBoxes.withDecentraderHistory(live, btcSpotGapHistory) : live;
+        timeline.historyReadFailed = btcSpotGapHistoryFailed;
         window.BTC_SPOT_GAP_TIMELINE = timeline;
         window.dispatchEvent(new CustomEvent('btc-spot-chart:gap-timeline', { detail: timeline }));
       } catch (error) {
@@ -6262,7 +6290,7 @@
       }
     }
     window.addEventListener('btc-spot-chart:manual-source-ready', publishBtcSpotManualLevels);
-    window.addEventListener('btc-spot-chart:gap-source-ready', publishBtcSpotGapTimeline);
+    window.addEventListener('btc-spot-chart:gap-source-ready', () => { publishBtcSpotGapTimeline(); refreshBtcSpotGapHistory(); });
     wireViewer();
   </script>
 </body>

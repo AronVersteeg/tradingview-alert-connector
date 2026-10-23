@@ -36,18 +36,19 @@
     const boxes = [];
     let current, previous;
     for (const row of rows) {
-      if (previous && row.availableAt !== previous.availableAt + HOUR) {
+      if (previous && (row.breakBefore || row.availableAt !== previous.availableAt + HOUR)) {
         if (current) { current.toTime = previous.availableAt + HOUR; current.openEnded = false; }
         current = undefined;
       }
-      const contiguous = previous && row.availableAt === previous.availableAt + HOUR;
+      const contiguous = previous && !row.breakBefore && row.availableAt === previous.availableAt + HOUR;
       if (row.lower === null || row.upper === null) {
         if (current) { current.toTime = row.availableAt; current.openEnded = false; }
         current = undefined;
       } else if (!current || current.lower !== row.lower || current.upper !== row.upper) {
         if (current) { current.toTime = row.availableAt; current.openEnded = false; }
         current = { fromTime: row.availableAt, toTime: row.availableAt, candleTime: row.candleTime,
-          lower: row.lower, upper: row.upper, startKnown: Boolean(contiguous), startSource: contiguous ? 'histomap' : 'unknown', openEnded: true };
+          lower: row.lower, upper: row.upper, startKnown: Boolean(contiguous),
+          startSource: contiguous ? (row.source === 'decentrader-map' ? 'decentrader-map' : 'histomap') : 'unknown', openEnded: true };
         if (!boxes.length && !previous) {
           const anchor = KNOWN_STARTS.find((item) => item.lower === current.lower && item.upper === current.upper &&
             item.fromTime <= current.fromTime && current.fromTime <= item.verifiedThrough);
@@ -58,7 +59,37 @@
       previous = row;
     }
     if (current) current.toTime = previous.availableAt;
-    return { boxes, evaluatedThrough: previous.availableAt, coverageFrom: rows[0].availableAt };
+    return { boxes, evaluatedThrough: previous.availableAt, coverageFrom: rows[0].availableAt,
+      history: timeline.history ? { ...timeline.history } : undefined };
+  }
+
+  function withDecentraderHistory(live, history) {
+    if (live?.symbol !== 'BTCUSDT' || live.venue !== 'Binance Spot' || !live.records?.length ||
+        history?.symbol !== 'BTCUSDT' || history.venue !== 'Decentrader map' || history.historicalOnly !== true ||
+        !Array.isArray(history.records) || !history.records.length) throw new Error('Unexpected Decentrader gap history');
+    let previous = 0;
+    for (const row of history.records) {
+      if (!Number.isSafeInteger(row.candleTime) || row.candleTime % HOUR || row.candleTime <= previous ||
+          row.availableAt !== row.candleTime + HOUR ||
+          !(row.lower === null && row.upper === null || Number.isFinite(row.lower) && Number.isFinite(row.upper) &&
+            row.lower > 0 && row.upper > row.lower)) throw new Error('Invalid Decentrader gap history');
+      previous = row.candleTime;
+    }
+    const first = live.records[0], lookup = new Map(history.records.map((row) => [row.candleTime, row]));
+    const sameEdges = (a, b) => a && b && a.lower === b.lower && a.upper === b.upper;
+    const overlapping = live.records.filter((row) => lookup.has(row.candleTime));
+    const mismatches = overlapping.filter((row) => !sameEdges(row, lookup.get(row.candleTime))).length;
+    // A source handover may continue a box only if both sources agree at the
+    // boundary. Public V2 always wins overlap; Decentrader never supplies live data.
+    const boundaryMatches = sameEdges(first, lookup.get(first.candleTime));
+    const older = history.records.filter((row) => row.candleTime < first.candleTime)
+      .map((row) => ({ ...row, source: 'decentrader-map' }));
+    const records = live.records.map((row, index) => ({ ...row, breakBefore: index === 0 && older.length > 0 && !boundaryMatches }));
+    return { ...live, records: [...older, ...records], history: {
+      source: 'Decentrader map', historicalOnly: true, records: older.length,
+      coverageFrom: history.records[0].availableAt, coverageThrough: history.records.at(-1).availableAt,
+      overlapCompared: overlapping.length, mismatches, boundaryMatches
+    } };
   }
 
   class GapBoxPrimitive {
@@ -120,7 +151,7 @@
     }
   }
 
-  const api = Object.freeze({ timelineFromPayload, buildGapBoxes, GapBoxPrimitive });
+  const api = Object.freeze({ timelineFromPayload, withDecentraderHistory, buildGapBoxes, GapBoxPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {
     root.BtcSpotGapBoxes = api;

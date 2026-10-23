@@ -135,10 +135,17 @@ coupling rendering to a trading executor. No strategy checkbox is added.
 ## Public V2 Gap Rectangles
 
 - Default-on bright-green (`#00ff00`) outlines use exactly `payload.gaps` from the BTC
-  histomap, without recalculating gaps from candles, querying Decentrader or
-  using a different Binance source. The existing histomap refresh publishes a
-  compact, validated timeline to the candle chart; there is no additional gap
-  fetch, Binance request or history file. This also works when the chart is
+  Public V2 histomap for the recent/live part. Older rectangles come from the
+  stored Decentrader map's default active/all-sides/all-leverages histogram data.
+  `GET /decentrader/gap-projection-history?market=BTC-USD` supplies only compact
+  gap records, reconstructed from existing in-memory frames/events and cached
+  until those change. It never fetches Binance/Decentrader, refreshes CoinGlass,
+  sends SMTP or invokes a trading executor. Before stored data is ready it
+  returns 503, without starting a collector.
+  The browser reads this compressed history at most once per hour (five-minute
+  retry after failure), without blocking the map or live overlay. Other pair
+  tabs do not request it. The existing histomap refresh publishes a combined,
+  validated timeline to the candle chart. This also works when the chart is
   opened after the map has loaded, and is independent of the map's frame slider.
 - Each pair of unchanged lower/upper edges is one rectangle. Changes to either
   edge close that rectangle and start the next at the same source timestamp.
@@ -155,7 +162,16 @@ coupling rendering to a trading executor. No strategy checkbox is added.
   candle intervals remain alongside the reserved future area. Historical panning
   and zooming remain available without snapping a historical view back to live.
   Live updates, resizing and changes to the edge offset preserve the buffer.
-- The 500 retained frames do not in themselves establish the first gap's
+- Public V2 wins every overlapping hour and remains the only recent/live source.
+  Older history may join a live rectangle only if the sources agree at the
+  handover timestamp; otherwise the outlines are interrupted with an unknown
+  live start. Overlap comparisons/differences are exposed in `getGapProjections()`
+  and in the source status. Source failures retain the last known historical
+  boxes with a warning, without changing Public V2 data or signals.
+  Reconstructed history reflects currently stored active flags, not proof of
+  when a historical gap was originally observed; it is display-only and must
+  not be used for retrospective timing/backtest claims.
+- The 500 retained Public V2 frames do not in themselves establish the first gap's
   original birth. Unknown starts remain open on the left. The current
   79,400-87,400 gap has the user's explicitly supplied start at 2026-09-21
   10:00 Europe/Amsterdam (08:00 UTC), tagged `startSource: user-confirmed`.
@@ -258,3 +274,10 @@ It never submits or alters a production plan.
 Real browser mouse/touch events also check two-axis dragging, wheel and pinch
 zoom, axis-only zoom, two-to-one-finger transitions, cancellation, reset,
 view preservation across refreshes and scrolling outside the chart.
+
+Gap-history QA: `node scripts/check-btc-gap-history.cjs <preview URL> <output dir>`.
+This isolated desktop/mobile fixture exercises the real map-to-chart bridge,
+historical transition coordinates and green pixels, hourly read reuse, failed
+history reads and recovery. It blocks all non-read requests. The broader chart
+QA can use `SPOT_CHART_GAP_HISTORY_FIXTURE` pointing at a captured JSON object
+with a `history` field when testing before the compact endpoint is deployed.

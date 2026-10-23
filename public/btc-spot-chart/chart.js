@@ -68,6 +68,10 @@
       const current = gapModel.boxes.find((box) => box.openEnded);
       const time = dateText(gapModel.evaluatedThrough, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
       status.textContent = `Gap ${current ? `${money.format(current.lower)} - ${money.format(current.upper)}` : 'none'} | ${stale ? 'stale through' : 'closed through'} ${time}`;
+      if (gapModel.history) {
+        status.textContent += ` | Decentrader history: ${gapModel.history.records}h${gapModel.history.mismatches ? ` | ${gapModel.history.mismatches} source differences (Public V2 leading)` : ''}`;
+      }
+      if (gapTimeline?.historyReadFailed) status.textContent += ' | Decentrader history unavailable (Public V2 unchanged)';
       status.dataset.stale = String(stale);
       if (fitFractals) candlesSeries?.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
     } catch (error) {

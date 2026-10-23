@@ -3,6 +3,7 @@ import fs from 'fs';
 import net from 'net';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
+import { buildDecentraderGapProjectionHistory, GapProjectionHistory } from './decentraderGapProjectionHistory';
 import {
   BtcManualEntryRequest,
   btcManualTriggerEmailSubject,
@@ -5353,6 +5354,7 @@ export class DecentraderGapMonitor {
   private checkPromise: Promise<any> | undefined;
   private latestRows: DecentraderRow[] | undefined;
   private latestTimelapsePayload: any | undefined;
+  private gapProjectionHistoryCache?: { frames: any; events: any; history: GapProjectionHistory };
   private tradeExecutor: DecentraderTradeExecutor | undefined;
   private status: MonitorStatus = {
     enabled: false,
@@ -7581,6 +7583,16 @@ export class DecentraderGapMonitor {
         market
       });
     }
+  }
+
+  getGapProjectionHistory(): GapProjectionHistory {
+    const payload = this.latestTimelapsePayload;
+    if (!payload) throw new Error('Awaiting stored BTC Decentrader map history.');
+    const cached = this.gapProjectionHistoryCache;
+    if (cached?.frames === payload.frames && cached?.events === payload.events) return cached.history;
+    const history = buildDecentraderGapProjectionHistory(payload);
+    this.gapProjectionHistoryCache = { frames: payload.frames, events: payload.events, history };
+    return history;
   }
 
   async getTimelapsePayload(): Promise<any> {

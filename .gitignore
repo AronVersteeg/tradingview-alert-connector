@@ -90,3 +90,4 @@ typings/
 !/scripts/preview-btc-spot-chart.ts
 !/scripts/check-btc-spot-chart.cjs
 !/scripts/check-btc-manual-levels.cjs
+!/scripts/check-btc-gap-history.cjs

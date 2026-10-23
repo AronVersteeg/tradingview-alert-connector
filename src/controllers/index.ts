@@ -53,6 +53,7 @@ import { shadowFractalMonitor } from '../services/shadowFractalMonitor';
 import { binanceCooldownHttpResponse, binanceHttpStatus } from '../services/binanceHttp';
 import { binanceHourlyCloseFeed } from '../services/binanceHourlyCloseFeed';
 import { btcSpotChartRouter } from './btcSpotChart';
+import { createBtcGapProjectionHistoryRouter } from './btcGapProjectionHistory';
 import { binanceMonthlyFractalsRouter } from './binanceMonthlyFractals';
 import {
   btcManualTradeOverrideMonitor,
@@ -296,6 +297,7 @@ initializeExchanges()
 
 const router: Router = express.Router();
 router.use(btcSpotChartRouter);
+router.use(createBtcGapProjectionHistoryRouter(() => decentraderGapMonitor.getGapProjectionHistory()));
 router.use(binanceMonthlyFractalsRouter);
 
 // Health check
