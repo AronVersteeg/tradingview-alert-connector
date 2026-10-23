@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import crypto from 'crypto';
+import { verifiedGapArchiveRows } from './replicaGapArchive';
 import { GapProjectionHistory } from './decentraderGapProjectionHistory';
 
 const MODEL = 'binance-spot-liquidation-cohorts-v2.4';
@@ -53,15 +53,8 @@ export class BtcGapProjectionRecovery {
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     for (const file of files.filter(name => new RegExp(`^${MODEL.replace(/\./g, '\\.')}\\-\\d{4}-\\d{2}\\.jsonl$`).test(name)).sort()) {
       const text = await fs.promises.readFile(path.join(directory, file), 'utf8');
-      for (const line of text.split('\n').filter(Boolean)) {
-        const stored = JSON.parse(line);
-        const { observedAt, fingerprint, previousFingerprint, kind, recordedAt, ...facts } = stored;
-        if (stored.version !== 1 || stored.market !== 'BTC-USD' || stored.symbol !== 'BTCUSDT' ||
-            stored.modelVersion !== MODEL || stored.accuracy !== 'causal-model-snapshot' ||
-            !['first-seen', 'revision'].includes(kind) ||
-            crypto.createHash('sha256').update(JSON.stringify(facts)).digest('hex') !== fingerprint) {
-          throw new Error('Invalid BTC gap archive integrity.');
-        }
+      for (const stored of verifiedGapArchiveRows(text, { market: 'BTC-USD', symbol: 'BTCUSDT', modelVersion: MODEL, accuracy: 'causal-model-snapshot' })) {
+        const { observedAt, kind } = stored;
         const candleTime = Date.parse(stored.candleStartedAt) / 1000;
         const row = { candleTime, availableAt: Date.parse(stored.candleClosedAt) / 1000,
           lower: stored.gap?.left ?? null, upper: stored.gap?.right ?? null };

@@ -113,6 +113,8 @@ describe('Public Perp V2 Binance Spot replica', () => {
   });
 
   test('a warmed close bypasses another market bootstrap and processes only missing hours', async () => {
+    // Exercise queue selection without a one-millisecond wall-clock race.
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now());
     const candles = observations(6);
     const pendingCollector = new OpenLiquidityV2ReplicaCollector() as any;
     let release: () => void;
@@ -149,6 +151,7 @@ describe('Public Perp V2 Binance Spot replica', () => {
       release!();
       await queued;
       collector.stop();
+      clock.mockRestore();
     }
   });
 

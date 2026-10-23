@@ -86,12 +86,14 @@ describe('Append-only causal-model gap archive', () => {
 
   test('failed writes are visible and retries do not lose records from a prematurely committed index', async () => {
     const archive = new ReplicaGapArchive();
-    const write = jest.spyOn(fs.promises, 'appendFile').mockRejectedValueOnce(new Error('disk full'));
+    const write = jest.spyOn(fs.promises, 'open').mockRejectedValueOnce(new Error('disk full'));
     await expect(archive.append(directory, identity, [snapshot()])).rejects.toThrow('disk full');
     expect(archive.status().lastError).toBe('disk full');
     write.mockRestore();
-    await archive.append(directory, identity, [snapshot()]);
-    expect(rows()).toHaveLength(1);
+    await archive.append(directory, identity, [snapshot(1)]);
+    expect(rows()).toHaveLength(2);
+    expect(rows()[0].candleStartedAt).toBe(snapshot().effectiveAt);
+    expect(archive.status().pendingRecords).toBe(0);
     expect(archive.status().lastError).toBeUndefined();
   });
 

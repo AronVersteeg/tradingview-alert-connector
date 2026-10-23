@@ -3,6 +3,7 @@ import path from 'path';
 
 import { binanceGet } from './binanceHttp';
 import { ReplicaGapArchive } from './replicaGapArchive';
+import { liquidityObservationArchive, archiveSourceCandles } from './liquidityObservationArchive';
 
 const BINANCE_SPOT_URL = 'https://api.binance.com/api/v3/klines';
 const BINANCE_FUTURES_URL = 'https://fapi.binance.com/fapi/v1/klines';
@@ -749,6 +750,7 @@ export class OpenLiquidityV2ReplicaCollector {
   private persistenceTimer: NodeJS.Timeout | undefined;
   private persistencePromise: Promise<void> = Promise.resolve();
   private readonly gapArchive = new ReplicaGapArchive();
+  private pendingSourceCandles: SpotCandle[] = [];
   private lastRefreshTiming: ReplicaRefreshTiming | undefined;
   private snapshots: ReplicaSnapshot[] = [];
   private loaded = false;
@@ -782,6 +784,14 @@ export class OpenLiquidityV2ReplicaCollector {
     const renderDisk = path.join(path.parse(process.cwd()).root, 'app', 'data');
     const base = fs.existsSync(renderDisk) ? renderDisk : path.join(process.cwd(), 'data');
     return path.join(base, this.config.historyDirectoryName);
+  }
+
+  observationArchive() {
+    return liquidityObservationArchive(this.historyDirectory(), {
+      market: this.config.market, symbol: this.config.symbol,
+      source: this.config.venue === 'futures' ? 'binance-futures' : 'binance-spot', modelVersion: this.config.modelVersion,
+      priceStepUsd: this.config.priceStepUsd, cohortWindowHours: COHORT_WINDOW_HOURS
+    });
   }
 
   private historyFile(): string {
@@ -851,6 +861,8 @@ export class OpenLiquidityV2ReplicaCollector {
     const file = this.historyFile();
     const temporary = `${file}.tmp`;
     const serialized = JSON.stringify(this.snapshots);
+    const sourceArchive = archiveSourceCandles(this.observationArchive(), this.pendingSourceCandles)
+      .catch(() => undefined); // Retained and retried by the archive, never an entry gate.
     const archive = this.gapArchive.append(this.historyDirectory(), {
       market: this.config.market, symbol: this.config.symbol, modelVersion: this.config.modelVersion
     }, this.snapshots).catch((error) => console.error('Public V2 gap observation archive failed; live execution unchanged:', {
@@ -858,6 +870,7 @@ export class OpenLiquidityV2ReplicaCollector {
     }));
     this.persistencePromise = this.persistencePromise.then(async () => {
       await archive;
+      await sourceArchive;
       await fs.promises.mkdir(this.historyDirectory(), { recursive: true });
       await fs.promises.writeFile(temporary, serialized);
       await fs.promises.rename(temporary, file);
@@ -982,6 +995,7 @@ export class OpenLiquidityV2ReplicaCollector {
         for (const candle of newCandles) this.liveReplay!.append(candle);
       }
       this.snapshots = compactReplicaHistoryInPlace(this.liveReplay!.snapshots);
+      this.pendingSourceCandles = candles;
       // A dashboard read may have cached the old replay while fetch was pending.
       this.clearPayloadCache();
       if (replayMode === 'bootstrap' || newCandles.length) this.schedulePersistence();
@@ -1051,6 +1065,7 @@ export class OpenLiquidityV2ReplicaCollector {
       historyDirectory: this.historyDirectory(),
       observations: this.snapshots.length,
       gapArchive: this.gapArchive.status(),
+      observationArchive: this.observationArchive().status(),
       coverage: this.snapshots.length ? {
         from: this.snapshots[0].effectiveAt,
         to: this.snapshots[this.snapshots.length - 1].effectiveAt

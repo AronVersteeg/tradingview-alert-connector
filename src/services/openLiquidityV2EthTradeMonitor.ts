@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
+import { archiveIntrusionEvidence } from './liquidityObservationArchive';
 import {
   FractalEntryRequest,
   delayEntryModelEnabled,
@@ -286,6 +287,7 @@ type EthBenchmarkRecord = {
   direction: TradePlanDirection | 'mixed';
   alertPrice?: number;
   gap?: { left: number; right: number; width: number };
+  gapRevisions?: Array<{ observedAt: string; gap: { left: number; right: number; width: number } }>;
   filtered: boolean;
   candleReview?: any;
   impulseQuality?: IntrusionImpulseQuality;
@@ -800,6 +802,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   private lastResult: any;
   private lastStartedAt: string | undefined;
   private lastFinishedAt: string | undefined;
+  private archiveSeeded = false;
 
   constructor(
     private readonly collector: OpenLiquidityV2ReplicaCollector,
@@ -997,6 +1000,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         ? Math.max(0, (sentAtMs - observedAtMs) / 60_000) : undefined
     };
     state.delayRecords = [...(state.delayRecords || []), record].slice(-intrusionHistoryMaxRecords());
+    void archiveIntrusionEvidence(this.collector.observationArchive(), [record]).catch(() => undefined);
   }
 
   private addBenchmark(state: EthMonitorState, alert: GapAlert, signature: string, details: Partial<EthBenchmarkRecord>): void {
@@ -1020,9 +1024,23 @@ export class OpenLiquidityV2EthTradeMonitor {
       ...details
     };
     const records = [...(state.benchmarkRecords || [])];
+    if (existingRecord) {
+      base.observedAt = existingRecord.observedAt;
+      if (existingRecord.gap) {
+        const incoming = base.gap;
+        base.gap = existingRecord.gap;
+        base.gapRevisions = [...(existingRecord.gapRevisions || [])];
+        if (incoming && (incoming.left !== base.gap.left || incoming.right !== base.gap.right) &&
+            !base.gapRevisions.some(revision => revision.gap.left === incoming.left && revision.gap.right === incoming.right)) {
+          base.gapRevisions.push({ observedAt: nowNlIso(), gap: incoming });
+        }
+      }
+    }
     if (existing >= 0) records[existing] = { ...records[existing], ...base };
     else records.push(base);
     state.benchmarkRecords = records.slice(-intrusionHistoryMaxRecords());
+    void archiveIntrusionEvidence(this.collector.observationArchive(), [records[existing >= 0 ? existing : records.length - 1]])
+      .catch(() => undefined);
   }
 
   private async impulseQuality(
@@ -1970,6 +1988,12 @@ export class OpenLiquidityV2EthTradeMonitor {
         result.publicV2Refreshed = await this.collector.refreshForLatestClosedHour();
       }
       const payload = await this.collector.getPayload();
+      if (!this.archiveSeeded) {
+        this.archiveSeeded = true;
+        void archiveIntrusionEvidence(this.collector.observationArchive(),
+          [...(state.benchmarkRecords || []), ...(state.delayRecords || [])], true)
+          .catch(() => { this.archiveSeeded = false; });
+      }
       const frames = payload.frames || [];
       const latestTimestamp = String(frames[frames.length - 1]?.t || '');
       if (this.config.informationalOnly && !state.historyBackfilledAt && frames.length > 1) {

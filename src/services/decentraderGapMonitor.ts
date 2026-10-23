@@ -5,6 +5,7 @@ import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import { GapProjectionHistory } from './decentraderGapProjectionHistory';
 import { ReplicaGapArchive } from './replicaGapArchive';
+import { decentraderObservationArchive } from './liquidityObservationArchive';
 import {
   BtcManualEntryRequest,
   btcManualTriggerEmailSubject,
@@ -483,6 +484,7 @@ export function dydxTargetFailedAndFlattened(result: any): boolean {
 
 type MonitorStatus = {
   gapArchive?: ReturnType<ReplicaGapArchive['status']>;
+  observationArchive?: ReturnType<ReturnType<typeof decentraderObservationArchive>['status']>;
   positionManagement?: any;
   enabled: boolean;
   running: boolean;
@@ -5463,6 +5465,7 @@ export class DecentraderGapMonitor {
     return {
       ...this.status,
       gapArchive: this.gapObservationArchive.status(),
+      observationArchive: this.observationArchive().status(),
       positionManagement: this.managementStatus,
       lastResult,
       enabled: config.enabled,
@@ -7617,6 +7620,8 @@ export class DecentraderGapMonitor {
     return { symbol: 'BTCUSDT', venue: 'Decentrader map', historicalOnly: true,
       historicalAccuracy: 'current-active-reconstruction', records: [] };
   }
+
+  observationArchive() { return decentraderObservationArchive(this.config().stateFile); }
 
   async getTimelapsePayload(): Promise<any> {
     const config = this.config();

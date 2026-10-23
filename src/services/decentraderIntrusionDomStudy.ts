@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { archiveIntrusionEvidence, decentraderObservationArchive } from './liquidityObservationArchive';
 
 import {
   decentralizedDomCollector,
@@ -1190,6 +1191,7 @@ export function refreshIntrusionDomStudy(input: {
     record.lastUpdatedAt = now;
   }
 
+  void archiveIntrusionEvidence(decentraderObservationArchive(studyFile()), records, true).catch(() => undefined);
   writeStudy({
     updatedAt: now,
     historyStartTimestamp: [input.historyStartTimestamp, study.historyStartTimestamp]

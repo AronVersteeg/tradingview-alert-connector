@@ -30,7 +30,7 @@ describe('Public V2 close-aligned intrusion checks', () => {
     process.env.DECENTRADER_GAP_POLL_MINUTES = '60';
     process.env.OPEN_LIQUIDITY_V2_ETH_INTRUSION_MONITOR_ENABLED = 'true';
     process.env.OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED = 'false';
-    monitor = new OpenLiquidityV2EthTradeMonitor({} as any);
+    monitor = new OpenLiquidityV2EthTradeMonitor({ observationArchive: () => ({ append: jest.fn().mockResolvedValue(undefined) }) } as any);
     check = jest.spyOn(monitor, 'check').mockResolvedValue({ ok: true });
     jest.spyOn(monitor, 'checkManagedPosition').mockResolvedValue({ ok: true });
   });

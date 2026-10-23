@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { archiveIntrusionEvidence, decentraderObservationArchive } from './liquidityObservationArchive';
 
 export type DecentraderDelayEmailType = 'normal' | 'filtered';
 
@@ -160,6 +161,8 @@ export function buildDecentraderDelayRecord(input: {
 
 export function appendDecentraderDelayRecord(record: DecentraderDelayRecord): void {
   const history = readDecentraderDelayHistory();
+  void archiveIntrusionEvidence(decentraderObservationArchive(decentraderDelayHistoryFile()), [...history.records, record], true)
+    .catch(() => undefined);
   const records = [...history.records, record].slice(-delayHistoryMaxRecords());
   writeDecentraderDelayHistory({ updatedAt: record.smtpSentAt, records });
 }

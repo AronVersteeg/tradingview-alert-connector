@@ -11,6 +11,7 @@ import {
   intrusionDomStudySnapshot
 } from '../src/services/decentraderIntrusionDomStudy';
 import { DomMinuteRecord, decentralizedDomCollector } from '../src/services/decentralizedDomCollector';
+import { decentraderObservationArchive } from '../src/services/liquidityObservationArchive';
 
 function minute(input: {
   at: string;
@@ -82,7 +83,7 @@ function window(overrides: Partial<IntrusionDomWindow> = {}): IntrusionDomWindow
 }
 
 describe('Decentrader intrusion DOM study', () => {
-  test('preserves the originally stored alert gap and records later recomputed edges separately', () => {
+  test('preserves the originally stored alert gap and records later recomputed edges separately', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'intrusion-gap-evidence-'));
     const previous = process.env.DECENTRADER_INTRUSION_DOM_STUDY_FILE;
     process.env.DECENTRADER_INTRUSION_DOM_STUDY_FILE = path.join(directory, 'study.json');
@@ -96,6 +97,12 @@ describe('Decentrader intrusion DOM study', () => {
       const record = intrusionDomStudySnapshot().history[0];
       expect(record.gap.right).toBe(67000);
       expect(record.gapRevisions).toEqual([{ observedAt: '2026-10-23T12:00:00Z', gap: { left: 61000, right: 87400 } }]);
+      const archive = decentraderObservationArchive(path.join(directory, 'study.json'));
+      await archive.flush();
+      const saved = await archive.read('intrusions', '2026-08');
+      expect(saved.rows[0].data.gap.right).toBe(67000);
+      expect(saved.rows.at(-1)?.data.gapRevisions[0].gap.right).toBe(87400);
+      archive.close();
     } finally {
       history.mockRestore();
       if (previous === undefined) delete process.env.DECENTRADER_INTRUSION_DOM_STUDY_FILE;

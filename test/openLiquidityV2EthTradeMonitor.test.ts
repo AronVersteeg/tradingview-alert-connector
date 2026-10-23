@@ -78,7 +78,8 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
     };
     const collector = {
       refreshForLatestClosedHour: jest.fn().mockResolvedValue(false),
-      getPayload: jest.fn().mockResolvedValue(payload)
+      getPayload: jest.fn().mockResolvedValue(payload),
+      observationArchive: () => ({ append: jest.fn().mockResolvedValue(undefined) })
     };
     const monitor = new OpenLiquidityV2EthTradeMonitor(collector as any, {
       market: 'BTC-USD',
@@ -115,6 +116,13 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
         gap: { left: 68_000, right: 72_000, width: 4_000 }
       })
     ]);
+    const firstObservedAt = state.benchmarkRecords[0].observedAt;
+    const initialAlert = result.alerts[0];
+    (monitor as any).addBenchmark(state, { ...initialAlert,
+      previousGap: { ...initialAlert.previousGap, right: 87400 } }, state.benchmarkRecords[0].signature, {});
+    expect(state.benchmarkRecords[0].gap.right).toBe(72000);
+    expect(state.benchmarkRecords[0].gapRevisions[0].gap.right).toBe(87400);
+    expect(state.benchmarkRecords[0].observedAt).toBe(firstObservedAt);
   });
 
   test('reserves one stop per five positions before evenly dividing TP slots', () => {
