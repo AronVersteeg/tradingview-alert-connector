@@ -10,7 +10,7 @@
     return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) / 1000;
   }
 
-  function projectFractals(bundle, input, symbol = 'BTCUSDT') {
+  function projectFractals(bundle, input, symbol = 'BTCUSDT', periods = [['daily', 'D'], ['weekly', 'W'], ['monthly', 'M']]) {
     if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || bundle?.symbol !== symbol || bundle.venue !== 'Binance Spot') throw new Error('Unexpected fractal source');
     const through = Date.parse(bundle.evaluatedThrough) / 1000;
     if (!Number.isSafeInteger(through) || through % HOUR !== 0) throw new Error('Invalid projection cutoff');
@@ -20,7 +20,7 @@
     const times = new Set(candles.map((candle) => candle.time));
     const first = candles[0].time;
     const levels = [];
-    for (const [key, timeframe] of [['daily', 'D'], ['weekly', 'W'], ['monthly', 'M']]) {
+    for (const [key, timeframe] of periods) {
       const snapshot = bundle[key];
       if (!snapshot || snapshot.venue !== 'Binance Spot' || snapshot.symbol !== symbol || snapshot.stale ||
         !Array.isArray(snapshot.records)) throw new Error('Fractal source is stale or invalid');
@@ -153,7 +153,11 @@
     }
   }
 
-  const api = Object.freeze({ projectFractals, FractalPrimitive });
+  function projectDailyFractals(bundle, input, symbol = 'BTCUSDT') {
+    return projectFractals(bundle, input, symbol, [['daily', 'D']]);
+  }
+
+  const api = Object.freeze({ projectFractals, projectDailyFractals, FractalPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcSpotFractals = api;
 })(typeof globalThis === 'object' ? globalThis : this);

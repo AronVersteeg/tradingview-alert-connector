@@ -588,7 +588,7 @@ export type AlertState = {
     currentStopFractalSource?: 'highRef' | 'lowRef' | 'ohlc4';
     currentStopFractalCandleSource?: 'dydx-1h';
     takeProfits?: any[];
-    takeProfitMode?: 'dynamic' | 'manual-locked';
+    takeProfitMode?: 'dynamic' | 'manual-locked' | 'trailing-only';
     tp1Lifecycle?: ManagedTp1Lifecycle;
     tpRatchetLifecycle?: ManagedTpRatchetLifecycle;
   };

@@ -43,7 +43,7 @@ export type SpotChartPage = {
   hasMore: boolean;
 };
 
-// Chart-only reads: bounded shared memory, no disk writes or trading callbacks.
+// Shared read-only Spot data: bounded memory, no disk writes or trading callbacks.
 export class BinanceSpotChartFeed {
   constructor(readonly symbol: 'BTCUSDT' | 'ETHUSDT' = 'BTCUSDT') {
     if (!['BTCUSDT', 'ETHUSDT'].includes(symbol)) throw new Error('Unsupported Spot chart symbol');

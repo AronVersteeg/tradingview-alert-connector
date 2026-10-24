@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
+import { ETH_GAP_DAILY_ENTRY_ENV, EthGapDailySignal, ethGapDailyEntryEnabled,
+  freshEthGapDailySignal, readEthGapDailySignal } from './ethGapDailyEntry';
 import { archiveIntrusionEvidence } from './liquidityObservationArchive';
 import {
   FractalEntryRequest,
@@ -299,6 +301,13 @@ type EthBenchmarkRecord = {
 };
 
 type EthMonitorState = AlertState & {
+  gapDailyEntry?: {
+    activatedAt?: string;
+    handledCandle?: number;
+    decision?: any;
+    intent?: { signature: string; attemptedAt: string; signal: EthGapDailySignal; plan: any;
+      orderAlert: AlertObject; outcome: 'SUBMITTING' | 'UNKNOWN' | 'CONFIRMED' | 'FLATTENED' | 'NO_POSITION' };
+  };
   pendingAlerts?: Record<string, PendingEthAlert>;
   normalSentSignatures?: string[];
   filteredSentSignatures?: string[];
@@ -790,6 +799,8 @@ export class OpenLiquidityV2EthTradeMonitor {
   private closedHourChecksActive = false;
   private managementInterval: NodeJS.Timeout | undefined;
   private managementPromise: Promise<any> | undefined;
+  private gapDailyRecoveryTimer: NodeJS.Timeout | undefined;
+  private gapDailyRecoveryActive = true;
   private takeProfitPromise: Promise<void> | undefined;
   private managementStatus: any = { running: false };
   private readonly coordinator = new ManagedPositionCoordinator<EthMonitorState>(
@@ -803,6 +814,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   private lastStartedAt: string | undefined;
   private lastFinishedAt: string | undefined;
   private archiveSeeded = false;
+  private readonly processStartedAt = Date.now();
 
   constructor(
     private readonly collector: OpenLiquidityV2ReplicaCollector,
@@ -815,6 +827,10 @@ export class OpenLiquidityV2EthTradeMonitor {
 
   private enabled(): boolean {
     return boolEnv(this.config.enabledEnv, true);
+  }
+
+  private gapDailyEnabled(): boolean {
+    return this.config.market === 'ETH-USD' && this.config.tradeCapable && ethGapDailyEntryEnabled();
   }
 
   private autoTradeEnabled(): boolean {
@@ -845,7 +861,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       try {
         if (!this.running) {
           const result = await this.check();
-          retry = !result?.ok || Number(result.pendingAlertCount) > 0 || Boolean(result.emailErrors?.length);
+          retry = !result?.ok || result?.gapDailyEntryPending || Number(result.pendingAlertCount) > 0 || Boolean(result.emailErrors?.length);
         }
       } catch (error) {
         retry = true;
@@ -862,6 +878,7 @@ export class OpenLiquidityV2EthTradeMonitor {
 
   start(initialDelayMs = 75_000): void {
     if (this.interval || this.initialTimer || this.managementInterval) return;
+    this.gapDailyRecoveryActive = true;
     const begin = () => {
       this.initialTimer = undefined;
       if (!this.config.informationalOnly) {
@@ -887,6 +904,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       pollMinutes: this.pollMinutes(),
       closedHourRefreshEnabled: Boolean(this.config.refreshLatestClosedHour),
       autoTradeEnabled: this.autoTradeEnabled(),
+      gapDailyEntryEnabled: this.gapDailyEnabled(),
       delayEntryModelEnabled: delayEntryModelEnabled(),
       observeOnly: !this.config.tradeCapable,
       informationalOnly: Boolean(this.config.informationalOnly),
@@ -906,6 +924,12 @@ export class OpenLiquidityV2EthTradeMonitor {
       positionManagement: this.managementStatus,
       market: this.config.market,
       autoTradeEnabled: this.autoTradeEnabled(),
+      gapDailyEntry: this.config.market === 'ETH-USD' ? {
+        enabled: this.gapDailyEnabled(), env: ETH_GAP_DAILY_ENTRY_ENV, source: 'Binance Spot ETHUSDT 1H + 1D',
+        executionMarket: 'ETH-USD', takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
+        activatedAt: state.gapDailyEntry?.activatedAt, decision: state.gapDailyEntry?.decision,
+        executionOutcome: state.gapDailyEntry?.intent?.outcome
+      } : undefined,
       delayEntryModelEnabled: delayEntryModelEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       observeOnly: !this.config.tradeCapable,
@@ -1073,6 +1097,166 @@ export class OpenLiquidityV2EthTradeMonitor {
     });
   }
 
+  private async getGapDailyStopPlan(account: DydxSizingAccountSnapshot, signal: EthGapDailySignal): Promise<any> {
+    const marketInfo = account.markets?.[this.config.market];
+    if (!marketInfo || String(marketInfo.status).toUpperCase() !== 'ACTIVE') {
+      throw new Error('ETH-USD must be ACTIVE with current dYdX market information.');
+    }
+    const price = finite(marketInfo.oraclePrice);
+    if (!(price > 0)) throw new Error('No current ETH-USD oracle price for SL sizing.');
+    const rows = dydxHourlyCandlesToFractalRows(await fetchDydxHourlyCandlesForMarket(this.config.market));
+    if (rows.length < 5) throw new Error('Not enough closed dYdX ETH 1H candles for the initial fractal stop.');
+    if (Date.parse(rows[rows.length - 1].timestamp) !== signal.time * 1000) {
+      throw new Error('Awaiting the signal hour in dYdX ETH candles before choosing the initial SL.');
+    }
+    const activePlan = buildDirectionalPlan(signal.direction, account, marketInfo, rows, rows.length - 1,
+      undefined, undefined, { longTp: [], shortTp: [] }, price,
+      String(process.env.DECENTRADER_TRADE_SIZING_MODE || 'growth').trim().toLowerCase());
+    return { market: this.config.market, marketInfo, price, activePlan, fractalCandleSource: 'dydx-1h',
+      timestamp: new Date(signal.time * 1000).toISOString().slice(0, 19).replace('T', ' ') };
+  }
+
+  private async recoverGapDailyIntent(state: EthMonitorState, result: any): Promise<void> {
+    const intent = state.gapDailyEntry?.intent;
+    if (!this.executor || state.managedPosition || !intent || !['SUBMITTING', 'UNKNOWN'].includes(intent.outcome)) return;
+    const account = await this.executor.getAccountSnapshot([this.config.market]);
+    const position = existingPosition(account, this.config.market);
+    const age = Date.now() - Date.parse(intent.attemptedAt);
+    if (!position) {
+      if (age > 300_000) intent.outcome = 'NO_POSITION';
+      result.gapDailyEntryRecovery = { outcome: intent.outcome, reason: 'No confirmed position; the entry will not be resubmitted.' };
+      return;
+    }
+    const reference = finite(intent.orderAlert.price);
+    if (age > 300_000 || directionForPosition(position) !== intent.signal.direction ||
+      Math.abs(position.size) > finite(intent.orderAlert.size) + 1e-9 ||
+      !(finite(position.entryPrice) > 0) || Math.abs(position.entryPrice! - reference) / reference > 0.05) {
+      throw new Error('Uncertain ETH gap/Daily execution cannot be safely attributed; inspect the live position and its SL.');
+    }
+    this.registerManagedPosition(state, intent.signature, intent.signal.direction, position, reference,
+      intent.plan, intent.orderAlert, 'RECOVERED_AFTER_PARTIAL_EXECUTION',
+      { model: 'GAP_DAILY', takeProfitMode: 'trailing-only', signal: intent.signal });
+    intent.outcome = 'CONFIRMED';
+    writeState(state, this.config);
+    await this.syncManagedOrders(state, result, { stopOnly: true });
+    result.gapDailyEntryRecovery = { outcome: 'RECOVERED_AFTER_PARTIAL_EXECUTION' };
+  }
+
+  private scheduleGapDailyRecovery(state: EthMonitorState): void {
+    const intent = state.gapDailyEntry?.intent;
+    if (!this.gapDailyRecoveryActive || this.gapDailyRecoveryTimer || state.managedPosition || !intent ||
+      !['SUBMITTING', 'UNKNOWN'].includes(intent.outcome) || Date.now() - Date.parse(intent.attemptedAt) >= 300_000) return;
+    this.gapDailyRecoveryTimer = setTimeout(() => {
+      this.gapDailyRecoveryTimer = undefined;
+      void this.checkManagedPosition().catch(error => console.error('ETH gap/Daily reconciliation failed:', error));
+    }, 5_000);
+  }
+
+  private async checkGapDailyEntry(state: EthMonitorState, payload: any, result: any): Promise<void> {
+    if (this.config.market !== 'ETH-USD') return;
+    if (!this.gapDailyEnabled()) {
+      if (state.gapDailyEntry) delete state.gapDailyEntry.activatedAt;
+      return;
+    }
+    const entry = state.gapDailyEntry ||= {};
+    if (!entry.activatedAt || Date.parse(entry.activatedAt) < this.processStartedAt) {
+      entry.activatedAt = new Date().toISOString();
+      entry.decision = { outcome: 'ARMED', at: entry.activatedAt, reason: 'Only candles closing after activation are eligible.' };
+      return;
+    }
+    const close = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+    if (close <= Date.parse(entry.activatedAt) || Date.now() - close > 300_000 || entry.handledCandle === close) return;
+    try {
+      const frames = payload.frames || [];
+      if (frames.length < 2 || frames.at(-1)?.startedAtMs !== close - HOUR_MS) {
+        throw new Error('Awaiting the latest closed ETH Spot replica hour.');
+      }
+      const alerts = reconstructReplicaIntrusions(payload, String(frames.at(-2).t)).alerts;
+      // The purple overlay rejects mixed left/right intrusions, even when one side has more weight.
+      const intrusions = alerts.filter(alert => Boolean(alert.left.length) !== Boolean(alert.right.length))
+        .map(alert => ({ timestamp: alert.timestamp, direction: mapDirectionFromAlert(alert),
+          sideCounts: sideCounts(alert), signature: signatureForAlert(alert, this.config.market) }))
+        .filter(row => row.direction === 'long' || row.direction === 'short');
+      if (!intrusions.length) {
+        entry.decision = { outcome: 'NO_INTRUSION', candleClosedAt: new Date(close).toISOString() };
+        return;
+      }
+      const signal = await readEthGapDailySignal(payload, intrusions);
+      if (!signal) {
+        entry.decision = { outcome: 'NO_DAILY_BREAK', candleClosedAt: new Date(close).toISOString() };
+        return;
+      }
+      await this.coordinator.exclusive(() => this.executeGapDailyEntry(state, signal, result));
+    } catch (error) {
+      result.gapDailyEntryPending = true;
+      entry.decision = { outcome: 'ERROR', at: nowNlIso(), reason: error instanceof Error ? error.message : String(error) };
+      console.error('ETH Spot gap/Daily entry check failed:', entry.decision);
+    }
+    result.gapDailyEntry = entry.decision;
+  }
+
+  private async executeGapDailyEntry(state: EthMonitorState, signal: EthGapDailySignal, result: any): Promise<void> {
+    const entry = state.gapDailyEntry!;
+    const skip = (reason: string) => { entry.decision = { outcome: 'SKIPPED', at: nowNlIso(), reason, signal }; };
+    if (!this.gapDailyEnabled() || !this.enabled() || !this.autoTradeEnabled()) return skip('ETH entry model, monitor or pair auto-trading is disabled.');
+    if (!this.executor?.syncTrailingStop || !boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true) ||
+      !boolEnv('DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED', true) || !boolEnv('DYDX_V4_FRACTAL_TRAIL_ENABLED', true)) {
+      return skip('The initial SL and live fractal trailing executor must be enabled.');
+    }
+    if (!freshEthGapDailySignal(signal, entry.activatedAt!) || entry.handledCandle === signal.closedAt * 1000) return skip('Signal is expired, historical or already handled.');
+    if (entry.intent && ['SUBMITTING', 'UNKNOWN'].includes(entry.intent.outcome)) return skip('An earlier ETH execution remains unconfirmed; no duplicate order will be sent.');
+    const account = await this.executor.getAccountSnapshot([this.config.market]);
+    if (state.managedPosition || existingPosition(account, this.config.market)) {
+      entry.handledCandle = signal.closedAt * 1000;
+      return skip('Existing ETH position; no addition or reversal.');
+    }
+    const plan = await this.getGapDailyStopPlan(account, signal);
+    const signature = `ETH-USD|GAP_DAILY|${signal.time}|${signal.direction}`;
+    const orderAlert = buildDecentraderOrderAlert(plan, signature);
+    Object.assign(orderAlert, { strategy: 'open_liquidity_v2_eth_gap_daily_entry', profile: 'NO_TP',
+      take_profits: [], gap_daily_entry: signal });
+    await this.applyStatefulOrderCapacity(orderAlert, result);
+    if (!freshEthGapDailySignal(signal, entry.activatedAt!)) return skip('Signal expired during order preparation.');
+    entry.handledCandle = signal.closedAt * 1000;
+    entry.intent = { signature, attemptedAt: new Date().toISOString(), signal, plan, orderAlert, outcome: 'SUBMITTING' };
+    state.lastTradeAttemptedSignature = signature;
+    state.lastTradeAttemptedAt = entry.intent.attemptedAt;
+    // Persist the order intent before any exchange mutation, including its no-TP policy.
+    writeState(state, this.config);
+    try {
+      const placement = await this.executor.placeOrder(orderAlert);
+      if (dydxTargetFailedAndFlattened(placement)) {
+        entry.intent.outcome = 'FLATTENED';
+        entry.decision = { outcome: 'FLATTENED', reason: placement.reason, signal };
+        return;
+      }
+      const position = await this.waitForExpectedPosition(signal.direction);
+      if (!position) throw new Error('ETH entry is not yet confirmed by the dYdX indexer.');
+      this.registerManagedPosition(state, signature, signal.direction, position, plan.price, plan, orderAlert,
+        'PLACED', { model: 'GAP_DAILY', takeProfitMode: 'trailing-only', signal });
+      entry.intent.outcome = 'CONFIRMED';
+      writeState(state, this.config);
+      result.tradePlaced = true;
+      await this.syncManagedOrders(state, result, { stopOnly: true });
+      entry.decision = { ...state.lastTradeDecision, protection: result.dynamicSlSync };
+    } catch (error) {
+      if (entry.intent.outcome === 'SUBMITTING') entry.intent.outcome = 'UNKNOWN';
+      writeState(state, this.config);
+      try {
+        await this.recoverGapDailyIntent(state, result);
+      } finally {
+        this.scheduleGapDailyRecovery(state);
+      }
+      if (result.gapDailyEntryRecovery?.outcome === 'RECOVERED_AFTER_PARTIAL_EXECUTION') {
+        result.tradePlaced = true;
+        result.tradeRecovered = true;
+        entry.decision = { ...state.lastTradeDecision, warning: error instanceof Error ? error.message : String(error) };
+        return;
+      }
+      throw error;
+    }
+  }
+
   async getTradePlan(
     account: DydxSizingAccountSnapshot,
     signalAlert?: GapAlert,
@@ -1183,8 +1367,8 @@ export class OpenLiquidityV2EthTradeMonitor {
     orderAlert: AlertObject,
     outcome: 'PLACED' | 'ADOPTED' | 'RECOVERED_AFTER_PARTIAL_EXECUTION',
     options: {
-      model?: 'SHADOW_FRACTAL' | 'MANUAL_OVERRIDE';
-      takeProfitMode?: 'dynamic' | 'manual-locked';
+      model?: 'SHADOW_FRACTAL' | 'MANUAL_OVERRIDE' | 'GAP_DAILY';
+      takeProfitMode?: 'dynamic' | 'manual-locked' | 'trailing-only';
       signal?: any;
     } = {}
   ): void {
@@ -1215,7 +1399,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       takeProfitMode: options.takeProfitMode || 'dynamic',
       takeProfits
     };
-    if (state.managedPosition.takeProfitMode !== 'manual-locked') {
+    if (state.managedPosition.takeProfitMode === 'dynamic') {
       stabilizeManagedTakeProfits(
         state.managedPosition,
         takeProfits,
@@ -1257,6 +1441,7 @@ export class OpenLiquidityV2EthTradeMonitor {
 
     try {
       return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
+        if (this.gapDailyEnabled()) return { ...result, tradeSkipped: 'ETH gap/Daily experiment owns ETH entries; Shadow entry disabled.' };
         if (!fractalEntryModelEnabled()) {
           result.tradeSkipped = 'SHADOW_FRACTAL_ENTRY_MODEL_ENABLED is false.';
           return result;
@@ -1387,6 +1572,8 @@ export class OpenLiquidityV2EthTradeMonitor {
 
     try {
       return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
+        if (this.gapDailyEnabled()) return { ...result, tradeDeferred: true,
+          tradeSkipped: 'ETH gap/Daily experiment owns ETH entries; manual plan remains armed.' };
         if (!btcManualTradeOverrideEnabled()) {
           result.tradeSkipped = 'MANUAL_ENTRY_TP_OVERRIDE_ENABLED is false.';
           return result;
@@ -1576,6 +1763,10 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private async executeAlertExclusive(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
+    if (this.gapDailyEnabled()) {
+      result.tradeSkipped = 'ETH gap/Daily experiment owns ETH entries; Delay entry disabled.';
+      return;
+    }
     if (!delayEntryModelEnabled()) {
       result.tradeSkipped = 'DECENTRADER_DELAY_ENTRY_MODEL_ENABLED is false; Delay entries and entry emails are disabled.';
       return;
@@ -1727,7 +1918,8 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private async recoverUnmanagedFilteredPosition(state: EthMonitorState, payload: any, result: any): Promise<void> {
-    if (!delayEntryModelEnabled() || !this.executor || !this.autoTradeEnabled() || state.managedPosition) return;
+    const uncertainGapDailyEntry = ['SUBMITTING', 'UNKNOWN'].includes(state.gapDailyEntry?.intent?.outcome || '');
+    if (this.gapDailyEnabled() || uncertainGapDailyEntry || !delayEntryModelEnabled() || !this.executor || !this.autoTradeEnabled() || state.managedPosition) return;
 
     const account = await this.executor.getAccountSnapshot([this.config.market]);
     const position = existingPosition(account, this.config.market);
@@ -1806,6 +1998,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       result.lastSuccessfulStopCheckAt = nowNlIso();
     }
     if (options.stopOnly) return;
+    if (managed.takeProfitMode === 'trailing-only') {
+      result.dynamicTpSync = { outcome: 'DISABLED', reason: 'This position is managed by initial SL and trailing only.' };
+      return;
+    }
     if (boolEnv('DECENTRADER_DYNAMIC_TP_ENABLED', true) && executor.syncTakeProfits) {
       if (managed.takeProfitMode === 'manual-locked') {
         result.dynamicTpSync = {
@@ -1988,6 +2184,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         result.publicV2Refreshed = await this.collector.refreshForLatestClosedHour();
       }
       const payload = await this.collector.getPayload();
+      await this.checkGapDailyEntry(state, payload, result);
       if (!this.archiveSeeded) {
         this.archiveSeeded = true;
         void archiveIntrusionEvidence(this.collector.observationArchive(),
@@ -2235,6 +2432,9 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   stop(): void {
+    this.gapDailyRecoveryActive = false;
+    if (this.gapDailyRecoveryTimer) clearTimeout(this.gapDailyRecoveryTimer);
+    this.gapDailyRecoveryTimer = undefined;
     this.closedHourChecksActive = false;
     if (this.closedHourTimer) clearTimeout(this.closedHourTimer);
     this.closedHourTimer = undefined;
@@ -2250,9 +2450,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       const result: any = { running: true, lastStartedAt: nowNlIso() };
       this.managementStatus = { ...this.managementStatus, ...result, error: undefined };
       try {
+        await this.recoverGapDailyIntent(state, result);
         await this.syncManagedOrders(state, result, { stopOnly: true });
         result.ok = result.dynamicTpSync?.outcome !== 'ERROR';
-        if (state.managedPosition && result.dynamicSlSync?.outcome !== 'FLATTENED_AFTER_STOP_BREACH') {
+        if (state.managedPosition && state.managedPosition.takeProfitMode !== 'trailing-only' && result.dynamicSlSync?.outcome !== 'FLATTENED_AFTER_STOP_BREACH') {
           this.scheduleTakeProfitSync();
         }
       } catch (error) {
@@ -2260,6 +2461,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         result.error = error instanceof Error ? error.message : String(error);
         console.error(`${this.config.asset} V2 protective order check failed:`, result.error);
       } finally {
+        this.scheduleGapDailyRecovery(state);
         this.managementStatus = { ...this.managementStatus, ...result, running: false, lastFinishedAt: nowNlIso() };
       }
       return this.managementStatus;
@@ -2276,6 +2478,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     this.takeProfitPromise = this.coordinator.withState(async (state) => {
       const managed = state.managedPosition;
       if (!managed) return;
+      if (managed.takeProfitMode === 'trailing-only') return;
       if (managed.takeProfitMode === 'manual-locked') {
         this.managementStatus.dynamicTpSync = {
           outcome: 'LOCKED',

@@ -172,6 +172,27 @@ describe('managed entry stop-risk protection', () => {
     expect(client.placeStaticSafetyStopAfterEntry).toHaveBeenCalledWith('ETH-USD', 0.4, alert);
   });
 
+  test('NO_TP preserves dynamic downsizing, the initial SL and trailing but cannot create fallback or extra TPs', async () => {
+    const { client, alert } = clientAndAlert();
+    alert.profile = 'NO_TP';
+    (alert as any).take_profits = [];
+    client.reachTargetPositionOrFailsafeFlat.mockResolvedValue(0.4);
+    client.rebalanceStatefulOrderCapacity = jest.fn().mockResolvedValue(undefined);
+    client.placeStaticSafetyStopAfterEntry = jest.fn().mockResolvedValue({ triggerPrice: 90 });
+    client.placeSafetyTakeProfitAfterEntry = jest.fn();
+    client.placeExtraTakeProfitsAfterEntry = jest.fn();
+    client.placeExplicitTakeProfitsAfterEntry = jest.fn();
+    expect(client.getExecutionProfile(alert)).toMatchObject({ placeStaticStop: true,
+      placeSafetyTp: false, placeExtraTps: false, allowManualStopSync: true,
+      allowFractalTrail: client.FRACTAL_TRAIL_ENABLED });
+    await client.placeOrderForMarket('ETH-USD', alert);
+    expect(client.reachTargetPositionOrFailsafeFlat).toHaveBeenCalledWith('ETH-USD', 0.6, expect.anything());
+    expect(client.placeStaticSafetyStopAfterEntry).toHaveBeenCalledWith('ETH-USD', 0.4, alert);
+    expect(client.placeSafetyTakeProfitAfterEntry).not.toHaveBeenCalled();
+    expect(client.placeExtraTakeProfitsAfterEntry).not.toHaveBeenCalled();
+    expect(client.placeExplicitTakeProfitsAfterEntry).not.toHaveBeenCalled();
+  });
+
   test('retries an unfilled entry with a freshly reduced risk-compatible target', async () => {
     const client = new DydxV4Client() as any;
     client.MAX_ATTEMPTS = 2;
