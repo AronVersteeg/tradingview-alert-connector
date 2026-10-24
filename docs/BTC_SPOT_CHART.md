@@ -287,6 +287,41 @@ alignment despite much later fixture mail timestamps, purple pixels and PNGs,
 independent toggling, failed-read retention, stopping reads when disabled, and no
 write requests.
 
+## ETH Spot Chart Parity
+
+The ETH Public V2 tab (`/decentrader/map?source=open-v2-eth`) uses the same chart,
+gestures, viewport constraints, PNG export and overlay renderers as BTC. All
+market-dependent reads are explicit and validated: Spot ETHUSDT REST klines and
+the `ethusdt@kline_1h` stream, plus Spot ETHUSDT Daily/Weekly/Monthly histories.
+ETH uses separate bounded read caches; BTC defaults and URLs remain compatible.
+The additional read routes are `/open-liquidity/v2/eth-spot-candles` and
+`/open-liquidity/v2/eth-spot-fractal-projections`.
+
+The green rectangles come from the ETH Public V2 histomap's Binance Spot ETHUSDT
+gap pairs. Its existing stored replica frames determine available gap coverage.
+The BTC-specific offline recovery and Decentrader BTC history are NOT imported
+into ETH, and no older ETH gap geometry is guessed where history is unavailable.
+Existing ETH candle/gap/intrusion storage and retention remain unchanged.
+
+Manual overlays read only ETH-USD plans and targets. This does not arm, edit or
+execute a plan, change live pair switches, or modify SL/TP/trailing logic. The
+orange Gap/W and light-yellow Gap/D rules are identical to BTC. ETH's purple
+`Intrusion / D` overlay uses its own saved Binance Spot replica intrusion alert
+times from `intrusionBenchmarks.history` / `delayHistory.records`, not Decentrader
+BTC and not mail time. The existing ETH histomap read is reused; no additional
+intrusion poll is needed. Source/market mismatches fail closed.
+
+Coverage: `test/ethSpotChart.test.ts` checks REST/stream identity, D/W/M source
+validation, cross-market rejection, gap/breakout geometry, intrusion timestamps
+and non-mutating manual projections. Both intercepted browser suites accept an
+ETH tab URL: `scripts/check-btc-gap-weekly-breakouts.cjs` and
+`scripts/check-btc-manual-levels.cjs`. They cover desktop/mobile layer pixels,
+toggles, exports, manual edits/removal, gestures and absence of write requests.
+`scripts/check-spot-live-chart.cjs <safe preview URL> <output dir>` checks actual
+Spot candles/fractals/gaps in a browser, while blocking all non-read requests.
+This live smoke test also requires the local browser to reach the Render cloud
+origin; a failed cross-origin read is not a successful full-dashboard verification.
+
 ## Libraries
 
 TradingView Lightweight Charts 5.2.1 is vendored as a standalone ES module;

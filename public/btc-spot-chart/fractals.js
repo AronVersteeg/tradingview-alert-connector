@@ -10,8 +10,8 @@
     return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) / 1000;
   }
 
-  function projectFractals(bundle, input) {
-    if (bundle?.symbol !== 'BTCUSDT' || bundle.venue !== 'Binance Spot') throw new Error('Unexpected fractal source');
+  function projectFractals(bundle, input, symbol = 'BTCUSDT') {
+    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || bundle?.symbol !== symbol || bundle.venue !== 'Binance Spot') throw new Error('Unexpected fractal source');
     const through = Date.parse(bundle.evaluatedThrough) / 1000;
     if (!Number.isSafeInteger(through) || through % HOUR !== 0) throw new Error('Invalid projection cutoff');
     const candles = input.filter((candle) => candle.closed === true && candle.time + HOUR <= through)
@@ -22,7 +22,7 @@
     const levels = [];
     for (const [key, timeframe] of [['daily', 'D'], ['weekly', 'W'], ['monthly', 'M']]) {
       const snapshot = bundle[key];
-      if (!snapshot || snapshot.venue !== 'Binance Spot' || snapshot.symbol !== 'BTCUSDT' || snapshot.stale ||
+      if (!snapshot || snapshot.venue !== 'Binance Spot' || snapshot.symbol !== symbol || snapshot.stale ||
         !Array.isArray(snapshot.records)) throw new Error('Fractal source is stale or invalid');
       const coverageStart = (Date.parse(snapshot.latestClosedCandleAt) + 1) / 1000;
       if (!Number.isSafeInteger(coverageStart) || coverageStart > through) throw new Error('Invalid fractal coverage');

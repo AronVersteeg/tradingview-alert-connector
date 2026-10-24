@@ -5,12 +5,19 @@ const { chromium } = require('playwright');
 const { PNG } = require('pngjs');
 const [url, output] = process.argv.slice(2);
 if (!url || !output) throw new Error('Supply preview URL and screenshot directory');
+const eth = new URL(url).searchParams.get('source') === 'open-v2-eth';
+const market = eth ? 'ETH-USD' : 'BTC-USD', symbol = eth ? 'ETHUSDT' : 'BTCUSDT', asset = eth ? 'eth' : 'btc';
 fs.mkdirSync(output, { recursive: true });
 const html = fs.readFileSync(path.join(__dirname, '../public/decentrader_liquidity_timelapse.html'), 'utf8')
-  .replace('    wireViewer();', '    window.__weeklyFixtureRefresh = refreshPayload;\n    wireViewer();');
+  .replace('    wireViewer();', '    window.__weeklyFixtureRefresh = () => refreshPayload().catch(error => { showRefreshError(error); throw error; });\n    wireViewer();');
 const HOUR = 3_600_000, start = Date.parse('2026-09-28T00:00:00Z'), day = Date.parse('2026-10-19T00:00:00Z');
 const iso = time => new Date(time).toISOString();
 function intrusionPayload() {
+  if (eth) return { source: { market, sourceStatuses: [{ name: 'Binance Spot ETHUSDT 1H' }] },
+    intrusionBenchmarks: { history: intrusionPayloadBtc().intrusionDomStudy.history }, delayHistory: intrusionPayloadBtc().delayHistory };
+  return intrusionPayloadBtc();
+}
+function intrusionPayloadBtc() {
   return { source: { url: 'https://www.decentrader.com/liquidity-maps/?coin=btc', method: 'getOHLCHourlyCalculations' },
     intrusionDomStudy: { history: [
       { timestamp: iso(day + 3 * HOUR).slice(0, 19).replace('T', ' '), direction: 'long', normalEmailSentAt: iso(day + 12 * HOUR) },
@@ -26,13 +33,14 @@ function candles(now) {
   return Array.from({ length: Math.floor((now - start) / HOUR) + 1 }, (_, i) => {
     const time = start + i * HOUR, values = special[(time - day) / HOUR] || [100, 110, 90, 100];
     const [open, high, low, close] = values;
-    return { time: time / 1000, open, high: time === Date.parse('2026-09-29T07:00:00Z') ? 120 : high,
-      low, close, volume: 1, quoteVolume: 100, closed: time + HOUR <= now };
+    return { time: time / 1000, open, high: time === Date.parse('2026-09-29T07:00:00Z') ? 120
+      : time === Date.parse('2026-10-15T07:00:00Z') ? 118 : high,
+      low: time === Date.parse('2026-10-16T07:00:00Z') ? 82 : low, close, volume: 1, quoteVolume: 100, closed: time + HOUR <= now };
   });
 }
 function payload(now) {
   const rows = candles(now).filter(c => c.closed);
-  return { modelVersion: 'binance-spot-liquidation-cohorts-v2.4', source: { market: 'BTC-USD', sourceStatuses: [{ name: 'Binance Spot BTCUSDT 1H' }] },
+  return { ...(eth ? intrusionPayload() : {}), modelVersion: 'binance-spot-liquidation-cohorts-v2.4', source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
     range: { minPrice: 60, maxPrice: 160 }, events: [],
     frames: rows.map((c, i) => ({ i, startedAtMs: c.time * 1000, t: iso(c.time * 1000).slice(0, 19).replace('T', ' '), price: (c.open + c.high + c.low + c.close) / 4 })),
     gaps: rows.map(c => { const left = c.time * 1000 >= day + 5 * HOUR ? 60 : 85, right = c.time * 1000 >= day + 3 * HOUR ? 140 : 115;
@@ -40,14 +48,17 @@ function payload(now) {
 }
 function bundle(now) {
   const through = Math.floor(now / HOUR) * HOUR;
-  const snapshot = (interval, close, records = []) => ({ venue: 'Binance Spot', symbol: 'BTCUSDT', interval, latestClosedCandleAt: close, records });
+  const snapshot = (interval, close, records = []) => ({ venue: 'Binance Spot', symbol, interval, latestClosedCandleAt: close, records });
   const record = (id, type, price, pivot, confirmed, broken) => ({ id, type, priceExact: String(price), pivotAt: pivot,
     confirmedAt: confirmed, isLatestForType: true, ...(broken ? { firstBrokenAt: iso(day) } : {}) });
-  return { symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThrough: iso(through),
+  return { symbol, venue: 'Binance Spot', evaluatedThrough: iso(through),
     daily: snapshot('1d', '2026-10-18T23:59:59.999Z', [
-      record('high', 'HIGH', 118, '2026-09-29T00:00:00Z', '2026-10-01T23:59:59.999Z', through >= day + 4 * HOUR),
-      record('low', 'LOW', 82, '2026-09-27T00:00:00Z', '2026-09-29T23:59:59.999Z', through >= day + 6 * HOUR)
-    ]), monthly: snapshot('1M', '2026-09-30T23:59:59.999Z'),
+      record('high', 'HIGH', 118, '2026-10-15T00:00:00Z', '2026-10-17T23:59:59.999Z', through >= day + 4 * HOUR),
+      record('low', 'LOW', 82, '2026-10-16T00:00:00Z', '2026-10-18T23:59:59.999Z', through >= day + 6 * HOUR)
+    ]), monthly: snapshot('1M', '2026-09-30T23:59:59.999Z', [
+      record('high', 'HIGH', 160, '2026-06-01T00:00:00Z', '2026-08-31T23:59:59.999Z', false),
+      record('low', 'LOW', 60, '2026-06-01T00:00:00Z', '2026-08-31T23:59:59.999Z', false)
+    ]),
     weekly: snapshot('1w', '2026-10-18T23:59:59.999Z', [
       record('high', 'HIGH', 120, '2026-09-28T00:00:00Z', '2026-10-18T23:59:59.999Z', through >= day + 4 * HOUR),
       record('low', 'LOW', 80, '2026-09-21T00:00:00Z', '2026-10-11T23:59:59.999Z', through >= day + 6 * HOUR)
@@ -80,28 +91,32 @@ function purpleColumn(buffer, x) {
       const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 },
         isMobile: mobile, hasTouch: mobile, acceptDownloads: true });
       let now = day + 4 * HOUR + 5000;
-      const errors = [], writes = []; let intrusionFailure = false, intrusionReads = 0;
+      const errors = [], writes = [], wrongMarketReads = []; let intrusionFailure = false, intrusionReads = 0;
       await context.addInitScript(value => { window.__weeklyNow = value; Date.now = () => window.__weeklyNow; window.WebSocket = class { close() {} }; }, now);
       await context.route('**/*', route => {
         const req = route.request(), target = new URL(req.url());
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) { writes.push(req.method()); return route.abort(); }
+        if (eth && (target.pathname.startsWith('/open-liquidity/v2/btc-spot-') || target.pathname === '/decentrader/liquidity-timelapse' ||
+            target.pathname.includes('gap-projection-history') || target.pathname === '/decentrader/manual-override' && target.searchParams.get('market') !== market)) wrongMarketReads.push(req.url());
         if (target.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: html });
         if (target.origin === new URL(url).origin && target.pathname.startsWith('/assets/')) return route.continue();
-        if (target.pathname.endsWith('/btc-spot-candles')) return route.fulfill({ json: { symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h',
+        if (target.pathname.endsWith(`/${asset}-spot-candles`)) return route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h',
           fetchedAt: iso(now), candles: candles(now), hasMore: false } });
-        if (target.pathname.endsWith('/btc-spot-fractal-projections')) return route.fulfill({ json: bundle(now) });
-        if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return route.fulfill({ json: payload(now) });
+        if (target.pathname.endsWith(`/${asset}-spot-fractal-projections`)) return route.fulfill({ json: bundle(now) });
+        if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return eth && intrusionFailure
+          ? route.fulfill({ status: 503, json: { error: 'Fixture read failure' } }) : route.fulfill({ json: payload(now) });
         if (target.pathname === '/decentrader/liquidity-timelapse') {
           intrusionReads++;
           return intrusionFailure ? route.fulfill({ status: 503, json: { error: 'Fixture read failure' } })
             : route.fulfill({ json: intrusionPayload() });
         }
-        if (target.pathname === '/decentrader/manual-override') return route.fulfill({ json: { enabled: true, market: 'BTC-USD', overrides: [] } });
+        if (target.pathname === '/decentrader/manual-override') return route.fulfill({ json: { enabled: true, market, overrides: [] } });
         return route.fulfill({ status: 503, json: { error: 'Unrelated source isolated in read-only fixture' } });
       });
       const page = await context.newPage(); page.on('pageerror', e => errors.push(e.message));
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
+      assert.equal(await page.locator('.spot-chart-symbol').textContent(), symbol);
       await page.waitForFunction(() => window.btcSpotChart?.getGapWeeklyBreakouts()?.signals.length === 1);
       await page.waitForFunction(() => window.btcSpotChart?.getGapDailyBreakouts()?.signals.length === 1);
       assert.equal(await page.locator('#spotChartGapWeeklyBreaks').isChecked(), true);
@@ -128,6 +143,25 @@ function purpleColumn(buffer, x) {
       assert.deepEqual(intrusionState.signals.map(s => [s.time, s.direction]), state.signals.map(s => [s.time, s.direction]));
       assert.equal(intrusionState.signals[0].intrusion.alertTime, iso(day + 3 * HOUR), 'Use alert open time, not SMTP time');
       await page.locator('#spotChartIntrusionDailyBreaks').uncheck();
+      for (const id of ['spotChartGapWeeklyBreaks', 'spotChartGapDailyBreaks']) await page.locator('#' + id).uncheck();
+      await page.evaluate(time => {
+        window.btcSpotChart.chart.timeScale().setVisibleRange({ from: time / 1000 - 6 * 3600, to: time / 1000 + 10 * 3600 });
+        window.btcSpotChart.candleSeries.priceScale().setVisibleRange({ from: 55, to: 170 });
+      }, day);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const layers = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
+      const layerPixels = { daily: 0, weekly: 0, monthly: 0, gap: 0 };
+      for (let i = 0; i < layers.data.length; i += 4) {
+        const [r, g, b] = layers.data.subarray(i, i + 3);
+        if (r > 130 && g > 130 && Math.abs(r - g) < 35 && b < 85) layerPixels.daily++;
+        if (r > 130 && g > 75 && g < 180 && r > g * 1.3 && b < 70) layerPixels.weekly++;
+        if (r > 250 && g < 100 && b > 65 && b < 100) layerPixels.monthly++;
+        if (r < 40 && g > 200 && b < 40) layerPixels.gap++;
+      }
+      assert(Object.values(layerPixels).every(n => n > 50), `D/W/M and green gap render: ${JSON.stringify(layerPixels)}`);
+      assert((await page.evaluate(() => window.btcSpotChart.getHourlyFractalBoxes())).boxes.length > 0, 'Confirmed 1H boxes are projected');
+      await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `${asset}-all-overlays-${mobile ? 'mobile' : 'desktop'}.png`) });
+      for (const id of ['spotChartGapWeeklyBreaks', 'spotChartGapDailyBreaks']) await page.locator('#' + id).check();
       for (const id of ['spotChartDaily', 'spotChartWeekly', 'spotChartMonthly', 'spotChartHourlyBoxes', 'spotChartGap']) await page.locator('#' + id).uncheck();
       await page.evaluate(time => {
         window.btcSpotChart.chart.timeScale().setVisibleRange({ from: time / 1000 - 6 * 3600, to: time / 1000 + 10 * 3600 });
@@ -188,7 +222,8 @@ function purpleColumn(buffer, x) {
       assert(purpleXs.every(x => purpleColumn(fs.readFileSync(purpleFile), x) > 200), 'PNG includes purple markers');
       await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `intrusion-daily-${mobile ? 'mobile' : 'desktop'}.png`) });
       intrusionFailure = true;
-      await page.locator('#spotChartRefresh').click();
+      if (eth) await page.evaluate(() => window.__weeklyFixtureRefresh().catch(() => {}));
+      else await page.locator('#spotChartRefresh').click();
       await page.waitForFunction(() => document.getElementById('spotChartIntrusionDailyStatus').textContent.includes('stale'));
       assert.equal((await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts())).signals.length, 2, 'Read failure preserves saved evidence');
       await page.locator('#spotChartIntrusionDailyBreaks').uncheck();
@@ -199,7 +234,8 @@ function purpleColumn(buffer, x) {
       const noPurple = await page.locator('#spotChartCanvas').screenshot();
       assert(purpleXs.every(x => purpleColumn(noPurple, x) < 20), 'Checkbox removes the actual purple lines');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
-      results.push({ mobile, automaticClosedHourUpdate: true, longAndShort: true, previousBoxUsed: true,
+      assert.deepEqual(wrongMarketReads, []);
+      results.push({ mobile, symbol, layerPixels, wrongMarketReads, automaticClosedHourUpdate: true, longAndShort: true, previousBoxUsed: true,
         independentCheckboxes: true, orangePixels: pixels, yellowPixels, weeklyWinsOverlap: true,
         pngIncludesBothOverlays: true, purplePixels, intrusionAlertTimeNotMailTime: true,
         readFailureRetainsIntrusions: true, disabledIntrusionStopsReads: true, noHorizontalOverflow: true, writes });

@@ -19,15 +19,15 @@
     return { from: from + shift, to: to + shift };
   }
 
-  function fromSnapshot(snapshot) {
-    if (!snapshot || snapshot.market !== 'BTC-USD') throw new Error('Unexpected manual plan market');
+  function fromSnapshot(snapshot, market = 'BTC-USD') {
+    if (!['BTC-USD', 'ETH-USD'].includes(market) || !snapshot || snapshot.market !== market) throw new Error('Unexpected manual plan market');
     const plans = Array.isArray(snapshot.overrides) ? snapshot.overrides : snapshot.override ? [snapshot.override] : null;
     if (!plans) throw new Error('Manual plans unavailable');
     const levels = [];
     let planCount = 0;
     for (const plan of plans) {
       if (!plan || !['ARMED', 'EXECUTING'].includes(plan.status)) continue;
-      if ((plan.market && plan.market !== 'BTC-USD') || typeof plan.id !== 'string' || !plan.id ||
+      if ((plan.market && plan.market !== market) || typeof plan.id !== 'string' || !plan.id ||
           !['long', 'short'].includes(plan.direction) || !positive(plan.closeTrigger)) continue;
       planCount++;
       const direction = plan.direction === 'long' ? 'L' : 'S';
@@ -42,7 +42,7 @@
           title: `${direction} ${entry} TP${index + 1}`, allocationPct: positive(tp.allocationPct) ? tp.allocationPct : null });
       });
     }
-    return { market: 'BTC-USD', enabled: snapshot.enabled === true, planCount, levels, observedAt: Date.now() };
+    return { market, enabled: snapshot.enabled === true, planCount, levels, observedAt: Date.now() };
   }
 
   function buildBands(levels) {

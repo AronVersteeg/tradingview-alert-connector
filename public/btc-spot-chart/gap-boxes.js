@@ -2,11 +2,12 @@
   'use strict';
   const HOUR = 3600;
 
-  function timelineFromPayload(payload) {
-    if (payload?.source?.market !== 'BTC-USD' ||
-      !payload.source.sourceStatuses?.some((source) => source.name === 'Binance Spot BTCUSDT 1H') ||
+  function timelineFromPayload(payload, market = 'BTC-USD') {
+    const symbol = market === 'ETH-USD' ? 'ETHUSDT' : 'BTCUSDT';
+    if (!['BTC-USD', 'ETH-USD'].includes(market) || payload?.source?.market !== market ||
+      !payload.source.sourceStatuses?.some((source) => source.name === `Binance Spot ${symbol} 1H`) ||
       !Array.isArray(payload.frames) || !payload.frames.length || !Array.isArray(payload.gaps) || payload.frames.length !== payload.gaps.length) {
-      throw new Error('Unexpected BTC Public V2 gap source');
+      throw new Error('Unexpected Public V2 Spot gap source');
     }
     let previous = 0;
     const records = payload.frames.map((frame, index) => {
@@ -18,11 +19,11 @@
         !Number.isFinite(gap.left) || !Number.isFinite(gap.right) || gap.left <= 0 || gap.right <= gap.left)) throw new Error('Invalid gap edges');
       return { candleTime, availableAt: candleTime + HOUR, lower: gap?.left ?? null, upper: gap?.right ?? null };
     });
-    return { symbol: 'BTCUSDT', venue: 'Binance Spot', modelVersion: payload.modelVersion, records };
+    return { symbol, venue: 'Binance Spot', modelVersion: payload.modelVersion, records };
   }
 
-  function buildGapBoxes(timeline, nowMs = Date.now()) {
-    if (timeline?.symbol !== 'BTCUSDT' || timeline.venue !== 'Binance Spot' || !Array.isArray(timeline.records)) throw new Error('Unexpected gap timeline');
+  function buildGapBoxes(timeline, nowMs = Date.now(), symbol = 'BTCUSDT') {
+    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || timeline?.symbol !== symbol || timeline.venue !== 'Binance Spot' || !Array.isArray(timeline.records)) throw new Error('Unexpected gap timeline');
     const cutoff = Math.floor(nowMs / (HOUR * 1000)) * HOUR;
     const rows = timeline.records.filter((row) => row.availableAt <= cutoff);
     if (!rows.length) throw new Error('Awaiting closed gap frames');

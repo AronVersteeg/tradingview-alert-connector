@@ -3,10 +3,14 @@
   const engine = typeof module === 'object' && module.exports ? require('./gap-weekly-breakouts.js') : root.BtcSpotGapWeeklyBreakouts;
   const SOURCE = 'decentrader-recorded-intrusions';
 
-  function compactIntrusionHistory(payload, nowMs = Date.now()) {
-    if (payload?.source?.method !== 'getOHLCHourlyCalculations' ||
-        payload.source.url !== 'https://www.decentrader.com/liquidity-maps/?coin=btc') throw new Error('Unexpected Decentrader intrusion source');
-    const histories = [payload.intrusionDomStudy?.history, payload.delayHistory?.records].filter(Array.isArray);
+  function compactIntrusionHistory(payload, nowMs = Date.now(), market = 'BTC-USD') {
+    const eth = market === 'ETH-USD';
+    const validSource = eth ? payload?.source?.market === market &&
+      payload.source.sourceStatuses?.some(source => source.name === 'Binance Spot ETHUSDT 1H')
+      : market === 'BTC-USD' && payload?.source?.method === 'getOHLCHourlyCalculations' &&
+        payload.source.url === 'https://www.decentrader.com/liquidity-maps/?coin=btc';
+    if (!validSource) throw new Error('Unexpected recorded intrusion source');
+    const histories = [eth ? payload.intrusionBenchmarks?.history : payload.intrusionDomStudy?.history, payload.delayHistory?.records].filter(Array.isArray);
     if (!histories.length) throw new Error('Decentrader intrusion history missing');
     const records = new Map();
     let ignoredRecords = 0;
@@ -21,12 +25,13 @@
       const direction = long ? 'long' : 'short';
       records.set(`${ms}|${direction}`, { time: ms / 1000, alertTime: new Date(ms).toISOString(), direction });
     }
-    return { market: 'BTC-USD', source: SOURCE, timeBasis: 'alert-candle-open-utc', fetchedAt: new Date(nowMs).toISOString(),
+    return { market, source: eth ? 'binance-spot-recorded-intrusions' : SOURCE, timeBasis: 'alert-candle-open-utc', fetchedAt: new Date(nowMs).toISOString(),
       ignoredRecords, records: [...records.values()].sort((a, b) => a.time - b.time || a.direction.localeCompare(b.direction)) };
   }
 
-  function buildIntrusionDailyBreakouts(candles, history, fractals, nowMs = Date.now()) {
-    if (history?.market !== 'BTC-USD' || history.source !== SOURCE || history.timeBasis !== 'alert-candle-open-utc' ||
+  function buildIntrusionDailyBreakouts(candles, history, fractals, nowMs = Date.now(), market = 'BTC-USD') {
+    const expectedSource = market === 'ETH-USD' ? 'binance-spot-recorded-intrusions' : SOURCE;
+    if (!['BTC-USD', 'ETH-USD'].includes(market) || history?.market !== market || history.source !== expectedSource || history.timeBasis !== 'alert-candle-open-utc' ||
         !Array.isArray(history.records)) throw new Error('Unexpected Decentrader intrusion history');
     const records = new Map();
     for (const record of history.records) {
@@ -34,8 +39,8 @@
           Date.parse(record.alertTime) !== record.time * 1000) throw new Error('Invalid intrusion alert time');
       records.set(`${record.time}|${record.direction}`, record);
     }
-    const model = engine.buildDailyFractalBreakouts(candles, fractals, nowMs);
-    return { ...model, intrusionSource: SOURCE, timeBasis: history.timeBasis, signals: model.signals.flatMap(signal => {
+    const model = engine.buildDailyFractalBreakouts(candles, fractals, nowMs, market === 'ETH-USD' ? 'ETHUSDT' : 'BTCUSDT');
+    return { ...model, intrusionSource: expectedSource, timeBasis: history.timeBasis, signals: model.signals.flatMap(signal => {
       const record = records.get(`${signal.time}|${signal.direction}`);
       return record ? [{ ...signal, intrusion: { ...record } }] : [];
     }) };
@@ -47,5 +52,8 @@
 
   const api = Object.freeze({ compactIntrusionHistory, buildIntrusionDailyBreakouts, IntrusionDailyBreakoutPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.BtcSpotIntrusionDailyBreakouts = api;
+  else {
+    root.BtcSpotIntrusionDailyBreakouts = api;
+    root.dispatchEvent(new CustomEvent('btc-spot-chart:intrusion-source-ready'));
+  }
 })(typeof globalThis === 'object' ? globalThis : this);

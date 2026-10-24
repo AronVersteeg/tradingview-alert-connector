@@ -1,8 +1,21 @@
 (function () {
   'use strict';
-  if (new URLSearchParams(location.search).get('source') !== 'open-v2') return;
+  const source = new URLSearchParams(location.search).get('source');
+  if (!['open-v2', 'open-v2-eth'].includes(source)) return;
+  const eth = source === 'open-v2-eth', asset = eth ? 'eth' : 'btc';
+  const symbol = eth ? 'ETHUSDT' : 'BTCUSDT', market = eth ? 'ETH-USD' : 'BTC-USD';
+  const intrusionLabel = eth ? 'Intrusion / D' : 'Dec intrusion / D';
   const panel = document.getElementById('btcSpotChartPanel');
   if (!panel) return;
+  panel.querySelector('.spot-chart-symbol').textContent = symbol;
+  panel.setAttribute('aria-label', `${symbol} Binance Spot 1H candlestick chart`);
+  panel.dataset.asset = asset;
+  if (eth) {
+    const toggle = document.getElementById('spotChartIntrusionDailyBreaks').parentElement;
+    toggle.lastChild.textContent = 'Intrusion / D';
+    toggle.title = 'Recorded Binance Spot ETH intrusion alert time and fresh Daily close break on the same candle';
+    document.getElementById('spotChartIntrusionDailyStatus').textContent = 'Intrusion / D pending';
+  }
   panel.hidden = false;
   const assetBase = new URL('.', document.currentScript.src);
   const data = window.BtcSpotChartData;
@@ -15,8 +28,8 @@
   const viewport = window.BtcSpotViewport;
   const interactions = window.BtcSpotInteractions;
   const byId = (id) => document.getElementById(id);
-  const api = '/open-liquidity/v2/btc-spot-candles';
-  const streamUrls = ['wss://stream.binance.com:443/ws/btcusdt@kline_1h', 'wss://stream.binance.com:9443/ws/btcusdt@kline_1h'];
+  const api = `/open-liquidity/v2/${asset}-spot-candles`;
+  const streamUrls = [443, 9443].map(port => `wss://stream.binance.com:${port}/ws/${symbol.toLowerCase()}@kline_1h`);
   const money = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   let zone = 'Europe/Amsterdam';
   let library, chart, candlesSeries, initialization;
@@ -30,7 +43,7 @@
   let hourlyBoxLayer, hourlyBoxModel;
   let gapLayer, gapTimeline = window.BTC_SPOT_GAP_TIMELINE, gapModel;
   let closedDataVersion = 0;
-  let intrusionLayer, intrusionHistory, intrusionModel, intrusionInputs, intrusionPending;
+  let intrusionLayer, intrusionHistory = window.BTC_SPOT_INTRUSION_HISTORY, intrusionModel, intrusionInputs, intrusionPending;
   let intrusionRetryAt = 0, intrusionReadFailed = false;
   const breakoutStates = [
     { timeframe: 'W', name: 'Weekly', levelsKey: 'weeklyLevels' },
@@ -70,7 +83,7 @@
   function updateGapProjection() {
     const status = byId('spotChartGapStatus');
     try {
-      if (gapTimeline) gapModel = gapBoxes.buildGapBoxes(gapTimeline);
+      if (gapTimeline) gapModel = gapBoxes.buildGapBoxes(gapTimeline, Date.now(), symbol);
       if (!gapModel) return;
       gapLayer?.setData(gapModel, candles);
       const stale = gapModel.evaluatedThrough < Math.floor(Date.now() / 3_600_000) * 3600;
@@ -101,7 +114,7 @@
       if (inputs?.gap === gapTimeline && inputs.fractals === fractalModel &&
           inputs.version === closedDataVersion && inputs.hour === hour) continue;
       try {
-        state.model = gapWeeklyBreaks[`buildGap${state.name}Breakouts`](candles, gapTimeline, fractalModel);
+        state.model = gapWeeklyBreaks[`buildGap${state.name}Breakouts`](candles, gapTimeline, fractalModel, Date.now(), symbol);
         state.layer?.setData(state.model.signals);
         state.inputs = { gap: gapTimeline, fractals: fractalModel, version: closedDataVersion, hour };
         const stale = Date.parse(state.model.evaluatedThrough || '') < hour * 3_600_000 || !state.model.evaluatedThrough;
@@ -128,23 +141,23 @@
     try {
       if (!inputs || inputs.history !== intrusionHistory || inputs.fractals !== fractalModel ||
           inputs.version !== closedDataVersion || inputs.hour !== hour) {
-        intrusionModel = intrusionDailyBreaks.buildIntrusionDailyBreakouts(candles, intrusionHistory, fractalModel);
+        intrusionModel = intrusionDailyBreaks.buildIntrusionDailyBreakouts(candles, intrusionHistory, fractalModel, Date.now(), market);
         intrusionLayer?.setData(intrusionModel.signals);
         intrusionInputs = { history: intrusionHistory, fractals: fractalModel, version: closedDataVersion, hour };
       }
       const stale = intrusionReadFailed || !intrusionModel.evaluatedThrough ||
         Date.parse(intrusionModel.evaluatedThrough) < hour * 3_600_000;
-      status.textContent = `Dec intrusion / D: ${intrusionModel.signals.length} | saved alert times${stale ? ' | stale' : ''}`;
+      status.textContent = `${intrusionLabel}: ${intrusionModel.signals.length} | saved alert times${stale ? ' | stale' : ''}`;
       status.dataset.stale = String(stale);
     } catch (error) {
       intrusionInputs = undefined; intrusionModel = undefined; intrusionLayer?.setData([]);
-      status.textContent = `Dec intrusion / D pending: ${error.message}`;
+      status.textContent = `${intrusionLabel} pending: ${error.message}`;
       status.dataset.stale = 'true';
     }
   }
 
   async function refreshIntrusionHistory(force = false) {
-    if (!initialData || !active || destroyed || !byId('spotChartIntrusionDailyBreaks').checked ||
+    if (eth || !initialData || !active || destroyed || !byId('spotChartIntrusionDailyBreaks').checked ||
         intrusionPending || !force && Date.now() < intrusionRetryAt) return intrusionPending;
     intrusionRetryAt = Date.now() + 60_000;
     intrusionPending = (async () => {
@@ -169,6 +182,17 @@
     })();
     return intrusionPending;
   }
+  window.addEventListener('btc-spot-chart:intrusion-history', event => {
+    if (!eth) return;
+    intrusionHistory = event.detail; intrusionReadFailed = false; updateIntrusionDailyBreakouts();
+  });
+  window.addEventListener('btc-spot-chart:intrusion-error', () => {
+    if (!eth) return;
+    intrusionReadFailed = true;
+    byId('spotChartIntrusionDailyStatus').textContent = intrusionHistory
+      ? 'Intrusion / D stale | saved history retained' : 'Intrusion / D unavailable';
+    byId('spotChartIntrusionDailyStatus').dataset.stale = 'true';
+  });
   window.addEventListener('btc-spot-chart:gap-timeline', (event) => { gapTimeline = event.detail; updateGapProjection(); });
   window.addEventListener('btc-spot-chart:gap-error', (event) => {
     byId('spotChartGapStatus').textContent = `Gap unavailable: ${event.detail}`;
@@ -182,7 +206,7 @@
   function projectLoadedCandles() {
     if (!fractalBundle || !fractalLayer) return;
     try {
-      fractalModel = fractals.projectFractals(fractalBundle, candles);
+      fractalModel = fractals.projectFractals(fractalBundle, candles, symbol);
       fractalLayer.setData(fractalModel.levels);
       updateGapFractalBreakouts();
       updateIntrusionDailyBreakouts();
@@ -214,7 +238,7 @@
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 25_000);
       try {
-        const response = await fetch('/open-liquidity/v2/btc-spot-fractal-projections', { signal: controller.signal, cache: 'no-store' });
+        const response = await fetch(`/open-liquidity/v2/${asset}-spot-fractal-projections`, { signal: controller.signal, cache: 'no-store' });
         if (!response.ok) {
           const retry = Number(response.headers.get('Retry-After'));
           fractalRetryAt = Date.now() + Math.max(60, Number.isFinite(retry) ? retry : 60) * 1000;
@@ -402,7 +426,7 @@
         if (range && range.from < 35 && initialData && active) void loadOlder();
       });
       window.btcSpotChart = Object.freeze({
-        symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', chart,
+        symbol, market, venue: 'Binance Spot', interval: '1h', chart,
         candleSeries: candlesSeries,
         getCandles: () => candles.map((candle) => ({ ...candle })),
         getFractalProjections: () => fractalModel ? { ...fractalModel, levels: fractalModel.levels.map((level) => ({ ...level })) } : null,
@@ -445,7 +469,7 @@
       const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
       if (!response.ok) throw new Error(`Binance chart feed unavailable (${response.status})`);
       const page = await response.json();
-      if (page.symbol !== 'BTCUSDT' || page.venue !== 'Binance Spot' || page.interval !== '1h' ||
+      if (page.symbol !== symbol || page.venue !== 'Binance Spot' || page.interval !== '1h' ||
         !Array.isArray(page.candles) || !Number.isFinite(Date.parse(page.fetchedAt))) throw new Error('Unexpected chart data source');
       const version = Date.parse(page.fetchedAt);
       return { ...page, candles: page.candles.map((candle) => ({ ...candle, version })) };
@@ -459,14 +483,14 @@
       try {
         const page = await fetchPage();
         if (destroyed) return;
-        if (!page.candles.length) throw new Error('No BTCUSDT candles returned');
+        if (!page.candles.length) throw new Error(`No ${symbol} candles returned`);
         const next = data.mergeCandles(candles, page.candles);
-        if (!next.length) throw new Error('No valid BTCUSDT candles returned');
+        if (!next.length) throw new Error(`No valid ${symbol} candles returned`);
         hasMore = hasMore && page.hasMore;
         lastSourceTime = Math.max(lastSourceTime, Date.parse(page.fetchedAt));
         applyCandles(next);
       } catch (error) {
-        if (!initialData) message('BTCUSDT candles are unavailable. Use refresh to retry.', true);
+        if (!initialData) message(`${symbol} candles are unavailable. Use refresh to retry.`, true);
         setFeed('retry', error.name === 'AbortError' ? 'Binance request timed out' : error.message);
       } finally {
         recentPending = undefined;
@@ -503,7 +527,7 @@
     current.onmessage = (event) => {
       if (socket !== current || !active) return;
       let candle;
-      try { candle = data.streamCandle(JSON.parse(event.data)); } catch { return; }
+      try { candle = data.streamCandle(JSON.parse(event.data), symbol); } catch { return; }
       if (!candle || candle.version < lastSourceTime - 120_000 || candle.time * 1000 > Date.now() + 60_000) return;
       const previous = candles[candles.length - 1];
       const existing = candles.find((row) => row.time === candle.time);
@@ -611,7 +635,7 @@
       if (!blob) return;
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url; link.download = `BTCUSDT-Spot-1H-${new Date().toISOString().slice(0, 10)}.png`;
+      link.href = url; link.download = `${symbol}-Spot-1H-${new Date().toISOString().slice(0, 10)}.png`;
       link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
   });

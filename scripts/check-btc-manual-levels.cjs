@@ -6,6 +6,8 @@ const { PNG } = require('pngjs');
 
 const url = process.argv[2] || 'http://127.0.0.1:4320/decentrader/map?source=open-v2';
 const output = process.argv[3];
+const eth = new URL(url).searchParams.get('source') === 'open-v2-eth';
+const market = eth ? 'ETH-USD' : 'BTC-USD', symbol = eth ? 'ETHUSDT' : 'BTCUSDT', asset = eth ? 'eth' : 'btc';
 if (!output) throw new Error('Supply a screenshot directory');
 fs.mkdirSync(output, { recursive: true });
 // Test-only hook into the real read/render callback; never served by production.
@@ -13,7 +15,7 @@ const html = fs.readFileSync(path.join(__dirname, '../public/decentrader_liquidi
   .replace('    wireViewer();', '    window.__manualFixtureRefresh = refreshManualOverride;\n    wireViewer();');
 const hour = 3_600_000, now = Math.floor(Date.now() / hour) * hour + 5000;
 const start = now - 120 * hour - 5000;
-const makePlan = (changes = {}) => ({ market: 'BTC-USD', id: 'fixture-long', direction: 'long', status: 'ARMED',
+const makePlan = (changes = {}) => ({ market, id: 'fixture-long', direction: 'long', status: 'ARMED',
   closeTrigger: 80000, armedAt: new Date(start + 55 * hour).toISOString(),
   takeProfits: [{ price: 82000, allocationPct: 50 }, { price: 84000, allocationPct: 30 }, { price: 86000, allocationPct: 20 }], ...changes });
 
@@ -172,8 +174,8 @@ async function checkPanGestures(page, context, mobile) {
         if (target.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: html });
         if (target.origin === new URL(url).origin && target.pathname.startsWith('/assets/')) return route.continue();
         if (target.pathname === '/decentrader/manual-override') return route.fulfill({ status: readFails ? 503 : 200,
-          json: readFails ? { error: 'Fixture unavailable' } : { market: 'BTC-USD', enabled: true, overrides: plans } });
-        if (target.pathname.endsWith('/btc-spot-candles')) return route.fulfill({ json: { symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h',
+          json: readFails ? { error: 'Fixture unavailable' } : { market, enabled: true, overrides: plans } });
+        if (target.pathname.endsWith(`/${asset}-spot-candles`)) return route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h',
           fetchedAt: new Date(now).toISOString(), hasMore: false, candles: Array.from({ length: 121 }, (_, index) => ({
             time: (start + index * hour) / 1000, open: 80800, high: 81500, low: 79000, close: index % 2 ? 81100 : 80100,
             volume: 10, quoteVolume: 800000, closed: index < 120

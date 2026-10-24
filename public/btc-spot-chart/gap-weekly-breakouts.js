@@ -2,8 +2,8 @@
   'use strict';
   const HOUR = 3600;
 
-  function buildFractalCloseBreakouts(input, fractals, nowMs, timeframe, levelsKey) {
-    if (fractals?.symbol !== 'BTCUSDT' || fractals.venue !== 'Binance Spot' || !Array.isArray(fractals.levels)) {
+  function buildFractalCloseBreakouts(input, fractals, nowMs, timeframe, levelsKey, symbol) {
+    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || fractals?.symbol !== symbol || fractals.venue !== 'Binance Spot' || !Array.isArray(fractals.levels)) {
       throw new Error('Unexpected BTC Spot breakout source');
     }
     const fractalThrough = Date.parse(fractals.evaluatedThrough) / 1000;
@@ -40,12 +40,12 @@
       signals.push({ time: candle.time, closedAt: candle.time + HOUR, direction: long ? 'long' : 'short', close: candle.close,
         [levelsKey]: matches.map(level => ({ id: level.id, type: level.type, price: level.price, confirmedAt: level.confirmedAt })) });
     }
-    return { symbol: 'BTCUSDT', venue: 'Binance Spot', signals,
+    return { symbol, venue: 'Binance Spot', signals,
       evaluatedThrough: through ? new Date(through * 1000).toISOString() : null };
   }
 
-  function buildGapFractalBreakouts(input, timeline, fractals, nowMs, timeframe, levelsKey) {
-    if (timeline?.symbol !== 'BTCUSDT' || timeline.venue !== 'Binance Spot' || !Array.isArray(timeline.records)) {
+  function buildGapFractalBreakouts(input, timeline, fractals, nowMs, timeframe, levelsKey, symbol) {
+    if (timeline?.symbol !== symbol || timeline.venue !== 'Binance Spot' || !Array.isArray(timeline.records)) {
       throw new Error('Unexpected BTC Spot breakout source');
     }
     const gaps = new Map();
@@ -58,7 +58,7 @@
       }
       gaps.set(row.availableAt, row); lastGap = row.availableAt;
     }
-    const model = buildFractalCloseBreakouts(input, fractals, nowMs, timeframe, levelsKey);
+    const model = buildFractalCloseBreakouts(input, fractals, nowMs, timeframe, levelsKey, symbol);
     const through = Math.min(Date.parse(model.evaluatedThrough || '') / 1000 || 0, lastGap ? lastGap + HOUR : 0);
     const previous = new Map(input.filter(candle => candle.closed === true).map(candle => [candle.time + HOUR, candle.close]));
     const signals = model.signals.flatMap(signal => {
@@ -72,16 +72,16 @@
     return { ...model, signals, evaluatedThrough: through ? new Date(through * 1000).toISOString() : null };
   }
 
-  function buildDailyFractalBreakouts(input, fractals, nowMs = Date.now()) {
-    return buildFractalCloseBreakouts(input, fractals, nowMs, 'D', 'dailyLevels');
+  function buildDailyFractalBreakouts(input, fractals, nowMs = Date.now(), symbol = 'BTCUSDT') {
+    return buildFractalCloseBreakouts(input, fractals, nowMs, 'D', 'dailyLevels', symbol);
   }
 
-  function buildGapWeeklyBreakouts(input, timeline, fractals, nowMs = Date.now()) {
-    return buildGapFractalBreakouts(input, timeline, fractals, nowMs, 'W', 'weeklyLevels');
+  function buildGapWeeklyBreakouts(input, timeline, fractals, nowMs = Date.now(), symbol = 'BTCUSDT') {
+    return buildGapFractalBreakouts(input, timeline, fractals, nowMs, 'W', 'weeklyLevels', symbol);
   }
 
-  function buildGapDailyBreakouts(input, timeline, fractals, nowMs = Date.now()) {
-    return buildGapFractalBreakouts(input, timeline, fractals, nowMs, 'D', 'dailyLevels');
+  function buildGapDailyBreakouts(input, timeline, fractals, nowMs = Date.now(), symbol = 'BTCUSDT') {
+    return buildGapFractalBreakouts(input, timeline, fractals, nowMs, 'D', 'dailyLevels', symbol);
   }
 
   class GapWeeklyBreakoutPrimitive {

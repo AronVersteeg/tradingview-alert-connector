@@ -12,9 +12,9 @@
     return { ...value, version: Number(value.version) || 0 };
   }
 
-  function streamCandle(message) {
+  function streamCandle(message, symbol = 'BTCUSDT') {
     const k = message && message.k;
-    if (!k || message.e !== 'kline' || message.s !== 'BTCUSDT' || k.s !== 'BTCUSDT' ||
+    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || !k || message.e !== 'kline' || message.s !== symbol || k.s !== symbol ||
       k.i !== '1h' || typeof k.x !== 'boolean' || !Number.isSafeInteger(k.t) ||
       k.T !== k.t + HOUR * 1000 - 1 || !Number.isFinite(message.E)) return null;
     return normalizeCandle({

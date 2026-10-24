@@ -35,7 +35,7 @@ export function parseSpotChartCandles(rows: unknown[], nowMs = Date.now()): Spot
 }
 
 export type SpotChartPage = {
-  symbol: 'BTCUSDT';
+  symbol: 'BTCUSDT' | 'ETHUSDT';
   venue: 'Binance Spot';
   interval: '1h';
   fetchedAt: string;
@@ -45,6 +45,9 @@ export type SpotChartPage = {
 
 // Chart-only reads: bounded shared memory, no disk writes or trading callbacks.
 export class BinanceSpotChartFeed {
+  constructor(readonly symbol: 'BTCUSDT' | 'ETHUSDT' = 'BTCUSDT') {
+    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol)) throw new Error('Unsupported Spot chart symbol');
+  }
   private cache = new Map<number, { expiresAt: number; page: SpotChartPage }>();
   private pending = new Map<number, Promise<SpotChartPage>>();
 
@@ -73,16 +76,17 @@ export class BinanceSpotChartFeed {
     const fetchedAt = new Date().toISOString();
     const response = await binanceGet<unknown[]>(URL, {
       timeout: 15_000,
-      params: { symbol: 'BTCUSDT', interval: '1h', limit: PAGE_SIZE, ...(endTime === undefined ? {} : { endTime }) }
+      params: { symbol: this.symbol, interval: '1h', limit: PAGE_SIZE, ...(endTime === undefined ? {} : { endTime }) }
     });
     if (!Array.isArray(response.data)) throw new Error('Binance returned invalid Spot candle data.');
     const candles = parseSpotChartCandles(response.data);
-    if (response.data.length && !candles.length) throw new Error('Binance returned no valid BTCUSDT Spot candles.');
+    if (response.data.length && !candles.length) throw new Error(`Binance returned no valid ${this.symbol} Spot candles.`);
     return {
-      symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', fetchedAt, candles,
+      symbol: this.symbol, venue: 'Binance Spot', interval: '1h', fetchedAt, candles,
       hasMore: candles.length === PAGE_SIZE
     };
   }
 }
 
 export const binanceSpotChartFeed = new BinanceSpotChartFeed();
+export const ethSpotChartFeed = new BinanceSpotChartFeed('ETHUSDT');

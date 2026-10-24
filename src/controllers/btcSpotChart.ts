@@ -1,8 +1,8 @@
 import express from 'express';
 import path from 'path';
-import { binanceSpotChartFeed } from '../services/binanceSpotChart';
+import { binanceSpotChartFeed, ethSpotChartFeed } from '../services/binanceSpotChart';
 import { binanceCooldownHttpResponse } from '../services/binanceHttp';
-import { btcFractalProjectionFeed } from '../services/btcFractalProjections';
+import { btcFractalProjectionFeed, ethFractalProjectionFeed } from '../services/btcFractalProjections';
 
 export const btcSpotChartRouter = express.Router();
 
@@ -10,37 +10,42 @@ btcSpotChartRouter.use('/assets/btc-spot-chart', express.static(
   path.join(process.cwd(), 'public', 'btc-spot-chart'), { index: false, maxAge: 0 }
 ));
 
-btcSpotChartRouter.get('/open-liquidity/v2/btc-spot-candles', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  const before = req.query.before === undefined ? undefined : Number(req.query.before);
-  if (before !== undefined && (!Number.isSafeInteger(before) || before <= 0 || before > Date.now())) {
-    res.status(400).send({ ok: false, error: 'before must be a past Unix timestamp in milliseconds.' });
-    return;
-  }
-  try {
-    res.send(await binanceSpotChartFeed.page(before));
-  } catch (error) {
-    const cooldown = binanceCooldownHttpResponse(error);
-    if (cooldown) {
-      res.setHeader('Retry-After', cooldown.retryAfter);
-      res.status(cooldown.status).send(cooldown.body);
+for (const [asset, candles, fractals] of [
+  ['btc', binanceSpotChartFeed, btcFractalProjectionFeed],
+  ['eth', ethSpotChartFeed, ethFractalProjectionFeed]
+] as const) {
+  btcSpotChartRouter.get(`/open-liquidity/v2/${asset}-spot-candles`, async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const before = req.query.before === undefined ? undefined : Number(req.query.before);
+    if (before !== undefined && (!Number.isSafeInteger(before) || before <= 0 || before > Date.now())) {
+      res.status(400).send({ ok: false, error: 'before must be a past Unix timestamp in milliseconds.' });
       return;
     }
-    res.status(502).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
-  }
-});
+    try {
+      res.send(await candles.page(before));
+    } catch (error) {
+      const cooldown = binanceCooldownHttpResponse(error);
+      if (cooldown) {
+        res.setHeader('Retry-After', cooldown.retryAfter);
+        res.status(cooldown.status).send(cooldown.body);
+        return;
+      }
+      res.status(502).send({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
 
-btcSpotChartRouter.get('/open-liquidity/v2/btc-spot-fractal-projections', async (_req, res) => {
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  try {
-    res.send(await btcFractalProjectionFeed.snapshot());
-  } catch (error) {
-    const cooldown = binanceCooldownHttpResponse(error);
-    if (cooldown) res.setHeader('Retry-After', cooldown.retryAfter);
-    res.status(503).send(cooldown?.body || {
-      ok: false, error: error instanceof Error ? error.message : String(error)
-    });
-  }
-});
+  btcSpotChartRouter.get(`/open-liquidity/v2/${asset}-spot-fractal-projections`, async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+      res.send(await fractals.snapshot());
+    } catch (error) {
+      const cooldown = binanceCooldownHttpResponse(error);
+      if (cooldown) res.setHeader('Retry-After', cooldown.retryAfter);
+      res.status(503).send(cooldown?.body || {
+        ok: false, error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+}

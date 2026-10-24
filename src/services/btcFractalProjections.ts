@@ -6,7 +6,7 @@ import {
 const HOUR_MS = 3_600_000;
 
 export type BtcFractalProjectionSnapshot = {
-  symbol: 'BTCUSDT';
+  symbol: 'BTCUSDT' | 'ETHUSDT';
   venue: 'Binance Spot';
   checkedAt: string;
   evaluatedThrough: string;
@@ -18,12 +18,23 @@ export type BtcFractalProjectionSnapshot = {
 export class BtcFractalProjectionFeed {
   private cached: BtcFractalProjectionSnapshot | undefined;
   private pending: Promise<BtcFractalProjectionSnapshot> | undefined;
+  private daily: (force?: boolean) => Promise<DailyFractalHistorySnapshot>;
+  private weekly: (force?: boolean) => Promise<DailyFractalHistorySnapshot>;
+  private monthly: (force?: boolean) => Promise<DailyFractalHistorySnapshot>;
+  private symbol: 'BTCUSDT' | 'ETHUSDT';
 
   constructor(
-    private daily = (force = false) => binanceDailyFractalHistory('BTC-USD', force, 'Binance Spot'),
-    private weekly = (force = false) => binanceWeeklyFractalHistory('BTC-USD', force),
-    private monthly = (force = false) => binanceMonthlyFractalHistory('BTC-USD', force)
-  ) {}
+    daily?: (force?: boolean) => Promise<DailyFractalHistorySnapshot>,
+    weekly?: (force?: boolean) => Promise<DailyFractalHistorySnapshot>,
+    monthly?: (force?: boolean) => Promise<DailyFractalHistorySnapshot>,
+    market: 'BTC-USD' | 'ETH-USD' = 'BTC-USD'
+  ) {
+    if (!['BTC-USD', 'ETH-USD'].includes(market)) throw new Error('Unsupported Spot fractal market');
+    this.symbol = market === 'ETH-USD' ? 'ETHUSDT' : 'BTCUSDT';
+    this.daily = daily || ((force = false) => binanceDailyFractalHistory(market, force, 'Binance Spot'));
+    this.weekly = weekly || ((force = false) => binanceWeeklyFractalHistory(market, force));
+    this.monthly = monthly || ((force = false) => binanceMonthlyFractalHistory(market, force));
+  }
 
   async snapshot(): Promise<BtcFractalProjectionSnapshot> {
     const hour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
@@ -45,16 +56,16 @@ export class BtcFractalProjectionFeed {
       if (!snapshot.stale && Date.parse(snapshot.latestClosedCandleAt || '') < latestExpectedFractalClose(interval, evaluatedAt)) {
         snapshot = await read(true);
       }
-      if (snapshot.venue !== 'Binance Spot' || snapshot.symbol !== 'BTCUSDT' || snapshot.interval !== interval ||
+      if (snapshot.venue !== 'Binance Spot' || snapshot.symbol !== this.symbol || snapshot.interval !== interval ||
         snapshot.stale || !Number.isFinite(Date.parse(snapshot.latestClosedCandleAt || '')) ||
         Date.parse(snapshot.latestClosedCandleAt!) < latestExpectedFractalClose(interval, evaluatedAt)) {
-        throw new Error(`BTC Spot ${interval} fractals are not current; projections will not be advanced.`);
+        throw new Error(`${this.symbol} Spot ${interval} fractals are not current; projections will not be advanced.`);
       }
       snapshots.push(snapshot);
     }
     const now = Date.now();
     return {
-      symbol: 'BTCUSDT', venue: 'Binance Spot', checkedAt: new Date(now).toISOString(),
+      symbol: this.symbol, venue: 'Binance Spot', checkedAt: new Date(now).toISOString(),
       evaluatedThrough: new Date(Math.floor(evaluatedAt / HOUR_MS) * HOUR_MS).toISOString(),
       daily: snapshots[0], weekly: snapshots[1], monthly: snapshots[2]
     };
@@ -62,3 +73,4 @@ export class BtcFractalProjectionFeed {
 }
 
 export const btcFractalProjectionFeed = new BtcFractalProjectionFeed();
+export const ethFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'ETH-USD');

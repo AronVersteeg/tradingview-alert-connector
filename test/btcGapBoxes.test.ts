@@ -1,3 +1,4 @@
+export {};
 const { timelineFromPayload, withDecentraderHistory, buildGapBoxes, GapBoxPrimitive } = require('../public/btc-spot-chart/gap-boxes.js');
 
 const HOUR = 3600;

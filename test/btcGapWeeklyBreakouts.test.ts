@@ -1,3 +1,4 @@
+export {};
 const breakouts = require('../public/btc-spot-chart/gap-weekly-breakouts.js');
 const HOUR = 3600, start = Date.parse('2026-10-19T00:00:00Z') / 1000;
 const iso = (seconds: number) => new Date(seconds * 1000).toISOString();

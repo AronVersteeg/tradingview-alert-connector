@@ -61,6 +61,7 @@
   background: #f7931a;
 }
 .spot-chart-interval { padding: 4px 9px; color: #90b5ff; background: #253047; border-radius: 3px; font-weight: 600; }
+.spot-chart-panel[data-asset="eth"] .spot-chart-symbol::before { content: "E"; background: #627eea; }
 .spot-chart-venue, .spot-chart-footer, .spot-chart-date { color: var(--spot-muted); }
 .spot-chart-divider { height: 22px; width: 1px; background: var(--spot-border); margin: 0 3px; }
 .spot-chart-panel .spot-chart-icon {
