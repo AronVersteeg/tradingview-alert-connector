@@ -10,6 +10,7 @@
   const hourlyBoxes = window.BtcHourlyFractalBoxes;
   const gapBoxes = window.BtcSpotGapBoxes;
   const gapWeeklyBreaks = window.BtcSpotGapWeeklyBreakouts;
+  const intrusionDailyBreaks = window.BtcSpotIntrusionDailyBreakouts;
   const manualLevels = window.BtcSpotManualLevels;
   const viewport = window.BtcSpotViewport;
   const interactions = window.BtcSpotInteractions;
@@ -29,6 +30,8 @@
   let hourlyBoxLayer, hourlyBoxModel;
   let gapLayer, gapTimeline = window.BTC_SPOT_GAP_TIMELINE, gapModel;
   let closedDataVersion = 0;
+  let intrusionLayer, intrusionHistory, intrusionModel, intrusionInputs, intrusionPending;
+  let intrusionRetryAt = 0, intrusionReadFailed = false;
   const breakoutStates = [
     { timeframe: 'W', name: 'Weekly', levelsKey: 'weeklyLevels' },
     { timeframe: 'D', name: 'Daily', levelsKey: 'dailyLevels' }
@@ -117,6 +120,55 @@
     return model ? { ...model, signals: model.signals.map(signal => ({ ...signal, gap: { ...signal.gap },
       [state.levelsKey]: signal[state.levelsKey].map(level => ({ ...level })) })) } : null;
   }
+
+  function updateIntrusionDailyBreakouts() {
+    const status = byId('spotChartIntrusionDailyStatus');
+    if (!intrusionHistory || !fractalModel) return;
+    const hour = Math.floor(Date.now() / 3_600_000), inputs = intrusionInputs;
+    try {
+      if (!inputs || inputs.history !== intrusionHistory || inputs.fractals !== fractalModel ||
+          inputs.version !== closedDataVersion || inputs.hour !== hour) {
+        intrusionModel = intrusionDailyBreaks.buildIntrusionDailyBreakouts(candles, intrusionHistory, fractalModel);
+        intrusionLayer?.setData(intrusionModel.signals);
+        intrusionInputs = { history: intrusionHistory, fractals: fractalModel, version: closedDataVersion, hour };
+      }
+      const stale = intrusionReadFailed || !intrusionModel.evaluatedThrough ||
+        Date.parse(intrusionModel.evaluatedThrough) < hour * 3_600_000;
+      status.textContent = `Dec intrusion / D: ${intrusionModel.signals.length} | saved alert times${stale ? ' | stale' : ''}`;
+      status.dataset.stale = String(stale);
+    } catch (error) {
+      intrusionInputs = undefined; intrusionModel = undefined; intrusionLayer?.setData([]);
+      status.textContent = `Dec intrusion / D pending: ${error.message}`;
+      status.dataset.stale = 'true';
+    }
+  }
+
+  async function refreshIntrusionHistory(force = false) {
+    if (!initialData || !active || destroyed || !byId('spotChartIntrusionDailyBreaks').checked ||
+        intrusionPending || !force && Date.now() < intrusionRetryAt) return intrusionPending;
+    intrusionRetryAt = Date.now() + 60_000;
+    intrusionPending = (async () => {
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 30_000);
+      try {
+        // Reuse the existing public dashboard read; never reconstruct intrusions
+        // from today's histogram survivors or use a normal/filtered mail timestamp.
+        const response = await fetch('/decentrader/liquidity-timelapse', { signal: controller.signal, cache: 'no-store' });
+        if (!response.ok) throw new Error(`dashboard unavailable (${response.status})`);
+        const history = intrusionDailyBreaks.compactIntrusionHistory(await response.json());
+        if (destroyed) return;
+        intrusionHistory = history; intrusionReadFailed = false;
+        updateIntrusionDailyBreakouts();
+      } catch (error) {
+        if (destroyed) return;
+        intrusionReadFailed = true;
+        const status = byId('spotChartIntrusionDailyStatus');
+        status.textContent = intrusionHistory ? 'Dec intrusion / D stale | saved history retained'
+          : `Dec intrusion / D unavailable: ${error.name === 'AbortError' ? 'read timed out' : error.message}`;
+        status.dataset.stale = 'true';
+      } finally { clearTimeout(timeout); intrusionPending = undefined; }
+    })();
+    return intrusionPending;
+  }
   window.addEventListener('btc-spot-chart:gap-timeline', (event) => { gapTimeline = event.detail; updateGapProjection(); });
   window.addEventListener('btc-spot-chart:gap-error', (event) => {
     byId('spotChartGapStatus').textContent = `Gap unavailable: ${event.detail}`;
@@ -133,6 +185,7 @@
       fractalModel = fractals.projectFractals(fractalBundle, candles);
       fractalLayer.setData(fractalModel.levels);
       updateGapFractalBreakouts();
+      updateIntrusionDailyBreakouts();
       projectionStatus(`D/W/M closed through ${dateText(Date.parse(fractalModel.evaluatedThrough) / 1000, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
       if (fitFractals) candlesSeries.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
     } catch (error) {
@@ -243,10 +296,12 @@
       hourlyBoxModel = hourlyBoxes.buildHourlyFractalBoxes(candles);
       hourlyBoxLayer.setData(hourlyBoxModel.boxes, candles);
       updateGapProjection();
+      updateIntrusionDailyBreakouts();
     }
     if (key !== fractalKey || !singleUpdate) { fractalKey = key; projectLoadedCandles(); }
     if (gestureActive && oldFirst !== candles[0]?.time) gestures?.rebase();
     void refreshFractals();
+    void refreshIntrusionHistory();
   }
   function selectRange(value) {
     if (!chart || !candles.length) return;
@@ -303,6 +358,10 @@
         candlesSeries.attachPrimitive(state.layer);
       }
       updateGapFractalBreakouts();
+      intrusionLayer = new intrusionDailyBreaks.IntrusionDailyBreakoutPrimitive();
+      intrusionLayer.setVisible(byId('spotChartIntrusionDailyBreaks').checked);
+      candlesSeries.attachPrimitive(intrusionLayer);
+      updateIntrusionDailyBreakouts();
       gestures = interactions.install(chartCanvas, {
         read: () => {
           if (!initialData || destroyed) return null;
@@ -352,6 +411,8 @@
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
+        getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({
+          ...signal, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
         getManualLevels: () => manualModel ? { ...manualModel, levels: manualModel.levels.map((level) => ({ ...level })) } : null,
         getManualProjections: () => manualLayer ? manualLayer.projectionBoxes().map((box) => ({ ...box })) : []
       });
@@ -360,6 +421,7 @@
         feedText();
         updateGapProjection();
         void refreshFractals();
+        void refreshIntrusionHistory();
         if (!lastTickAt || Date.now() - lastTickAt > 12_000) {
           if (Date.now() - lastRestAt >= 30_000) void loadRecent();
           if (socket && Date.now() - (lastTickAt || lastRestAt) > 20_000) socket.close();
@@ -477,7 +539,7 @@
   }
 
   byId('spotChartRefresh').addEventListener('click', async () => {
-    try { await ensureChart(); await loadRecent(); await refreshFractals(true); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
+    try { await ensureChart(); await loadRecent(); await refreshFractals(true); void refreshIntrusionHistory(true); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
   });
   for (const [id, key] of [['spotChartDaily', 'daily'], ['spotChartWeekly', 'weekly'], ['spotChartMonthly', 'monthly'], ['spotChartBroken', 'broken']]) {
     byId(id).addEventListener('change', (event) => {
@@ -495,6 +557,10 @@
   for (const state of breakoutStates) {
     byId(`spotChartGap${state.name}Breaks`).addEventListener('change', (event) => state.layer?.setVisible(event.target.checked));
   }
+  byId('spotChartIntrusionDailyBreaks').addEventListener('change', (event) => {
+    intrusionLayer?.setVisible(event.target.checked);
+    if (event.target.checked) void refreshIntrusionHistory();
+  });
   byId('spotChartManual').addEventListener('change', (event) => {
     manualLayer?.setVisible(event.target.checked);
     ensureProjectionRoom();

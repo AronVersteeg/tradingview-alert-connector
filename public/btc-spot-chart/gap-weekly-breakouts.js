@@ -2,23 +2,12 @@
   'use strict';
   const HOUR = 3600;
 
-  function buildGapFractalBreakouts(input, timeline, fractals, nowMs, timeframe, levelsKey) {
-    if (timeline?.symbol !== 'BTCUSDT' || timeline.venue !== 'Binance Spot' || !Array.isArray(timeline.records) ||
-        fractals?.symbol !== 'BTCUSDT' || fractals.venue !== 'Binance Spot' || !Array.isArray(fractals.levels)) {
+  function buildFractalCloseBreakouts(input, fractals, nowMs, timeframe, levelsKey) {
+    if (fractals?.symbol !== 'BTCUSDT' || fractals.venue !== 'Binance Spot' || !Array.isArray(fractals.levels)) {
       throw new Error('Unexpected BTC Spot breakout source');
     }
     const fractalThrough = Date.parse(fractals.evaluatedThrough) / 1000;
     if (!Number.isSafeInteger(fractalThrough) || fractalThrough % HOUR) throw new Error('Invalid fractal coverage');
-    const gaps = new Map();
-    let lastGap = 0;
-    for (const row of timeline.records) {
-      if (!Number.isSafeInteger(row.candleTime) || row.candleTime % HOUR || row.availableAt !== row.candleTime + HOUR ||
-          row.availableAt <= lastGap || !(row.lower === null && row.upper === null ||
-          Number.isFinite(row.lower) && Number.isFinite(row.upper) && row.lower > 0 && row.upper > row.lower)) {
-        throw new Error('Invalid gap breakout history');
-      }
-      gaps.set(row.availableAt, row); lastGap = row.availableAt;
-    }
     const candles = input.filter(candle => candle.closed === true).slice().sort((a, b) => a.time - b.time);
     let previousTime = 0;
     for (const candle of candles) {
@@ -30,18 +19,14 @@
       previousTime = candle.time;
     }
     const through = Math.min(Math.floor(nowMs / (HOUR * 1000)) * HOUR, fractalThrough,
-      candles.at(-1)?.time + HOUR || 0, lastGap ? lastGap + HOUR : 0);
+      candles.at(-1)?.time + HOUR || 0);
     const levels = fractals.levels.filter(level => level.timeframe === timeframe && ['HIGH', 'LOW'].includes(level.type));
     const signals = [];
     for (let i = 1; i < candles.length; i++) {
       const candle = candles[i], previous = candles[i - 1];
       if (candle.time + HOUR > through || candle.time !== previous.time + HOUR) continue;
-      // The candle can move the box at its close: use the box known at its OPEN,
-      // never the newly expanded edges produced by the signal candle itself.
-      const gap = gaps.get(candle.time);
-      if (!gap || gap.lower === null || gap.upper === null) continue;
-      const long = previous.close <= gap.upper && candle.close > gap.upper;
-      const short = previous.close >= gap.lower && candle.close < gap.lower;
+      const long = candle.close > previous.close;
+      const short = candle.close < previous.close;
       if (!long && !short) continue;
       const matches = levels.filter(level => {
         const confirmedMs = Date.parse(level.confirmedAt);
@@ -53,11 +38,42 @@
       });
       if (!matches.length) continue;
       signals.push({ time: candle.time, closedAt: candle.time + HOUR, direction: long ? 'long' : 'short', close: candle.close,
-        gap: { lower: gap.lower, upper: gap.upper, candleTime: gap.candleTime },
         [levelsKey]: matches.map(level => ({ id: level.id, type: level.type, price: level.price, confirmedAt: level.confirmedAt })) });
     }
     return { symbol: 'BTCUSDT', venue: 'Binance Spot', signals,
       evaluatedThrough: through ? new Date(through * 1000).toISOString() : null };
+  }
+
+  function buildGapFractalBreakouts(input, timeline, fractals, nowMs, timeframe, levelsKey) {
+    if (timeline?.symbol !== 'BTCUSDT' || timeline.venue !== 'Binance Spot' || !Array.isArray(timeline.records)) {
+      throw new Error('Unexpected BTC Spot breakout source');
+    }
+    const gaps = new Map();
+    let lastGap = 0;
+    for (const row of timeline.records) {
+      if (!Number.isSafeInteger(row.candleTime) || row.candleTime % HOUR || row.availableAt !== row.candleTime + HOUR ||
+          row.availableAt <= lastGap || !(row.lower === null && row.upper === null ||
+          Number.isFinite(row.lower) && Number.isFinite(row.upper) && row.lower > 0 && row.upper > row.lower)) {
+        throw new Error('Invalid gap breakout history');
+      }
+      gaps.set(row.availableAt, row); lastGap = row.availableAt;
+    }
+    const model = buildFractalCloseBreakouts(input, fractals, nowMs, timeframe, levelsKey);
+    const through = Math.min(Date.parse(model.evaluatedThrough || '') / 1000 || 0, lastGap ? lastGap + HOUR : 0);
+    const previous = new Map(input.filter(candle => candle.closed === true).map(candle => [candle.time + HOUR, candle.close]));
+    const signals = model.signals.flatMap(signal => {
+      // Use the completed box known at candle OPEN, not its expanded replacement.
+      const gap = gaps.get(signal.time), priorClose = previous.get(signal.time);
+      if (signal.closedAt > through || !gap || gap.lower === null || gap.upper === null ||
+          !(signal.direction === 'long' ? priorClose <= gap.upper && signal.close > gap.upper
+            : priorClose >= gap.lower && signal.close < gap.lower)) return [];
+      return [{ ...signal, gap: { lower: gap.lower, upper: gap.upper, candleTime: gap.candleTime } }];
+    });
+    return { ...model, signals, evaluatedThrough: through ? new Date(through * 1000).toISOString() : null };
+  }
+
+  function buildDailyFractalBreakouts(input, fractals, nowMs = Date.now()) {
+    return buildFractalCloseBreakouts(input, fractals, nowMs, 'D', 'dailyLevels');
   }
 
   function buildGapWeeklyBreakouts(input, timeline, fractals, nowMs = Date.now()) {
@@ -100,7 +116,8 @@
     constructor() { super('#fff59d'); }
   }
 
-  const api = Object.freeze({ buildGapWeeklyBreakouts, buildGapDailyBreakouts, GapWeeklyBreakoutPrimitive, GapDailyBreakoutPrimitive });
+  const api = Object.freeze({ buildGapWeeklyBreakouts, buildGapDailyBreakouts, buildDailyFractalBreakouts,
+    GapWeeklyBreakoutPrimitive, GapDailyBreakoutPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcSpotGapWeeklyBreakouts = api;
 })(typeof globalThis === 'object' ? globalThis : this);

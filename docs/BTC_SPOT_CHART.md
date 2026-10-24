@@ -254,6 +254,39 @@ hour-close updates, pre-candle gap selection, independent toggling, actual orang
 and light-yellow canvas pixels, overlap priority, PNG export and absence of write
 requests.
 
+## Decentrader Intrusion / D Overlay
+
+The default-on `Dec intrusion / D` checkbox adds thin purple (`#ba68c8`)
+vertical lines. A saved Decentrader intrusion must have the exact same candle-open
+UTC timestamp and direction as a fresh Daily fractal close break on Binance Spot
+BTCUSDT 1H. The Daily level must already be confirmed and intact at candle open;
+the previous close must be on the other side. Wick-only touches, open candles,
+previously broken levels and Weekly-only breaks do not qualify. A green-box edge
+break is not an additional requirement for this overlay.
+
+The existing `/decentrader/liquidity-timelapse` response supplies
+`intrusionDomStudy.history[].timestamp` and `delayHistory.records[].intrusionTimestamp`.
+Both are alert-candle **open** times in UTC, not SMTP, first-observed or filtered
+mail times. Normal/filtered duplicates are combined by candle and direction.
+Missing/ambiguous timestamps or directions are ignored. Today's histogram survivor
+flags are never replayed as historical intrusion evidence. This overlay represents
+saved records, not complete coverage or proof that no other intrusions occurred.
+A late-recorded intrusion appears retroactively on its original alert candle.
+
+The existing dashboard is read at most once per minute while the chart is active
+and this checkbox is enabled (explicit Refresh can retry sooner). Reads are shared
+within the chart; failures retain the last saved evidence with a stale indication.
+Disabling it stops further automatic reads. No new public endpoint, backend export,
+provider polling, entry logic, orders, SMTP, SL, TP or trailing behavior is added.
+Purple is drawn above the Gap/D and Gap/W markers when they overlap; its checkbox
+reveals those underlying lines. PNG exports include the purple overlay.
+
+Tests: `test/btcIntrusionDailyBreakouts.test.ts` and the combined desktop/mobile
+`scripts/check-btc-gap-weekly-breakouts.cjs` fixture. Browser QA verifies alert-time
+alignment despite much later fixture mail timestamps, purple pixels and PNGs,
+independent toggling, failed-read retention, stopping reads when disabled, and no
+write requests.
+
 ## Libraries
 
 TradingView Lightweight Charts 5.2.1 is vendored as a standalone ES module;

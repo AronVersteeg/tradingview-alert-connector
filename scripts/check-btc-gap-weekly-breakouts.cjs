@@ -10,6 +10,16 @@ const html = fs.readFileSync(path.join(__dirname, '../public/decentrader_liquidi
   .replace('    wireViewer();', '    window.__weeklyFixtureRefresh = refreshPayload;\n    wireViewer();');
 const HOUR = 3_600_000, start = Date.parse('2026-09-28T00:00:00Z'), day = Date.parse('2026-10-19T00:00:00Z');
 const iso = time => new Date(time).toISOString();
+function intrusionPayload() {
+  return { source: { url: 'https://www.decentrader.com/liquidity-maps/?coin=btc', method: 'getOHLCHourlyCalculations' },
+    intrusionDomStudy: { history: [
+      { timestamp: iso(day + 3 * HOUR).slice(0, 19).replace('T', ' '), direction: 'long', normalEmailSentAt: iso(day + 12 * HOUR) },
+      { timestamp: iso(day + 4 * HOUR).slice(0, 19).replace('T', ' '), direction: 'long' },
+      { timestamp: iso(day + 5 * HOUR).slice(0, 19).replace('T', ' '), direction: 'short', filteredEmailSentAt: iso(day + 12 * HOUR) }
+    ] }, delayHistory: { records: [
+      { intrusionTimestamp: iso(day + 3 * HOUR).slice(0, 19).replace('T', ' '), sideCounts: '1 left edge', smtpSentAt: iso(day + 12 * HOUR) }
+    ] } };
+}
 const special = { 3: [100, 128, 98, 125], 4: [125, 133, 123, 130], 5: [130, 132, 72, 75],
   6: [75, 77, 68, 70], 7: [70, 102, 68, 100], 8: [100, 155, 99, 150] };
 function candles(now) {
@@ -54,6 +64,14 @@ function markerColumn(buffer, x, daily = false) {
 }
 const orangeColumn = (buffer, x) => markerColumn(buffer, x);
 const yellowColumn = (buffer, x) => markerColumn(buffer, x, true);
+function purpleColumn(buffer, x) {
+  const png = PNG.sync.read(buffer); let count = 0;
+  for (let y = 5; y < png.height - 35; y++) for (let atX = Math.max(0, Math.floor(x) - 2); atX <= Math.min(png.width - 1, Math.ceil(x) + 2); atX++) {
+    const at = (y * png.width + atX) * 4;
+    if (png.data[at] > 140 && png.data[at + 1] > 60 && png.data[at + 1] < 140 && png.data[at + 2] > 150) count++;
+  }
+  return count;
+}
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: process.env.SPOT_CHART_BROWSER_CHANNEL || 'msedge' });
   const results = [];
@@ -62,7 +80,7 @@ const yellowColumn = (buffer, x) => markerColumn(buffer, x, true);
       const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 },
         isMobile: mobile, hasTouch: mobile, acceptDownloads: true });
       let now = day + 4 * HOUR + 5000;
-      const errors = [], writes = [];
+      const errors = [], writes = []; let intrusionFailure = false, intrusionReads = 0;
       await context.addInitScript(value => { window.__weeklyNow = value; Date.now = () => window.__weeklyNow; window.WebSocket = class { close() {} }; }, now);
       await context.route('**/*', route => {
         const req = route.request(), target = new URL(req.url());
@@ -73,6 +91,11 @@ const yellowColumn = (buffer, x) => markerColumn(buffer, x, true);
           fetchedAt: iso(now), candles: candles(now), hasMore: false } });
         if (target.pathname.endsWith('/btc-spot-fractal-projections')) return route.fulfill({ json: bundle(now) });
         if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return route.fulfill({ json: payload(now) });
+        if (target.pathname === '/decentrader/liquidity-timelapse') {
+          intrusionReads++;
+          return intrusionFailure ? route.fulfill({ status: 503, json: { error: 'Fixture read failure' } })
+            : route.fulfill({ json: intrusionPayload() });
+        }
         if (target.pathname === '/decentrader/manual-override') return route.fulfill({ json: { enabled: true, market: 'BTC-USD', overrides: [] } });
         return route.fulfill({ status: 503, json: { error: 'Unrelated source isolated in read-only fixture' } });
       });
@@ -83,6 +106,8 @@ const yellowColumn = (buffer, x) => markerColumn(buffer, x, true);
       await page.waitForFunction(() => window.btcSpotChart?.getGapDailyBreakouts()?.signals.length === 1);
       assert.equal(await page.locator('#spotChartGapWeeklyBreaks').isChecked(), true);
       assert.equal(await page.locator('#spotChartGapDailyBreaks').isChecked(), true);
+      await page.waitForFunction(() => window.btcSpotChart?.getIntrusionDailyBreakouts()?.signals.length === 1);
+      assert.equal(await page.locator('#spotChartIntrusionDailyBreaks').isChecked(), true);
       let state = await page.evaluate(() => window.btcSpotChart.getGapWeeklyBreakouts());
       assert.equal(state.signals[0].time, (day + 3 * HOUR) / 1000);
       assert.equal(state.signals[0].gap.upper, 115, 'The expanded 140 edge must not be used retroactively');
@@ -98,6 +123,11 @@ const yellowColumn = (buffer, x) => markerColumn(buffer, x, true);
       const dailyState = await page.evaluate(() => window.btcSpotChart.getGapDailyBreakouts());
       assert.deepEqual(dailyState.signals.map(s => [s.time, s.direction]), state.signals.map(s => [s.time, s.direction]));
       assert.deepEqual(dailyState.signals.map(s => s.dailyLevels[0].price), [118, 82]);
+      await page.waitForFunction(() => window.btcSpotChart?.getIntrusionDailyBreakouts()?.signals.length === 2);
+      const intrusionState = await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts());
+      assert.deepEqual(intrusionState.signals.map(s => [s.time, s.direction]), state.signals.map(s => [s.time, s.direction]));
+      assert.equal(intrusionState.signals[0].intrusion.alertTime, iso(day + 3 * HOUR), 'Use alert open time, not SMTP time');
+      await page.locator('#spotChartIntrusionDailyBreaks').uncheck();
       for (const id of ['spotChartDaily', 'spotChartWeekly', 'spotChartMonthly', 'spotChartHourlyBoxes', 'spotChartGap']) await page.locator('#' + id).uncheck();
       await page.evaluate(time => {
         window.btcSpotChart.chart.timeScale().setVisibleRange({ from: time / 1000 - 6 * 3600, to: time / 1000 + 10 * 3600 });
@@ -142,10 +172,37 @@ const yellowColumn = (buffer, x) => markerColumn(buffer, x, true);
       assert.equal((await page.evaluate(() => window.btcSpotChart.getGapWeeklyBreakouts())).signals.length, 2,
         'A later close beyond already-broken levels must not add another line');
       assert.equal((await page.evaluate(() => window.btcSpotChart.getGapDailyBreakouts())).signals.length, 2);
+      for (const id of ['spotChartGapWeeklyBreaks', 'spotChartGapDailyBreaks']) await page.locator('#' + id).uncheck();
+      await page.locator('#spotChartIntrusionDailyBreaks').check();
+      await page.evaluate(time => {
+        window.btcSpotChart.chart.timeScale().setVisibleRange({ from: time / 1000 - 6 * 3600, to: time / 1000 + 10 * 3600 });
+      }, day);
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const purpleXs = await page.evaluate(times => times.map(time => window.btcSpotChart.chart.timeScale().timeToCoordinate(time)), intrusionState.signals.map(s => s.time));
+      const purple = await page.locator('#spotChartCanvas').screenshot();
+      const purplePixels = purpleXs.map(x => purpleColumn(purple, x));
+      assert(purplePixels.every(n => n > 200), `Actual purple lines on the alert candles: ${purplePixels}`);
+      const purpleDownloadEvent = page.waitForEvent('download'); await page.locator('#spotChartDownload').click();
+      const purpleFile = path.join(output, `intrusion-daily-${mobile ? 'mobile' : 'desktop'}-export.png`);
+      await (await purpleDownloadEvent).saveAs(purpleFile);
+      assert(purpleXs.every(x => purpleColumn(fs.readFileSync(purpleFile), x) > 200), 'PNG includes purple markers');
+      await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `intrusion-daily-${mobile ? 'mobile' : 'desktop'}.png`) });
+      intrusionFailure = true;
+      await page.locator('#spotChartRefresh').click();
+      await page.waitForFunction(() => document.getElementById('spotChartIntrusionDailyStatus').textContent.includes('stale'));
+      assert.equal((await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts())).signals.length, 2, 'Read failure preserves saved evidence');
+      await page.locator('#spotChartIntrusionDailyBreaks').uncheck();
+      const readsWhenOff = intrusionReads;
+      await page.locator('#spotChartRefresh').click();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(intrusionReads, readsWhenOff, 'Disabled intrusion overlay performs no additional dashboard reads');
+      const noPurple = await page.locator('#spotChartCanvas').screenshot();
+      assert(purpleXs.every(x => purpleColumn(noPurple, x) < 20), 'Checkbox removes the actual purple lines');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
       results.push({ mobile, automaticClosedHourUpdate: true, longAndShort: true, previousBoxUsed: true,
         independentCheckboxes: true, orangePixels: pixels, yellowPixels, weeklyWinsOverlap: true,
-        pngIncludesBothOverlays: true, noHorizontalOverflow: true, writes });
+        pngIncludesBothOverlays: true, purplePixels, intrusionAlertTimeNotMailTime: true,
+        readFailureRetainsIntrusions: true, disabledIntrusionStopsReads: true, noHorizontalOverflow: true, writes });
       await context.close();
     }
     console.log(JSON.stringify(results, null, 2));
