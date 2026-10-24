@@ -15,6 +15,49 @@ boxes. Agreement across 498 recent overlapping hours did not validate older
 history. Those current-survivor extensions remain quarantined on server and client.
 No original raw snapshots, logs or saved alert evidence are deleted.
 
+## ETH Source and Edge Audit, 2026-10-24
+
+The deployed ETH Spot candle route reports ETHUSDT / Binance Spot / 1h.
+The ETH replica configuration uses only Spot klines, $5 bins and its own
+`binance-spot-eth-liquidation-cohorts-v2.1` model. The chart rejects cross-market
+inputs and never imports BTC recovery or Decentrader BTC active flags.
+
+Read-only live checks used the existing ETH timelapse response and direct Binance
+`api/v3/klines?symbol=ETHUSDT&interval=1h` reads. The final audit covered candle
+opens 2026-10-03 15:00 UTC through 2026-10-24 10:00 UTC:
+
+- 500/500 OHLC/OHLC4 frames match Binance Spot.
+- Independent application of the complete cohort seed and per-hour deltas gives
+  the same nearest occupied left AND right prices for every one of 500 gap pairs.
+- The left edge has 8 distinct values / 7 transitions; the right has 10 / 9.
+- A fresh causal model replay from 10,340 Spot candles, with 8,760 prior warmup
+  hours, reproduces all 500 live gap pairs without a mismatch. This uses the
+  existing model implementation; the seed/delta edge check is separate arithmetic.
+- All 54 saved intrusion timestamps and directions agree with the causal replay.
+  The 9 records with original saved gap pairs match those pairs exactly. The
+  other 45 records (August 19 through September 21) have no original gap pair;
+  their reconstructed edges are NOT proof of what was saved/observed then and
+  are never written back as original observations.
+
+No production correction or trading change was required by these checks. This is
+validation of the reconstructed model/source, not proof of real liquidation
+inventory, historical email delivery time, all persistent archive contents, or
+permanent absence of future provider/application faults.
+
+Recheck without starting the production application:
+
+```powershell
+node scripts/audit-eth-gap-source.cjs --all-labels
+```
+
+The CLI performs only bounded public GET requests and local calculations. It
+starts no collector, submits no order, sends no mail, and changes no state files.
+Without flags it checks current payload geometry and 500 Spot candles; `--deep`
+adds a full warmup replay, while `--all-labels` also covers older saved labels.
+Missing original evidence is reported separately from a mismatch. Regression
+tests explicitly detect a frozen right edge, source mixing, incorrect previous
+gaps, and later candles rewriting earlier ETH/BTC causal snapshots.
+
 ## Historical display protection
 
 - Decentrader historical-frame gaps use the independent causal Binance recovery

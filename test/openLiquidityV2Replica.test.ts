@@ -48,11 +48,14 @@ function zone(input: Partial<ReplicaLiquidityZone>): ReplicaLiquidityZone {
 describe('Public Perp V2 Binance Spot replica', () => {
   const hour = 3_600_000;
   const base = Date.parse('2026-01-01T00:00:00Z');
-  test('later sweeps cannot erase or move either edge or intrusion of an earlier causal snapshot', () => {
-    const before = [candle(base, 60000, 60100, 59900, 60000), candle(base + hour, 61000, 61100, 60900, 61000)];
-    const earlier = buildReplicaSnapshots(before, { frameLimit: 10 });
+  test.each([{ symbol: 'BTCUSDT', step: 100, scale: 1 }, { symbol: 'ETHUSDT', step: 5, scale: .05 }])(
+    '$symbol later sweeps cannot erase or move either edge or intrusion of an earlier causal snapshot', ({ step, scale }) => {
+    const scaled = (time: number, open: number, high: number, low: number, close: number) => candle(time, open * scale, high * scale, low * scale, close * scale);
+    const before = [scaled(base, 60000, 60100, 59900, 60000), scaled(base + hour, 61000, 61100, 60900, 61000)];
+    const options = { frameLimit: 10, priceStepUsd: step };
+    const earlier = buildReplicaSnapshots(before, options);
     const original = JSON.stringify(earlier);
-    const after = buildReplicaSnapshots([...before, candle(base + 2 * hour, 85000, 88000, 58000, 86000)], { frameLimit: 10 });
+    const after = buildReplicaSnapshots([...before, scaled(base + 2 * hour, 85000, 88000, 58000, 86000)], options);
     expect(comparable(after.slice(0, before.length))).toEqual(comparable(earlier));
     const afterTimestamp = payloadFor(earlier).frames[0].t;
     const originalAlerts = reconstructReplicaIntrusions(payloadFor(earlier), afterTimestamp).alerts;
