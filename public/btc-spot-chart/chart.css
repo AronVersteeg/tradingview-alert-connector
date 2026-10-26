@@ -83,6 +83,11 @@
 .spot-chart-icon img, .spot-chart-toggle img { width: 18px; height: 18px; filter: invert(.85); }
 .spot-chart-toggle { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; padding: 5px 2px; }
 .spot-chart-toggle input { width: 13px; height: 13px; margin: 0; accent-color: #538af7; }
+.spot-order-block-controls { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; max-width: 100%; }
+.spot-order-block-controls[hidden] { display: none; }
+.spot-ob-pivot { display: inline-flex; align-items: center; gap: 4px; }
+.spot-ob-pivot input { width: 48px; height: 28px; box-sizing: border-box; color: #b2b5be; background: #131722; border: 1px solid #3b3e49; border-radius: 3px; }
+.spot-fractal-swatch.order-blocks { background: #169400; border: 1px solid #ff1100; }
 .spot-chart-select { border: 1px solid #3b3e49; border-radius: 3px; background: #131722; color: var(--spot-text); padding: 5px; font: inherit; }
 .spot-chart-ohlc {
   display: flex;

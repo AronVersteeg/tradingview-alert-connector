@@ -97,3 +97,5 @@ typings/
 !/scripts/check-btc-gap-weekly-breakouts.cjs
 !/scripts/check-spot-live-chart.cjs
 !/scripts/audit-eth-gap-source.cjs
+!/scripts/check-order-block-source.cjs
+!/scripts/check-btc-order-blocks.cjs

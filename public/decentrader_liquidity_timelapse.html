@@ -1533,6 +1533,11 @@
       <div class="spot-chart-fractals">
         <div class="spot-chart-actions">
           <label class="spot-chart-toggle" title="Confirmed 1H Williams fractal ranges"><input type="checkbox" id="spotChartHourlyBoxes" checked><i class="spot-fractal-swatch hourly-boxes"></i>1H boxes</label>
+          <span id="spotChartOrderBlockControls" class="spot-order-block-controls">
+            <label class="spot-chart-toggle" title="LuxAlgo volume-pivot order blocks; broken blocks retained at half strength"><input type="checkbox" id="spotChartOrderBlocks" checked><i class="spot-fractal-swatch order-blocks"></i>Order blocks</label>
+            <label class="spot-ob-pivot" title="Volume pivot confirmation length">Pivot <input type="number" id="spotChartObLength" value="5" min="1" max="100" step="1" aria-label="Order block volume pivot length"></label>
+            <select class="spot-chart-select" id="spotChartObMitigation" aria-label="Order block mitigation method"><option value="Wick">Wick</option><option value="Close">Close</option></select>
+          </span>
           <label class="spot-chart-toggle" title="Public V2 gap edges"><input type="checkbox" id="spotChartGap" checked><i class="spot-fractal-swatch gap-box"></i>Gap</label>
           <label class="spot-gap-lead" title="Gap right edge: hours beyond the latest candle">+<input type="number" id="spotChartGapLead" value="10" min="1" max="72" step="1" aria-label="Gap right offset in 1H candles">h</label>
           <label class="spot-chart-toggle" title="Daily fractals"><input type="checkbox" id="spotChartDaily" checked><i class="spot-fractal-swatch daily"></i>Daily</label>
@@ -1551,6 +1556,7 @@
         <span id="spotChartGapWeeklyStatus" role="status">Gap / W breaks pending</span>
         <span id="spotChartGapDailyStatus" role="status">Gap / D breaks pending</span>
         <span id="spotChartIntrusionDailyStatus" role="status">Dec intrusion / D pending</span>
+        <span id="spotChartOrderBlockStatus" role="status">Order blocks pending</span>
       </div>
       <div class="spot-chart-ohlc" id="spotChartOhlc">
         <span class="spot-chart-date" id="spotChartCandleTime">-</span>
@@ -1572,6 +1578,7 @@
         <select class="spot-chart-select" id="spotChartTimezone" aria-label="Chart timezone"><option value="Europe/Amsterdam">Amsterdam</option><option value="UTC">UTC</option></select>
       </div>
       <div class="spot-chart-credit">TradingView Lightweight Charts&trade; &middot; Copyright &copy; 2025 <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">TradingView, Inc.</a> &middot; <a href="/assets/btc-spot-chart/vendor/LIGHTWEIGHT-CHARTS-LICENSE" target="_blank" rel="noopener">License</a></div>
+      <div class="spot-chart-credit" id="spotChartOrderBlockCredit">Order Block Detector &copy; <a href="https://www.luxalgo.com/library/indicator/order-block-detector/" target="_blank" rel="noopener noreferrer">LuxAlgo</a> &middot; adapted &middot; <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC-SA 4.0</a></div>
     </section>
 
     <section class="dom-observer-panel" id="domObserverPanel" aria-live="polite">
@@ -1753,6 +1760,7 @@
   <script defer src="/assets/btc-spot-chart/data.js"></script>
   <script defer src="/assets/btc-spot-chart/fractals.js"></script>
   <script defer src="/assets/btc-spot-chart/hourly-fractal-boxes.js"></script>
+  <script defer src="/assets/btc-spot-chart/order-blocks.js"></script>
   <script defer src="/assets/btc-spot-chart/gap-boxes.js"></script>
   <script defer src="/assets/btc-spot-chart/gap-weekly-breakouts.js"></script>
   <script defer src="/assets/btc-spot-chart/intrusion-daily-breakouts.js"></script>

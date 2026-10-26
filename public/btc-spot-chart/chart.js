@@ -21,6 +21,7 @@
   const data = window.BtcSpotChartData;
   const fractals = window.BtcSpotFractals;
   const hourlyBoxes = window.BtcHourlyFractalBoxes;
+  const orderBlocks = window.BtcSpotOrderBlocks;
   const gapBoxes = window.BtcSpotGapBoxes;
   const gapWeeklyBreaks = window.BtcSpotGapWeeklyBreakouts;
   const intrusionDailyBreaks = window.BtcSpotIntrusionDailyBreakouts;
@@ -41,6 +42,7 @@
   let fractalLayer, fractalBundle, fractalModel, fractalPending, fractalRetryAt = 0, fractalKey;
   let fitFractals = false;
   let hourlyBoxLayer, hourlyBoxModel;
+  let orderBlockLayer, orderBlockModel, orderBlockHistoryTimer;
   let gapLayer, gapTimeline = window.BTC_SPOT_GAP_TIMELINE, gapModel;
   let closedDataVersion = 0;
   let intrusionLayer, intrusionHistory = window.BTC_SPOT_INTRUSION_HISTORY, intrusionModel, intrusionInputs, intrusionPending;
@@ -55,6 +57,38 @@
   const gapLead = () => Number(byId('spotChartGapLead').value);
   const projectionLead = () => Math.max(gapLead(), (manualLayer?.rightLead(candles.length) || gapLead()) - viewport.RIGHT_BUFFER + 2);
   const chartCanvas = byId('spotChartCanvas');
+  for (const id of ['spotChartOrderBlockControls', 'spotChartOrderBlockStatus', 'spotChartOrderBlockCredit']) byId(id).hidden = eth;
+
+  function updateOrderBlocks() {
+    if (eth || !orderBlockLayer) return;
+    const status = byId('spotChartOrderBlockStatus');
+    try {
+      orderBlockModel = orderBlocks.buildOrderBlocks(candles, {
+        length: Number(byId('spotChartObLength').value), mitigation: byId('spotChartObMitigation').value
+      });
+      orderBlockLayer.setData(orderBlockModel, candles);
+      const intact = orderBlockModel.blocks.filter(block => block.state === 'intact').length;
+      const broken = orderBlockModel.blocks.filter(block => block.state === 'broken').length;
+      status.textContent = `OB: ${intact} intact / ${broken} broken | ${orderBlockModel.candleCount.toLocaleString('en-US')}h${orderBlockModel.gaps ? ` | ${orderBlockModel.gaps} coverage gaps` : ''}`;
+      status.dataset.stale = String(Boolean(orderBlockModel.gaps));
+    } catch (error) {
+      orderBlockModel = undefined; orderBlockLayer.setData({ blocks: [] }, candles);
+      status.textContent = `Order blocks unavailable: ${error.message}`; status.dataset.stale = 'true';
+    }
+    scheduleOrderBlockHistory();
+  }
+
+  function scheduleOrderBlockHistory() {
+    if (eth || orderBlockHistoryTimer || !active || destroyed || !initialData || !hasMore ||
+      candles.length >= 12000 || !byId('spotChartOrderBlocks').checked) return;
+    // Reuse the chart's bounded pages and shared Binance limiter; never burst-load history.
+    orderBlockHistoryTimer = setTimeout(async () => {
+      orderBlockHistoryTimer = undefined;
+      if (!active || destroyed || !byId('spotChartOrderBlocks').checked) return;
+      await loadOlder();
+      scheduleOrderBlockHistory();
+    }, Math.max(2500, olderRetryAt - Date.now()));
+  }
 
   function ensureProjectionRoom() {
     if (!chart || !candles.length || userPanned || gestureActive) return;
@@ -319,6 +353,7 @@
       manualLayer?.setCandles(candles);
       hourlyBoxModel = hourlyBoxes.buildHourlyFractalBoxes(candles);
       hourlyBoxLayer.setData(hourlyBoxModel.boxes, candles);
+      updateOrderBlocks();
       updateGapProjection();
       updateIntrusionDailyBreakouts();
     }
@@ -375,6 +410,11 @@
       hourlyBoxLayer = new hourlyBoxes.HourlyFractalBoxPrimitive();
       hourlyBoxLayer.setVisible(byId('spotChartHourlyBoxes').checked);
       candlesSeries.attachPrimitive(hourlyBoxLayer);
+      if (!eth) {
+        orderBlockLayer = new orderBlocks.OrderBlockPrimitive();
+        orderBlockLayer.setVisible(byId('spotChartOrderBlocks').checked);
+        candlesSeries.attachPrimitive(orderBlockLayer);
+      }
       // Draw Weekly last so orange remains visible when both mark the same candle.
       for (const state of [...breakoutStates].reverse()) {
         state.layer = new gapWeeklyBreaks[`Gap${state.name}BreakoutPrimitive`]();
@@ -432,6 +472,7 @@
         getFractalProjections: () => fractalModel ? { ...fractalModel, levels: fractalModel.levels.map((level) => ({ ...level })) } : null,
         getHourlyFractalBoxes: () => hourlyBoxModel ? { evaluatedThrough: hourlyBoxModel.evaluatedThrough,
           boxes: hourlyBoxModel.boxes.map((box) => ({ ...box })), fractals: hourlyBoxModel.fractals.map((fractal) => ({ ...fractal })) } : null,
+        getOrderBlocks: () => orderBlockModel ? { ...orderBlockModel, blocks: orderBlockModel.blocks.map(block => ({ ...block })) } : null,
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
@@ -442,6 +483,7 @@
       });
       watchdog = setInterval(() => {
         if (!active) return;
+        scheduleOrderBlockHistory();
         feedText();
         updateGapProjection();
         void refreshFractals();
@@ -552,13 +594,14 @@
   }
   async function syncActivity() {
     active = inView && !document.hidden && navigator.onLine;
-    if (!active) { gestures?.cancel(); disconnect(); feedText(); return; }
+    if (!active) { clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return; }
     try {
       await ensureChart();
       if (!active || destroyed) return;
       openStream();
       if (!initialData || Date.now() - lastRestAt > 30_000) void loadRecent();
       feedText();
+      scheduleOrderBlockHistory();
     } catch { /* The panel displays the library load error. */ }
   }
 
@@ -578,6 +621,17 @@
     chart?.priceScale('right').applyOptions({ autoScale: true });
   });
   byId('spotChartHourlyBoxes').addEventListener('change', (event) => hourlyBoxLayer?.setVisible(event.target.checked));
+  byId('spotChartOrderBlocks').addEventListener('change', event => {
+    orderBlockLayer?.setVisible(event.target.checked);
+    if (event.target.checked) scheduleOrderBlockHistory();
+    else { clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; }
+  });
+  byId('spotChartObLength').addEventListener('change', event => {
+    const length = Number(event.target.value);
+    if (!Number.isInteger(length) || length < 1 || length > 100) event.target.value = String(orderBlockModel?.length || 5);
+    updateOrderBlocks();
+  });
+  byId('spotChartObMitigation').addEventListener('change', updateOrderBlocks);
   for (const state of breakoutStates) {
     byId(`spotChartGap${state.name}Breaks`).addEventListener('change', (event) => state.layer?.setVisible(event.target.checked));
   }
@@ -649,6 +703,6 @@
   observer.observe(panel);
   window.addEventListener('pagehide', () => {
     destroyed = true;
-    observer.disconnect(); disconnect(); clearInterval(watchdog); gestures?.destroy(); manualLayer?.destroy(); chart?.remove();
+    observer.disconnect(); disconnect(); clearInterval(watchdog); clearTimeout(orderBlockHistoryTimer); gestures?.destroy(); manualLayer?.destroy(); chart?.remove();
   }, { once: true });
 })();
