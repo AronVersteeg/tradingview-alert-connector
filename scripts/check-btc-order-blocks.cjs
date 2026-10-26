@@ -51,6 +51,15 @@ const pixel = (buffer, point) => {
           return route.fulfill({ json: { symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThrough: iso(Math.floor(now / HOUR) * HOUR),
             daily: snapshot('1d'), weekly: snapshot('1w'), monthly: snapshot('1M') } });
         }
+        if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') {
+          const rows = candles(now).filter(c => c.closed);
+          return route.fulfill({ json: { modelVersion: 'binance-spot-liquidation-cohorts-v2.4',
+            source: { market: 'BTC-USD', sourceStatuses: [{ name: 'Binance Spot BTCUSDT 1H' }] },
+            range: { minPrice: 78000, maxPrice: 85000 }, events: [],
+            frames: rows.map((c, i) => ({ i, startedAtMs: c.time * 1000, t: iso(c.time * 1000).slice(0, 19).replace('T', ' '), price: c.close })),
+            gaps: rows.map(() => ({ left: 78500, right: 84500, width: 6000,
+              leftEdge: { leverage: 10, relativeCount: 1 }, rightEdge: { leverage: 10, relativeCount: 1 } })) } });
+        }
         if (target.pathname === '/decentrader/manual-override') return route.fulfill({ json: { enabled: true, market: 'BTC-USD', overrides: [] } });
         return route.fulfill({ status: 503, json: { error: 'Unrelated source isolated in read-only fixture' } });
       });
@@ -82,6 +91,35 @@ const pixel = (buffer, point) => {
       assert(brokenDelta > 5 && brokenDelta < activeDelta * .7 && brokenDelta > activeDelta * .3,
         `Broken fill should be about half strength: ${brokenDelta}/${activeDelta}`);
       await page.locator('#spotChartOrderBlocks').check();
+      await page.locator('#spotChartGap').check(); await frames(page);
+      await page.waitForFunction(() => window.btcSpotChart.getOrderBlockLabels().length === 1);
+      const label = await page.evaluate(() => {
+        const api = window.btcSpotChart, label = api.getOrderBlockLabels()[0];
+        const edge = api.chart.timeScale().logicalToCoordinate(api.getCandles().length - 1 + Number(document.getElementById('spotChartGapLead').value));
+        return { ...label, edge, paneWidth: api.chart.timeScale().width() };
+      });
+      assert.equal(label.bottom, 80000); assert.equal(label.top, 80500); assert.equal(label.x, label.edge + 10);
+      assert(label.x + label.width <= label.paneWidth - 3, 'Full price label must fit in the right column');
+      const labeled = await canvas.screenshot();
+      let labelPixels = 0; const png = PNG.sync.read(labeled);
+      for (let y = Math.floor(label.y); y < Math.ceil(label.y + label.height); y++) {
+        for (let x = Math.floor(label.x); x < Math.ceil(label.x + label.width); x++) {
+          const i = (y * png.width + x) * 4;
+          if (png.data[i] > 65 && png.data[i + 1] > 90 && png.data[i + 2] > 60) labelPixels++;
+        }
+      }
+      assert(labelPixels > 10, 'Price text must actually render on the canvas');
+      await page.screenshot({ path: path.join(output, mobile ? 'order-block-labels-mobile.png' : 'order-block-labels-desktop.png') });
+      await page.locator('#spotChartGapLead').fill('20'); await page.locator('#spotChartGapLead').press('Tab'); await frames(page);
+      const shifted = await page.evaluate(() => {
+        const api = window.btcSpotChart;
+        return { label: api.getOrderBlockLabels()[0], edge: api.chart.timeScale().logicalToCoordinate(api.getCandles().length - 1 + 20) };
+      });
+      assert.equal(shifted.label.x, shifted.edge + 10);
+      await page.locator('#spotChartGap').uncheck(); await frames(page);
+      assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getOrderBlockLabels()), []);
+      await page.locator('#spotChartGapLead').fill('10'); await page.locator('#spotChartGapLead').press('Tab');
+      await page.locator('#spotChartGap').check();
       await page.locator('#spotChartObMitigation').selectOption('Close');
       assert.equal((await page.evaluate(() => window.btcSpotChart.getOrderBlocks())).mitigation, 'Close');
       await page.locator('#spotChartObLength').fill('3'); await page.locator('#spotChartObLength').press('Tab');
@@ -93,11 +131,12 @@ const pixel = (buffer, point) => {
       await page.waitForFunction(() => window.btcSpotChart.getOrderBlocks().blocks.every(b => b.state === 'broken'));
       const latest = await page.evaluate(() => window.btcSpotChart.getOrderBlocks());
       assert.equal(latest.blocks.at(-1).brokenAt, (start + 151 * HOUR) / 1000);
+      await frames(page); assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getOrderBlockLabels()), []);
       const overflow = await page.locator('#btcSpotChartPanel').evaluate(node => node.scrollWidth > node.clientWidth + 1);
       assert.equal(overflow, false, 'Chart panel must fit on mobile and desktop');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
       results.push({ mobile, blocks: model.blocks.length, olderReads, activeDelta, brokenDelta, toggle: true,
-        controls: true, closedHourRefresh: true, overflow, writes });
+        controls: true, clusterLabel: true, labelPixels, gapLeadAlignment: true, closedHourRefresh: true, overflow, writes });
       await context.close();
     }
   } finally { await browser.close(); }

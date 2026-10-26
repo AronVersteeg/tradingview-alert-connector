@@ -412,6 +412,7 @@
       candlesSeries.attachPrimitive(hourlyBoxLayer);
       if (!eth) {
         orderBlockLayer = new orderBlocks.OrderBlockPrimitive();
+        orderBlockLayer.setLabelAnchor(() => gapLayer?.rightEdgeCoordinate() ?? null);
         orderBlockLayer.setVisible(byId('spotChartOrderBlocks').checked);
         candlesSeries.attachPrimitive(orderBlockLayer);
       }
@@ -473,6 +474,8 @@
         getHourlyFractalBoxes: () => hourlyBoxModel ? { evaluatedThrough: hourlyBoxModel.evaluatedThrough,
           boxes: hourlyBoxModel.boxes.map((box) => ({ ...box })), fractals: hourlyBoxModel.fractals.map((fractal) => ({ ...fractal })) } : null,
         getOrderBlocks: () => orderBlockModel ? { ...orderBlockModel, blocks: orderBlockModel.blocks.map(block => ({ ...block })) } : null,
+        getOrderBlockClusters: () => orderBlockLayer?.getClusters() || [],
+        getOrderBlockLabels: () => orderBlockLayer?.getLabels() || [],
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),

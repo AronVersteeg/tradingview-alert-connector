@@ -1,4 +1,4 @@
-const { buildOrderBlocks, OrderBlockPrimitive } = require('../public/btc-spot-chart/order-blocks.js');
+const { buildOrderBlocks, clusterActiveBlocks, placeClusterLabels, OrderBlockPrimitive } = require('../public/btc-spot-chart/order-blocks.js');
 const HOUR = 3600, start = Date.parse('2026-10-01T00:00:00Z') / 1000;
 const bar = (i: number, changes: any = {}) => ({ time: start + i * HOUR, open: 100, high: 115, low: 95,
   close: 100, volume: 1, closed: true, ...changes });
@@ -87,5 +87,51 @@ describe('LuxAlgo volume-pivot order block reconstruction', () => {
     expect(strokes.map(row => row.alpha)).toEqual([.3, .15]);
     expect(fills[1].args[0] + fills[1].args[2]).toBe(40);
     primitive.setVisible(false); primitive.draw(target); expect(fills).toHaveLength(2);
+  });
+});
+
+describe('active order block cluster labels', () => {
+  const block = (id: string, bottom: number, top: number, direction = 'bullish', state = 'intact') => ({ id, bottom, top, direction, state });
+  test('merges nested, touching and transitively overlapping ranges without including broken or unknown blocks', () => {
+    const input = [block('c', 108, 120, 'bearish'), block('b', 104, 110), block('a', 100, 105),
+      block('nested', 101, 102), block('touch', 120, 125), block('separate', 140, 150),
+      block('broken', 1, 200, 'bearish', 'broken'), block('unknown', 1, 200, 'bullish', 'coverage-gap')];
+    const before = JSON.stringify(input), clusters = clusterActiveBlocks(input);
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0]).toMatchObject({ bottom: 100, top: 125, count: 5, direction: 'mixed' });
+    expect(clusters[1]).toMatchObject({ bottom: 140, top: 150, count: 1, direction: 'bullish' });
+    expect(JSON.stringify(input)).toBe(before);
+    expect(clusterActiveBlocks(input.slice().reverse())).toEqual(clusters);
+  });
+  test('keeps visible labels inside the pane, with no vertical collisions, even when prices are very close', () => {
+    const items = Array.from({ length: 20 }, (_, i) => ({ id: i, anchorY: 45 + i * .01, count: i + 1, height: 24 }));
+    const labels = placeClusterLabels(items, 120);
+    expect(labels.length).toBeGreaterThan(0); expect(labels.length).toBeLessThan(items.length);
+    labels.forEach((label: any, i: number) => {
+      expect(label.y).toBeGreaterThanOrEqual(4); expect(label.y + label.height).toBeLessThanOrEqual(116);
+      if (i) expect(label.y).toBeGreaterThanOrEqual(labels[i - 1].y + labels[i - 1].height + 3);
+    });
+    expect(items[0]).not.toHaveProperty('y');
+  });
+  test('renders only active cluster ranges right of the gap anchor, wraps in a narrow column and respects visibility', () => {
+    const primitive = new OrderBlockPrimitive(), texts: any[] = [];
+    const ctx: any = { save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, setLineDash() {},
+      fillRect() {}, moveTo() {}, lineTo() {}, stroke() {}, measureText: (value: string) => ({ width: value.length * 5 }),
+      fillText(text: string, x: number, y: number) { texts.push({ text, x, y }); } };
+    let anchor: any = 120;
+    primitive.attached({ chart: {}, series: { priceToCoordinate: (price: number) => 300 - price }, requestUpdate: jest.fn() });
+    primitive.setLabelAnchor(() => anchor);
+    primitive.setData({ blocks: [block('a', 100000.005, 100100), block('b', 100050, 100200),
+      block('old', 1, 200000, 'bearish', 'broken')] }, []);
+    primitive.series.priceToCoordinate = (price: number) => 50 + (100200 - price) / 10;
+    const draw = () => primitive.drawLabels({ useMediaCoordinateSpace: (fn: any) => fn({ context: ctx, mediaSize: { width: 200, height: 120 } }) });
+    draw();
+    expect(primitive.getLabels()).toHaveLength(1);
+    expect(primitive.getLabels()[0]).toMatchObject({ x: 130, bottom: 100000.005, top: 100200, lines: ['100,200', '100,000.005'] });
+    expect(texts.every(text => text.x === 130)).toBe(true);
+    const copy = primitive.getClusters(); copy[0].blockIds.push('external');
+    expect(primitive.getClusters()[0].blockIds).not.toContain('external');
+    anchor = null; draw(); expect(primitive.getLabels()).toEqual([]);
+    anchor = 120; primitive.setVisible(false); draw(); expect(primitive.getLabels()).toEqual([]);
   });
 });

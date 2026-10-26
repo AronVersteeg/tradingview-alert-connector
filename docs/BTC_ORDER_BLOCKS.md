@@ -61,6 +61,24 @@ The first 2 x pivot-length candles of each contiguous segment are warmup.
 `window.btcSpotChart.getOrderBlocks()` exposes defensive copies, coverage,
 origin/confirmation/break times and settings for read-only inspection.
 
+## Active Cluster Labels
+
+Only intact blocks contribute to price-range labels. Overlapping or touching
+price intervals form one cluster, including nested blocks and transitive chains.
+Each label shows the complete cluster range (lowest bottom to highest top), not
+the narrower intersection or the midpoint. Bullish/bearish colors are muted;
+mixed-direction clusters use neutral text. Broken and coverage-gap blocks never
+widen the range or receive a label.
+
+Labels sit 10 pixels to the right of the current green gapbox edge, using the
+same exact coordinate as that box, including its adjustable candle lead and
+stale-history endpoint. They track pan, zoom, refresh and new closed hours. They
+hide with the orderblock checkbox or when the gapbox is hidden/offscreen/absent.
+Narrow columns use two lines; vertical packing prevents text collisions, and
+labels without sufficient room are omitted rather than clipped across the axis.
+Prices retain fractional-cent midpoint precision, with up to eight decimals.
+`getOrderBlockClusters()` and `getOrderBlockLabels()` expose read-only snapshots.
+
 ## Verification
 
 - `test/btcOrderBlocks.test.ts`: coordinates, confirmation, volume ties, price

@@ -6,6 +6,42 @@
   'use strict';
   const HOUR = 3600;
   const COLORS = { bullish: '#169400', bearish: '#ff1100' };
+  const LABEL_COLORS = { bullish: '#91a98e', bearish: '#b99a95', mixed: '#a2a9b6' };
+  const priceText = new Intl.NumberFormat('en-US', { maximumFractionDigits: 8 });
+
+  function clusterActiveBlocks(blocks) {
+    const active = blocks.filter(block => block.state === 'intact' && Number.isFinite(block.bottom) &&
+      Number.isFinite(block.top) && block.bottom > 0 && block.top >= block.bottom)
+      .slice().sort((a, b) => a.bottom - b.bottom || a.top - b.top || a.id.localeCompare(b.id));
+    const clusters = [];
+    for (const block of active) {
+      let cluster = clusters.at(-1);
+      if (!cluster || block.bottom > cluster.top) {
+        cluster = { bottom: block.bottom, top: block.top, direction: block.direction, blockIds: [] };
+        clusters.push(cluster);
+      }
+      cluster.top = Math.max(cluster.top, block.top);
+      if (cluster.direction !== block.direction) cluster.direction = 'mixed';
+      cluster.blockIds.push(block.id);
+    }
+    return clusters.map(cluster => ({ ...cluster, count: cluster.blockIds.length, id: cluster.blockIds.join(',') }));
+  }
+
+  function placeClusterLabels(items, height) {
+    let used = 0;
+    const selected = items.slice().sort((a, b) => b.count - a.count ||
+      Math.abs(a.anchorY - height / 2) - Math.abs(b.anchorY - height / 2)).filter(item => {
+      if (used + item.height + 3 > height - 8) return false;
+      used += item.height + 3; return true;
+    }).map(item => ({ ...item })).sort((a, b) => a.anchorY - b.anchorY);
+    let bottom = 4;
+    for (const item of selected) { item.y = Math.max(bottom, item.anchorY - item.height / 2); bottom = item.y + item.height + 3; }
+    bottom = height - 4;
+    for (let i = selected.length - 1; i >= 0; i--) {
+      const item = selected[i]; item.y = Math.min(item.y, bottom - item.height); bottom = item.y - 3;
+    }
+    return selected;
+  }
 
   function buildOrderBlocks(input, options = {}, nowMs = Date.now()) {
     const length = options.length ?? 5, mitigation = options.mitigation ?? 'Wick';
@@ -64,16 +100,20 @@
 
   class OrderBlockPrimitive {
     constructor() {
-      this.blocks = []; this.indices = new Map(); this.visible = true;
+      this.blocks = []; this.clusters = []; this.labels = []; this.indices = new Map(); this.visible = true;
       this.view = { zOrder: () => 'bottom', renderer: () => ({ draw: target => this.draw(target) }) };
+      this.labelView = { zOrder: () => 'top', renderer: () => ({ draw: target => this.drawLabels(target) }) };
     }
     attached({ chart, series, requestUpdate }) { this.chart = chart; this.series = series; this.requestUpdate = requestUpdate; }
     detached() { this.chart = this.series = this.requestUpdate = undefined; }
-    paneViews() { return [this.view]; }
+    paneViews() { return [this.view, this.labelView]; }
     updateAllViews() {}
-    setVisible(visible) { this.visible = Boolean(visible); this.requestUpdate?.(); }
+    setVisible(visible) { this.visible = Boolean(visible); this.labels = []; this.requestUpdate?.(); }
+    setLabelAnchor(read) { this.labelAnchor = read; this.requestUpdate?.(); }
+    getClusters() { return this.clusters.map(cluster => ({ ...cluster, blockIds: [...cluster.blockIds] })); }
+    getLabels() { return this.labels.map(label => ({ ...label, lines: [...label.lines] })); }
     setData(model, candles) {
-      this.blocks = model.blocks; this.indices = new Map();
+      this.blocks = model.blocks; this.clusters = clusterActiveBlocks(this.blocks); this.labels = []; this.indices = new Map();
       candles.forEach((c, i) => { this.indices.set(c.time, i); this.indices.set(c.time + HOUR, i + 1); });
       this.requestUpdate?.();
     }
@@ -106,8 +146,45 @@
         ctx.restore();
       });
     }
+    drawLabels(target) {
+      this.labels = [];
+      if (!this.visible || !this.chart || !this.series) return;
+      const anchor = this.labelAnchor?.();
+      if (!Number.isFinite(anchor) || anchor < 0) return;
+      target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width, height } }) => {
+        const x = anchor + 10, available = width - x - 4;
+        if (available < 30) return;
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();
+        const items = [];
+        for (const cluster of this.clusters) {
+          const a = this.series.priceToCoordinate(cluster.top), b = this.series.priceToCoordinate(cluster.bottom);
+          if (!Number.isFinite(a) || !Number.isFinite(b) || Math.max(a, b) < 4 || Math.min(a, b) > height - 4) continue;
+          const low = priceText.format(cluster.bottom), high = priceText.format(cluster.top);
+          let fontSize = 10, lines = [`${low} - ${high}`];
+          ctx.font = `${fontSize}px Arial`;
+          if (ctx.measureText(lines[0]).width > available) lines = [high, low];
+          const longest = Math.max(...lines.map(line => ctx.measureText(line).width));
+          fontSize = Math.min(fontSize, Math.floor(10 * available / Math.max(1, longest)));
+          if (fontSize < 8) continue;
+          ctx.font = `${fontSize}px Arial`;
+          items.push({ id: cluster.id, count: cluster.count, direction: cluster.direction, bottom: cluster.bottom, top: cluster.top,
+            x, lines, fontSize, width: Math.max(...lines.map(line => ctx.measureText(line).width)),
+            height: lines.length * (fontSize + 2), anchorY: Math.max(4, Math.min(height - 4, (a + b) / 2)) });
+        }
+        this.labels = placeClusterLabels(items, height);
+        for (const label of this.labels) {
+          const color = LABEL_COLORS[label.direction] || LABEL_COLORS.mixed;
+          ctx.globalAlpha = .9; ctx.fillStyle = '#131722'; ctx.fillRect(label.x - 2, label.y - 1, label.width + 4, label.height + 2);
+          ctx.globalAlpha = .55; ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash([]);
+          ctx.beginPath(); ctx.moveTo(anchor + 3, label.anchorY); ctx.lineTo(label.x - 3, label.y + label.height / 2); ctx.stroke();
+          ctx.globalAlpha = .9; ctx.fillStyle = color; ctx.font = `${label.fontSize}px Arial`; ctx.textBaseline = 'top';
+          label.lines.forEach((line, i) => ctx.fillText(line, label.x, label.y + i * (label.fontSize + 2)));
+        }
+        ctx.restore();
+      });
+    }
   }
-  const api = Object.freeze({ buildOrderBlocks, OrderBlockPrimitive });
+  const api = Object.freeze({ buildOrderBlocks, clusterActiveBlocks, placeClusterLabels, OrderBlockPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcSpotOrderBlocks = api;
 })(typeof globalThis === 'object' ? globalThis : this);

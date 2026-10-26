@@ -125,6 +125,13 @@
       if (Number.isInteger(options.lead) && options.lead >= 1 && options.lead <= 72) this.lead = options.lead;
       this.requestUpdate?.();
     }
+    rightEdgeCoordinate() {
+      const box = this.model?.boxes.find(item => item.openEnded);
+      if (!this.visible || !box || !this.chart || this.firstTime === undefined) return null;
+      const stale = this.model.evaluatedThrough < Math.floor(Date.now() / (HOUR * 1000)) * HOUR;
+      const index = stale ? this.indices.get(box.toTime) : this.lastIndex + this.lead;
+      return index === undefined ? null : this.chart.timeScale().logicalToCoordinate(index);
+    }
     draw(target) {
       if (!this.visible || !this.model || !this.chart || !this.series || this.firstTime === undefined) return;
       const stale = this.model.evaluatedThrough < Math.floor(Date.now() / (HOUR * 1000)) * HOUR;
@@ -135,8 +142,7 @@
           const clippedStart = box.fromTime < this.firstTime;
           const from = this.indices.get(box.fromTime), to = this.indices.get(box.toTime);
           const left = clippedStart ? 0 : from === undefined ? null : this.chart.timeScale().logicalToCoordinate(from);
-          const right = box.openEnded && !stale ? this.chart.timeScale().logicalToCoordinate(this.lastIndex + this.lead)
-            : to === undefined ? null : this.chart.timeScale().logicalToCoordinate(to);
+          const right = box.openEnded ? this.rightEdgeCoordinate() : to === undefined ? null : this.chart.timeScale().logicalToCoordinate(to);
           const a = this.series.priceToCoordinate(box.upper), b = this.series.priceToCoordinate(box.lower);
           if (left === null || right === null || a === null || b === null || right < 0 || left > width) continue;
           ctx.setLineDash(box.openEnded && stale ? [5, 4] : []);
