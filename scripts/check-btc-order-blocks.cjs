@@ -99,6 +99,8 @@ const pixel = (buffer, point) => {
         return { ...label, edge, paneWidth: api.chart.timeScale().width() };
       });
       assert.equal(label.bottom, 80000); assert.equal(label.top, 80500); assert.equal(label.x, label.edge + 10);
+      assert.equal(label.pivotVolumeBtc, 1200); assert.equal(label.volumeRank, 1);
+      assert(label.lines.join(' ').includes('PV ~1.2K BTC #1'), 'Volume and relative rank must appear alongside the price range');
       assert(label.x + label.width <= label.paneWidth - 3, 'Full price label must fit in the right column');
       const labeled = await canvas.screenshot();
       let labelPixels = 0; const png = PNG.sync.read(labeled);
@@ -136,7 +138,8 @@ const pixel = (buffer, point) => {
       assert.equal(overflow, false, 'Chart panel must fit on mobile and desktop');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
       results.push({ mobile, blocks: model.blocks.length, olderReads, activeDelta, brokenDelta, toggle: true,
-        controls: true, clusterLabel: true, labelPixels, gapLeadAlignment: true, closedHourRefresh: true, overflow, writes });
+        controls: true, clusterLabel: true, labelPixels, pivotVolumeBtc: label.pivotVolumeBtc,
+        volumeRank: label.volumeRank, gapLeadAlignment: true, closedHourRefresh: true, overflow, writes });
       await context.close();
     }
   } finally { await browser.close(); }

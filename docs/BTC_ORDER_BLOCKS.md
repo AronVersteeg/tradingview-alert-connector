@@ -79,6 +79,27 @@ labels without sufficient room are omitted rather than clipped across the axis.
 Prices retain fractional-cent midpoint precision, with up to eight decimals.
 `getOrderBlockClusters()` and `getOrderBlockLabels()` expose read-only snapshots.
 
+### Cluster Volume
+
+Labels also show `PV ~1.2K BTC #1`: approximate compact **pivot-candle volume**
+and the rank among all active clusters in the loaded history (#1 is largest).
+The cluster's price position is unchanged. Equal volumes share a rank; ranks
+recompute when blocks appear, break or older candles are loaded. Labels with
+larger PV take priority if the pane cannot fit every label without collisions.
+
+`pivotVolumeBtc` sums actual Binance Spot base volumes from unique block-origin
+1H candles. A candle appearing twice inside a cluster is counted once. Broken
+or unknown blocks do not contribute. Missing, negative or contradictory volume
+produces `PV n/a`, not zero. API snapshots retain the unabridged numeric total,
+`volumeRank`, `volumeSharePct`, `volumeCandleCount` and the explicit source
+`origin-candle-base-volume`.
+
+PV is a contextual proxy for relative historical traded activity. It is **not**
+volume traded specifically inside the block's price band, cumulative volume
+since block creation, current order-book depth, unfilled institutional orders,
+or a proven measure of support/resistance strength. No allocation of the whole
+candle's volume to individual price levels is assumed.
+
 ## Verification
 
 - `test/btcOrderBlocks.test.ts`: coordinates, confirmation, volume ties, price

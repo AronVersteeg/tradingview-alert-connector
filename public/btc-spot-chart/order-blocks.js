@@ -8,6 +8,7 @@
   const COLORS = { bullish: '#169400', bearish: '#ff1100' };
   const LABEL_COLORS = { bullish: '#91a98e', bearish: '#b99a95', mixed: '#a2a9b6' };
   const priceText = new Intl.NumberFormat('en-US', { maximumFractionDigits: 8 });
+  const volumeText = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
 
   function clusterActiveBlocks(blocks) {
     const active = blocks.filter(block => block.state === 'intact' && Number.isFinite(block.bottom) &&
@@ -17,19 +18,33 @@
     for (const block of active) {
       let cluster = clusters.at(-1);
       if (!cluster || block.bottom > cluster.top) {
-        cluster = { bottom: block.bottom, top: block.top, direction: block.direction, blockIds: [] };
+        cluster = { bottom: block.bottom, top: block.top, direction: block.direction, blockIds: [], pivotVolumes: new Map(), volumeComplete: true };
         clusters.push(cluster);
       }
       cluster.top = Math.max(cluster.top, block.top);
       if (cluster.direction !== block.direction) cluster.direction = 'mixed';
       cluster.blockIds.push(block.id);
+      // These are whole origin-candle volumes, not volume measured inside the zone.
+      if (!Number.isSafeInteger(block.originTime) || !Number.isFinite(block.volume) || block.volume < 0) cluster.volumeComplete = false;
+      else if (cluster.pivotVolumes.has(block.originTime) && cluster.pivotVolumes.get(block.originTime) !== block.volume) cluster.volumeComplete = false;
+      else cluster.pivotVolumes.set(block.originTime, block.volume);
     }
-    return clusters.map(cluster => ({ ...cluster, count: cluster.blockIds.length, id: cluster.blockIds.join(',') }));
+    const result = clusters.map(({ pivotVolumes, ...cluster }) => ({ ...cluster, count: cluster.blockIds.length,
+      id: cluster.blockIds.join(','), volumeCandleCount: pivotVolumes.size,
+      pivotVolumeBtc: cluster.volumeComplete ? [...pivotVolumes.values()].reduce((sum, volume) => sum + volume, 0) : null,
+      volumeRank: null, volumeSharePct: null, volumeSource: 'origin-candle-base-volume' }));
+    const ranked = result.filter(cluster => cluster.volumeComplete).slice().sort((a, b) => b.pivotVolumeBtc - a.pivotVolumeBtc || a.bottom - b.bottom);
+    const total = ranked.reduce((sum, cluster) => sum + cluster.pivotVolumeBtc, 0);
+    ranked.forEach((cluster, i) => {
+      cluster.volumeRank = i && cluster.pivotVolumeBtc === ranked[i - 1].pivotVolumeBtc ? ranked[i - 1].volumeRank : i + 1;
+      cluster.volumeSharePct = total > 0 ? cluster.pivotVolumeBtc / total * 100 : 0;
+    });
+    return result;
   }
 
   function placeClusterLabels(items, height) {
     let used = 0;
-    const selected = items.slice().sort((a, b) => b.count - a.count ||
+    const selected = items.slice().sort((a, b) => (b.pivotVolumeBtc ?? -1) - (a.pivotVolumeBtc ?? -1) || b.count - a.count ||
       Math.abs(a.anchorY - height / 2) - Math.abs(b.anchorY - height / 2)).filter(item => {
       if (used + item.height + 3 > height - 8) return false;
       used += item.height + 3; return true;
@@ -160,14 +175,24 @@
           const a = this.series.priceToCoordinate(cluster.top), b = this.series.priceToCoordinate(cluster.bottom);
           if (!Number.isFinite(a) || !Number.isFinite(b) || Math.max(a, b) < 4 || Math.min(a, b) > height - 4) continue;
           const low = priceText.format(cluster.bottom), high = priceText.format(cluster.top);
-          let fontSize = 10, lines = [`${low} - ${high}`];
+          const volume = cluster.volumeComplete ? `PV ~${volumeText.format(cluster.pivotVolumeBtc)} BTC #${cluster.volumeRank}` : 'PV n/a';
+          let fontSize = 10, lines = [`${low} - ${high} | ${volume}`];
           ctx.font = `${fontSize}px Arial`;
-          if (ctx.measureText(lines[0]).width > available) lines = [high, low];
+          if (ctx.measureText(lines[0]).width > available) {
+            lines = ctx.measureText(`${low} - ${high}`).width <= available ? [`${low} - ${high}`] : [high, low];
+            let line = '';
+            for (const word of volume.split(' ')) {
+              if (line && ctx.measureText(`${line} ${word}`).width > available) { lines.push(line); line = word; }
+              else line = line ? `${line} ${word}` : word;
+            }
+            if (line) lines.push(line);
+          }
           const longest = Math.max(...lines.map(line => ctx.measureText(line).width));
           fontSize = Math.min(fontSize, Math.floor(10 * available / Math.max(1, longest)));
           if (fontSize < 8) continue;
           ctx.font = `${fontSize}px Arial`;
           items.push({ id: cluster.id, count: cluster.count, direction: cluster.direction, bottom: cluster.bottom, top: cluster.top,
+            pivotVolumeBtc: cluster.pivotVolumeBtc, volumeComplete: cluster.volumeComplete, volumeRank: cluster.volumeRank,
             x, lines, fontSize, width: Math.max(...lines.map(line => ctx.measureText(line).width)),
             height: lines.length * (fontSize + 2), anchorY: Math.max(4, Math.min(height - 4, (a + b) / 2)) });
         }

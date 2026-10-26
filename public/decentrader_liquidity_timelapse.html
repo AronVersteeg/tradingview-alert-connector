@@ -1534,7 +1534,7 @@
         <div class="spot-chart-actions">
           <label class="spot-chart-toggle" title="Confirmed 1H Williams fractal ranges"><input type="checkbox" id="spotChartHourlyBoxes" checked><i class="spot-fractal-swatch hourly-boxes"></i>1H boxes</label>
           <span id="spotChartOrderBlockControls" class="spot-order-block-controls">
-            <label class="spot-chart-toggle" title="LuxAlgo volume-pivot order blocks; broken blocks retained at half strength"><input type="checkbox" id="spotChartOrderBlocks" checked><i class="spot-fractal-swatch order-blocks"></i>Order blocks</label>
+            <label class="spot-chart-toggle" title="LuxAlgo order blocks. PV = summed unique origin-candle Spot volume in BTC, not volume inside the price zone or resting orders. #1 = largest active cluster by PV."><input type="checkbox" id="spotChartOrderBlocks" checked><i class="spot-fractal-swatch order-blocks"></i>Order blocks</label>
             <label class="spot-ob-pivot" title="Volume pivot confirmation length">Pivot <input type="number" id="spotChartObLength" value="5" min="1" max="100" step="1" aria-label="Order block volume pivot length"></label>
             <select class="spot-chart-select" id="spotChartObMitigation" aria-label="Order block mitigation method"><option value="Wick">Wick</option><option value="Close">Close</option></select>
           </span>

@@ -127,11 +127,33 @@ describe('active order block cluster labels', () => {
     const draw = () => primitive.drawLabels({ useMediaCoordinateSpace: (fn: any) => fn({ context: ctx, mediaSize: { width: 200, height: 120 } }) });
     draw();
     expect(primitive.getLabels()).toHaveLength(1);
-    expect(primitive.getLabels()[0]).toMatchObject({ x: 130, bottom: 100000.005, top: 100200, lines: ['100,200', '100,000.005'] });
+    expect(primitive.getLabels()[0]).toMatchObject({ x: 130, bottom: 100000.005, top: 100200, lines: ['100,200', '100,000.005', 'PV n/a'] });
     expect(texts.every(text => text.x === 130)).toBe(true);
     const copy = primitive.getClusters(); copy[0].blockIds.push('external');
     expect(primitive.getClusters()[0].blockIds).not.toContain('external');
     anchor = null; draw(); expect(primitive.getLabels()).toEqual([]);
     anchor = 120; primitive.setVisible(false); draw(); expect(primitive.getLabels()).toEqual([]);
+  });
+  test('sums unique origin-candle BTC volume and ranks active clusters by it, independently from their price order', () => {
+    const origin = (id: string, bottom: number, top: number, volume: number, hour: number, state = 'intact') => ({
+      ...block(id, bottom, top, 'bullish', state), originTime: start + hour * HOUR, volume
+    });
+    const clusters = clusterActiveBlocks([origin('a', 100, 110, 200, 1), origin('a-copy', 100, 110, 200, 1),
+      origin('b', 105, 115, 300, 2), origin('large', 150, 160, 1500, 3), origin('broken', 100, 110, 9000, 4, 'broken')]);
+    expect(clusters[0]).toMatchObject({ bottom: 100, top: 115, pivotVolumeBtc: 500, volumeCandleCount: 2, volumeRank: 2, volumeSharePct: 25 });
+    expect(clusters[1]).toMatchObject({ bottom: 150, top: 160, pivotVolumeBtc: 1500, volumeRank: 1, volumeSharePct: 75 });
+    expect(clusters[0].volumeSource).toBe('origin-candle-base-volume');
+    const remaining = clusterActiveBlocks([origin('a', 100, 110, 200, 1), origin('b', 105, 115, 300, 2, 'broken')]);
+    expect(remaining[0]).toMatchObject({ pivotVolumeBtc: 200, volumeRank: 1, volumeSharePct: 100 });
+  });
+  test('shares ranks for equal volumes and never silently treats absent or contradictory volume as zero', () => {
+    const known = (id: string, bottom: number, volume: number, hour: number) => ({ ...block(id, bottom, bottom + 1), volume, originTime: start + hour * HOUR });
+    const clusters = clusterActiveBlocks([known('a', 100, 10, 1), known('b', 200, 10, 2), known('c', 300, 5, 3), block('missing', 400, 410)]);
+    expect(clusters.map((c: any) => c.volumeRank)).toEqual([1, 1, 3, null]);
+    expect(clusters[3]).toMatchObject({ pivotVolumeBtc: null, volumeComplete: false, volumeSharePct: null });
+    expect(clusterActiveBlocks([known('a', 100, 10, 1), known('b', 100, 20, 1)])[0]).toMatchObject({ volumeComplete: false, pivotVolumeBtc: null });
+    const crowded = placeClusterLabels([{ anchorY: 30, height: 24, count: 10, pivotVolumeBtc: 1 },
+      { anchorY: 30, height: 24, count: 1, pivotVolumeBtc: 100 }], 36);
+    expect(crowded).toHaveLength(1); expect(crowded[0].pivotVolumeBtc).toBe(100);
   });
 });
