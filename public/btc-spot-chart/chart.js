@@ -57,6 +57,9 @@
   const gapLead = () => Number(byId('spotChartGapLead').value);
   const projectionLead = () => Math.max(gapLead(), (manualLayer?.rightLead(candles.length) || gapLead()) - viewport.RIGHT_BUFFER + 2);
   const chartCanvas = byId('spotChartCanvas');
+  const desktopOrderBlockLabels = window.matchMedia('(min-width: 681px)');
+  const updateOrderBlockFont = () => orderBlockLayer?.setLabelFontSize(desktopOrderBlockLabels.matches ? 15 : 10);
+  desktopOrderBlockLabels.addEventListener('change', updateOrderBlockFont);
   for (const id of ['spotChartOrderBlockControls', 'spotChartOrderBlockStatus', 'spotChartOrderBlockCredit']) byId(id).hidden = eth;
 
   function updateOrderBlocks() {
@@ -412,6 +415,7 @@
       candlesSeries.attachPrimitive(hourlyBoxLayer);
       if (!eth) {
         orderBlockLayer = new orderBlocks.OrderBlockPrimitive();
+        updateOrderBlockFont();
         orderBlockLayer.setLabelAnchor(() => gapLayer?.rightEdgeCoordinate() ?? null);
         orderBlockLayer.setVisible(byId('spotChartOrderBlocks').checked);
         candlesSeries.attachPrimitive(orderBlockLayer);
@@ -706,6 +710,7 @@
   observer.observe(panel);
   window.addEventListener('pagehide', () => {
     destroyed = true;
+    desktopOrderBlockLabels.removeEventListener('change', updateOrderBlockFont);
     observer.disconnect(); disconnect(); clearInterval(watchdog); clearTimeout(orderBlockHistoryTimer); gestures?.destroy(); manualLayer?.destroy(); chart?.remove();
   }, { once: true });
 })();

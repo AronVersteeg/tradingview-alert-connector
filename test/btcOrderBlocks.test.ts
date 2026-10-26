@@ -129,6 +129,10 @@ describe('active order block cluster labels', () => {
     expect(primitive.getLabels()).toHaveLength(1);
     expect(primitive.getLabels()[0]).toMatchObject({ x: 130, bottom: 100000.005, top: 100200, lines: ['100,200', '100,000.005', 'PV n/a'] });
     expect(texts.every(text => text.x === 130)).toBe(true);
+    expect(primitive.getLabels()[0].fontSize).toBe(10);
+    primitive.setLabelFontSize(15); draw();
+    expect(primitive.getLabels()[0]).toMatchObject({ fontSize: 15, height: 51 });
+    primitive.setLabelFontSize(0); draw(); expect(primitive.getLabels()[0].fontSize).toBe(15);
     const copy = primitive.getClusters(); copy[0].blockIds.push('external');
     expect(primitive.getClusters()[0].blockIds).not.toContain('external');
     anchor = null; draw(); expect(primitive.getLabels()).toEqual([]);

@@ -100,6 +100,7 @@ const pixel = (buffer, point) => {
       });
       assert.equal(label.bottom, 80000); assert.equal(label.top, 80500); assert.equal(label.x, label.edge + 10);
       assert.equal(label.pivotVolumeBtc, 1200); assert.equal(label.volumeRank, 1);
+      assert.equal(label.fontSize, mobile ? 10 : 15, 'Desktop text is 1.5x larger; mobile is unchanged');
       assert(label.lines.join(' ').includes('PV ~1.2K BTC #1'), 'Volume and relative rank must appear alongside the price range');
       assert(label.x + label.width <= label.paneWidth - 3, 'Full price label must fit in the right column');
       const labeled = await canvas.screenshot();
@@ -112,6 +113,14 @@ const pixel = (buffer, point) => {
       }
       assert(labelPixels > 10, 'Price text must actually render on the canvas');
       await page.screenshot({ path: path.join(output, mobile ? 'order-block-labels-mobile.png' : 'order-block-labels-desktop.png') });
+      if (!mobile) {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.locator('#spotChartCanvas').scrollIntoViewIfNeeded();
+        await page.waitForFunction(() => window.btcSpotChart.getOrderBlockLabels()[0]?.fontSize === 10);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.locator('#spotChartCanvas').scrollIntoViewIfNeeded();
+        await page.waitForFunction(() => window.btcSpotChart.getOrderBlockLabels()[0]?.fontSize === 15);
+      }
       await page.locator('#spotChartGapLead').fill('20'); await page.locator('#spotChartGapLead').press('Tab'); await frames(page);
       const shifted = await page.evaluate(() => {
         const api = window.btcSpotChart;
@@ -138,7 +147,7 @@ const pixel = (buffer, point) => {
       assert.equal(overflow, false, 'Chart panel must fit on mobile and desktop');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
       results.push({ mobile, blocks: model.blocks.length, olderReads, activeDelta, brokenDelta, toggle: true,
-        controls: true, clusterLabel: true, labelPixels, pivotVolumeBtc: label.pivotVolumeBtc,
+        controls: true, clusterLabel: true, labelPixels, fontSize: label.fontSize, pivotVolumeBtc: label.pivotVolumeBtc,
         volumeRank: label.volumeRank, gapLeadAlignment: true, closedHourRefresh: true, overflow, writes });
       await context.close();
     }

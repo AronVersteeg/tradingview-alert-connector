@@ -115,7 +115,7 @@
 
   class OrderBlockPrimitive {
     constructor() {
-      this.blocks = []; this.clusters = []; this.labels = []; this.indices = new Map(); this.visible = true;
+      this.blocks = []; this.clusters = []; this.labels = []; this.indices = new Map(); this.visible = true; this.labelFontSize = 10;
       this.view = { zOrder: () => 'bottom', renderer: () => ({ draw: target => this.draw(target) }) };
       this.labelView = { zOrder: () => 'top', renderer: () => ({ draw: target => this.drawLabels(target) }) };
     }
@@ -125,6 +125,10 @@
     updateAllViews() {}
     setVisible(visible) { this.visible = Boolean(visible); this.labels = []; this.requestUpdate?.(); }
     setLabelAnchor(read) { this.labelAnchor = read; this.requestUpdate?.(); }
+    setLabelFontSize(size) {
+      if (!Number.isFinite(size) || size < 8 || size > 24) return;
+      this.labelFontSize = size; this.labels = []; this.requestUpdate?.();
+    }
     getClusters() { return this.clusters.map(cluster => ({ ...cluster, blockIds: [...cluster.blockIds] })); }
     getLabels() { return this.labels.map(label => ({ ...label, lines: [...label.lines] })); }
     setData(model, candles) {
@@ -176,7 +180,7 @@
           if (!Number.isFinite(a) || !Number.isFinite(b) || Math.max(a, b) < 4 || Math.min(a, b) > height - 4) continue;
           const low = priceText.format(cluster.bottom), high = priceText.format(cluster.top);
           const volume = cluster.volumeComplete ? `PV ~${volumeText.format(cluster.pivotVolumeBtc)} BTC #${cluster.volumeRank}` : 'PV n/a';
-          let fontSize = 10, lines = [`${low} - ${high} | ${volume}`];
+          let fontSize = this.labelFontSize, lines = [`${low} - ${high} | ${volume}`];
           ctx.font = `${fontSize}px Arial`;
           if (ctx.measureText(lines[0]).width > available) {
             lines = ctx.measureText(`${low} - ${high}`).width <= available ? [`${low} - ${high}`] : [high, low];
@@ -188,8 +192,8 @@
             if (line) lines.push(line);
           }
           const longest = Math.max(...lines.map(line => ctx.measureText(line).width));
-          fontSize = Math.min(fontSize, Math.floor(10 * available / Math.max(1, longest)));
-          if (fontSize < 8) continue;
+          fontSize = Math.min(fontSize, Math.floor(this.labelFontSize * available / Math.max(1, longest)));
+          if (fontSize < this.labelFontSize * .8) continue;
           ctx.font = `${fontSize}px Arial`;
           items.push({ id: cluster.id, count: cluster.count, direction: cluster.direction, bottom: cluster.bottom, top: cluster.top,
             pivotVolumeBtc: cluster.pivotVolumeBtc, volumeComplete: cluster.volumeComplete, volumeRank: cluster.volumeRank,

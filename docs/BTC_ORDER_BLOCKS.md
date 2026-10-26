@@ -78,6 +78,10 @@ Narrow columns use two lines; vertical packing prevents text collisions, and
 labels without sufficient room are omitted rather than clipped across the axis.
 Prices retain fractional-cent midpoint precision, with up to eight decimals.
 `getOrderBlockClusters()` and `getOrderBlockLabels()` expose read-only snapshots.
+Desktop cluster price/volume text uses 15px (1.5x its previous 10px); the existing
+680px mobile breakpoint retains 10px. Crossing that breakpoint refreshes labels
+without reloading data. Wrapping and collision packing follow the actual font
+size, with limited shrink-to-fit only when the right column is constrained.
 
 ### Cluster Volume
 
