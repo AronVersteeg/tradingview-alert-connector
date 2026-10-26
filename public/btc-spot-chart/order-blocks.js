@@ -58,6 +58,24 @@
     return selected;
   }
 
+  function brokenRankGroups(blocks) {
+    const groups = new Map();
+    for (const block of blocks) {
+      if (block.state !== 'broken' || !Number.isInteger(block.volumeRankAtBreak) || block.volumeRankAtBreak < 1) continue;
+      const id = `${block.brokenAt}|${block.breakClusterId || block.id}`;
+      let group = groups.get(id);
+      if (!group) {
+        group = { id, rank: block.volumeRankAtBreak, brokenAt: block.brokenAt, originTime: block.originTime,
+          top: block.top, bottom: block.bottom, count: 0, direction: block.direction };
+        groups.set(id, group);
+      }
+      group.originTime = Math.min(group.originTime, block.originTime);
+      group.top = Math.max(group.top, block.top); group.bottom = Math.min(group.bottom, block.bottom); group.count++;
+      if (group.direction !== block.direction) group.direction = 'mixed';
+    }
+    return [...groups.values()].sort((a, b) => b.brokenAt - a.brokenAt || a.rank - b.rank || a.id.localeCompare(b.id));
+  }
+
   function buildOrderBlocks(input, options = {}, nowMs = Date.now()) {
     const length = options.length ?? 5, mitigation = options.mitigation ?? 'Wick';
     if (!Number.isInteger(length) || length < 1 || length > 100 || !['Wick', 'Close'].includes(mitigation)) {
@@ -100,11 +118,19 @@
       }
       const targetBull = mitigation === 'Close' ? Math.min(...right.map(row => row.close)) : lower;
       const targetBear = mitigation === 'Close' ? Math.max(...right.map(row => row.close)) : upper;
-      for (const block of active) {
-        if (block.direction === 'bullish' ? targetBull < block.bottom : targetBear > block.top) {
-          block.state = 'broken'; block.brokenTime = c.time; block.brokenAt = c.time + HOUR;
-          active.delete(block);
-        }
+      const breaking = [...active].filter(block => block.direction === 'bullish' ? targetBull < block.bottom : targetBear > block.top);
+      // Freeze one common pre-mitigation snapshot for this close, never today's ranks.
+      const ranks = new Map();
+      if (breaking.length) {
+        for (const cluster of clusterActiveBlocks([...active])) for (const id of cluster.blockIds) ranks.set(id, cluster);
+      }
+      for (const block of breaking) {
+        const cluster = ranks.get(block.id);
+        block.volumeRankAtBreak = cluster?.volumeRank ?? null;
+        block.breakClusterId = cluster?.id ?? null;
+        block.breakClusterCount = cluster?.count ?? null;
+        block.state = 'broken'; block.brokenTime = c.time; block.brokenAt = c.time + HOUR;
+        active.delete(block);
       }
     }
     return { symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', length, mitigation, blocks, gaps,
@@ -115,7 +141,8 @@
 
   class OrderBlockPrimitive {
     constructor() {
-      this.blocks = []; this.clusters = []; this.labels = []; this.indices = new Map(); this.visible = true; this.labelFontSize = 10;
+      this.blocks = []; this.clusters = []; this.labels = []; this.brokenGroups = []; this.brokenLabels = [];
+      this.indices = new Map(); this.visible = true; this.labelFontSize = 10;
       this.view = { zOrder: () => 'bottom', renderer: () => ({ draw: target => this.draw(target) }) };
       this.labelView = { zOrder: () => 'top', renderer: () => ({ draw: target => this.drawLabels(target) }) };
     }
@@ -123,16 +150,18 @@
     detached() { this.chart = this.series = this.requestUpdate = undefined; }
     paneViews() { return [this.view, this.labelView]; }
     updateAllViews() {}
-    setVisible(visible) { this.visible = Boolean(visible); this.labels = []; this.requestUpdate?.(); }
+    setVisible(visible) { this.visible = Boolean(visible); this.labels = []; this.brokenLabels = []; this.requestUpdate?.(); }
     setLabelAnchor(read) { this.labelAnchor = read; this.requestUpdate?.(); }
     setLabelFontSize(size) {
       if (!Number.isFinite(size) || size < 8 || size > 24) return;
-      this.labelFontSize = size; this.labels = []; this.requestUpdate?.();
+      this.labelFontSize = size; this.labels = []; this.brokenLabels = []; this.requestUpdate?.();
     }
     getClusters() { return this.clusters.map(cluster => ({ ...cluster, blockIds: [...cluster.blockIds] })); }
     getLabels() { return this.labels.map(label => ({ ...label, lines: [...label.lines] })); }
+    getBrokenRankLabels() { return this.brokenLabels.map(label => ({ ...label })); }
     setData(model, candles) {
-      this.blocks = model.blocks; this.clusters = clusterActiveBlocks(this.blocks); this.labels = []; this.indices = new Map();
+      this.blocks = model.blocks; this.clusters = clusterActiveBlocks(this.blocks); this.brokenGroups = brokenRankGroups(this.blocks);
+      this.labels = []; this.brokenLabels = []; this.indices = new Map();
       candles.forEach((c, i) => { this.indices.set(c.time, i); this.indices.set(c.time + HOUR, i + 1); });
       this.requestUpdate?.();
     }
@@ -165,15 +194,35 @@
         ctx.restore();
       });
     }
+    drawBrokenRanks(ctx, width, height) {
+      ctx.font = `${this.labelFontSize}px Arial`; ctx.textBaseline = 'top';
+      for (const group of this.brokenGroups) {
+        const from = this.indices.get(group.originTime), to = this.indices.get(group.brokenAt);
+        if (from === undefined || to === undefined) continue;
+        const left = this.chart.timeScale().logicalToCoordinate(from), right = this.chart.timeScale().logicalToCoordinate(to);
+        const a = this.series.priceToCoordinate(group.top), b = this.series.priceToCoordinate(group.bottom);
+        if (![left, right, a, b].every(Number.isFinite) || right <= 0 || left >= width || Math.max(a, b) < 0 || Math.min(a, b) > height) continue;
+        const text = `#${group.rank}`, textWidth = ctx.measureText(text).width, h = this.labelFontSize + 2;
+        // Keep the annotation inside its historical box and out of neighboring labels.
+        if (right > width || right - Math.max(0, left) < textWidth + 8 || height < h + 4) continue;
+        const x = right - textWidth - 4, y = Math.max(2, Math.min(height - h - 2, (a + b - h) / 2));
+        if (this.brokenLabels.some(label => x < label.x + label.width + 4 && x + textWidth + 4 > label.x &&
+          y < label.y + label.height + 3 && y + h + 3 > label.y)) continue;
+        ctx.globalAlpha = .65; ctx.fillStyle = '#131722'; ctx.fillRect(x - 2, y - 1, textWidth + 4, h + 2);
+        ctx.globalAlpha = .65; ctx.fillStyle = LABEL_COLORS[group.direction]; ctx.fillText(text, x, y);
+        this.brokenLabels.push({ id: group.id, text, rank: group.rank, brokenAt: group.brokenAt,
+          x, y, width: textWidth, height: h, fontSize: this.labelFontSize });
+      }
+    }
     drawLabels(target) {
-      this.labels = [];
+      this.labels = []; this.brokenLabels = [];
       if (!this.visible || !this.chart || !this.series) return;
       const anchor = this.labelAnchor?.();
-      if (!Number.isFinite(anchor) || anchor < 0) return;
       target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width, height } }) => {
-        const x = anchor + 10, available = width - x - 4;
-        if (available < 30) return;
         ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();
+        this.drawBrokenRanks(ctx, width, height);
+        const x = anchor + 10, available = width - x - 4;
+        if (!Number.isFinite(anchor) || anchor < 0 || available < 30) { ctx.restore(); return; }
         const items = [];
         for (const cluster of this.clusters) {
           const a = this.series.priceToCoordinate(cluster.top), b = this.series.priceToCoordinate(cluster.bottom);
@@ -213,7 +262,7 @@
       });
     }
   }
-  const api = Object.freeze({ buildOrderBlocks, clusterActiveBlocks, placeClusterLabels, OrderBlockPrimitive });
+  const api = Object.freeze({ buildOrderBlocks, clusterActiveBlocks, placeClusterLabels, brokenRankGroups, OrderBlockPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcSpotOrderBlocks = api;
 })(typeof globalThis === 'object' ? globalThis : this);

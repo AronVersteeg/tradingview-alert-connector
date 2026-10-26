@@ -68,7 +68,7 @@ price intervals form one cluster, including nested blocks and transitive chains.
 Each label shows the complete cluster range (lowest bottom to highest top), not
 the narrower intersection or the midpoint. Bullish/bearish colors are muted;
 mixed-direction clusters use neutral text. Broken and coverage-gap blocks never
-widen the range or receive a label.
+widen the active range or receive an active price/volume label.
 
 Labels sit 10 pixels to the right of the current green gapbox edge, using the
 same exact coordinate as that box, including its adjustable candle lead and
@@ -103,6 +103,33 @@ volume traded specifically inside the block's price band, cumulative volume
 since block creation, current order-book depth, unfilled institutional orders,
 or a proven measure of support/resistance strength. No allocation of the whole
 candle's volume to individual price levels is assumed.
+
+### Broken-Block Ranks
+
+Historical broken blocks show only a muted `#N`, without a price or volume
+amount, inside the box near its breaking endpoint. This is the cluster's PV
+rank **immediately before mitigation at that candle close**, not today's rank.
+Replay includes only blocks confirmed by that close. Newly confirmed blocks
+are added before mitigation, matching the detector's existing execution order.
+All blocks breaking on the same close use one common ranking snapshot, so
+removing one cannot artificially improve another's rank on that close.
+
+Blocks from the same cluster breaking on the same close share one annotation.
+Separate break events retain separate ranks. Equal volumes share ranks using
+the same competition ranking as active clusters. Unknown coverage is not a
+proven break and receives no retrospective rank.
+
+The existing orderblock checkbox controls these annotations. Unlike active
+cluster labels, they do not depend on the green gapbox being visible. Labels
+without enough space or colliding with another broken-rank label are omitted
+until zoom/pan provides room. Read-only block metadata contains
+`volumeRankAtBreak`, `breakClusterId` and `breakClusterCount`;
+`getBrokenOrderBlockRankLabels()` exposes the currently drawn annotations.
+
+Ranks reconstruct automatically from loaded history, without extra requests
+or a server-side block archive. Future candles do not alter a completed break's
+rank; loading previously unknown older history or changing detector settings
+can refine it. Ranks cannot account for older active blocks outside coverage.
 
 ## Verification
 

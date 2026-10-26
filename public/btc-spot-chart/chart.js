@@ -480,6 +480,7 @@
         getOrderBlocks: () => orderBlockModel ? { ...orderBlockModel, blocks: orderBlockModel.blocks.map(block => ({ ...block })) } : null,
         getOrderBlockClusters: () => orderBlockLayer?.getClusters() || [],
         getOrderBlockLabels: () => orderBlockLayer?.getLabels() || [],
+        getBrokenOrderBlockRankLabels: () => orderBlockLayer?.getBrokenRankLabels() || [],
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),

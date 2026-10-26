@@ -1,4 +1,4 @@
-const { buildOrderBlocks, clusterActiveBlocks, placeClusterLabels, OrderBlockPrimitive } = require('../public/btc-spot-chart/order-blocks.js');
+const { buildOrderBlocks, clusterActiveBlocks, placeClusterLabels, brokenRankGroups, OrderBlockPrimitive } = require('../public/btc-spot-chart/order-blocks.js');
 const HOUR = 3600, start = Date.parse('2026-10-01T00:00:00Z') / 1000;
 const bar = (i: number, changes: any = {}) => ({ time: start + i * HOUR, open: 100, high: 115, low: 95,
   close: 100, volume: 1, closed: true, ...changes });
@@ -56,6 +56,7 @@ describe('LuxAlgo volume-pivot order block reconstruction', () => {
     expect(model.gaps).toBe(1);
     expect(model.blocks[0]).toMatchObject({ state: 'coverage-gap', brokenAt: null, coverageEndedAt: start + 3 * HOUR });
     expect(model.blocks[1]).toMatchObject({ state: 'intact', originTime: start + 8 * HOUR });
+    expect(model.blocks[0]).not.toHaveProperty('volumeRankAtBreak');
   });
   test('keeps historical blocks beyond LuxAlgo display caps, and stable IDs after older bars are prepended', () => {
     const candles = Array.from({ length: 100 }, (_, i) => bar(i, i % 4 === 1 ? { volume: 10, high: 110, low: 90 } : {}));
@@ -87,6 +88,65 @@ describe('LuxAlgo volume-pivot order block reconstruction', () => {
     expect(strokes.map(row => row.alpha)).toEqual([.3, .15]);
     expect(fills[1].args[0] + fills[1].args[2]).toBe(40);
     primitive.setVisible(false); primitive.draw(target); expect(fills).toHaveLength(2);
+  });
+});
+
+describe('historical order block volume ranks', () => {
+  const twoClusters = (firstVolume = 30) => [bar(0), bar(1, { high: 110, low: 90, volume: firstVolume }), bar(2),
+    bar(3, { open: 140, high: 150, low: 130, close: 140, volume: 20 }),
+    bar(4, { open: 145, high: 155, low: 140, close: 145 })];
+
+  test('ranks simultaneous breaks against one common active-cluster snapshot', () => {
+    const model = build([...twoClusters(), bar(5, { high: 155, low: 89 })]);
+    expect(model.blocks).toHaveLength(2);
+    expect(model.blocks.map((b: any) => [b.state, b.volumeRankAtBreak])).toEqual([['broken', 1], ['broken', 2]]);
+    expect(model.blocks.every((b: any) => b.brokenAt === start + 6 * HOUR)).toBe(true);
+  });
+
+  test('freezes each rank at its own break, never against future blocks or already broken clusters', () => {
+    const firstBreak = [...twoClusters(10), bar(5, { open: 140, high: 155, low: 129, close: 135 })];
+    const before = build(firstBreak), after = build([...firstBreak, bar(6, { high: 120, low: 89 }),
+      bar(7, { high: 110, low: 80, volume: 1000 }), bar(8)]);
+    expect(before.blocks[1]).toMatchObject({ state: 'broken', volumeRankAtBreak: 1 });
+    expect(after.blocks[1]).toEqual(before.blocks[1]);
+    expect(after.blocks[0]).toMatchObject({ state: 'broken', volumeRankAtBreak: 1, brokenAt: start + 7 * HOUR });
+    expect(after.blocks[2]).toMatchObject({ state: 'intact', volume: 1000 });
+  });
+
+  test('includes newly confirmed clusters before mitigation at the same close, matching detection order', () => {
+    const candles = [...bull(), bar(3, { open: 140, high: 150, low: 130, close: 140, volume: 20 }), bar(4, { high: 151, low: 89 })];
+    const blocks = build(candles).blocks;
+    expect(blocks[0]).toMatchObject({ state: 'broken', volumeRankAtBreak: 2 });
+    expect(blocks[1]).toMatchObject({ state: 'broken', volumeRankAtBreak: 1, confirmedAt: start + 5 * HOUR });
+  });
+
+  test('deduplicates one cluster breaking on one candle, but keeps separate break events and excludes unknown ranks', () => {
+    const broken = (id: string, changes: any = {}) => ({ id, state: 'broken', direction: 'bullish', originTime: start,
+      brokenAt: start + 10 * HOUR, top: 110, bottom: 90, volumeRankAtBreak: 2, breakClusterId: 'a,b', ...changes });
+    const groups = brokenRankGroups([broken('a'), broken('b', { bottom: 95, top: 120 }),
+      broken('c', { brokenAt: start + 11 * HOUR }), broken('unknown', { volumeRankAtBreak: null }),
+      broken('gap', { state: 'coverage-gap' })]);
+    expect(groups).toHaveLength(2);
+    expect(groups[1]).toMatchObject({ rank: 2, count: 2, bottom: 90, top: 120 });
+  });
+
+  test('renders only #rank inside the historical block without a gap anchor and hides with the orderblock checkbox', () => {
+    const primitive = new OrderBlockPrimitive(), texts: string[] = [];
+    const ctx: any = { save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, fillRect() {},
+      measureText: (value: string) => ({ width: value.length * 5 }), fillText: (text: string) => texts.push(text) };
+    primitive.attached({ chart: { timeScale: () => ({ logicalToCoordinate: (i: number) => i * 20 }) },
+      series: { priceToCoordinate: (price: number) => 150 - price }, requestUpdate: jest.fn() });
+    primitive.setLabelAnchor(() => null);
+    primitive.setData(build([...bull(), bar(3, { low: 89 })]), [...bull(), bar(3)]);
+    const draw = (width = 200) => primitive.drawLabels({ useMediaCoordinateSpace: (fn: any) => fn({ context: ctx, mediaSize: { width, height: 100 } }) });
+    draw();
+    expect(texts).toEqual(['#1']); expect(primitive.getLabels()).toEqual([]);
+    expect(primitive.getBrokenRankLabels()).toEqual([expect.objectContaining({ text: '#1', rank: 1, x: 66, fontSize: 10 })]);
+    const copy = primitive.getBrokenRankLabels(); copy[0].rank = 99;
+    expect(primitive.getBrokenRankLabels()[0].rank).toBe(1);
+    draw(70); expect(primitive.getBrokenRankLabels()).toEqual([]);
+    primitive.setVisible(false); draw(); expect(texts).toEqual(['#1']);
+    expect(primitive.getBrokenRankLabels()).toEqual([]);
   });
 });
 

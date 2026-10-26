@@ -74,6 +74,11 @@ const pixel = (buffer, point) => {
       await page.locator('#spotChartCanvas').scrollIntoViewIfNeeded(); await frames(page);
       const model = await page.evaluate(() => window.btcSpotChart.getOrderBlocks());
       assert.equal(model.blocks.length, 3); assert.equal(model.blocks.filter(b => b.state === 'broken').length, 2);
+      assert.deepEqual(model.blocks.filter(b => b.state === 'broken').map(b => b.volumeRankAtBreak), [2, 2],
+        'Historical ranks must reflect the active clusters at each break, not current ranks');
+      const brokenRanks = await page.evaluate(() => window.btcSpotChart.getBrokenOrderBlockRankLabels());
+      assert(brokenRanks.length > 0, 'Historical rank text must render without the green gapbox');
+      assert(brokenRanks.every(label => label.text === '#2' && !/PV|BTC/.test(label.text)));
       const points = await page.evaluate(() => {
         const api = window.btcSpotChart, rows = api.getCandles(), blocks = api.getOrderBlocks().blocks;
         return Object.fromEntries(blocks.filter(b => b.direction === 'bullish').map(b => [b.state, {
@@ -84,6 +89,7 @@ const pixel = (buffer, point) => {
       const canvas = page.locator('#spotChartCanvas'), on = await canvas.screenshot();
       await page.screenshot({ path: path.join(output, mobile ? 'order-blocks-mobile.png' : 'order-blocks-desktop.png') });
       await page.locator('#spotChartOrderBlocks').uncheck(); await frames(page);
+      assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getBrokenOrderBlockRankLabels()), []);
       const off = await canvas.screenshot();
       const activeDelta = pixel(on, points.intact)[1] - pixel(off, points.intact)[1];
       const brokenDelta = pixel(on, points.broken)[1] - pixel(off, points.broken)[1];
@@ -129,6 +135,8 @@ const pixel = (buffer, point) => {
       assert.equal(shifted.label.x, shifted.edge + 10);
       await page.locator('#spotChartGap').uncheck(); await frames(page);
       assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getOrderBlockLabels()), []);
+      assert((await page.evaluate(() => window.btcSpotChart.getBrokenOrderBlockRankLabels())).length > 0,
+        'Hiding the gapbox must not hide broken-block ranks');
       await page.locator('#spotChartGapLead').fill('10'); await page.locator('#spotChartGapLead').press('Tab');
       await page.locator('#spotChartGap').check();
       await page.locator('#spotChartObMitigation').selectOption('Close');
@@ -142,13 +150,15 @@ const pixel = (buffer, point) => {
       await page.waitForFunction(() => window.btcSpotChart.getOrderBlocks().blocks.every(b => b.state === 'broken'));
       const latest = await page.evaluate(() => window.btcSpotChart.getOrderBlocks());
       assert.equal(latest.blocks.at(-1).brokenAt, (start + 151 * HOUR) / 1000);
+      assert.deepEqual(latest.blocks.map(b => b.volumeRankAtBreak), [2, 2, 1], 'Past ranks must stay frozen when a new block breaks');
       await frames(page); assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getOrderBlockLabels()), []);
       const overflow = await page.locator('#btcSpotChartPanel').evaluate(node => node.scrollWidth > node.clientWidth + 1);
       assert.equal(overflow, false, 'Chart panel must fit on mobile and desktop');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
       results.push({ mobile, blocks: model.blocks.length, olderReads, activeDelta, brokenDelta, toggle: true,
         controls: true, clusterLabel: true, labelPixels, fontSize: label.fontSize, pivotVolumeBtc: label.pivotVolumeBtc,
-        volumeRank: label.volumeRank, gapLeadAlignment: true, closedHourRefresh: true, overflow, writes });
+        volumeRank: label.volumeRank, brokenRanks: brokenRanks.map(label => label.text),
+        gapLeadAlignment: true, closedHourRefresh: true, overflow, writes });
       await context.close();
     }
   } finally { await browser.close(); }
