@@ -47,7 +47,7 @@ function validStored(value: any): value is FuturesDeltaCandle {
     Number.isFinite(Date.parse(value.fetchedAt)) && Date.parse(value.fetchedAt) >= value.closedAt * 1000;
 }
 
-// Lazy, chart-only cache. No startup fetches, background collectors or trading callbacks.
+// Lazy closed-candle cache shared by chart labels and the ETH entry gate; no startup fetches.
 export class IntrusionFuturesDeltaFeed {
   private records = new Map<number, FuturesDeltaCandle>();
   private failures = new Map<number, FuturesDeltaRead>();

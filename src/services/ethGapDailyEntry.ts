@@ -1,9 +1,11 @@
 import { binanceDailyFractalHistory, latestExpectedFractalClose } from './binanceDailyFractalHistory';
 import { ethSpotChartFeed, SpotChartPage } from './binanceSpotChart';
+import { ethIntrusionFuturesDeltaFeed } from './intrusionFuturesDelta';
 
 // These are the same pure evaluators used by the purple chart overlay.
 const { projectDailyFractals } = require('../../public/btc-spot-chart/fractals.js');
 const { compactIntrusionHistory, buildIntrusionDailyBreakouts } = require('../../public/btc-spot-chart/intrusion-daily-breakouts.js');
+const { readDeltaResponse, deltaLabel } = require('../../public/btc-spot-chart/futures-delta.js');
 
 export const ETH_GAP_DAILY_ENTRY_ENV = 'OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_ENABLED';
 export const ETH_GAP_DAILY_MAX_AGE_MS = 5 * 60_000;
@@ -16,6 +18,27 @@ export type EthGapDailySignal = {
   close: number;
   dailyLevels: { id: string; type: 'HIGH' | 'LOW'; price: number; confirmedAt: string }[];
 };
+
+export type EthEntryFuturesDelta = {
+  symbol: 'ETHUSDT'; venue: 'Binance USD-M Futures'; interval: '5m';
+  signalTime: number; startedAt: number; closedAt: number; fetchedAt: string;
+  rawDeltaPct: number; directionalDeltaPct: number; passed: boolean;
+};
+
+export async function readEthEntryFuturesDelta(signal: EthGapDailySignal): Promise<EthEntryFuturesDelta> {
+  const response = await ethIntrusionFuturesDeltaFeed.snapshot([signal.time]);
+  const record = readDeltaResponse(response, 'ETHUSDT').find((row: any) => row.hour === signal.time);
+  if (!record || record.status !== 'ok') {
+    throw new Error(`ETH final-5m Futures delta unavailable (${record?.status || 'missing'}); entry remains pending.`);
+  }
+  // Reuse the chart's direction normalization and exact signal-candle identity checks.
+  const label = deltaLabel(signal, record);
+  const directionalDeltaPct = label.directionalDeltaPct;
+  if (!Number.isFinite(directionalDeltaPct)) throw new Error('Invalid ETH directional Futures delta.');
+  return { symbol: 'ETHUSDT', venue: 'Binance USD-M Futures', interval: '5m', signalTime: signal.time,
+    startedAt: record.candle.startedAt, closedAt: record.candle.closedAt, fetchedAt: record.candle.fetchedAt,
+    rawDeltaPct: record.candle.rawDeltaPct, directionalDeltaPct, passed: directionalDeltaPct > 0 };
+}
 
 export function ethGapDailyEntryEnabled(): boolean {
   return ['true', '1', 'yes', 'on'].includes(String(process.env[ETH_GAP_DAILY_ENTRY_ENV] || '').trim().toLowerCase());

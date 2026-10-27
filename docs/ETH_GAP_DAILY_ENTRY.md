@@ -40,6 +40,15 @@ as well when all new ETH entries should stop.
 - Uses the exact pure projection and matching functions behind the purple ETH
   chart marker, including older still-intact Daily levels. Weekly/Monthly data
   availability is not an entry dependency. An intrusion is not a green-box exit.
+- Additionally requires **direction-normalized final-5m Futures delta > 0** from
+  Binance USD-M ETHUSDT, using the same measurement as the chart's `F5m` label.
+  For an 11:00-12:00 UTC signal candle, only 11:55-11:59:59.999 is measured.
+  Long requires raw taker delta > 0; short requires raw taker delta < 0.
+  The threshold uses full precision, not the rounded chart label. Zero and
+  negative directional delta reject that signal. Missing, pending, failed or
+  mismatched data block entry and may retry only inside the existing five-minute
+  window. No additional environment switch is required: this is mandatory when
+  this ETH experiment is enabled. BTC manual execution is unaffected.
 - Only the latest closed hour, within five minutes of its close, is eligible.
   The first successful scan after activation/restart arms the model; earlier
   closed candles and historical purple markers cannot open a trade retrospectively.
@@ -72,6 +81,12 @@ can be guaranteed away, and no unprotected entry is deliberately requested.
 
 The existing `/open-liquidity/v2/status?market=ETH-USD` monitor status contains
 `gapDailyEntry`: activation, latest decision, signal candle and execution outcome.
+`futuresDeltaFilter` describes the required source/window and last measurement.
+The decision and durable order intent retain the accepted/rejected measurement;
+accepted orders also carry `gap_daily_futures_delta` as audit metadata. The
+shared closed-candle cache/limiter is reused; the entry check does not depend on
+opening a browser or enabling the chart overlay. Existing positions and uncertain
+pre-deploy submissions continue protective reconciliation without a new FD check.
 The existing ETH state file also holds the durable intent and position policy.
 No new public raw-history export endpoint is introduced.
 

@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import * as entry from '../src/services/ethGapDailyEntry';
 import * as gap from '../src/services/decentraderGapMonitor';
+import { ethIntrusionFuturesDeltaFeed, parseFuturesDeltaCandle } from '../src/services/intrusionFuturesDelta';
 import { OpenLiquidityV2EthTradeMonitor, openLiquidityV2BtcIntrusionMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
 const fractals = require('../public/btc-spot-chart/fractals.js');
 const purple = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
@@ -80,6 +81,49 @@ describe('ETH Spot gap intrusion + Daily entry signal', () => {
   });
 });
 
+describe('ETH entry final-5m Futures delta gate', () => {
+  const response = (buy: number) => {
+    const hour = signal().time;
+    const candle = parseFuturesDeltaCandle([(hour + 3300) * 1000, 0, 0, 0, 0, '100',
+      closeAt - 1, 0, 0, String(buy)], hour, now);
+    return { symbol: 'ETHUSDT', venue: 'Binance USD-M Futures', interval: '5m', timeBasis: 'signal-last-five-minutes',
+      records: [{ hour, status: 'ok', candle }] } as any;
+  };
+  afterEach(() => jest.restoreAllMocks());
+
+  test.each([
+    ['long', 60, true, 20], ['long', 40, false, -20], ['short', 40, true, 20],
+    ['short', 60, false, -20], ['long', 50, false, 0], ['short', 50, false, 0],
+    ['long', 50.0001, true, .0002]
+  ])('uses unrounded direction-normalized delta for %s / buy %s', async (direction, buy, passed, expected) => {
+    const read = jest.spyOn(ethIntrusionFuturesDeltaFeed, 'snapshot').mockResolvedValue(response(buy as number));
+    const result = await entry.readEthEntryFuturesDelta(signal(direction as 'long' | 'short'));
+    expect(read).toHaveBeenCalledWith([signal().time]);
+    expect(result).toMatchObject({ symbol: 'ETHUSDT', interval: '5m', passed,
+      signalTime: signal().time, startedAt: signal().time + 3300, closedAt: closeAt / 1000 });
+    expect(result.directionalDeltaPct).toBeCloseTo(expected as number, 8);
+  });
+
+  test('blocks absent/pending/unavailable candles, wrong market/venue/hour and corrupt values', async () => {
+    const read = jest.spyOn(ethIntrusionFuturesDeltaFeed, 'snapshot');
+    for (const kind of ['missing', 'pending', 'unavailable', 'btc', 'spot', 'hour', 'window', 'invalid', 'mismatch']) {
+      const value = response(60);
+      if (kind === 'missing') value.records = [];
+      if (kind === 'pending' || kind === 'unavailable') value.records = [{ hour: signal().time, status: kind, retryAt: iso(now + 15000) }];
+      if (kind === 'btc') value.symbol = 'BTCUSDT';
+      if (kind === 'spot') value.venue = 'Binance Spot';
+      if (kind === 'hour') value.records[0].hour -= 3600;
+      if (kind === 'window') value.records[0].candle.startedAt -= 300;
+      if (kind === 'invalid') value.records[0].candle.rawDeltaPct = 99;
+      if (kind === 'mismatch') value.records[0].candle.closedAt += 3600;
+      read.mockResolvedValue(value);
+      await expect(entry.readEthEntryFuturesDelta(signal())).rejects.toThrow();
+    }
+    read.mockRejectedValue(new Error('cooldown'));
+    await expect(entry.readEthEntryFuturesDelta(signal())).rejects.toThrow('cooldown');
+  });
+});
+
 describe('ETH gap/Daily live execution and persistent trailing-only management', () => {
   const oldEnv = { ...process.env };
   let directory: string, file: string, monitor: any, orders: any, position: any;
@@ -97,6 +141,11 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
       DECENTRADER_TRADE_RISK_USD: '15', DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT: 'false'
     });
     position = undefined;
+    jest.spyOn(entry, 'readEthEntryFuturesDelta').mockImplementation(async s => ({
+      symbol: 'ETHUSDT', venue: 'Binance USD-M Futures', interval: '5m', signalTime: s.time,
+      startedAt: s.time + 3300, closedAt: s.closedAt, fetchedAt: iso(now),
+      rawDeltaPct: s.direction === 'long' ? 20 : -20, directionalDeltaPct: 20, passed: true
+    }));
     orders = {
       getAccountSnapshot: jest.fn().mockImplementation(async () => ({ equity: 1000, freeCollateral: 1000,
         openPositionsCount: position ? 1 : 0, openPositions: position ? [position] : [],
@@ -139,6 +188,40 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
     expect(orders.syncTrailingStop).toHaveBeenCalled();
     expect(orders.syncTakeProfits).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
+    expect(managed.gapDailyEntry.intent.futuresDelta).toMatchObject({ directionalDeltaPct: 20, passed: true });
+    expect(orders.placeOrder.mock.calls[0][0].gap_daily_futures_delta).toEqual(managed.gapDailyEntry.intent.futuresDelta);
+  });
+  test.each(['long', 'short'])('rejects zero and negative F5m before order/SL planning for %s', async direction => {
+    const plan = jest.spyOn(monitor, 'getGapDailyStopPlan');
+    for (const delta of [0, -1]) {
+      (entry.readEthEntryFuturesDelta as jest.Mock).mockResolvedValue({ directionalDeltaPct: delta, passed: false });
+      const managed: any = state();
+      await monitor.executeGapDailyEntry(managed, signal(direction as 'long' | 'short'), {});
+      expect(managed.gapDailyEntry.decision).toMatchObject({ outcome: 'SKIPPED', futuresDelta: { directionalDeltaPct: delta } });
+      expect(managed.gapDailyEntry.handledCandle).toBe(closeAt); expect(managed.gapDailyEntry.intent).toBeUndefined();
+    }
+    expect(plan).not.toHaveBeenCalled(); expect(orders.placeOrder).not.toHaveBeenCalled();
+    expect(orders.getStatefulOrderCapacity).not.toHaveBeenCalled();
+  });
+  test('missing F5m retries the same fresh purple signal and enters only after a positive measurement', async () => {
+    jest.spyOn(entry, 'readEthGapDailySignal').mockResolvedValue(signal());
+    const delta = entry.readEthEntryFuturesDelta as jest.Mock;
+    const positive = await delta(signal()); delta.mockClear();
+    delta.mockRejectedValueOnce(new Error('ETH final-5m Futures delta unavailable')).mockResolvedValue(positive);
+    const managed: any = state(), first: any = {}, second: any = {};
+    await monitor.checkGapDailyEntry(managed, inputs().payload, first);
+    expect(first.gapDailyEntryPending).toBe(true); expect(orders.placeOrder).not.toHaveBeenCalled();
+    expect(managed.gapDailyEntry.handledCandle).toBeUndefined(); expect(managed.gapDailyEntry.intent).toBeUndefined();
+    await monitor.checkGapDailyEntry(managed, inputs().payload, second);
+    expect(second.tradePlaced).toBe(true); expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+  });
+  test('does not use a positive measurement to enter after the five-minute freshness deadline', async () => {
+    const delta = entry.readEthEntryFuturesDelta as jest.Mock, positive = await delta(signal());
+    delta.mockImplementation(async () => { jest.setSystemTime(closeAt + 300001); return positive; });
+    const plan = jest.spyOn(monitor, 'getGapDailyStopPlan'), managed: any = state();
+    await monitor.executeGapDailyEntry(managed, signal(), {});
+    expect(managed.gapDailyEntry.decision.reason).toMatch(/expired.*Futures delta/);
+    expect(plan).not.toHaveBeenCalled(); expect(orders.placeOrder).not.toHaveBeenCalled();
   });
   test('never resubmits the same candle even if the trade closed or intrusion counts changed', async () => {
     const managed: any = state();
@@ -240,6 +323,8 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
   });
   test('continues trailing a persisted position after disabling entries and never prepares map TPs', async () => {
     const managed: any = state(); await monitor.executeGapDailyEntry(managed, signal(), {});
+    const delta = entry.readEthEntryFuturesDelta as jest.Mock;
+    delta.mockClear(); delta.mockRejectedValue(new Error('FD must not gate protection of an existing position'));
     process.env.OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_ENABLED = 'false';
     const restarted: any = new OpenLiquidityV2EthTradeMonitor({} as any); restarted.configureTradeExecutor(orders);
     const plan = jest.spyOn(restarted, 'getTradePlan').mockRejectedValue(new Error('No map access allowed'));
@@ -247,12 +332,19 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
     await restarted.syncManagedOrders(JSON.parse(fs.readFileSync(file, 'utf8')), {});
     expect(orders.syncTrailingStop.mock.calls.length).toBeGreaterThan(1);
     expect(plan).not.toHaveBeenCalled(); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+    expect(delta).not.toHaveBeenCalled();
   });
   test('recovers a delayed fill after restart even when entries are off, without a second entry or any TP', async () => {
     orders.placeOrder.mockRejectedValue(new Error('uncertain submission'));
     const managed: any = state();
     await expect(monitor.executeGapDailyEntry(managed, signal(), {})).rejects.toThrow('uncertain submission');
     expect(managed.gapDailyEntry.intent.outcome).toBe('UNKNOWN');
+    // Legacy pending submissions from before the FD gate must still receive protection.
+    delete managed.gapDailyEntry.intent.futuresDelta;
+    delete managed.gapDailyEntry.intent.orderAlert.gap_daily_futures_delta;
+    fs.writeFileSync(file, JSON.stringify(managed));
+    const delta = entry.readEthEntryFuturesDelta as jest.Mock;
+    delta.mockClear(); delta.mockRejectedValue(new Error('FD unavailable during protective recovery'));
     position = { market: 'ETH-USD', size: .4, entryPrice: 120 };
     process.env.OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_ENABLED = 'false';
     const restarted = new OpenLiquidityV2EthTradeMonitor({} as any); restarted.configureTradeExecutor(orders);
@@ -261,6 +353,7 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
     expect(orders.syncTrailingStop).toHaveBeenCalled();
     expect(orders.placeOrder).toHaveBeenCalledTimes(1); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+    expect(delta).not.toHaveBeenCalled();
   });
   test('a restart does not turn a pre-restart purple candle into a fresh entry', async () => {
     const restarted: any = new OpenLiquidityV2EthTradeMonitor({} as any); restarted.configureTradeExecutor(orders);

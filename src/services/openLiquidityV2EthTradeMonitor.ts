@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
-import { ETH_GAP_DAILY_ENTRY_ENV, EthGapDailySignal, ethGapDailyEntryEnabled,
-  freshEthGapDailySignal, readEthGapDailySignal } from './ethGapDailyEntry';
+import { ETH_GAP_DAILY_ENTRY_ENV, EthGapDailySignal, EthEntryFuturesDelta, ethGapDailyEntryEnabled,
+  freshEthGapDailySignal, readEthGapDailySignal, readEthEntryFuturesDelta } from './ethGapDailyEntry';
 import { archiveIntrusionEvidence } from './liquidityObservationArchive';
 import {
   FractalEntryRequest,
@@ -304,9 +304,10 @@ type EthMonitorState = AlertState & {
   gapDailyEntry?: {
     activatedAt?: string;
     handledCandle?: number;
+    futuresDelta?: EthEntryFuturesDelta;
     decision?: any;
     intent?: { signature: string; attemptedAt: string; signal: EthGapDailySignal; plan: any;
-      orderAlert: AlertObject; outcome: 'SUBMITTING' | 'UNKNOWN' | 'CONFIRMED' | 'FLATTENED' | 'NO_POSITION' };
+      futuresDelta?: EthEntryFuturesDelta; orderAlert: AlertObject; outcome: 'SUBMITTING' | 'UNKNOWN' | 'CONFIRMED' | 'FLATTENED' | 'NO_POSITION' };
   };
   pendingAlerts?: Record<string, PendingEthAlert>;
   normalSentSignatures?: string[];
@@ -927,6 +928,9 @@ export class OpenLiquidityV2EthTradeMonitor {
       gapDailyEntry: this.config.market === 'ETH-USD' ? {
         enabled: this.gapDailyEnabled(), env: ETH_GAP_DAILY_ENTRY_ENV, source: 'Binance Spot ETHUSDT 1H + 1D',
         executionMarket: 'ETH-USD', takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
+        futuresDeltaFilter: { enabled: true, symbol: 'ETHUSDT', venue: 'Binance USD-M Futures', interval: '5m',
+          window: 'signal-last-five-minutes', requirement: 'directionalDeltaPct > 0', missingData: 'block-entry',
+          lastMeasurement: state.gapDailyEntry?.futuresDelta },
         activatedAt: state.gapDailyEntry?.activatedAt, decision: state.gapDailyEntry?.decision,
         executionOutcome: state.gapDailyEntry?.intent?.outcome
       } : undefined,
@@ -1197,7 +1201,9 @@ export class OpenLiquidityV2EthTradeMonitor {
 
   private async executeGapDailyEntry(state: EthMonitorState, signal: EthGapDailySignal, result: any): Promise<void> {
     const entry = state.gapDailyEntry!;
-    const skip = (reason: string) => { entry.decision = { outcome: 'SKIPPED', at: nowNlIso(), reason, signal }; };
+    const skip = (reason: string, futuresDelta?: EthEntryFuturesDelta) => {
+      entry.decision = { outcome: 'SKIPPED', at: nowNlIso(), reason, signal, ...(futuresDelta ? { futuresDelta } : {}) };
+    };
     if (!this.gapDailyEnabled() || !this.enabled() || !this.autoTradeEnabled()) return skip('ETH entry model, monitor or pair auto-trading is disabled.');
     if (!this.executor?.syncTrailingStop || !boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true) ||
       !boolEnv('DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED', true) || !boolEnv('DYDX_V4_FRACTAL_TRAIL_ENABLED', true)) {
@@ -1210,15 +1216,22 @@ export class OpenLiquidityV2EthTradeMonitor {
       entry.handledCandle = signal.closedAt * 1000;
       return skip('Existing ETH position; no addition or reversal.');
     }
+    const futuresDelta = await readEthEntryFuturesDelta(signal);
+    entry.futuresDelta = futuresDelta;
+    if (!freshEthGapDailySignal(signal, entry.activatedAt!)) return skip('Signal expired while waiting for Futures delta.', futuresDelta);
+    if (!futuresDelta.passed) {
+      entry.handledCandle = signal.closedAt * 1000;
+      return skip('ETH final-5m directional Futures delta must be strictly positive (> 0).', futuresDelta);
+    }
     const plan = await this.getGapDailyStopPlan(account, signal);
     const signature = `ETH-USD|GAP_DAILY|${signal.time}|${signal.direction}`;
     const orderAlert = buildDecentraderOrderAlert(plan, signature);
     Object.assign(orderAlert, { strategy: 'open_liquidity_v2_eth_gap_daily_entry', profile: 'NO_TP',
-      take_profits: [], gap_daily_entry: signal });
+      take_profits: [], gap_daily_entry: signal, gap_daily_futures_delta: futuresDelta });
     await this.applyStatefulOrderCapacity(orderAlert, result);
     if (!freshEthGapDailySignal(signal, entry.activatedAt!)) return skip('Signal expired during order preparation.');
     entry.handledCandle = signal.closedAt * 1000;
-    entry.intent = { signature, attemptedAt: new Date().toISOString(), signal, plan, orderAlert, outcome: 'SUBMITTING' };
+    entry.intent = { signature, attemptedAt: new Date().toISOString(), signal, plan, futuresDelta, orderAlert, outcome: 'SUBMITTING' };
     state.lastTradeAttemptedSignature = signature;
     state.lastTradeAttemptedAt = entry.intent.attemptedAt;
     // Persist the order intent before any exchange mutation, including its no-TP policy.
@@ -1238,7 +1251,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       writeState(state, this.config);
       result.tradePlaced = true;
       await this.syncManagedOrders(state, result, { stopOnly: true });
-      entry.decision = { ...state.lastTradeDecision, protection: result.dynamicSlSync };
+      entry.decision = { ...state.lastTradeDecision, futuresDelta, protection: result.dynamicSlSync };
     } catch (error) {
       if (entry.intent.outcome === 'SUBMITTING') entry.intent.outcome = 'UNKNOWN';
       writeState(state, this.config);

@@ -31,7 +31,9 @@ Labels are included in chart PNG exports.
 
 The chart requests at most eight signal hours at a time, newest first, only
 while visible and the overlay is enabled. Historical labels fill progressively.
-There are no startup fetches, background collectors, exchange callbacks or mails.
+There are no startup fetches or background collectors in the delta feed itself.
+The ETH gap/Daily entry model also reads the same ETH cache when evaluating a
+fresh candidate, independently from the browser; see `ETH_GAP_DAILY_ENTRY.md`.
 At most one new annotation read across BTC and ETH enters the existing shared
 Binance host queue at a time. Existing throttling and host cooldowns apply.
 Failures back off; just-closed candles can retry after 15 seconds, older failures
@@ -46,8 +48,10 @@ continue. Responses expose `persistenceAvailable`.
 
 ## Scope and Interpretation
 
-These are observation labels only. There is no 25% cutoff, new entry filter,
-order, notification, stop-loss, trailing or TP behavior. The BTC exploratory
+The labels themselves do not execute orders. BTC remains observe-only; the ETH
+gap/Daily experiment now additionally requires this same directional measurement
+to be strictly > 0. There is no 25% cutoff. No notification, stop-loss, trailing
+or TP behavior is changed by the delta check. The BTC exploratory
 finding is not proof that the same feature predicts ETH outcomes. Historical
 measurements retain their fetch timestamp; reconstruction does not prove that
 the historical intrusion was available at candle-close, and upstream historical
