@@ -99,3 +99,6 @@ typings/
 !/scripts/audit-eth-gap-source.cjs
 !/scripts/check-order-block-source.cjs
 !/scripts/check-btc-order-blocks.cjs
+!/scripts/fetch-btc-replay.cjs
+!/scripts/replay-btc-intrusion-daily.ts
+!/scripts/render-btc-replay.cjs
