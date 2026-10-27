@@ -102,3 +102,7 @@ typings/
 !/scripts/fetch-btc-replay.cjs
 !/scripts/replay-btc-intrusion-daily.ts
 !/scripts/render-btc-replay.cjs
+!/scripts/fetch-btc-impulse-study.py
+!/scripts/analyze-btc-impulses.py
+!/scripts/build-btc-structure-study.ts
+!/scripts/report-btc-impulse-study.py
