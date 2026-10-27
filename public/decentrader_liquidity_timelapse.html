@@ -1544,7 +1544,7 @@
           <label class="spot-chart-toggle" title="Weekly fractals"><input type="checkbox" id="spotChartWeekly" checked><i class="spot-fractal-swatch weekly"></i>Weekly</label>
           <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Weekly fractal"><input type="checkbox" id="spotChartGapWeeklyBreaks" checked><i class="spot-fractal-swatch gap-weekly-break"></i>Gap / W break</label>
           <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Daily fractal"><input type="checkbox" id="spotChartGapDailyBreaks" checked><i class="spot-fractal-swatch gap-daily-break"></i>Gap / D break</label>
-          <label class="spot-chart-toggle" title="Recorded Decentrader intrusion alert time coincides with a fresh Daily close break in the same direction"><input type="checkbox" id="spotChartIntrusionDailyBreaks" checked><i class="spot-fractal-swatch intrusion-daily-break"></i>Dec intrusion / D</label>
+          <label class="spot-chart-toggle" title="Recorded intrusion and fresh Daily close break. F5m labels show the last five minutes of the matching Binance USD-M Futures symbol's taker delta, normalized to trade direction: positive = aligned selling for shorts / buying for longs. n/a = unavailable. Observe-only, not an entry filter."><input type="checkbox" id="spotChartIntrusionDailyBreaks" checked><i class="spot-fractal-swatch intrusion-daily-break"></i>Dec intrusion / D</label>
           <label class="spot-chart-toggle" title="Monthly fractals"><input type="checkbox" id="spotChartMonthly" checked><i class="spot-fractal-swatch monthly"></i>Monthly</label>
           <label class="spot-chart-toggle" title="Planned manual entries and their take profits"><input type="checkbox" id="spotChartManual" checked><i class="spot-fractal-swatch manual"></i>Manual / TP</label>
           <label class="spot-chart-toggle" title="Broken fractal segments"><input type="checkbox" id="spotChartBroken" checked>Broken</label>
@@ -1763,6 +1763,7 @@
   <script defer src="/assets/btc-spot-chart/order-blocks.js"></script>
   <script defer src="/assets/btc-spot-chart/gap-boxes.js"></script>
   <script defer src="/assets/btc-spot-chart/gap-weekly-breakouts.js"></script>
+  <script defer src="/assets/btc-spot-chart/futures-delta.js"></script>
   <script defer src="/assets/btc-spot-chart/intrusion-daily-breakouts.js"></script>
   <script defer src="/assets/btc-spot-chart/manual-levels.js"></script>
   <script defer src="/assets/btc-spot-chart/viewport.js"></script>

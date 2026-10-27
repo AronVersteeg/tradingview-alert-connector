@@ -91,18 +91,27 @@ function purpleColumn(buffer, x) {
       const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 },
         isMobile: mobile, hasTouch: mobile, acceptDownloads: true });
       let now = day + 4 * HOUR + 5000;
-      const errors = [], writes = [], wrongMarketReads = []; let intrusionFailure = false, intrusionReads = 0;
+      const errors = [], writes = [], wrongMarketReads = []; let intrusionFailure = false, intrusionReads = 0, deltaReads = 0;
       await context.addInitScript(value => { window.__weeklyNow = value; Date.now = () => window.__weeklyNow; window.WebSocket = class { close() {} }; }, now);
       await context.route('**/*', route => {
         const req = route.request(), target = new URL(req.url());
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) { writes.push(req.method()); return route.abort(); }
-        if (eth && (target.pathname.startsWith('/open-liquidity/v2/btc-spot-') || target.pathname === '/decentrader/liquidity-timelapse' ||
+        if (eth && (target.pathname.startsWith('/open-liquidity/v2/btc-spot-') || target.pathname.includes('btc-intrusion-futures-delta') || target.pathname === '/decentrader/liquidity-timelapse' ||
             target.pathname.includes('gap-projection-history') || target.pathname === '/decentrader/manual-override' && target.searchParams.get('market') !== market)) wrongMarketReads.push(req.url());
         if (target.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: html });
         if (target.origin === new URL(url).origin && target.pathname.startsWith('/assets/')) return route.continue();
         if (target.pathname.endsWith(`/${asset}-spot-candles`)) return route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h',
           fetchedAt: iso(now), candles: candles(now), hasMore: false } });
         if (target.pathname.endsWith(`/${asset}-spot-fractal-projections`)) return route.fulfill({ json: bundle(now) });
+        if (target.pathname.endsWith(`/${asset}-intrusion-futures-delta`)) {
+          deltaReads++;
+          const hours = target.searchParams.get('hours').split(',').map(Number);
+          assert(hours.length <= 8, 'Annotation requests must be bounded batches');
+          return route.fulfill({ json: { symbol, venue: 'Binance USD-M Futures', interval: '5m', timeBasis: 'signal-last-five-minutes',
+            records: hours.map(hour => { const buy = hour === (day + 3 * HOUR) / 1000 ? (eth ? 65 : 62.93) : (eth ? 40 : 34.78);
+              return { hour, status: 'ok', candle: { hour, startedAt: hour + 3300, closedAt: hour + 3600,
+                volumeBase: 100, takerBuyVolumeBase: buy, rawDeltaPct: (2 * buy / 100 - 1) * 100, fetchedAt: iso(now) } }; }) } });
+        }
         if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return eth && intrusionFailure
           ? route.fulfill({ status: 503, json: { error: 'Fixture read failure' } }) : route.fulfill({ json: payload(now) });
         if (target.pathname === '/decentrader/liquidity-timelapse') {
@@ -216,6 +225,22 @@ function purpleColumn(buffer, x) {
       const purple = await page.locator('#spotChartCanvas').screenshot();
       const purplePixels = purpleXs.map(x => purpleColumn(purple, x));
       assert(purplePixels.every(n => n > 200), `Actual purple lines on the alert candles: ${purplePixels}`);
+      let deltaLabels = [];
+      {
+        await page.waitForFunction(() => window.btcSpotChart.getIntrusionDeltaLabels().filter(label => label.status === 'ok').length === 2);
+        deltaLabels = await page.evaluate(() => window.btcSpotChart.getIntrusionDeltaLabels());
+        assert.deepEqual(deltaLabels.map(label => label.text), eth ? ['F5m +30.00%', 'F5m +20.00%'] : ['F5m +25.86%', 'F5m +30.44%']);
+        for (const label of deltaLabels) assert(label.x >= 0 && label.y >= 0, 'Labels remain within the pane');
+        const shot = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
+        for (const label of deltaLabels) {
+          let pixels = 0;
+          for (let y = Math.ceil(label.y); y < Math.floor(label.y + label.height); y++) for (let x = Math.ceil(label.x); x < Math.floor(label.x + label.width); x++) {
+            const at = (y * shot.width + x) * 4;
+            if (shot.data[at] > 175 && shot.data[at + 1] > 125 && shot.data[at + 2] > 185) pixels++;
+          }
+          assert(pixels > 12, 'The actual F5m text must render, not just expose metadata');
+        }
+      }
       const purpleDownloadEvent = page.waitForEvent('download'); await page.locator('#spotChartDownload').click();
       const purpleFile = path.join(output, `intrusion-daily-${mobile ? 'mobile' : 'desktop'}-export.png`);
       await (await purpleDownloadEvent).saveAs(purpleFile);
@@ -228,9 +253,12 @@ function purpleColumn(buffer, x) {
       assert.equal((await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts())).signals.length, 2, 'Read failure preserves saved evidence');
       await page.locator('#spotChartIntrusionDailyBreaks').uncheck();
       const readsWhenOff = intrusionReads;
+      const deltaReadsWhenOff = deltaReads;
       await page.locator('#spotChartRefresh').click();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal(intrusionReads, readsWhenOff, 'Disabled intrusion overlay performs no additional dashboard reads');
+      assert.equal(deltaReads, deltaReadsWhenOff, 'Disabled overlay stops annotation reads');
+      assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionDeltaLabels()), []);
       const noPurple = await page.locator('#spotChartCanvas').screenshot();
       assert(purpleXs.every(x => purpleColumn(noPurple, x) < 20), 'Checkbox removes the actual purple lines');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
@@ -238,7 +266,8 @@ function purpleColumn(buffer, x) {
       results.push({ mobile, symbol, layerPixels, wrongMarketReads, automaticClosedHourUpdate: true, longAndShort: true, previousBoxUsed: true,
         independentCheckboxes: true, orangePixels: pixels, yellowPixels, weeklyWinsOverlap: true,
         pngIncludesBothOverlays: true, purplePixels, intrusionAlertTimeNotMailTime: true,
-        readFailureRetainsIntrusions: true, disabledIntrusionStopsReads: true, noHorizontalOverflow: true, writes });
+        readFailureRetainsIntrusions: true, disabledIntrusionStopsReads: true, deltaReads, deltaLabels,
+        noHorizontalOverflow: true, writes });
       await context.close();
     }
     console.log(JSON.stringify(results, null, 2));

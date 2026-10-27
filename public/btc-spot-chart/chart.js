@@ -13,7 +13,7 @@
   if (eth) {
     const toggle = document.getElementById('spotChartIntrusionDailyBreaks').parentElement;
     toggle.lastChild.textContent = 'Intrusion / D';
-    toggle.title = 'Recorded Binance Spot ETH intrusion alert time and fresh Daily close break on the same candle';
+    toggle.title = 'Recorded Binance Spot ETH intrusion and fresh Daily close break. F5m = last-five-minute ETHUSDT Futures taker delta normalized to direction; positive means aligned flow. Observe-only.';
     document.getElementById('spotChartIntrusionDailyStatus').textContent = 'Intrusion / D pending';
   }
   panel.hidden = false;
@@ -25,6 +25,7 @@
   const gapBoxes = window.BtcSpotGapBoxes;
   const gapWeeklyBreaks = window.BtcSpotGapWeeklyBreakouts;
   const intrusionDailyBreaks = window.BtcSpotIntrusionDailyBreakouts;
+  const futuresDelta = window.BtcIntrusionFuturesDelta;
   const manualLevels = window.BtcSpotManualLevels;
   const viewport = window.BtcSpotViewport;
   const interactions = window.BtcSpotInteractions;
@@ -47,6 +48,8 @@
   let closedDataVersion = 0;
   let intrusionLayer, intrusionHistory = window.BTC_SPOT_INTRUSION_HISTORY, intrusionModel, intrusionInputs, intrusionPending;
   let intrusionRetryAt = 0, intrusionReadFailed = false;
+  const deltaRecords = new Map();
+  let deltaPending, deltaController, deltaLastRequestAt = 0;
   const breakoutStates = [
     { timeframe: 'W', name: 'Weekly', levelsKey: 'weeklyLevels' },
     { timeframe: 'D', name: 'Daily', levelsKey: 'dailyLevels' }
@@ -58,7 +61,10 @@
   const projectionLead = () => Math.max(gapLead(), (manualLayer?.rightLead(candles.length) || gapLead()) - viewport.RIGHT_BUFFER + 2);
   const chartCanvas = byId('spotChartCanvas');
   const desktopOrderBlockLabels = window.matchMedia('(min-width: 681px)');
-  const updateOrderBlockFont = () => orderBlockLayer?.setLabelFontSize(desktopOrderBlockLabels.matches ? 15 : 10);
+  const updateOrderBlockFont = () => {
+    orderBlockLayer?.setLabelFontSize(desktopOrderBlockLabels.matches ? 15 : 10);
+    intrusionLayer?.setLabelFontSize(desktopOrderBlockLabels.matches ? 11 : 10);
+  };
   desktopOrderBlockLabels.addEventListener('change', updateOrderBlockFont);
   for (const id of ['spotChartOrderBlockControls', 'spotChartOrderBlockStatus', 'spotChartOrderBlockCredit']) byId(id).hidden = eth;
 
@@ -185,12 +191,52 @@
       const stale = intrusionReadFailed || !intrusionModel.evaluatedThrough ||
         Date.parse(intrusionModel.evaluatedThrough) < hour * 3_600_000;
       status.textContent = `${intrusionLabel}: ${intrusionModel.signals.length} | saved alert times${stale ? ' | stale' : ''}`;
+      intrusionLayer?.setDeltaRecords(deltaRecords);
+      const available = intrusionModel.signals.filter(signal => deltaRecords.get(signal.time)?.status === 'ok').length;
+      status.textContent += ` | F5m: ${available}/${intrusionModel.signals.length}`;
+      void refreshIntrusionDelta();
       status.dataset.stale = String(stale);
     } catch (error) {
       intrusionInputs = undefined; intrusionModel = undefined; intrusionLayer?.setData([]);
       status.textContent = `${intrusionLabel} pending: ${error.message}`;
       status.dataset.stale = 'true';
     }
+  }
+
+  async function refreshIntrusionDelta() {
+    if (!active || destroyed || !initialData || !byId('spotChartIntrusionDailyBreaks').checked ||
+      !intrusionModel || deltaPending || Date.now() - deltaLastRequestAt < 2000) return deltaPending;
+    const hours = [...new Set(intrusionModel.signals.map(signal => signal.time))].sort((a, b) => b - a).filter(hour => {
+      const record = deltaRecords.get(hour);
+      return !record || record.status !== 'ok' && Date.parse(record.retryAt) <= Date.now();
+    }).slice(0, 8);
+    if (!hours.length) return;
+    deltaLastRequestAt = Date.now();
+    deltaController = new AbortController();
+    const controller = deltaController, timeout = setTimeout(() => controller.abort(), 25_000);
+    deltaPending = (async () => {
+      try {
+        const response = await fetch(`/open-liquidity/v2/${asset}-intrusion-futures-delta?hours=${hours.join(',')}`,
+          { signal: controller.signal, cache: 'no-store' });
+        if (!response.ok) throw new Error('Futures delta read unavailable');
+        const records = futuresDelta.readDeltaResponse(await response.json(), symbol);
+        if (records.some(record => !hours.includes(record.hour))) throw new Error('Unexpected Futures delta hour');
+        if (destroyed || controller.signal.aborted) return;
+        for (const hour of hours) {
+          const record = records.find(row => row.hour === hour);
+          deltaRecords.set(hour, record || { hour, status: 'unavailable', retryAt: new Date(Date.now() + 60_000).toISOString() });
+        }
+        while (deltaRecords.size > 5000) deltaRecords.delete(deltaRecords.keys().next().value);
+        updateIntrusionDailyBreakouts();
+      } catch {
+        if (!destroyed && !controller.signal.aborted) {
+          for (const hour of hours) if (deltaRecords.get(hour)?.status !== 'ok') deltaRecords.set(hour,
+            { hour, status: 'unavailable', retryAt: new Date(Date.now() + 60_000).toISOString() });
+          updateIntrusionDailyBreakouts();
+        }
+      } finally { clearTimeout(timeout); deltaPending = undefined; if (deltaController === controller) deltaController = undefined; }
+    })();
+    return deltaPending;
   }
 
   async function refreshIntrusionHistory(force = false) {
@@ -428,6 +474,8 @@
       }
       updateGapFractalBreakouts();
       intrusionLayer = new intrusionDailyBreaks.IntrusionDailyBreakoutPrimitive();
+      intrusionLayer.setDeltaEnabled(true);
+      updateOrderBlockFont();
       intrusionLayer.setVisible(byId('spotChartIntrusionDailyBreaks').checked);
       candlesSeries.attachPrimitive(intrusionLayer);
       updateIntrusionDailyBreakouts();
@@ -486,6 +534,8 @@
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
         getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({
           ...signal, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
+        getIntrusionDeltaLabels: () => intrusionLayer?.getDeltaLabels() || [],
+        getIntrusionFuturesDelta: () => [...deltaRecords.values()].map(record => ({ ...record, ...(record.candle ? { candle: { ...record.candle } } : {}) })),
         getManualLevels: () => manualModel ? { ...manualModel, levels: manualModel.levels.map((level) => ({ ...level })) } : null,
         getManualProjections: () => manualLayer ? manualLayer.projectionBoxes().map((box) => ({ ...box })) : []
       });
@@ -496,6 +546,7 @@
         updateGapProjection();
         void refreshFractals();
         void refreshIntrusionHistory();
+        void refreshIntrusionDelta();
         if (!lastTickAt || Date.now() - lastTickAt > 12_000) {
           if (Date.now() - lastRestAt >= 30_000) void loadRecent();
           if (socket && Date.now() - (lastTickAt || lastRestAt) > 20_000) socket.close();
@@ -602,7 +653,7 @@
   }
   async function syncActivity() {
     active = inView && !document.hidden && navigator.onLine;
-    if (!active) { clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return; }
+    if (!active) { deltaController?.abort(); clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return; }
     try {
       await ensureChart();
       if (!active || destroyed) return;
@@ -645,7 +696,8 @@
   }
   byId('spotChartIntrusionDailyBreaks').addEventListener('change', (event) => {
     intrusionLayer?.setVisible(event.target.checked);
-    if (event.target.checked) void refreshIntrusionHistory();
+    if (event.target.checked) { void refreshIntrusionHistory(); void refreshIntrusionDelta(); }
+    else deltaController?.abort();
   });
   byId('spotChartManual').addEventListener('change', (event) => {
     manualLayer?.setVisible(event.target.checked);
@@ -711,6 +763,7 @@
   observer.observe(panel);
   window.addEventListener('pagehide', () => {
     destroyed = true;
+    deltaController?.abort();
     desktopOrderBlockLabels.removeEventListener('change', updateOrderBlockFont);
     observer.disconnect(); disconnect(); clearInterval(watchdog); clearTimeout(orderBlockHistoryTimer); gestures?.destroy(); manualLayer?.destroy(); chart?.remove();
   }, { once: true });

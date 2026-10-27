@@ -1,6 +1,7 @@
 (function (root) {
   'use strict';
   const engine = typeof module === 'object' && module.exports ? require('./gap-weekly-breakouts.js') : root.BtcSpotGapWeeklyBreakouts;
+  const delta = typeof module === 'object' && module.exports ? require('./futures-delta.js') : root.BtcIntrusionFuturesDelta;
   const SOURCE = 'decentrader-recorded-intrusions';
 
   function compactIntrusionHistory(payload, nowMs = Date.now(), market = 'BTC-USD') {
@@ -56,7 +57,38 @@
   }
 
   class IntrusionDailyBreakoutPrimitive extends engine.GapWeeklyBreakoutPrimitive {
-    constructor() { super('#ba68c8'); }
+    constructor() { super('#ba68c8'); this.deltaEnabled = false; this.deltaRecords = new Map(); this.deltaLabels = []; this.fontSize = 11; }
+    setDeltaEnabled(enabled) { this.deltaEnabled = Boolean(enabled); this.deltaLabels = []; this.requestUpdate?.(); }
+    setDeltaRecords(records) { this.deltaRecords = new Map(records); this.requestUpdate?.(); }
+    setLabelFontSize(size) { if (size >= 8 && size <= 16) this.fontSize = size; this.requestUpdate?.(); }
+    setVisible(visible) { super.setVisible(visible); this.deltaLabels = []; }
+    getDeltaLabels() { return this.deltaLabels.map(label => ({ ...label })); }
+    draw(target) {
+      super.draw(target); this.deltaLabels = [];
+      if (!this.deltaEnabled || !this.visible || !this.chart) return;
+      target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width, height } }) => {
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();
+        ctx.font = `${this.fontSize}px Arial`; ctx.textBaseline = 'top';
+        const h = this.fontSize + 6, lanes = Array(Math.max(0, Math.min(7, Math.floor((height - 14) / (h + 3))))).fill(-1000);
+        for (const signal of this.signals.slice().sort((a, b) => a.time - b.time)) {
+          const anchor = this.chart.timeScale().timeToCoordinate(signal.time);
+          if (!Number.isFinite(anchor) || anchor < 0 || anchor > width) continue;
+          const value = delta.deltaLabel(signal, this.deltaRecords.get(signal.time));
+          const w = ctx.measureText(value.text).width + 8;
+          if (w + 6 > width) continue;
+          const x = Math.max(3, Math.min(width - w - 3, anchor - w / 2));
+          const lane = lanes.findIndex(right => x >= right + 4);
+          if (lane < 0) continue;
+          lanes[lane] = x + w;
+          const y = 7 + lane * (h + 3);
+          ctx.globalAlpha = .95; ctx.fillStyle = '#161a25'; ctx.fillRect(x, y, w, h);
+          ctx.strokeStyle = '#865094'; ctx.lineWidth = 1; ctx.setLineDash([]); ctx.globalAlpha = .7; ctx.strokeRect(x, y, w, h);
+          ctx.globalAlpha = 1; ctx.fillStyle = '#d8b4e6'; ctx.fillText(value.text, x + 4, y + 3);
+          this.deltaLabels.push({ time: signal.time, direction: signal.direction, ...value, x, y, width: w, height: h });
+        }
+        ctx.restore();
+      });
+    }
   }
 
   const api = Object.freeze({ compactIntrusionHistory, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, IntrusionDailyBreakoutPrimitive });
