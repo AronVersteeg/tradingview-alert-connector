@@ -29,7 +29,7 @@
       ignoredRecords, records: [...records.values()].sort((a, b) => a.time - b.time || a.direction.localeCompare(b.direction)) };
   }
 
-  function buildIntrusionDailyBreakouts(candles, history, fractals, nowMs = Date.now(), market = 'BTC-USD') {
+  function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe) {
     const expectedSource = market === 'ETH-USD' ? 'binance-spot-recorded-intrusions' : SOURCE;
     if (!['BTC-USD', 'ETH-USD'].includes(market) || history?.market !== market || history.source !== expectedSource || history.timeBasis !== 'alert-candle-open-utc' ||
         !Array.isArray(history.records)) throw new Error('Unexpected Decentrader intrusion history');
@@ -39,18 +39,27 @@
           Date.parse(record.alertTime) !== record.time * 1000) throw new Error('Invalid intrusion alert time');
       records.set(`${record.time}|${record.direction}`, record);
     }
-    const model = engine.buildDailyFractalBreakouts(candles, fractals, nowMs, market === 'ETH-USD' ? 'ETHUSDT' : 'BTCUSDT');
+    const evaluate = timeframe === 'W' ? engine.buildWeeklyFractalBreakouts : engine.buildDailyFractalBreakouts;
+    const model = evaluate(candles, fractals, nowMs, market === 'ETH-USD' ? 'ETHUSDT' : 'BTCUSDT');
     return { ...model, intrusionSource: expectedSource, timeBasis: history.timeBasis, signals: model.signals.flatMap(signal => {
       const record = records.get(`${signal.time}|${signal.direction}`);
       return record ? [{ ...signal, intrusion: { ...record } }] : [];
     }) };
   }
 
+  function buildIntrusionDailyBreakouts(candles, history, fractals, nowMs = Date.now(), market = 'BTC-USD') {
+    return buildIntrusionBreakouts(candles, history, fractals, nowMs, market, 'D');
+  }
+
+  function buildIntrusionWeeklyBreakouts(candles, history, fractals, nowMs = Date.now(), market = 'BTC-USD') {
+    return buildIntrusionBreakouts(candles, history, fractals, nowMs, market, 'W');
+  }
+
   class IntrusionDailyBreakoutPrimitive extends engine.GapWeeklyBreakoutPrimitive {
     constructor() { super('#ba68c8'); }
   }
 
-  const api = Object.freeze({ compactIntrusionHistory, buildIntrusionDailyBreakouts, IntrusionDailyBreakoutPrimitive });
+  const api = Object.freeze({ compactIntrusionHistory, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, IntrusionDailyBreakoutPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {
     root.BtcSpotIntrusionDailyBreakouts = api;

@@ -76,6 +76,10 @@
     return buildFractalCloseBreakouts(input, fractals, nowMs, 'D', 'dailyLevels', symbol);
   }
 
+  function buildWeeklyFractalBreakouts(input, fractals, nowMs = Date.now(), symbol = 'BTCUSDT') {
+    return buildFractalCloseBreakouts(input, fractals, nowMs, 'W', 'weeklyLevels', symbol);
+  }
+
   function buildGapWeeklyBreakouts(input, timeline, fractals, nowMs = Date.now(), symbol = 'BTCUSDT') {
     return buildGapFractalBreakouts(input, timeline, fractals, nowMs, 'W', 'weeklyLevels', symbol);
   }
@@ -116,7 +120,7 @@
     constructor() { super('#fff59d'); }
   }
 
-  const api = Object.freeze({ buildGapWeeklyBreakouts, buildGapDailyBreakouts, buildDailyFractalBreakouts,
+  const api = Object.freeze({ buildGapWeeklyBreakouts, buildGapDailyBreakouts, buildDailyFractalBreakouts, buildWeeklyFractalBreakouts,
     GapWeeklyBreakoutPrimitive, GapDailyBreakoutPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcSpotGapWeeklyBreakouts = api;

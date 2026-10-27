@@ -6,29 +6,37 @@ import { buildFractalStop } from '../src/services/decentraderGapMonitor';
 import { parseSpotChartCandles } from '../src/services/binanceSpotChart';
 import { parseBinanceDailyCandles, buildDailyFractalHistory } from '../src/services/binanceDailyFractalHistory';
 import { replayFractalStrategy, ReplayConfig, ReplayTrade } from '../src/research/fractalStrategyReplay';
-const { projectDailyFractals } = require('../public/btc-spot-chart/fractals.js');
-const { compactIntrusionHistory, buildIntrusionDailyBreakouts } = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
+const { projectFractals } = require('../public/btc-spot-chart/fractals.js');
+const { compactIntrusionHistory, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts } = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
 const directory = process.argv[2];
 if (!directory) throw new Error('Supply a directory containing inputs.json');
+const timeframe = process.argv[3] || 'D';
+if (!['D', 'W'].includes(timeframe)) throw new Error('Replay timeframe must be D or W');
+const fractalName = timeframe === 'W' ? 'Weekly' : 'Daily';
+const snapshotKey = timeframe === 'W' ? 'weekly' : 'daily', levelsKey = timeframe === 'W' ? 'weeklyLevels' : 'dailyLevels';
+const evaluate = timeframe === 'W' ? buildIntrusionWeeklyBreakouts : buildIntrusionDailyBreakouts;
 const inputPath = path.join(directory, 'inputs.json'), bytes = fs.readFileSync(inputPath);
 const input = JSON.parse(bytes.toString());
 if (input.version !== 1 || input.source !== 'Binance Spot BTCUSDT' || !Number.isSafeInteger(input.cutoff)) throw new Error('Unexpected replay capture');
 const candles = parseSpotChartCandles(input.hourly, input.cutoff).filter(c => c.closed);
-const daily = parseBinanceDailyCandles(input.daily, input.cutoff);
-const bundle = { symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThrough: new Date(input.cutoff).toISOString(),
-  daily: { venue: 'Binance Spot', symbol: 'BTCUSDT', interval: '1d', stale: false,
-    latestClosedCandleAt: new Date(daily.at(-1)!.closeTime).toISOString(), records: buildDailyFractalHistory(daily) } };
+if (!Array.isArray(input[snapshotKey])) throw new Error(`Capture lacks ${fractalName} candles`);
+const higher = parseBinanceDailyCandles(input[snapshotKey], input.cutoff);
+if (higher.length < 5) throw new Error('Insufficient higher-timeframe fractal history');
+const higherSnapshot = { venue: 'Binance Spot', symbol: 'BTCUSDT', interval: timeframe === 'W' ? '1w' : '1d', stale: false,
+  latestClosedCandleAt: new Date(higher.at(-1)!.closeTime).toISOString(), records: buildDailyFractalHistory(higher) };
+const bundle = { symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThrough: new Date(input.cutoff).toISOString(), [snapshotKey]: higherSnapshot };
 const history = compactIntrusionHistory(input.intrusionPayload, input.cutoff);
-const projections = projectDailyFractals(bundle, candles);
-const model = buildIntrusionDailyBreakouts(candles, history, projections, input.cutoff);
+const project = (data: any, rows: any[]) => projectFractals(data, rows, 'BTCUSDT', [[snapshotKey, timeframe]]);
+const projections = project(bundle, candles);
+const model = evaluate(candles, history, projections, input.cutoff);
 const prefixChecks = model.signals.map((signal: any) => {
-  const cutoff = signal.closedAt * 1000, prefixDaily = daily.filter(c => c.closeTime < cutoff);
+  const cutoff = signal.closedAt * 1000, prefixHigher = higher.filter(c => c.closeTime < cutoff);
   const prefixCandles = candles.filter(c => (c.time + 3600) * 1000 <= cutoff);
-  const prefixBundle = { ...bundle, evaluatedThrough: new Date(cutoff).toISOString(), daily: { ...bundle.daily,
-    latestClosedCandleAt: new Date(prefixDaily.at(-1)!.closeTime).toISOString(), records: buildDailyFractalHistory(prefixDaily) } };
-  const prefix = buildIntrusionDailyBreakouts(prefixCandles, history, projectDailyFractals(prefixBundle, prefixCandles), cutoff);
+  const prefixBundle = { ...bundle, evaluatedThrough: new Date(cutoff).toISOString(), [snapshotKey]: { ...higherSnapshot,
+    latestClosedCandleAt: new Date(prefixHigher.at(-1)!.closeTime).toISOString(), records: buildDailyFractalHistory(prefixHigher) } };
+  const prefix = evaluate(prefixCandles, history, project(prefixBundle, prefixCandles), cutoff);
   const expected = model.signals.filter((s: any) => s.closedAt <= signal.closedAt);
-  if (JSON.stringify(prefix.signals) !== JSON.stringify(expected)) throw new Error('Daily signal changed when future candles were removed');
+  if (JSON.stringify(prefix.signals) !== JSON.stringify(expected)) throw new Error(`${fractalName} signal changed when future candles were removed`);
   return { cutoff: new Date(cutoff).toISOString(), signals: prefix.signals.length, matchesFullHistory: true };
 });
 // These match the previously supplied SL settings and the existing live defaults.
@@ -65,10 +73,11 @@ const signalAudit = model.signals.map((s: any) => {
 });
 const report = { version: 1, generatedAt: new Date().toISOString(), capturedAt: input.capturedAt,
   inputSha256: crypto.createHash('sha256').update(bytes).digest('hex'), manifest: input.manifest,
-  strategy: 'Recorded BTC intrusion + same-candle fresh Daily close break (purple overlay)',
+  strategy: `Recorded BTC intrusion + same-candle fresh ${fractalName} close break`, fractalTimeframe: timeframe,
+  ...(input.baseInputSha256 ? { baseInputSha256: input.baseInputSha256 } : {}),
   signalSource: history.source, intrusions: { count: history.records.length, first: history.records[0], last: history.records.at(-1),
     ignored: history.ignoredRecords, completeCoverageProven: false },
-  dailyFractals: bundle.daily.records.length, stopEnvironment, settingsEvidence: input.settings,
+  [timeframe === 'W' ? 'weeklyFractals' : 'dailyFractals']: higherSnapshot.records.length, stopEnvironment, settingsEvidence: input.settings,
   validation: { contiguousClosedCandles: true, priceSignalPrefixChecks: prefixChecks,
     caveat: 'This proves price/fractal causality only, not historical intrusion availability.' },
   signals: signalAudit, primary, independent, sensitivity,
@@ -96,7 +105,7 @@ const tradeKeys = ['id', 'direction', 'signalOpenUtc', 'signalOpenAmsterdam', 'e
 fs.writeFileSync(path.join(directory, 'trades-single.csv'), csv(exportTrades(primary.trades), tradeKeys));
 fs.writeFileSync(path.join(directory, 'trades-all-signals.csv'), csv(exportTrades(independent.trades), tradeKeys));
 fs.writeFileSync(path.join(directory, 'signals.csv'), csv(signalAudit.map((s: any) => ({ ...s,
-  levels: s.dailyLevels.map((l: any) => l.price).join(' | ') })), ['signalOpenUtc', 'signalOpenAmsterdam', 'signalCloseUtc',
+  levels: s[levelsKey].map((l: any) => l.price).join(' | ') })), ['signalOpenUtc', 'signalOpenAmsterdam', 'signalCloseUtc',
   'direction', 'close', 'levels', 'firstObservedAt', 'firstObservationAtCloseProven', 'earliestSmtpSentAt', 'smtpMinutesAfterClose']));
 
 function lineChart(points: { x: number; y: number }[], width: number, height: number, color: string, markers: any[] = []) {
@@ -152,10 +161,10 @@ const tradeCards = (trades: ReplayTrade[]) => trades.map(t => `<article class="t
   ${tradeChart(t)}<div class="trade-info"><span>Entry ${num(t.entryPrice)} &middot; SL ${num(t.initialStop)} &middot; ${num(t.quantityBtc, 6)} BTC</span>
   <span>${t.stops.length - 1} trailupdates &middot; ${t.exitCandleTime ? 'Exitcandle ' + escape(nl(t.exitCandleTime)) : 'Ongerealiseerd ' + money(t.unrealizedGross)}</span></div></article>`).join('');
 const html = `<!doctype html><html lang="nl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>BTC Spot - Intrusion + Daily replay</title><style>
+<title>BTC Spot - Intrusion + ${fractalName} replay</title><style>
 *{box-sizing:border-box}body{margin:0;background:#10141d;color:#e2e7ee;font:14px 'Segoe UI',Arial,sans-serif;letter-spacing:0}main{max-width:2000px;margin:auto;padding:32px}
 h1{font-size:28px;margin:0 0 8px}h2{font-size:20px;margin:0 0 14px}h3{font-size:15px;margin:0}p{line-height:1.6;margin:8px 0}a{color:#91bfff}section{border-top:1px solid #303845;padding:24px 0}.muted,small{color:#a0adbe}.warning{border-left:3px solid #ffc857;padding:10px 16px;margin:20px 0;background:#1d2027}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin:24px 0}.metric strong{display:block;font-size:27px;margin-top:5px}.gain{color:#66d3b0}.loss{color:#ff8991}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}th,td{text-align:left;border-bottom:1px solid #2c3340;padding:9px 10px;font-size:13px}th{color:#a0adbe;font-weight:500}.scroll{overflow-x:auto}.trades{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.trade{border:1px solid #303845;border-radius:4px;background:#141924;overflow:hidden}.trade header{display:flex;justify-content:space-between;gap:10px;padding:14px 16px;align-items:center}.trade h3 span{font-weight:400;color:#a0adbe;margin-left:8px}.trade-info{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;color:#a0adbe;font-size:12px;padding:9px 16px 14px}svg{display:block;width:100%;height:auto}svg text{font:11px Arial;fill:#a0adbe}ul{padding-left:20px;line-height:1.6}.legend{display:flex;gap:22px;color:#a0adbe;margin-bottom:12px}.legend b{color:#bb86d9}.legend .stop{color:#ffc857}button{background:#242d3d;color:#e2e7ee;border:1px solid #465066;border-radius:4px;padding:7px 12px;cursor:pointer}footer{color:#a0adbe;font-size:12px;padding:20px 0;word-break:break-word}@media(max-width:900px){main{padding:16px}.metrics{grid-template-columns:repeat(2,1fr)}.trades{grid-template-columns:1fr}.trade header{flex-wrap:wrap}}@media print{button{display:none}.trade{break-inside:avoid}}
-</style><main><h1>BTCUSDT Spot &middot; Intrusion + Daily break</h1><p class="muted">Historische replay &middot; $15 prijsrisico per entry &middot; geen TP &middot; fractal-SL + tighten-only trailing &middot; tijden Europe/Amsterdam</p>
+</style><main><h1>BTCUSDT Spot &middot; Intrusion + ${fractalName} break</h1><p class="muted">Historische replay &middot; $15 prijsrisico per entry &middot; geen TP &middot; fractal-SL + tighten-only trailing &middot; tijden Europe/Amsterdam</p>
 <div class="warning"><strong>Hypothesetest, geen bewezen live rendement.</strong> De paarse lijnen worden op hun oorspronkelijke alert-candle getest. Dat de intrusion toen al bij candle-close beschikbaar was, is niet bewezen. De bewaarde intrusionhistorie is niet aantoonbaar volledig.</div>
 <div class="metrics"><div class="metric">Spot-candles<strong>${candles.length.toLocaleString('nl-NL')}</strong></div><div class="metric">Paarse signalen<strong>${model.signals.length}</strong></div>
 <div class="metric">Gesloten / open<strong>${primary.summary.closed} / ${primary.summary.open}</strong></div><div class="metric">Bruto resultaat<strong class="${primary.summary.netPnlUsd >= 0 ? 'gain' : 'loss'}">${money(primary.summary.netPnlUsd)}</strong></div>
@@ -170,14 +179,14 @@ ${summaryRow('Ieder signaal onafhankelijk - bruto (overlap toegestaan)', indepen
 <h3>Prijscontext &middot; nummers verwijzen naar de trades</h3>${lineChart(candles.map(c => ({ x: c.time, y: c.close })), 1800, 260, '#66a5ed', primary.trades.map(t => ({ time: t.signalTime, id: t.id })))}</section>
 <section id="trade-overview"><h2>Trades &middot; &eacute;&eacute;n positie tegelijk</h2><div class="legend"><span><b>|</b> Paarse signaalcandle</span><span>Blauw: entry</span><span class="stop">Geel: actieve SL / trailing</span><span>Wit: stop-exit</span></div>
 <p class="muted">Entry op de open van de volgende 1H-candle. Nieuwe stops gelden pas na bevestiging, vanaf de volgende candle. De exacte intrabar exittijd is onbekend.</p><div class="trades">${tradeCards(primary.trades) || '<p>Geen geldige entries.</p>'}</div></section>
-<section><h2>Signaalcontrole</h2><div class="scroll"><table><thead><tr><th>Alertcandle (open)</th><th>Close / entrymoment</th><th>Richting</th><th>Gebroken D-level(s)</th><th>Primaire replay</th><th>Eerste SMTP na close</th></tr></thead><tbody>
-${signalAudit.map((s: any) => { const trade = primary.trades.find(t => t.signalTime === s.time && t.direction === s.direction), skip = primary.skipped.find(t => t.signalTime === s.time && t.direction === s.direction); return `<tr><td>${escape(nl(s.time))}</td><td>${escape(nl(s.closedAt))}</td><td>${s.direction}</td><td>${s.dailyLevels.map((l: any) => num(l.price)).join(' / ')}</td><td>${trade ? '#' + trade.id : escape(skip?.reason || 'Onbekend')}</td><td>${s.smtpMinutesAfterClose === null ? 'Onbekend' : num(s.smtpMinutesAfterClose) + ' min'}</td></tr>`; }).join('')}
+<section><h2>Signaalcontrole</h2><div class="scroll"><table><thead><tr><th>Alertcandle (open)</th><th>Close / entrymoment</th><th>Richting</th><th>Gebroken ${timeframe}-level(s)</th><th>Primaire replay</th><th>Eerste SMTP na close</th></tr></thead><tbody>
+${signalAudit.map((s: any) => { const trade = primary.trades.find(t => t.signalTime === s.time && t.direction === s.direction), skip = primary.skipped.find(t => t.signalTime === s.time && t.direction === s.direction); return `<tr><td>${escape(nl(s.time))}</td><td>${escape(nl(s.closedAt))}</td><td>${s.direction}</td><td>${s[levelsKey].map((l: any) => num(l.price)).join(' / ')}</td><td>${trade ? '#' + trade.id : escape(skip?.reason || 'Onbekend')}</td><td>${s.smtpMinutesAfterClose === null ? 'Onbekend' : num(s.smtpMinutesAfterClose) + ' min'}</td></tr>`; }).join('')}
 </tbody></table></div><p class="muted">SMTP-acceptatie is geen bewijs van eerste observatie of inboxbezorging. Onbekend is niet nul minuten.</p></section>
 <section id="independent"><h2>Ieder signaal afzonderlijk &middot; diagnostisch</h2><p class="muted">Ook signalen tijdens een lopende trade, elk met eigen $15-risico en stop. Niet optellen alsof dit dezelfde live BTC-nettopositie is.</p>
 <details><summary>Alle ${independent.trades.length} afzonderlijke trades</summary><div class="trades">${tradeCards(independent.trades)}</div></details></section>
 <section><h2>Regels, herkomst en beperkingen</h2><p>Initial SL: meest recente geldige, bevestigde 1H Williams-fractal; 2 candles links/rechts; lookback 72; wick-buffer 0,1%; geen minimumafstand-uitbreiding; maximale afstand ${num(Number(stopEnvironment.DECENTRADER_SL_MAX_DISTANCE_PCT) * 100)}%. Trailing kiest uitsluitend nieuwere fractals, delay ${config.fractalDelay}, en verruimt de stop nooit. Dezelfde <code>buildFractalStop</code> als de live code wordt gebruikt.</p>
-<p>Anti-lookahead-controle: voor elk van de ${prefixChecks.length} signalen zijn alle latere 1H- en Daily-candles verwijderd en de Daily-breaksignalen opnieuw berekend. Alle controles komen overeen. Dit bewijst niet dat de intrusion zelf op tijd beschikbaar was.</p>
-<ul>${report.limitations.map(s => '<li>' + escape(s) + '</li>').join('')}</ul><p>Geen OI-, Delay-, candlekleur-, delta-, orderblock- of TP-filter toegevoegd. Daily-break en intrusionselectie gebruiken exact de bestaande paarse-overlay-evaluatoren.</p>
+<p>Anti-lookahead-controle: voor elk van de ${prefixChecks.length} signalen zijn alle latere 1H- en ${fractalName}-candles verwijderd en de ${fractalName}-breaksignalen opnieuw berekend. Alle controles komen overeen. Dit bewijst niet dat de intrusion zelf op tijd beschikbaar was.</p>
+<ul>${report.limitations.map(s => '<li>' + escape(s) + '</li>').join('')}</ul><p>Geen OI-, Delay-, candlekleur-, delta-, orderblock- of TP-filter toegevoegd. ${fractalName}-break en intrusionselectie gebruiken dezelfde candle-close- en bevestigingsregels als de bestaande overlays. ${timeframe === 'W' ? 'W-break is verplicht, D-break is geen extra eis; een gelijktijdige D-break sluit een W-signaal niet uit. Een green-gap-edge break is niet vereist.' : ''}</p>
 <p><a href="https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints">Binance Spot kline-bron</a> &middot; <a href="replay.json">Replay + stoptrajecten (JSON)</a> &middot; <a href="trades-single.csv">Trades (CSV)</a> &middot; <a href="trades-all-signals.csv">Alle signalen (CSV)</a> &middot; <a href="signals.csv">Signaalaudit (CSV)</a></p></section>
 <footer>Inputcapture ${escape(input.capturedAt)} &middot; input SHA-256 ${report.inputSha256} &middot; analyse-output, geen live orders of mails</footer></main></html>`;
 fs.writeFileSync(path.join(directory, 'rapport.html'), html);

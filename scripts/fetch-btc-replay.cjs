@@ -19,6 +19,21 @@ async function read(url) {
 }
 async function main() {
   fs.mkdirSync(output, { recursive: true });
+  if (process.argv[3] === '--from') {
+    const file = process.argv[4];
+    if (!file) throw new Error('--from requires an existing inputs.json path');
+    if (path.resolve(file) === path.resolve(output, 'inputs.json')) throw new Error('Use a separate output directory to preserve the original capture');
+    const bytes = fs.readFileSync(file), capture = JSON.parse(bytes);
+    if (capture.version !== 1 || capture.source !== 'Binance Spot BTCUSDT' || !Number.isSafeInteger(capture.cutoff)) throw new Error('Invalid existing capture');
+    capture.weekly = await read(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1w&endTime=${capture.cutoff - 1}&limit=1000`);
+    capture.baseInputSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+    capture.augmentedAt = new Date().toISOString();
+    capture.manifest.push(...manifest);
+    fs.writeFileSync(path.join(output, 'inputs.json'), JSON.stringify(capture));
+    console.log(JSON.stringify({ output, cutoff: new Date(capture.cutoff).toISOString(),
+      hourlyUnchanged: true, intrusionsUnchanged: true, weeklyCandles: capture.weekly.length, baseInputSha256: capture.baseInputSha256 }, null, 2));
+    return;
+  }
   const { serverTime } = await read('https://api.binance.com/api/v3/time');
   const cutoff = Math.floor(serverTime / HOUR) * HOUR;
   const raw = await read(base + '/decentrader/liquidity-timelapse');
@@ -46,8 +61,10 @@ async function main() {
     await pause(700);
   }
   const daily = await read(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&endTime=${cutoff - 1}&limit=1000`);
+  await pause(700);
+  const weekly = await read(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1w&endTime=${cutoff - 1}&limit=1000`);
   const capture = { version: 1, cutoff, capturedAt: new Date().toISOString(), source: 'Binance Spot BTCUSDT',
-    settings, intrusionPayload, hourly, daily, manifest };
+    settings, intrusionPayload, hourly, daily, weekly, manifest };
   fs.writeFileSync(path.join(output, 'inputs.json'), JSON.stringify(capture));
   console.log(JSON.stringify({ output, cutoff: new Date(cutoff).toISOString(), candles: hourly.length,
     intrusions: history.records.length, first: history.records[0], last: history.records.at(-1), settings }, null, 2));

@@ -1,6 +1,6 @@
 export {};
 const intrusionBreakouts = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
-const { compactIntrusionHistory, buildIntrusionDailyBreakouts, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
+const { compactIntrusionHistory, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
 const HOUR = 3600, start = Date.parse('2026-10-19T00:00:00Z') / 1000;
 const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
 const now = (start + 8 * HOUR) * 1000;
@@ -106,5 +106,46 @@ describe('Decentrader intrusion alert time and same-candle Daily close break, di
     draw(); expect(ctx.strokeStyle).toBe('#ba68c8'); expect(ctx.lineWidth).toBe(1);
     expect(ctx.moveTo).toHaveBeenCalledWith(20.5, 0); expect(ctx.lineTo).toHaveBeenCalledWith(20.5, 400);
     layer.setVisible(false); ctx.stroke.mockClear(); draw(); expect(ctx.stroke).not.toHaveBeenCalled();
+  });
+});
+
+describe('recorded intrusion and same-candle Weekly close break, offline replay', () => {
+  const weeklyModel = () => ({ ...model(), levels: model().levels.map((level: any) => ({ ...level,
+    id: level.id.replace('D|', 'W|'), timeframe: 'W' })) });
+
+  test('requires a Weekly level, not merely a Daily break, and does not require a gap edge', () => {
+    const history = compactIntrusionHistory(payload(), now);
+    expect(buildIntrusionWeeklyBreakouts(candles(), history, model(), now).signals).toEqual([]);
+    const result = buildIntrusionWeeklyBreakouts(candles(), history, weeklyModel(), now);
+    expect(result.signals.map((s: any) => [s.time, s.direction])).toEqual([[start + 2 * HOUR, 'long'], [start + 4 * HOUR, 'short']]);
+    expect(result.signals[0]).toMatchObject({ weeklyLevels: [{ price: 120 }], intrusion: { alertTime: iso(start + 2 * HOUR) } });
+    expect(result.signals[0]).not.toHaveProperty('gap'); expect(result.signals[0]).not.toHaveProperty('dailyLevels');
+  });
+
+  test('does not exclude a Weekly break when the same candle also breaks a Daily fractal', () => {
+    const history = compactIntrusionHistory(payload(), now), weekly = weeklyModel();
+    const combined = { ...weekly, levels: [...weekly.levels, ...model().levels] };
+    expect(buildIntrusionWeeklyBreakouts(candles(), history, combined, now)).toEqual(buildIntrusionWeeklyBreakouts(candles(), history, weekly, now));
+  });
+
+  test('groups multiple Weekly levels broken on one intrusion candle into one entry signal', () => {
+    const weekly = weeklyModel(); weekly.levels.push({ ...weekly.levels[0], id: 'W|second-high', price: 123 });
+    const result = buildIntrusionWeeklyBreakouts(candles(), compactIntrusionHistory(payload(), now), weekly, now);
+    expect(result.signals).toHaveLength(2); expect(result.signals[0].weeklyLevels).toHaveLength(2);
+  });
+
+  test('requires fresh, confirmed levels, the exact intrusion candle/direction and only closed candles', () => {
+    const history = compactIntrusionHistory(payload(), now), weekly = weeklyModel();
+    const priorBreak = weeklyModel(); priorBreak.levels[0].brokenTime = start + HOUR;
+    const late = weeklyModel(); late.levels[0].confirmedAt = iso(start + 3 * HOUR - .001);
+    for (const fractals of [priorBreak, late]) {
+      expect(buildIntrusionWeeklyBreakouts(candles(), history, fractals, now).signals.map((s: any) => s.direction)).toEqual(['short']);
+    }
+    const rows = candles(); rows[2].closed = false;
+    expect(buildIntrusionWeeklyBreakouts(rows, history, weekly, now).signals.map((s: any) => s.direction)).toEqual(['short']);
+    const wrong = { ...history, records: history.records.map((r: any) => ({ ...r, direction: r.direction === 'long' ? 'short' : 'long' })) };
+    expect(buildIntrusionWeeklyBreakouts(candles(), wrong, weekly, now).signals).toEqual([]);
+    const early = buildIntrusionWeeklyBreakouts(candles().slice(0, 4), history, weekly, (start + 4 * HOUR) * 1000).signals;
+    expect(buildIntrusionWeeklyBreakouts(candles(), history, weekly, now).signals.filter((s: any) => s.closedAt <= start + 4 * HOUR)).toEqual(early);
   });
 });
