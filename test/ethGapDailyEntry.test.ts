@@ -81,7 +81,7 @@ describe('ETH Spot gap intrusion + Daily entry signal', () => {
   });
 });
 
-describe('ETH entry final-5m Futures delta gate', () => {
+describe('ETH final-5m Futures delta measurement utility (not an entry gate)', () => {
   const response = (buy: number) => {
     const hour = signal().time;
     const candle = parseFuturesDeltaCandle([(hour + 3300) * 1000, 0, 0, 0, 0, '100',
@@ -188,40 +188,29 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
     expect(orders.syncTrailingStop).toHaveBeenCalled();
     expect(orders.syncTakeProfits).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
-    expect(managed.gapDailyEntry.intent.futuresDelta).toMatchObject({ directionalDeltaPct: 20, passed: true });
-    expect(orders.placeOrder.mock.calls[0][0].gap_daily_futures_delta).toEqual(managed.gapDailyEntry.intent.futuresDelta);
+    expect(managed.gapDailyEntry.intent.futuresDelta).toBeUndefined();
+    expect(orders.placeOrder.mock.calls[0][0].gap_daily_futures_delta).toBeUndefined();
+    expect(entry.readEthEntryFuturesDelta).not.toHaveBeenCalled();
   });
-  test.each(['long', 'short'])('rejects zero and negative F5m before order/SL planning for %s', async direction => {
-    const plan = jest.spyOn(monitor, 'getGapDailyStopPlan');
-    for (const delta of [0, -1]) {
-      (entry.readEthEntryFuturesDelta as jest.Mock).mockResolvedValue({ directionalDeltaPct: delta, passed: false });
-      const managed: any = state();
-      await monitor.executeGapDailyEntry(managed, signal(direction as 'long' | 'short'), {});
-      expect(managed.gapDailyEntry.decision).toMatchObject({ outcome: 'SKIPPED', futuresDelta: { directionalDeltaPct: delta } });
-      expect(managed.gapDailyEntry.handledCandle).toBe(closeAt); expect(managed.gapDailyEntry.intent).toBeUndefined();
-    }
-    expect(plan).not.toHaveBeenCalled(); expect(orders.placeOrder).not.toHaveBeenCalled();
-    expect(orders.getStatefulOrderCapacity).not.toHaveBeenCalled();
-  });
-  test('missing F5m retries the same fresh purple signal and enters only after a positive measurement', async () => {
-    jest.spyOn(entry, 'readEthGapDailySignal').mockResolvedValue(signal());
+  test.each([
+    ['long', 'negative'], ['long', 'zero'], ['long', 'unavailable'],
+    ['short', 'negative'], ['short', 'zero'], ['short', 'unavailable']
+  ])('allows a valid purple %s signal independently from %s FD, with SL/trailing and no TPs', async (direction, condition) => {
     const delta = entry.readEthEntryFuturesDelta as jest.Mock;
-    const positive = await delta(signal()); delta.mockClear();
-    delta.mockRejectedValueOnce(new Error('ETH final-5m Futures delta unavailable')).mockResolvedValue(positive);
-    const managed: any = state(), first: any = {}, second: any = {};
-    await monitor.checkGapDailyEntry(managed, inputs().payload, first);
-    expect(first.gapDailyEntryPending).toBe(true); expect(orders.placeOrder).not.toHaveBeenCalled();
-    expect(managed.gapDailyEntry.handledCandle).toBeUndefined(); expect(managed.gapDailyEntry.intent).toBeUndefined();
-    await monitor.checkGapDailyEntry(managed, inputs().payload, second);
-    expect(second.tradePlaced).toBe(true); expect(orders.placeOrder).toHaveBeenCalledTimes(1);
-  });
-  test('does not use a positive measurement to enter after the five-minute freshness deadline', async () => {
-    const delta = entry.readEthEntryFuturesDelta as jest.Mock, positive = await delta(signal());
-    delta.mockImplementation(async () => { jest.setSystemTime(closeAt + 300001); return positive; });
-    const plan = jest.spyOn(monitor, 'getGapDailyStopPlan'), managed: any = state();
-    await monitor.executeGapDailyEntry(managed, signal(), {});
-    expect(managed.gapDailyEntry.decision.reason).toMatch(/expired.*Futures delta/);
-    expect(plan).not.toHaveBeenCalled(); expect(orders.placeOrder).not.toHaveBeenCalled();
+    if (condition === 'unavailable') delta.mockRejectedValue(new Error('Futures unavailable'));
+    else delta.mockResolvedValue({ directionalDeltaPct: condition === 'zero' ? 0 : -20, passed: false });
+    const stop = direction === 'long' ? 110 : 130;
+    monitor.getGapDailyStopPlan = jest.fn().mockResolvedValue({ market: 'ETH-USD', price: 120,
+      timestamp: '2026-10-24 01:00:00', marketInfo: { oraclePrice: 120, status: 'ACTIVE' },
+      activePlan: { direction, stop: { valid: true, price: stop },
+        sizing: { size: 1, minimumOrderSize: .1, notional: 120, riskBudgetUsd: 15 }, takeProfits: [] } });
+    const managed: any = state(), result: any = {};
+    await monitor.executeGapDailyEntry(managed, signal(direction as 'long' | 'short'), result);
+    expect(result.tradePlaced).toBe(true); expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+    expect(delta).not.toHaveBeenCalled(); expect(orders.syncTrailingStop).toHaveBeenCalled();
+    expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+    expect(managed.managedPosition).toMatchObject({ direction, takeProfitMode: 'trailing-only', currentStop: stop });
+    expect(monitor.getStatus().gapDailyEntry.futuresDeltaFilter.enabled).toBe(false);
   });
   test('never resubmits the same candle even if the trade closed or intrusion counts changed', async () => {
     const managed: any = state();
