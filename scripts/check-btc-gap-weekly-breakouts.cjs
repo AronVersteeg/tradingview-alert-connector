@@ -248,6 +248,14 @@ function pocPixels(buffer, cross) {
       const purplePixels = purpleXs.map(x => purpleColumn(purple, x));
       assert(purplePixels.every(n => n > 200), `Actual purple lines on the alert candles: ${purplePixels}`);
       assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionPocCrosses()), [], 'Partial volume profiles draw no guessed crossbar');
+      const pendingRead = page.waitForResponse(response => response.url().includes(`/${asset}-intrusion-spot-poc`));
+      now += 6000;
+      await page.evaluate(({ time, day }) => {
+        window.__weeklyNow = time;
+        window.btcSpotChart.chart.timeScale().setVisibleRange({ from: day / 1000 + 7 * 3600, to: day / 1000 + 8 * 3600 });
+      }, { time: now, day });
+      await pendingRead;
+      assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionPocCrosses()), [], 'Offscreen partial profiles stay invisible while still loading');
       pocReady = true;
       for (let pass = 0; pass < 2; pass++) {
         now += 6000; await page.evaluate(time => { window.__weeklyNow = time; }, now);

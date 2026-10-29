@@ -199,6 +199,11 @@
       status.textContent += ` | F5m: ${available}/${intrusionModel.signals.length}`;
       intrusionLayer?.setPocRecords(pocRecords);
       status.textContent += ` | POC: ${intrusionModel.signals.filter(signal => pocRecords.get(signal.time)?.status === 'ok').length}/${intrusionModel.signals.length}`;
+      const loadingPoc = pocRecords.get(pocWorkingHour);
+      if (loadingPoc?.status === 'pending') status.textContent += Number.isInteger(loadingPoc.pages)
+        ? ` (loading: ${loadingPoc.pages} pages)` : ' (queued)';
+      const unavailablePocs = intrusionModel.signals.filter(signal => pocRecords.get(signal.time)?.status === 'unavailable').length;
+      if (unavailablePocs) status.textContent += ` (${unavailablePocs} unavailable)`;
       void refreshIntrusionDelta();
       void refreshIntrusionPoc();
       status.dataset.stale = String(stale);
@@ -249,13 +254,9 @@
     if (!active || destroyed || !initialData || !byId('spotChartIntrusionDailyBreaks').checked ||
         !intrusionModel || pocPending || Date.now() - pocLastRequestAt < 5000) return pocPending;
     const range = chart?.timeScale().getVisibleRange();
-    const visible = [...new Set(intrusionModel.signals.map(signal => signal.time))]
-      .filter(hour => range && hour >= range.from && hour <= range.to).sort((a, b) => b - a);
-    const candidates = visible.filter(hour => pocRecords.get(hour)?.status !== 'ok');
-    if (!candidates.includes(pocWorkingHour)) pocWorkingHour = candidates.find(hour =>
-      !pocRecords.has(hour) || Date.parse(pocRecords.get(hour).retryAt) <= Date.now());
-    const hour = pocWorkingHour;
-    if (hour === undefined || Date.parse(pocRecords.get(hour)?.retryAt || '') > Date.now()) return;
+    const hour = spotPoc.nextPocHour(intrusionModel.signals, pocRecords, pocWorkingHour, range);
+    if (hour === undefined) return;
+    pocWorkingHour = hour;
     pocLastRequestAt = Date.now(); pocController = new AbortController();
     const controller = pocController, timeout = setTimeout(() => controller.abort(), 25_000);
     pocPending = (async () => {

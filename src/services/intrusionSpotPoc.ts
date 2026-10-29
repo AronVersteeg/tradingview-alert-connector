@@ -19,9 +19,11 @@ type Job = {
   owner: IntrusionSpotPocFeed; hour: number; touched: number; expected?: bigint; trades?: number;
   low?: number; high?: number; total: bigint; count: number; aggregates: number; pages: number;
   lastId?: number; lastRawId?: number; lastTime?: number; levels: Map<string, bigint>;
+  waiting: boolean;
 };
 // A chart annotation must not burst through the trading service's shared Binance queue.
-let job: Job | undefined, busy = false, nextReadAt = 0;
+const jobs = new Map<IntrusionSpotPocFeed, Job>();
+let busy = false, nextReadAt = 0, lastOwner: IntrusionSpotPocFeed | undefined;
 
 export function validatePocHour(hour: number, now = Date.now()): number {
   if (!Number.isSafeInteger(hour) || hour < 1502928000 || hour % HOUR || (hour + HOUR) * 1000 > now) {
@@ -92,6 +94,7 @@ export class IntrusionSpotPocFeed {
   }
 
   private pending(hour: number): Read {
+    const job = jobs.get(this);
     return { hour, status: 'pending', retryAt: new Date(Math.max(Date.now() + 5000, nextReadAt, binanceRetryAt(BASE + 'aggTrades'))).toISOString(),
       ...(job?.owner === this && job.hour === hour ? { pages: job.pages } : {}) };
   }
@@ -101,12 +104,18 @@ export class IntrusionSpotPocFeed {
     if (known) return { hour, status: 'ok', poc: { ...known } };
     const failed = this.failures.get(hour);
     if (failed && failed.status !== 'ok' && Date.parse(failed.retryAt) > Date.now()) return { ...failed };
-    if (!busy && job && Date.now() - job.touched > 120_000) job = undefined;
-    if (job?.owner === this && job.hour === hour) job.touched = Date.now();
-    if (busy || Date.now() < Math.max(nextReadAt, binanceRetryAt(BASE + 'aggTrades')) ||
-      job && (job.owner !== this || job.hour !== hour)) return this.pending(hour);
-    if (!job) job = { owner: this, hour, touched: Date.now(), total: ZERO, count: 0, aggregates: 0, pages: 0, levels: new Map() };
-    const current = job;
+    if (!busy) for (const [owner, job] of jobs) if (Date.now() - job.touched > 120_000) jobs.delete(owner);
+    let current = jobs.get(this);
+    if (current && current.hour !== hour || !current && jobs.size >= 2) return this.pending(hour);
+    if (!current) {
+      current = { owner: this, hour, touched: Date.now(), total: ZERO, count: 0, aggregates: 0, pages: 0, levels: new Map(), waiting: true };
+      jobs.set(this, current);
+    }
+    current.touched = Date.now(); current.waiting = true;
+    const yieldToOtherChart = lastOwner === this && [...jobs.values()].some(other =>
+      other.owner !== this && other.waiting && Date.now() - other.touched < 20_000);
+    if (busy || Date.now() < Math.max(nextReadAt, binanceRetryAt(BASE + 'aggTrades')) || yieldToOtherChart) return this.pending(hour);
+    current.waiting = false;
     busy = true;
     try {
       if (current.expected === undefined) {
@@ -130,6 +139,7 @@ export class IntrusionSpotPocFeed {
       if (!Array.isArray(response.data) || response.data.length > LIMIT) throw new Error('Invalid Spot trade page.');
       current.pages++;
       let ended = response.data.length < LIMIT;
+      const otherLevels = [...jobs.values()].reduce((sum, item) => sum + (item === current ? 0 : item.levels.size), 0);
       for (const raw of response.data as any[]) {
         if (!raw || ![raw.a, raw.f, raw.l, raw.T].every(n => Number.isSafeInteger(n) && n >= 0) || raw.l < raw.f ||
           current.lastId !== undefined && raw.a !== current.lastId + 1 ||
@@ -143,7 +153,8 @@ export class IntrusionSpotPocFeed {
         current.total += quantity; current.count += raw.l - raw.f + 1; current.aggregates++;
         current.lastId = raw.a; current.lastRawId = raw.l; current.lastTime = raw.T;
         if (current.total > current.expected || current.count > current.trades!) throw new Error('Spot trades exceed candle totals.');
-        if (current.levels.size > 100_000 || current.aggregates > 2_000_000) throw new Error('Spot POC memory bound reached.');
+        if (current.levels.size + otherLevels > 100_000 ||
+            current.aggregates > 2_000_000) throw new Error('Spot POC memory bound reached.');
       }
       // Completion requires agreement with the independent 1H volume AND raw trade count.
       if (current.total === current.expected && current.count === current.trades) {
@@ -156,20 +167,20 @@ export class IntrusionSpotPocFeed {
           aggregateTrades: current.aggregates, priceLevels: current.levels.size, pages: current.pages, fetchedAt: new Date().toISOString() };
         this.records.set(hour, poc); this.failures.delete(hour);
         while (this.records.size > MAX_RECORDS) this.records.delete(this.records.keys().next().value);
-        this.persist(); job = undefined;
+        this.persist(); jobs.delete(this);
         return { hour, status: 'ok', poc: { ...poc } };
       }
       if (ended || current.pages >= 2000) throw new Error('Incomplete Spot trade history; no POC published.');
       return this.pending(hour);
     } catch (error) {
-      job = undefined;
+      jobs.delete(this);
       const result: Read = { hour, status: 'unavailable',
         retryAt: new Date(Math.max(Date.now() + 300_000, binanceRetryAt(BASE + 'aggTrades'))).toISOString(),
         error: error instanceof Error ? error.message : String(error) };
       this.failures.set(hour, result);
       while (this.failures.size > MAX_RECORDS) this.failures.delete(this.failures.keys().next().value);
       return { ...result };
-    } finally { busy = false; nextReadAt = Date.now() + 5000; }
+    } finally { busy = false; lastOwner = this; nextReadAt = Date.now() + 5000; }
   }
 
   async snapshot(hour: number) {

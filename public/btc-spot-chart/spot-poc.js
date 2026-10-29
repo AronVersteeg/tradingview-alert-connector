@@ -1,5 +1,19 @@
 (function (root) {
   'use strict';
+  function nextPocHour(signals, records, workingHour, range, now = Date.now()) {
+    const hours = [...new Set(signals.map(signal => signal.time))].sort((a, b) => b - a);
+    const due = hour => {
+      const record = records.get(hour);
+      return !record || record.status !== 'ok' && Date.parse(record.retryAt) <= now;
+    };
+    // Finish a partial profile even when the user pans away; otherwise each pan
+    // can abandon its pages and block the shared server job for two minutes.
+    if (hours.includes(workingHour) && records.get(workingHour)?.status === 'pending') {
+      return due(workingHour) ? workingHour : undefined;
+    }
+    const candidates = hours.filter(due);
+    return candidates.find(hour => range && hour >= range.from && hour <= range.to) ?? candidates[0];
+  }
   function readPocResponse(payload, symbol, hour, now = Date.now()) {
     if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || payload?.symbol !== symbol || payload.venue !== 'Binance Spot' ||
         payload.interval !== '1h' || payload.method !== 'exact-price-base-volume') throw new Error('Unexpected Spot POC source');
@@ -18,7 +32,7 @@
     if (!['pending', 'unavailable'].includes(record.status) || !Number.isFinite(Date.parse(record.retryAt))) throw new Error('Invalid POC availability');
     return { ...record };
   }
-  const api = Object.freeze({ readPocResponse });
+  const api = Object.freeze({ readPocResponse, nextPocHour });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcIntrusionSpotPoc = api;
 })(typeof globalThis === 'object' ? globalThis : this);

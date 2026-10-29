@@ -91,7 +91,7 @@ describe('annotation-only exact-price Binance Spot POC', () => {
     expect(JSON.parse(fs.readFileSync(ethFile, 'utf8')).symbol).toBe('ETHUSDT');
   });
 
-  test('admits one page globally, blocks competing reads and expires abandoned partial jobs', async () => {
+  test('admits one page globally and alternates waiting BTC/ETH profiles without starvation', async () => {
     let finish: any;
     (binanceGet as jest.Mock).mockReset().mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
     const btc = new IntrusionSpotPocFeed('BTCUSDT', () => file), eth = new IntrusionSpotPocFeed('ETHUSDT', () => path.join(directory, 'eth.json'));
@@ -99,9 +99,21 @@ describe('annotation-only exact-price Binance Spot POC', () => {
     expect((await btc.snapshot(hour)).record.status).toBe('pending');
     expect((await eth.snapshot(hour)).record.status).toBe('pending'); expect(binanceGet).toHaveBeenCalledTimes(1);
     finish({ data: [candle()] }); await first; advance();
-    await eth.snapshot(hour); expect(binanceGet).toHaveBeenCalledTimes(1);
-    jest.setSystemTime(Date.now() + 121_000); (binanceGet as jest.Mock).mockResolvedValueOnce({ data: [candle()] });
+    await btc.snapshot(hour); expect(binanceGet).toHaveBeenCalledTimes(1);
+    (binanceGet as jest.Mock).mockResolvedValueOnce({ data: [candle()] }).mockResolvedValue({ data: trades() });
     await eth.snapshot(hour); expect(binanceGet).toHaveBeenCalledTimes(2);
+    advance(); await eth.snapshot(hour); expect(binanceGet).toHaveBeenCalledTimes(2);
+    expect((await btc.snapshot(hour)).record.status).toBe('ok'); expect(binanceGet).toHaveBeenCalledTimes(3);
+    advance(); expect((await eth.snapshot(hour)).record.status).toBe('ok'); expect(binanceGet).toHaveBeenCalledTimes(4);
+  });
+
+  test('expires abandoned profiles so another hour of the same chart can load', async () => {
+    const feed = new IntrusionSpotPocFeed('BTCUSDT', () => file);
+    await feed.snapshot(hour); advance(); await feed.snapshot(hour - 3600);
+    expect(binanceGet).toHaveBeenCalledTimes(1);
+    jest.setSystemTime(Date.now() + 121000);
+    (binanceGet as jest.Mock).mockResolvedValueOnce({ data: [candle()] });
+    await feed.snapshot(hour); expect(binanceGet).toHaveBeenCalledTimes(2);
   });
 
   test('honors shared cooldown before enqueuing any POC work', async () => {
@@ -158,6 +170,31 @@ describe('annotation-only exact-price Binance Spot POC', () => {
     for (const bad of [{ symbol: 'ETHUSDT' }, { venue: 'Binance USD-M Futures' }, { method: 'body-midpoint' }, { record: { hour, status: 'ok', poc: { price: 0 } } }]) {
       expect(() => browser.readPocResponse({ ...result, ...bad }, 'BTCUSDT', hour, Date.now())).toThrow();
     }
+  });
+
+  test('starts historical POC loading even when no purple candle is in the current viewport', () => {
+    const signals = [{ time: hour }, { time: hour - 3600 }];
+    const range = { from: hour + 86400, to: hour + 172800 };
+    expect(browser.nextPocHour(signals, new Map(), undefined, range)).toBe(hour);
+    expect(browser.nextPocHour(signals, new Map(), undefined, null)).toBe(hour);
+  });
+
+  test('prioritizes visible candles but finishes a partial profile across panning and retries', () => {
+    const signals = [{ time: hour }, { time: hour - 3600 }], range = { from: hour - 3600, to: hour - 3600 };
+    expect(browser.nextPocHour(signals, new Map(), undefined, range)).toBe(hour - 3600);
+    const records = new Map([[hour, { status: 'pending', retryAt: new Date(Date.now() - 1).toISOString() }]]);
+    expect(browser.nextPocHour(signals, records, hour, range)).toBe(hour);
+    records.get(hour)!.retryAt = new Date(Date.now() + 5000).toISOString();
+    expect(browser.nextPocHour(signals, records, hour, range)).toBeUndefined();
+    expect(browser.nextPocHour(signals, records, hour, range, Date.now() + 5001)).toBe(hour);
+  });
+
+  test('skips completed candles and backed-off failures without blocking the rest of history', () => {
+    const signals = [{ time: hour }, { time: hour - 3600 }];
+    const records = new Map([[hour, { status: 'unavailable', retryAt: new Date(Date.now() + 300000).toISOString() }]]);
+    expect(browser.nextPocHour(signals, records, undefined, null)).toBe(hour - 3600);
+    records.set(hour - 3600, { status: 'ok', retryAt: '' });
+    expect(browser.nextPocHour(signals, records, undefined, null)).toBeUndefined();
   });
 
   test('draws a 16px crossbar at POC, independent of FD, skips partial/mismatched records, and obeys the purple checkbox', () => {

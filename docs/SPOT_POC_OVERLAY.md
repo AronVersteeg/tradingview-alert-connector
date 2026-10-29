@@ -22,16 +22,21 @@ timestamps. Fixed eight-decimal integer quantities reconcile exactly against BOT
 kline totals before any POC is published. Missing or inconsistent data is not a
 zero/midpoint estimate: no crossbar is rendered.
 
-The browser requests only visible purple candles, newest first, and continues a
-partial profile before starting another. One shared job across BTC/ETH admits at
-most one 1000-trade page per five seconds via the existing Binance host limiter.
+The browser prioritizes visible purple candles, then loads other purple candles
+newest first while the chart panel is active. It continues a partial profile even
+when panning away before starting another; progress is shown beside the POC count.
+This also warms the historical cache when the initial viewport has no purple
+candles. Two bounded partial profiles can coexist (one per active chart); a shared
+fair scheduler admits at most one 1000-trade page per five seconds via the
+existing Binance host limiter, so a long BTC profile cannot starve ETH or vice versa.
 The official Spot aggregate-trades weight of 4 is accounted for. Cooldowns are
 respected before enqueueing work. High-volume historical hours may take minutes
 to complete. Hidden tabs and an unchecked purple overlay stop browser requests;
 abandoned partial jobs expire after two minutes. There are no startup collectors,
 archive ZIP downloads, bulk backfills, orders or emails.
 
-Memory is bounded at 100,000 price levels / 2,000,000 aggregate trades per job.
+Memory is bounded at 100,000 price levels across both profiles, with at most
+2,000,000 aggregate trades per profile (only per-price sums remain in memory).
 Completed-only results (up to 5000 per symbol) are atomically stored alongside the
 DOM-history directory, in `btcusdt-intrusion-spot-poc.json` and
 `ethusdt-intrusion-spot-poc.json`. Corrupt/mixed-symbol history is preserved and
