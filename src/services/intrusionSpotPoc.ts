@@ -20,6 +20,7 @@ type Job = {
   low?: number; high?: number; total: bigint; count: number; aggregates: number; pages: number;
   lastId?: number; lastRawId?: number; lastTime?: number; levels: Map<string, bigint>;
   waiting: boolean;
+  retryAt?: number; consecutiveFailures?: number; lastError?: string;
 };
 // A chart annotation must not burst through the trading service's shared Binance queue.
 const jobs = new Map<IntrusionSpotPocFeed, Job>();
@@ -95,8 +96,9 @@ export class IntrusionSpotPocFeed {
 
   private pending(hour: number): Read {
     const job = jobs.get(this);
-    return { hour, status: 'pending', retryAt: new Date(Math.max(Date.now() + 5000, nextReadAt, binanceRetryAt(BASE + 'aggTrades'))).toISOString(),
-      ...(job?.owner === this && job.hour === hour ? { pages: job.pages } : {}) };
+    return { hour, status: 'pending', retryAt: new Date(Math.max(Date.now() + 5000, nextReadAt,
+      job?.hour === hour ? job.retryAt || 0 : 0, binanceRetryAt(BASE + 'aggTrades'))).toISOString(),
+      ...(job?.owner === this && job.hour === hour ? { pages: job.pages, ...(job.lastError ? { error: job.lastError } : {}) } : {}) };
   }
 
   private async read(hour: number): Promise<Read> {
@@ -104,7 +106,7 @@ export class IntrusionSpotPocFeed {
     if (known) return { hour, status: 'ok', poc: { ...known } };
     const failed = this.failures.get(hour);
     if (failed && failed.status !== 'ok' && Date.parse(failed.retryAt) > Date.now()) return { ...failed };
-    if (!busy) for (const [owner, job] of jobs) if (Date.now() - job.touched > 120_000) jobs.delete(owner);
+    if (!busy) for (const [owner, job] of jobs) if (Date.now() > Math.max(job.touched, job.retryAt || 0) + 120_000) jobs.delete(owner);
     let current = jobs.get(this);
     if (current && current.hour !== hour || !current && jobs.size >= 2) return this.pending(hour);
     if (!current) {
@@ -113,14 +115,22 @@ export class IntrusionSpotPocFeed {
     }
     current.touched = Date.now(); current.waiting = true;
     const yieldToOtherChart = lastOwner === this && [...jobs.values()].some(other =>
-      other.owner !== this && other.waiting && Date.now() - other.touched < 20_000);
-    if (busy || Date.now() < Math.max(nextReadAt, binanceRetryAt(BASE + 'aggTrades')) || yieldToOtherChart) return this.pending(hour);
+      other.owner !== this && other.waiting && (other.retryAt || 0) <= Date.now() && Date.now() - other.touched < 20_000);
+    if (busy || Date.now() < Math.max(nextReadAt, current.retryAt || 0, binanceRetryAt(BASE + 'aggTrades')) || yieldToOtherChart) return this.pending(hour);
     current.waiting = false;
     busy = true;
+    let requestFailed = false;
+    const request = async (endpoint: string, params: Record<string, string | number>) => {
+      try {
+        const response = await binanceGet<unknown[]>(BASE + endpoint, { timeout: 15000, params });
+        current!.retryAt = 0; current!.consecutiveFailures = 0; current!.lastError = undefined;
+        return response;
+      } catch (error) { requestFailed = true; throw error; }
+    };
     try {
       if (current.expected === undefined) {
-        const response = await binanceGet<unknown[]>(BASE + 'klines', { timeout: 8000,
-          params: { symbol: this.symbol, interval: '1h', startTime: hour * 1000, endTime: (hour + HOUR) * 1000 - 1, limit: 1 } });
+        const response = await request('klines',
+          { symbol: this.symbol, interval: '1h', startTime: hour * 1000, endTime: (hour + HOUR) * 1000 - 1, limit: 1 });
         const row = response.data?.[0] as any;
         if (!Array.isArray(response.data) || response.data.length !== 1 || !Array.isArray(row) ||
           Number(row[0]) !== hour * 1000 || Number(row[6]) !== (hour + HOUR) * 1000 - 1 ||
@@ -135,7 +145,7 @@ export class IntrusionSpotPocFeed {
       const params = current.lastId === undefined
         ? { symbol: this.symbol, startTime: hour * 1000, endTime: (hour + HOUR) * 1000 - 1, limit: LIMIT }
         : { symbol: this.symbol, fromId: current.lastId + 1, limit: LIMIT };
-      const response = await binanceGet<unknown[]>(BASE + 'aggTrades', { timeout: 8000, params });
+      const response = await request('aggTrades', params);
       if (!Array.isArray(response.data) || response.data.length > LIMIT) throw new Error('Invalid Spot trade page.');
       current.pages++;
       let ended = response.data.length < LIMIT;
@@ -173,6 +183,17 @@ export class IntrusionSpotPocFeed {
       if (ended || current.pages >= 2000) throw new Error('Incomplete Spot trade history; no POC published.');
       return this.pending(hour);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = /HTTP (\d{3})/.exec(message)?.[1];
+      // A failed HTTP read has not modified any profile sums. Resume the same
+      // next aggregate ID after backoff; data-validation failures still discard it.
+      if (requestFailed && (!status || Number(status) >= 500 || ['418', '429'].includes(status))) {
+        current.consecutiveFailures = (current.consecutiveFailures || 0) + 1;
+        current.lastError = message;
+        current.retryAt = Math.max(Date.now() + Math.min(300_000, 15_000 * 2 ** Math.min(5, current.consecutiveFailures - 1)),
+          binanceRetryAt(BASE + 'aggTrades'));
+        return this.pending(hour);
+      }
       jobs.delete(this);
       const result: Read = { hour, status: 'unavailable',
         retryAt: new Date(Math.max(Date.now() + 300_000, binanceRetryAt(BASE + 'aggTrades'))).toISOString(),

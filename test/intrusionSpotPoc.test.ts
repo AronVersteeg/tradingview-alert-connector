@@ -61,6 +61,43 @@ describe('annotation-only exact-price Binance Spot POC', () => {
     expect((await complete(new IntrusionSpotPocFeed('BTCUSDT', () => file))).record).toMatchObject({ status: 'ok', poc: { price: 100, priceVolumeBase: '0.30000000' } });
   });
 
+  test.each(['timeout of 8000ms exceeded', 'HTTP 503: Service unavailable'])('retains verified pages across %s and resumes the same next ID', async message => {
+    const rows = Array.from({ length: 1000 }, (_, i) => trade(i + 10, '100', '0.001'));
+    (binanceGet as jest.Mock).mockReset().mockResolvedValueOnce({ data: [candle('3', 1001)] })
+      .mockResolvedValueOnce({ data: rows }).mockRejectedValueOnce(new Error(`Binance api.binance.com: ${message}`))
+      .mockResolvedValueOnce({ data: [trade(1010, '101', '2')] });
+    const feed = new IntrusionSpotPocFeed('BTCUSDT', () => file);
+    expect((await complete(feed)).record).toMatchObject({ status: 'pending', pages: 1 }); advance();
+    const interrupted: any = (await feed.snapshot(hour)).record;
+    expect(interrupted).toMatchObject({ status: 'pending', pages: 1 }); expect(interrupted).not.toHaveProperty('poc');
+    expect(Date.parse(interrupted.retryAt)).toBe(Date.now() + 15000);
+    await feed.snapshot(hour); expect(binanceGet).toHaveBeenCalledTimes(3); expect(fs.existsSync(file)).toBe(false);
+    jest.setSystemTime(Date.parse(interrupted.retryAt) + 1);
+    expect((await feed.snapshot(hour)).record).toMatchObject({ status: 'ok', poc: { price: 101, volumeBase: '3.00000000', tradeCount: 1001, pages: 2 } });
+    expect(binanceGet).toHaveBeenCalledTimes(4);
+    for (const call of (binanceGet as jest.Mock).mock.calls.slice(2)) expect(call[1].params).toEqual({ symbol: 'BTCUSDT', fromId: 1010, limit: 1000 });
+  });
+
+  test('a long shared cooldown does not expire the validated profile before its scheduled retry', async () => {
+    const rows = Array.from({ length: 1000 }, (_, i) => trade(i + 10, '100', '0.001'));
+    (binanceGet as jest.Mock).mockReset().mockResolvedValueOnce({ data: [candle('3', 1001)] })
+      .mockResolvedValueOnce({ data: rows }).mockImplementationOnce(() => {
+        (binanceRetryAt as jest.Mock).mockReturnValue(Date.now() + 600000); throw new Error('Binance cooldown');
+      }).mockResolvedValueOnce({ data: [trade(1010, '101', '2')] });
+    const feed = new IntrusionSpotPocFeed('BTCUSDT', () => file); await complete(feed); advance();
+    const retry: any = (await feed.snapshot(hour)).record;
+    expect(retry.status).toBe('pending'); expect(retry.pages).toBe(1);
+    jest.setSystemTime(Date.parse(retry.retryAt) + 1);
+    expect((await feed.snapshot(hour)).record).toMatchObject({ status: 'ok', poc: { pages: 2, price: 101 } });
+    expect(binanceGet).toHaveBeenCalledTimes(4);
+  });
+
+  test('non-retryable HTTP errors remain unavailable rather than looping without progress', async () => {
+    (binanceGet as jest.Mock).mockReset().mockRejectedValue(new Error('Binance api.binance.com HTTP 400 code -1121: Invalid symbol'));
+    const result = await new IntrusionSpotPocFeed('BTCUSDT', () => file).snapshot(hour);
+    expect(result.record.status).toBe('unavailable'); expect(result.record).not.toHaveProperty('poc');
+  });
+
   test.each(['gap', 'duplicate', 'count', 'volume', 'time', 'price', 'precision', 'empty'])('rejects %s corruption without publishing any POC', async kind => {
     const rows = trades();
     if (kind === 'gap') rows[1].a++;

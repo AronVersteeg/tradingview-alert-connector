@@ -31,7 +31,12 @@ fair scheduler admits at most one 1000-trade page per five seconds via the
 existing Binance host limiter, so a long BTC profile cannot starve ETH or vice versa.
 The official Spot aggregate-trades weight of 4 is accounted for. Cooldowns are
 respected before enqueueing work. High-volume historical hours may take minutes
-to complete. Hidden tabs and an unchecked purple overlay stop browser requests;
+to complete (the 21 September 2026 08:00 UTC BTC candle needs 152 trade pages).
+Transport timeouts, temporary server errors and rate-limit failures retain the
+validated partial profile and retry the same next aggregate ID after exponential
+backoff (15 seconds to 5 minutes, or longer shared cooldown). Invalid trade data
+still discards the profile and publishes no POC. Backoff does not expire a partial
+profile before its retry becomes due. Hidden tabs and an unchecked purple overlay stop browser requests;
 abandoned partial jobs expire after two minutes. There are no startup collectors,
 archive ZIP downloads, bulk backfills, orders or emails.
 
