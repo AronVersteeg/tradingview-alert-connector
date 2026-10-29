@@ -124,6 +124,45 @@ describe('ETH final-5m Futures delta measurement utility (not an entry gate)', (
   });
 });
 
+describe('ETH dYdX body-midpoint initial stop with original fractal sizing', () => {
+  const candle = () => ({ timestamp: iso(closeAt - HOUR), fractalCandleSource: 'dydx-1h',
+    openRef: 110, closeRef: 118, highRef: 150, lowRef: 80 });
+  const plan = (direction = 'long') => ({ direction, status: 'watch',
+    stop: { valid: true, price: direction === 'long' ? 100 : 140, source: 'confirmed-fractal',
+      buffer: .1, maxDistancePct: .3, fractal: { index: 2, timestamp: iso(closeAt - 3 * HOUR), price: direction === 'long' ? 100 : 140, source: 'lowRef' } },
+    sizing: { size: .75, riskBudgetUsd: 15, plannedStopRiskUsd: 15 } });
+
+  test('changes only initial stop price, not sizing/anchor; uses dYdX body rather than Spot price or wick midpoint', () => {
+    const original = plan(), before = JSON.stringify(original);
+    const result = entry.withEthDydxBodyMidpointStop(original, candle(), signal(), 120);
+    expect(result.stop).toMatchObject({ price: 114, source: 'dydx-signal-body-midpoint', buffer: 0, distance: 6 });
+    expect(result.sizing).toBe(original.sizing); expect(result.sizingStop).toEqual(original.stop);
+    expect(result.stop.fractal).toEqual(original.stop.fractal);
+    expect(result.initialStopPolicy).toMatchObject({ candleSource: 'dydx-1h', open: 110, close: 118,
+      midpoint: 114, sizingStopPrice: 100, fractalPlannedStopRiskUsd: 15, midpointPlannedStopRiskUsd: 4.5 });
+    expect(JSON.stringify(original)).toBe(before);
+  });
+  test('short uses the same body midpoint above the dYdX entry reference', () => {
+    const result = entry.withEthDydxBodyMidpointStop(plan('short'), candle(), signal('short'), 108);
+    expect(result.stop.price).toBe(114); expect(result.sizing.size).toBe(.75);
+    expect(result.sizingStop.price).toBe(140);
+  });
+  test.each(['source', 'old-hour', 'future-close', 'invalid-ohlc', 'missing-open', 'no-fractal', 'direction', 'not-protective', 'equal-reference', 'max-distance'])('fails closed without a silent fractal fallback: %s', kind => {
+    const p: any = plan(), c: any = candle(), s: any = signal(); let reference = 120;
+    if (kind === 'source') c.fractalCandleSource = 'binance-spot';
+    if (kind === 'old-hour') c.timestamp = iso(closeAt - 2 * HOUR);
+    if (kind === 'future-close') s.closedAt = Date.now() / 1000 + HOUR;
+    if (kind === 'invalid-ohlc') c.lowRef = 119;
+    if (kind === 'missing-open') delete c.openRef;
+    if (kind === 'no-fractal') p.stop.valid = false;
+    if (kind === 'direction') p.direction = 'short';
+    if (kind === 'not-protective') reference = 113;
+    if (kind === 'equal-reference') reference = 114;
+    if (kind === 'max-distance') p.stop.maxDistancePct = .01;
+    expect(() => entry.withEthDydxBodyMidpointStop(p, c, s, reference)).toThrow();
+  });
+});
+
 describe('ETH gap/Daily live execution and persistent trailing-only management', () => {
   const oldEnv = { ...process.env };
   let directory: string, file: string, monitor: any, orders: any, position: any;
@@ -177,20 +216,60 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
   });
   const state = () => ({ gapDailyEntry: { activatedAt: iso(closeAt - HOUR) } });
 
-  test('places a risk-sized NO_TP entry with exact existing fractal SL and manages the actual smaller fill', async () => {
+  test('keeps original fractal sizing but places a dYdX body-midpoint SL and manages the actual smaller fill', async () => {
     const managed: any = state(), result: any = {};
     await monitor.executeGapDailyEntry(managed, signal(), result);
     expect(result.tradePlaced).toBe(true);
     expect(orders.placeOrder).toHaveBeenCalledTimes(1);
     expect(orders.placeOrder).toHaveBeenCalledWith(expect.objectContaining({ market: 'ETH-USD', profile: 'NO_TP',
-      signal: 'LONG_ENTRY', static_sl: 109.89, take_profits: [] }));
-    expect(managed.managedPosition).toMatchObject({ takeProfitMode: 'trailing-only', takeProfits: [], initialSize: .4, currentStop: 109.89 });
+      signal: 'LONG_ENTRY', size: 1.4, static_sl: 118.5, take_profits: [] }));
+    expect(managed.managedPosition).toMatchObject({ takeProfitMode: 'trailing-only', takeProfits: [], initialSize: .4, currentStop: 118.5,
+      currentStopFractalTimestamp: iso(closeAt - 3 * HOUR), currentStopFractalCandleSource: 'dydx-1h' });
+    expect(managed.gapDailyEntry.intent.plan.activePlan.sizingStop.price).toBe(109.89);
+    expect(managed.gapDailyEntry.intent.plan.activePlan.sizing.plannedStopRiskUsd).toBeCloseTo(1.4 * (120 - 109.89));
+    expect(orders.placeOrder.mock.calls[0][0].decentrader.initialStopPolicy).toMatchObject({ candleSource: 'dydx-1h',
+      open: 118, close: 119, midpoint: 118.5, sizingStopPrice: 109.89 });
     expect(orders.syncTrailingStop).toHaveBeenCalled();
     expect(orders.syncTakeProfits).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
     expect(managed.gapDailyEntry.intent.futuresDelta).toBeUndefined();
     expect(orders.placeOrder.mock.calls[0][0].gap_daily_futures_delta).toBeUndefined();
     expect(entry.readEthEntryFuturesDelta).not.toHaveBeenCalled();
+  });
+  test('real short plan sizes from a dYdX top fractal but stops at that hour body midpoint', async () => {
+    (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue([125, 128, 130, 127, 124].map((high, i) => ({
+      startedAt: iso(closeAt - (5 - i) * HOUR), open: String(high - 2), close: String(high - 3),
+      high: String(high), low: String(high - 8)
+    })));
+    const managed: any = state(), result: any = {};
+    await monitor.executeGapDailyEntry(managed, signal('short'), result);
+    expect(result.tradePlaced).toBe(true);
+    expect(orders.placeOrder).toHaveBeenCalledWith(expect.objectContaining({ size: 1.4, static_sl: 121.5, profile: 'NO_TP', take_profits: [] }));
+    expect(managed.gapDailyEntry.intent.plan.activePlan.sizingStop.price).toBeCloseTo(130.13);
+    expect(managed.managedPosition).toMatchObject({ direction: 'short', currentStop: 121.5,
+      currentStopFractalTimestamp: iso(closeAt - 3 * HOUR) });
+  });
+  test.each(['long', 'short'])('first %s fractal trail never widens or equals the initial body stop; improvement ratchets it', async direction => {
+    if (direction === 'short') (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue([125, 128, 130, 127, 124].map((high, i) => ({
+      startedAt: iso(closeAt - (5 - i) * HOUR), open: String(high - 2), close: String(high - 3), high: String(high), low: String(high - 8)
+    })));
+    const managed: any = state(); await monitor.executeGapDailyEntry(managed, signal(direction as 'long' | 'short'), {});
+    const initial = managed.managedPosition.currentStop, anchor = managed.managedPosition.currentStopFractalTimestamp;
+    const candidate = jest.spyOn(gap, 'buildFractalStop');
+    for (const price of [direction === 'long' ? initial - 1 : initial + 1, initial]) {
+      candidate.mockReturnValue({ valid: true, price, fractal: { index: 3, timestamp: iso(closeAt - 2 * HOUR), price, source: 'lowRef' } } as any);
+      const result: any = {};
+      await monitor.syncManagedStop(managed, result, position, { marketInfo: { oraclePrice: 120 }, price: 120 });
+      expect(managed.managedPosition.currentStop).toBe(initial);
+      expect(managed.managedPosition.currentStopFractalTimestamp).toBe(anchor);
+      expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(initial);
+      expect(result.dynamicSlSync.needsDydxFractalRebase).toBe(false);
+    }
+    const better = direction === 'long' ? initial + .5 : initial - .5;
+    candidate.mockReturnValue({ valid: true, price: better, fractal: { index: 3, timestamp: iso(closeAt - 2 * HOUR), price: better, source: 'lowRef' } } as any);
+    await monitor.syncManagedStop(managed, {}, position, { marketInfo: { oraclePrice: 120 }, price: 120 });
+    expect(managed.managedPosition.currentStop).toBe(better);
+    expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(better);
   });
   test.each([
     ['long', 'negative'], ['long', 'zero'], ['long', 'unavailable'],
@@ -301,6 +380,8 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
     const managed: any = state();
     await monitor.executeGapDailyEntry(managed, signal(), {});
     expect(managed.managedPosition.takeProfitMode).toBe('trailing-only');
+    expect(managed.managedPosition.currentStop).toBe(118.5);
+    expect(managed.managedPosition.currentStopFractalTimestamp).toBe(iso(closeAt - 3 * HOUR));
     expect(managed.gapDailyEntry.intent.outcome).toBe('CONFIRMED');
     expect(orders.syncTrailingStop).toHaveBeenCalled();
     expect(orders.syncTakeProfits).not.toHaveBeenCalled();
@@ -328,9 +409,15 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
     const managed: any = state();
     await expect(monitor.executeGapDailyEntry(managed, signal(), {})).rejects.toThrow('uncertain submission');
     expect(managed.gapDailyEntry.intent.outcome).toBe('UNKNOWN');
-    // Legacy pending submissions from before the FD gate must still receive protection.
+    // Legacy submissions must recover their stored fractal SL, not acquire the new body SL.
     delete managed.gapDailyEntry.intent.futuresDelta;
     delete managed.gapDailyEntry.intent.orderAlert.gap_daily_futures_delta;
+    const legacyPlan = managed.gapDailyEntry.intent.plan.activePlan;
+    legacyPlan.stop = legacyPlan.sizingStop;
+    delete legacyPlan.sizingStop; delete legacyPlan.initialStopPolicy;
+    managed.gapDailyEntry.intent.orderAlert.static_sl = legacyPlan.stop.price;
+    delete managed.gapDailyEntry.intent.orderAlert.decentrader.initialStopPolicy;
+    delete managed.gapDailyEntry.intent.orderAlert.decentrader.sizingStop;
     fs.writeFileSync(file, JSON.stringify(managed));
     const delta = entry.readEthEntryFuturesDelta as jest.Mock;
     delta.mockClear(); delta.mockRejectedValue(new Error('FD unavailable during protective recovery'));
@@ -340,6 +427,7 @@ describe('ETH gap/Daily live execution and persistent trailing-only management',
     const result = await restarted.checkManagedPosition();
     expect(result.ok).toBe(true);
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.currentStop).toBe(109.89);
     expect(orders.syncTrailingStop).toHaveBeenCalled();
     expect(orders.placeOrder).toHaveBeenCalledTimes(1); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
     expect(delta).not.toHaveBeenCalled();

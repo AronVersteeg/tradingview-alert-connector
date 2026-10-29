@@ -19,6 +19,41 @@ export type EthGapDailySignal = {
   dailyLevels: { id: string; type: 'HIGH' | 'LOW'; price: number; confirmedAt: string }[];
 };
 
+export function withEthDydxBodyMidpointStop(activePlan: any, candle: any, signal: EthGapDailySignal, referencePrice: number): any {
+  const sizingStop = activePlan?.stop;
+  if (!sizingStop?.valid || !Number.isFinite(Number(sizingStop.price)) || !(Number(sizingStop.price) > 0) ||
+    !sizingStop.fractal || activePlan.status === 'invalid-stop') {
+    throw new Error(sizingStop?.reason || 'ETH requires a valid original dYdX fractal for order sizing.');
+  }
+  const open = Number(candle?.openRef), close = Number(candle?.closeRef);
+  const high = Number(candle?.highRef), low = Number(candle?.lowRef);
+  if (candle?.fractalCandleSource !== 'dydx-1h' || Date.parse(candle.timestamp) !== signal.time * 1000 ||
+    signal.closedAt !== signal.time + 3600 || signal.closedAt * 1000 > Date.now() ||
+    ![open, close, high, low, referencePrice].every(value => Number.isFinite(value) && value > 0) ||
+    low > Math.min(open, close) || high < Math.max(open, close)) {
+    throw new Error('ETH midpoint SL requires valid closed dYdX OHLC from the exact Binance signal hour.');
+  }
+  if (activePlan.direction !== signal.direction) throw new Error('ETH midpoint SL direction does not match the entry signal.');
+  const midpoint = (open + close) / 2;
+  if (signal.direction === 'long' ? midpoint >= referencePrice : midpoint <= referencePrice) {
+    throw new Error('ETH dYdX body-midpoint SL is not on the protective side of the current oracle price.');
+  }
+  const distance = Math.abs(referencePrice - midpoint), riskPct = distance / Math.max(1, referencePrice);
+  if (Number.isFinite(sizingStop.maxDistancePct) && riskPct > sizingStop.maxDistancePct) {
+    throw new Error('ETH dYdX body-midpoint SL exceeds the existing maximum stop distance.');
+  }
+  // Keep sizing and the confirmed dYdX fractal anchor; replace only the execution stop price.
+  return { ...activePlan, sizingStop: { ...sizingStop, fractal: { ...sizingStop.fractal } },
+    stop: { ...sizingStop, price: midpoint, source: 'dydx-signal-body-midpoint', distance, riskPct,
+      buffer: 0, adjustedToMinDistance: false, wickGuardPrice: undefined, wickGuardSource: undefined,
+      reason: 'dYdX signal-body midpoint SL; original confirmed fractal retained as the trailing anchor.' },
+    initialStopPolicy: { mode: 'signal-body-midpoint', candleSource: 'dydx-1h',
+      candleStartedAt: new Date(signal.time * 1000).toISOString(), candleClosedAt: new Date(signal.closedAt * 1000).toISOString(),
+      open, close, midpoint, sizingStopPrice: sizingStop.price, sizingSource: 'dydx-fractal',
+      fractalPlannedStopRiskUsd: activePlan.sizing?.plannedStopRiskUsd,
+      midpointPlannedStopRiskUsd: Number(activePlan.sizing?.size) * distance } };
+}
+
 export type EthEntryFuturesDelta = {
   symbol: 'ETHUSDT'; venue: 'Binance USD-M Futures'; interval: '5m';
   signalTime: number; startedAt: number; closedAt: number; fetchedAt: string;

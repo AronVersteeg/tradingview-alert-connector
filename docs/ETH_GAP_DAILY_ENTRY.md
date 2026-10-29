@@ -56,8 +56,28 @@ as well when all new ETH entries should stop.
 
 ## Position Management
 
-Initial SL and subsequent trailing use the existing **dYdX 1H** fractal logic,
-buffers and stop-breach protection, exactly as the existing managed setup.
+For new entries, Binance Spot determines only the purple signal. The **closed
+dYdX 1H candle covering that exact signal hour** provides all execution-side data:
+
+- Order sizing first uses the original confirmed dYdX fractal SL, with the existing
+  buffer, risk budget, rounding and collateral caps. This size is not increased
+  when the actual SL moves closer.
+- The actual initial SL is `(dydx.open + dydx.close) / 2`, the middle of the body,
+  without a percentage buffer or minimum-distance widening. Exchange tick rounding
+  still applies. OHLC follows the existing dYdX chart-normalization path, including
+  thin-market orderbook-mid mapping where applicable.
+- The original fractal is retained as the trailing anchor. Subsequent dYdX
+  fractal stops keep the existing confirmation, delay, wick-buffer and protective
+  stop-breach logic. The first and all later updates must strictly improve the
+  actual current stop: higher for longs, lower for shorts. Equal/worse candidates
+  leave the midpoint stop in place, with coverage repair if necessary.
+- Missing/malformed/stale same-hour dYdX data or a midpoint on the wrong side of
+  the oracle block entry; no silent fallback to Spot or the old fractal price.
+  Existing freshness, maximum-distance and exchange risk/downsize checks remain.
+
+This applies only to new orders after deployment. Persisted existing positions
+and uncertain legacy submissions retain their recorded stops and continue normal
+protective recovery. No migration moves a running trade to a new body SL.
 The entry explicitly uses the existing `NO_TP` execution profile and an empty TP
 ladder. This also disables the exchange client's optional safety/fallback TPs.
 `takeProfitMode: trailing-only` is persisted with the position, preventing later
@@ -83,6 +103,12 @@ Existing positions and uncertain pre-deploy submissions continue protective
 reconciliation without an FD check. The chart cache and its stored measurements
 are unchanged.
 The existing ETH state file also holds the durable intent and position policy.
+`gapDailyEntry.initialStop` describes the execution policy. Each new intent's plan
+keeps `activePlan.sizingStop` (original fractal), `activePlan.stop` (actual midpoint)
+and `activePlan.initialStopPolicy` (exact dYdX hour/body and both planned risks).
+Orders carry the same policy/sizing anchor in their `decentrader` audit metadata.
+Sizing risk remains the original fractal risk; actual midpoint risk is separate
+and generally lower. Risk/margin downsizing may still reduce the submitted fill.
 No new public raw-history export endpoint is introduced.
 
 Tests: `test/ethGapDailyEntry.test.ts`, `test/dydxV4EntryRiskGuard.test.ts`,
