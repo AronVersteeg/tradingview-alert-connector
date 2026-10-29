@@ -83,6 +83,17 @@ function purpleColumn(buffer, x) {
   }
   return count;
 }
+function pocPixels(buffer, cross) {
+  const png = PNG.sync.read(buffer); let count = 0;
+  for (let y = Math.floor(cross.y) - 1; y <= Math.ceil(cross.y) + 1; y++) {
+    for (let x = Math.ceil(cross.x - 8); x < Math.floor(cross.x + 8); x++) {
+      if (Math.abs(x - cross.x) < 3 || x < 0 || y < 0 || x >= png.width || y >= png.height) continue;
+      const at = (y * png.width + x) * 4;
+      if (png.data[at] > 140 && png.data[at + 1] > 60 && png.data[at + 1] < 140 && png.data[at + 2] > 150) count++;
+    }
+  }
+  return count;
+}
 (async () => {
   const browser = await chromium.launch({ headless: true, channel: process.env.SPOT_CHART_BROWSER_CHANNEL || 'msedge' });
   const results = [];
@@ -91,18 +102,29 @@ function purpleColumn(buffer, x) {
       const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 },
         isMobile: mobile, hasTouch: mobile, acceptDownloads: true });
       let now = day + 4 * HOUR + 5000;
-      const errors = [], writes = [], wrongMarketReads = []; let intrusionFailure = false, intrusionReads = 0, deltaReads = 0;
+      const errors = [], writes = [], wrongMarketReads = []; let intrusionFailure = false, intrusionReads = 0, deltaReads = 0, pocReads = 0, pocReady = false;
       await context.addInitScript(value => { window.__weeklyNow = value; Date.now = () => window.__weeklyNow; window.WebSocket = class { close() {} }; }, now);
       await context.route('**/*', route => {
         const req = route.request(), target = new URL(req.url());
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) { writes.push(req.method()); return route.abort(); }
-        if (eth && (target.pathname.startsWith('/open-liquidity/v2/btc-spot-') || target.pathname.includes('btc-intrusion-futures-delta') || target.pathname === '/decentrader/liquidity-timelapse' ||
+        if (eth && (target.pathname.startsWith('/open-liquidity/v2/btc-spot-') || target.pathname.includes('btc-intrusion-') || target.pathname === '/decentrader/liquidity-timelapse' ||
             target.pathname.includes('gap-projection-history') || target.pathname === '/decentrader/manual-override' && target.searchParams.get('market') !== market)) wrongMarketReads.push(req.url());
         if (target.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: html });
         if (target.origin === new URL(url).origin && target.pathname.startsWith('/assets/')) return route.continue();
         if (target.pathname.endsWith(`/${asset}-spot-candles`)) return route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h',
           fetchedAt: iso(now), candles: candles(now), hasMore: false } });
         if (target.pathname.endsWith(`/${asset}-spot-fractal-projections`)) return route.fulfill({ json: bundle(now) });
+        if (target.pathname.endsWith(`/${asset}-intrusion-spot-poc`)) {
+          pocReads++;
+          const hour = Number(target.searchParams.get('hour'));
+          const long = hour === (day + 3 * HOUR) / 1000;
+          assert([3, 5].some(offset => hour === (day + offset * HOUR) / 1000), 'POC belongs to an actual purple candle');
+          return route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h', method: 'exact-price-base-volume',
+            record: pocReady ? { hour, status: 'ok', poc: { hour, startedAt: hour, closedAt: hour + 3600,
+              price: long ? 119.25 : 88.75, volumeBase: '100', priceVolumeBase: '10', tradeCount: 1000,
+              aggregateTrades: 500, priceLevels: 50, pages: 1, fetchedAt: iso(now) } }
+              : { hour, status: 'pending', pages: 1, retryAt: iso(now + 5000) } } });
+        }
         if (target.pathname.endsWith(`/${asset}-intrusion-futures-delta`)) {
           deltaReads++;
           const hours = target.searchParams.get('hours').split(',').map(Number);
@@ -225,6 +247,33 @@ function purpleColumn(buffer, x) {
       const purple = await page.locator('#spotChartCanvas').screenshot();
       const purplePixels = purpleXs.map(x => purpleColumn(purple, x));
       assert(purplePixels.every(n => n > 200), `Actual purple lines on the alert candles: ${purplePixels}`);
+      assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionPocCrosses()), [], 'Partial volume profiles draw no guessed crossbar');
+      pocReady = true;
+      for (let pass = 0; pass < 2; pass++) {
+        now += 6000; await page.evaluate(time => { window.__weeklyNow = time; }, now);
+        await page.evaluate(time => {
+          window.btcSpotChart.chart.timeScale().setVisibleRange({ from: time / 1000 - 6 * 3600, to: time / 1000 + 10 * 3600 });
+          window.btcSpotChart.candleSeries.priceScale().setVisibleRange({ from: 60, to: 160 });
+        }, day);
+        try { await page.waitForFunction(minimum => window.btcSpotChart.getIntrusionPocCrosses().length >= minimum, pass + 1); }
+        catch (error) {
+          console.error('POC fixture state', JSON.stringify(await page.evaluate(() => ({
+            records: window.btcSpotChart.getIntrusionSpotPoc(), crosses: window.btcSpotChart.getIntrusionPocCrosses(),
+            range: window.btcSpotChart.chart.timeScale().getVisibleRange(),
+            status: document.getElementById('spotChartIntrusionDailyStatus').textContent
+          }))), { pocReads, errors });
+          throw error;
+        }
+      }
+      const pocCrosses = await page.evaluate(() => window.btcSpotChart.getIntrusionPocCrosses());
+      assert.deepEqual(pocCrosses.map(cross => cross.price), [119.25, 88.75]);
+      for (const cross of pocCrosses) {
+        const expected = await page.evaluate(price => window.btcSpotChart.candleSeries.priceToCoordinate(price), cross.price);
+        assert(Math.abs(cross.y - expected) <= 1, 'Horizontal marker uses actual POC price coordinate');
+      }
+      const crossShot = await page.locator('#spotChartCanvas').screenshot();
+      fs.writeFileSync(path.join(output, `poc-crosses-${mobile ? 'mobile' : 'desktop'}.png`), crossShot);
+      assert(pocCrosses.every(cross => pocPixels(crossShot, cross) >= 8), `Both actual horizontal crossbars must render: ${JSON.stringify(pocCrosses.map(cross => ({ ...cross, pixels: pocPixels(crossShot, cross) })))}`);
       let deltaLabels = [];
       {
         await page.waitForFunction(() => window.btcSpotChart.getIntrusionDeltaLabels().filter(label => label.status === 'ok').length === 2);
@@ -245,6 +294,7 @@ function purpleColumn(buffer, x) {
       const purpleFile = path.join(output, `intrusion-daily-${mobile ? 'mobile' : 'desktop'}-export.png`);
       await (await purpleDownloadEvent).saveAs(purpleFile);
       assert(purpleXs.every(x => purpleColumn(fs.readFileSync(purpleFile), x) > 200), 'PNG includes purple markers');
+      assert(pocCrosses.every(cross => pocPixels(fs.readFileSync(purpleFile), cross) >= 8), 'PNG includes horizontal POC crossbars');
       await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `intrusion-daily-${mobile ? 'mobile' : 'desktop'}.png`) });
       intrusionFailure = true;
       if (eth) await page.evaluate(() => window.__weeklyFixtureRefresh().catch(() => {}));
@@ -254,10 +304,13 @@ function purpleColumn(buffer, x) {
       await page.locator('#spotChartIntrusionDailyBreaks').uncheck();
       const readsWhenOff = intrusionReads;
       const deltaReadsWhenOff = deltaReads;
+      const pocReadsWhenOff = pocReads;
       await page.locator('#spotChartRefresh').click();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal(intrusionReads, readsWhenOff, 'Disabled intrusion overlay performs no additional dashboard reads');
       assert.equal(deltaReads, deltaReadsWhenOff, 'Disabled overlay stops annotation reads');
+      assert.equal(pocReads, pocReadsWhenOff, 'Disabled overlay stops POC reads');
+      assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionPocCrosses()), []);
       assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionDeltaLabels()), []);
       const noPurple = await page.locator('#spotChartCanvas').screenshot();
       assert(purpleXs.every(x => purpleColumn(noPurple, x) < 20), 'Checkbox removes the actual purple lines');
@@ -266,7 +319,7 @@ function purpleColumn(buffer, x) {
       results.push({ mobile, symbol, layerPixels, wrongMarketReads, automaticClosedHourUpdate: true, longAndShort: true, previousBoxUsed: true,
         independentCheckboxes: true, orangePixels: pixels, yellowPixels, weeklyWinsOverlap: true,
         pngIncludesBothOverlays: true, purplePixels, intrusionAlertTimeNotMailTime: true,
-        readFailureRetainsIntrusions: true, disabledIntrusionStopsReads: true, deltaReads, deltaLabels,
+        readFailureRetainsIntrusions: true, disabledIntrusionStopsReads: true, deltaReads, deltaLabels, pocReads, pocCrosses,
         noHorizontalOverflow: true, writes });
       await context.close();
     }

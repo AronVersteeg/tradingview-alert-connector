@@ -116,6 +116,7 @@ export function binanceRequestWeight(url: string, config?: AxiosRequestConfig): 
   if (endpoint === '/fapi/v1/klines') return limit < 100 ? 1 : limit < 500 ? 2 : limit <= 1000 ? 5 : 10;
   if (endpoint === '/fapi/v1/depth') return limit <= 50 ? 2 : limit <= 100 ? 5 : limit <= 500 ? 10 : 20;
   if (endpoint === '/api/v3/klines') return 2;
+  if (endpoint === '/api/v3/aggTrades') return 4;
   return 1;
 }
 

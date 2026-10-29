@@ -57,14 +57,37 @@
   }
 
   class IntrusionDailyBreakoutPrimitive extends engine.GapWeeklyBreakoutPrimitive {
-    constructor() { super('#ba68c8'); this.deltaEnabled = false; this.deltaRecords = new Map(); this.deltaLabels = []; this.fontSize = 11; }
+    constructor() { super('#ba68c8'); this.deltaEnabled = false; this.deltaRecords = new Map(); this.deltaLabels = []; this.fontSize = 11;
+      this.pocEnabled = false; this.pocRecords = new Map(); this.pocCrosses = []; }
+    attached(params) { super.attached(params); this.series = params.series; }
+    detached() { super.detached(); this.series = undefined; this.pocCrosses = []; }
+    setPocEnabled(enabled) { this.pocEnabled = Boolean(enabled); this.pocCrosses = []; this.requestUpdate?.(); }
+    setPocRecords(records) { this.pocRecords = new Map(records); this.requestUpdate?.(); }
+    getPocCrosses() { return this.pocCrosses.map(cross => ({ ...cross })); }
     setDeltaEnabled(enabled) { this.deltaEnabled = Boolean(enabled); this.deltaLabels = []; this.requestUpdate?.(); }
     setDeltaRecords(records) { this.deltaRecords = new Map(records); this.requestUpdate?.(); }
     setLabelFontSize(size) { if (size >= 8 && size <= 16) this.fontSize = size; this.requestUpdate?.(); }
-    setVisible(visible) { super.setVisible(visible); this.deltaLabels = []; }
+    setVisible(visible) { super.setVisible(visible); this.deltaLabels = []; this.pocCrosses = []; }
     getDeltaLabels() { return this.deltaLabels.map(label => ({ ...label })); }
     draw(target) {
-      super.draw(target); this.deltaLabels = [];
+      super.draw(target); this.deltaLabels = []; this.pocCrosses = [];
+      if (this.pocEnabled && this.visible && this.chart && this.series) {
+        target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width, height } }) => {
+          ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();
+          ctx.strokeStyle = this.color; ctx.lineWidth = 1.5; ctx.globalAlpha = 1; ctx.setLineDash([]);
+          for (const signal of this.signals) {
+            const record = this.pocRecords.get(signal.time);
+            if (record?.status !== 'ok' || record.hour !== signal.time || record.poc?.hour !== signal.time ||
+                !Number.isFinite(record.poc.price) || record.poc.price <= 0) continue;
+            const x = this.chart.timeScale().timeToCoordinate(signal.time), y = this.series.priceToCoordinate(record.poc.price);
+            if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > width || y < 0 || y > height) continue;
+            const cx = Math.floor(x) + .5, cy = Math.floor(y) + .5;
+            ctx.beginPath(); ctx.moveTo(cx - 8, cy); ctx.lineTo(cx + 8, cy); ctx.stroke();
+            this.pocCrosses.push({ time: signal.time, direction: signal.direction, price: record.poc.price, x: cx, y: cy, width: 16 });
+          }
+          ctx.restore();
+        });
+      }
       if (!this.deltaEnabled || !this.visible || !this.chart) return;
       target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width, height } }) => {
         ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();

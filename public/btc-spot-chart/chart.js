@@ -26,6 +26,7 @@
   const gapWeeklyBreaks = window.BtcSpotGapWeeklyBreakouts;
   const intrusionDailyBreaks = window.BtcSpotIntrusionDailyBreakouts;
   const futuresDelta = window.BtcIntrusionFuturesDelta;
+  const spotPoc = window.BtcIntrusionSpotPoc;
   const manualLevels = window.BtcSpotManualLevels;
   const viewport = window.BtcSpotViewport;
   const interactions = window.BtcSpotInteractions;
@@ -50,6 +51,8 @@
   let intrusionRetryAt = 0, intrusionReadFailed = false;
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
+  const pocRecords = new Map();
+  let pocPending, pocController, pocLastRequestAt = 0, pocWorkingHour;
   const breakoutStates = [
     { timeframe: 'W', name: 'Weekly', levelsKey: 'weeklyLevels' },
     { timeframe: 'D', name: 'Daily', levelsKey: 'dailyLevels' }
@@ -194,7 +197,10 @@
       intrusionLayer?.setDeltaRecords(deltaRecords);
       const available = intrusionModel.signals.filter(signal => deltaRecords.get(signal.time)?.status === 'ok').length;
       status.textContent += ` | F5m: ${available}/${intrusionModel.signals.length}`;
+      intrusionLayer?.setPocRecords(pocRecords);
+      status.textContent += ` | POC: ${intrusionModel.signals.filter(signal => pocRecords.get(signal.time)?.status === 'ok').length}/${intrusionModel.signals.length}`;
       void refreshIntrusionDelta();
+      void refreshIntrusionPoc();
       status.dataset.stale = String(stale);
     } catch (error) {
       intrusionInputs = undefined; intrusionModel = undefined; intrusionLayer?.setData([]);
@@ -237,6 +243,40 @@
       } finally { clearTimeout(timeout); deltaPending = undefined; if (deltaController === controller) deltaController = undefined; }
     })();
     return deltaPending;
+  }
+
+  async function refreshIntrusionPoc() {
+    if (!active || destroyed || !initialData || !byId('spotChartIntrusionDailyBreaks').checked ||
+        !intrusionModel || pocPending || Date.now() - pocLastRequestAt < 5000) return pocPending;
+    const range = chart?.timeScale().getVisibleRange();
+    const visible = [...new Set(intrusionModel.signals.map(signal => signal.time))]
+      .filter(hour => range && hour >= range.from && hour <= range.to).sort((a, b) => b - a);
+    const candidates = visible.filter(hour => pocRecords.get(hour)?.status !== 'ok');
+    if (!candidates.includes(pocWorkingHour)) pocWorkingHour = candidates.find(hour =>
+      !pocRecords.has(hour) || Date.parse(pocRecords.get(hour).retryAt) <= Date.now());
+    const hour = pocWorkingHour;
+    if (hour === undefined || Date.parse(pocRecords.get(hour)?.retryAt || '') > Date.now()) return;
+    pocLastRequestAt = Date.now(); pocController = new AbortController();
+    const controller = pocController, timeout = setTimeout(() => controller.abort(), 25_000);
+    pocPending = (async () => {
+      try {
+        const response = await fetch(`/open-liquidity/v2/${asset}-intrusion-spot-poc?hour=${hour}`,
+          { signal: controller.signal, cache: 'no-store' });
+        if (!response.ok) throw new Error('Spot POC read unavailable');
+        const record = spotPoc.readPocResponse(await response.json(), symbol, hour);
+        if (destroyed || controller.signal.aborted) return;
+        pocRecords.set(hour, record);
+        if (record.status !== 'pending') pocWorkingHour = undefined;
+        while (pocRecords.size > 5000) pocRecords.delete(pocRecords.keys().next().value);
+        updateIntrusionDailyBreakouts();
+      } catch {
+        if (!destroyed && !controller.signal.aborted) {
+          pocRecords.set(hour, { hour, status: 'unavailable', retryAt: new Date(Date.now() + 60_000).toISOString() });
+          pocWorkingHour = undefined; updateIntrusionDailyBreakouts();
+        }
+      } finally { clearTimeout(timeout); pocPending = undefined; if (pocController === controller) pocController = undefined; }
+    })();
+    return pocPending;
   }
 
   async function refreshIntrusionHistory(force = false) {
@@ -475,6 +515,7 @@
       updateGapFractalBreakouts();
       intrusionLayer = new intrusionDailyBreaks.IntrusionDailyBreakoutPrimitive();
       intrusionLayer.setDeltaEnabled(true);
+      intrusionLayer.setPocEnabled(true);
       updateOrderBlockFont();
       intrusionLayer.setVisible(byId('spotChartIntrusionDailyBreaks').checked);
       candlesSeries.attachPrimitive(intrusionLayer);
@@ -535,6 +576,8 @@
         getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({
           ...signal, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
         getIntrusionDeltaLabels: () => intrusionLayer?.getDeltaLabels() || [],
+        getIntrusionPocCrosses: () => intrusionLayer?.getPocCrosses() || [],
+        getIntrusionSpotPoc: () => [...pocRecords.values()].map(record => ({ ...record, ...(record.poc ? { poc: { ...record.poc } } : {}) })),
         getIntrusionFuturesDelta: () => [...deltaRecords.values()].map(record => ({ ...record, ...(record.candle ? { candle: { ...record.candle } } : {}) })),
         getManualLevels: () => manualModel ? { ...manualModel, levels: manualModel.levels.map((level) => ({ ...level })) } : null,
         getManualProjections: () => manualLayer ? manualLayer.projectionBoxes().map((box) => ({ ...box })) : []
@@ -547,6 +590,7 @@
         void refreshFractals();
         void refreshIntrusionHistory();
         void refreshIntrusionDelta();
+        void refreshIntrusionPoc();
         if (!lastTickAt || Date.now() - lastTickAt > 12_000) {
           if (Date.now() - lastRestAt >= 30_000) void loadRecent();
           if (socket && Date.now() - (lastTickAt || lastRestAt) > 20_000) socket.close();
@@ -653,7 +697,7 @@
   }
   async function syncActivity() {
     active = inView && !document.hidden && navigator.onLine;
-    if (!active) { deltaController?.abort(); clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return; }
+    if (!active) { deltaController?.abort(); pocController?.abort(); clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return; }
     try {
       await ensureChart();
       if (!active || destroyed) return;
@@ -696,8 +740,8 @@
   }
   byId('spotChartIntrusionDailyBreaks').addEventListener('change', (event) => {
     intrusionLayer?.setVisible(event.target.checked);
-    if (event.target.checked) { void refreshIntrusionHistory(); void refreshIntrusionDelta(); }
-    else deltaController?.abort();
+    if (event.target.checked) { void refreshIntrusionHistory(); void refreshIntrusionDelta(); void refreshIntrusionPoc(); }
+    else { deltaController?.abort(); pocController?.abort(); }
   });
   byId('spotChartManual').addEventListener('change', (event) => {
     manualLayer?.setVisible(event.target.checked);
@@ -764,6 +808,7 @@
   window.addEventListener('pagehide', () => {
     destroyed = true;
     deltaController?.abort();
+    pocController?.abort();
     desktopOrderBlockLabels.removeEventListener('change', updateOrderBlockFont);
     observer.disconnect(); disconnect(); clearInterval(watchdog); clearTimeout(orderBlockHistoryTimer); gestures?.destroy(); manualLayer?.destroy(); chart?.remove();
   }, { once: true });

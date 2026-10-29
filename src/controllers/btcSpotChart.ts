@@ -4,8 +4,25 @@ import { binanceSpotChartFeed, ethSpotChartFeed } from '../services/binanceSpotC
 import { binanceCooldownHttpResponse } from '../services/binanceHttp';
 import { btcFractalProjectionFeed, ethFractalProjectionFeed } from '../services/btcFractalProjections';
 import { btcIntrusionFuturesDeltaFeed, ethIntrusionFuturesDeltaFeed, validateDeltaHours } from '../services/intrusionFuturesDelta';
+import { btcIntrusionSpotPocFeed, ethIntrusionSpotPocFeed, validatePocHour } from '../services/intrusionSpotPoc';
 
 export const btcSpotChartRouter = express.Router();
+
+for (const [asset, feed] of [['btc', btcIntrusionSpotPocFeed], ['eth', ethIntrusionSpotPocFeed]] as const) {
+  btcSpotChartRouter.get(`/open-liquidity/v2/${asset}-intrusion-spot-poc`, async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    let hour: number;
+    try {
+      if (typeof req.query.hour !== 'string' || !/^\d{1,10}$/.test(req.query.hour)) throw new Error('Invalid hour.');
+      hour = validatePocHour(Number(req.query.hour));
+    } catch {
+      res.status(400).send({ ok: false, error: 'Supply one closed Spot candle-open hour as Unix seconds.' });
+      return;
+    }
+    try { res.send(await feed.snapshot(hour)); }
+    catch { res.status(503).send({ ok: false, error: 'Spot POC annotation unavailable.' }); }
+  });
+}
 
 btcSpotChartRouter.use('/assets/btc-spot-chart', express.static(
   path.join(process.cwd(), 'public', 'btc-spot-chart'), { index: false, maxAge: 0 }

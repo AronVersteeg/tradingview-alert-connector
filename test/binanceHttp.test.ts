@@ -16,6 +16,7 @@ describe('Binance REST rate-limit handling', () => {
     expect(binanceRequestWeight('https://fapi.binance.com/fapi/v1/klines', { params: { limit: 12 } })).toBe(1);
     expect(binanceRequestWeight('https://fapi.binance.com/fapi/v1/klines', { params: { limit: 1500 } })).toBe(10);
     expect(binanceRequestWeight('https://fapi.binance.com/fapi/v1/depth', { params: { limit: 500 } })).toBe(10);
+    expect(binanceRequestWeight('https://api.binance.com/api/v3/aggTrades', { params: { limit: 1000 } })).toBe(4);
   });
   test('recognizes Binance code -1003 and honors the longest cooldown', () => {
     const now = Date.parse('2026-08-26T14:13:14.000Z');
