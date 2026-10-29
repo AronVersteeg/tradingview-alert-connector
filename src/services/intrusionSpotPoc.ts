@@ -14,17 +14,40 @@ export type SpotPoc = {
   aggregateTrades: number; priceLevels: number; pages: number; fetchedAt: string;
 };
 type Read = { hour: number; status: 'ok'; poc: SpotPoc } |
-  { hour: number; status: 'pending' | 'unavailable'; retryAt: string; error?: string; pages?: number };
+  { hour: number; status: 'pending' | 'unavailable'; retryAt: string; error?: string; pages?: number; tradesRead?: number; tradesTotal?: number };
 type Job = {
   owner: IntrusionSpotPocFeed; hour: number; touched: number; expected?: bigint; trades?: number;
   low?: number; high?: number; total: bigint; count: number; aggregates: number; pages: number;
   lastId?: number; lastRawId?: number; lastTime?: number; levels: Map<string, bigint>;
   waiting: boolean;
   retryAt?: number; consecutiveFailures?: number; lastError?: string;
+  verifyRestored?: boolean;
 };
 // A chart annotation must not burst through the trading service's shared Binance queue.
 const jobs = new Map<IntrusionSpotPocFeed, Job>();
 let busy = false, nextReadAt = 0, lastOwner: IntrusionSpotPocFeed | undefined;
+let backgroundTimer: ReturnType<typeof setTimeout> | undefined;
+let backgroundDue = 0;
+
+function scheduleBackground(): void {
+  const pending = [...jobs.values()].filter(job => job.owner.backgroundEnabled);
+  if (!pending.length) return;
+  const due = Math.max(Date.now() + (busy ? 1000 : 10), nextReadAt, binanceRetryAt(BASE + 'aggTrades'),
+    Math.min(...pending.map(job => job.retryAt || 0)));
+  if (backgroundTimer && due >= backgroundDue) return;
+  if (backgroundTimer) clearTimeout(backgroundTimer);
+  backgroundDue = due;
+  backgroundTimer = setTimeout(() => {
+    backgroundTimer = undefined; backgroundDue = 0;
+    const ready = [...jobs.values()].filter(job => job.owner.backgroundEnabled && (job.retryAt || 0) <= Date.now());
+    const next = ready.find(job => job.owner !== lastOwner) || ready[0];
+    if (!next || busy) { scheduleBackground(); return; }
+    void next.owner.continueBackground().catch(error => {
+      console.warn('Spot POC background read failed:', String(error));
+    }).finally(scheduleBackground);
+  }, Math.max(10, due - Date.now()));
+  backgroundTimer.unref?.();
+}
 
 export function validatePocHour(hour: number, now = Date.now()): number {
   if (!Number.isSafeInteger(hour) || hour < 1502928000 || hour % HOUR || (hour + HOUR) * 1000 > now) {
@@ -54,13 +77,19 @@ export class IntrusionSpotPocFeed {
   private failures = new Map<number, Read>();
   private loaded = false;
   private persistenceDisabled = false;
+  private partialPersistenceDisabled = false;
+  private restored?: Job;
+  private disposed = false;
+  readonly backgroundEnabled: boolean;
   private readonly file: () => string;
-  constructor(readonly symbol: Symbol, file?: () => string) {
+  constructor(readonly symbol: Symbol, file?: () => string,
+    private readonly options: { background?: boolean; seedFile?: () => string } = {}) {
     if (!['BTCUSDT', 'ETHUSDT'].includes(symbol)) throw new Error('Unsupported Spot POC symbol.');
     this.file = file || (() => {
       const dom = String(process.env.DECENTRALIZED_DOM_HISTORY_DIR || '').trim();
       return path.join(dom ? path.dirname(dom) : path.join(process.cwd(), 'data'), `${symbol.toLowerCase()}-intrusion-spot-poc.json`);
     });
+    this.backgroundEnabled = Boolean(options.background);
   }
 
   private load(): void {
@@ -75,9 +104,96 @@ export class IntrusionSpotPocFeed {
       }
       for (const p of stored.records) this.records.set(p.hour, p);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      this.persistenceDisabled = true;
-      console.warn(`${this.symbol} Spot POC history unavailable; preserved existing file:`, String(error));
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.persistenceDisabled = true;
+        console.warn(`${this.symbol} Spot POC history unavailable; preserved existing file:`, String(error));
+      }
+    }
+    if (this.options.seedFile) {
+      try {
+        const seed = this.options.seedFile();
+        if (fs.statSync(seed).size > 3_000_000) throw new Error('Oversized POC reference history.');
+        const stored = JSON.parse(fs.readFileSync(seed, 'utf8'));
+        if (stored.version !== 1 || stored.symbol !== this.symbol || stored.method !== METHOD ||
+          !Array.isArray(stored.records) || stored.records.length > MAX_RECORDS || !stored.records.every(validStored)) throw new Error('Invalid POC reference history.');
+        for (const p of stored.records) if (!this.records.has(p.hour)) this.records.set(p.hour, p);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') console.warn('Spot POC reference history unavailable:', String(error));
+      }
+    }
+    this.loadCheckpoint();
+  }
+
+  private loadCheckpoint(): void {
+    try {
+      const file = `${this.file()}.partial`;
+      if (fs.statSync(file).size > 6_000_000) throw new Error('Oversized POC checkpoint.');
+      const p = JSON.parse(fs.readFileSync(file, 'utf8'));
+      validatePocHour(p.hour);
+      if (p.version !== 1 || p.symbol !== this.symbol || p.method !== METHOD || !Array.isArray(p.levels) || p.levels.length > 100_000 ||
+        ![p.count, p.aggregates, p.pages, p.trades].every(n => Number.isSafeInteger(n) && n >= 0) ||
+        p.trades <= 0 || p.aggregates > p.count || p.count > p.trades || p.pages > 2000 || p.aggregates > 2_000_000 ||
+        !Number.isFinite(p.low) || !Number.isFinite(p.high) || p.low <= 0 || p.high < p.low) throw new Error('Invalid POC checkpoint metadata.');
+      const levels = new Map<string, bigint>(); let sum = ZERO;
+      for (const entry of p.levels) {
+        if (!Array.isArray(entry) || entry.length !== 2) throw new Error('Invalid POC checkpoint level.');
+        const [price, quantity] = entry, volume = units(quantity);
+        if (units(price) <= ZERO || amount(units(price)) !== price || volume <= ZERO ||
+          Number(price) < p.low || Number(price) > p.high || levels.has(price)) throw new Error('Invalid POC checkpoint level.');
+        levels.set(price, volume); sum += volume;
+      }
+      if (sum !== units(p.total) || sum > units(p.expected) || units(p.expected) <= ZERO || levels.size > p.aggregates ||
+        (p.pages === 0 && (p.count !== 0 || p.aggregates !== 0 || levels.size !== 0)) ||
+        (p.pages > 0 && (![p.lastId, p.lastRawId, p.lastTime].every(n => Number.isSafeInteger(n) && n >= 0) ||
+          p.lastTime < p.hour * 1000 || p.lastTime >= (p.hour + HOUR) * 1000 || p.aggregates === 0))) throw new Error('Inconsistent POC checkpoint.');
+      if (this.records.has(p.hour)) { this.clearCheckpoint(); return; }
+      this.restored = { owner: this, hour: p.hour, touched: Date.now(), expected: units(p.expected), total: sum,
+        trades: p.trades, low: p.low, high: p.high, count: p.count, aggregates: p.aggregates, pages: p.pages,
+        lastId: p.lastId, lastRawId: p.lastRawId, lastTime: p.lastTime, levels, waiting: true, verifyRestored: true };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.partialPersistenceDisabled = true;
+        console.warn(`${this.symbol} POC checkpoint invalid; preserved existing file:`, String(error));
+      }
+    }
+  }
+
+  private checkpoint(current: Job): void {
+    if (this.partialPersistenceDisabled || current.expected === undefined) return;
+    try {
+      const file = `${this.file()}.partial`, temporary = `${file}.${process.pid}.tmp`;
+      const { hour, trades, low, high, count, aggregates, pages, lastId, lastRawId, lastTime } = current;
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(temporary, JSON.stringify({ version: 1, symbol: this.symbol, method: METHOD,
+        hour, trades, low, high, count, aggregates, pages, lastId, lastRawId, lastTime,
+        total: amount(current.total), expected: amount(current.expected),
+        levels: [...current.levels].map(([price, quantity]) => [price, amount(quantity)]) }));
+      fs.renameSync(temporary, file);
+    } catch (error) {
+      this.partialPersistenceDisabled = true;
+      console.warn('Could not persist Spot POC checkpoint:', String(error));
+    }
+  }
+
+  private clearCheckpoint(): void {
+    if (this.partialPersistenceDisabled) return;
+    try { fs.unlinkSync(`${this.file()}.partial`); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') console.warn('Could not clear completed POC checkpoint:', String(error)); }
+  }
+
+  async continueBackground(): Promise<void> {
+    const current = jobs.get(this);
+    if (current && !this.disposed) await this.read(current.hour);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    const current = jobs.get(this);
+    if (current) this.checkpoint(current);
+    jobs.delete(this);
+    if (![...jobs.values()].some(job => job.owner.backgroundEnabled) && backgroundTimer) {
+      clearTimeout(backgroundTimer); backgroundTimer = undefined;
+      backgroundDue = 0;
     }
   }
 
@@ -98,7 +214,8 @@ export class IntrusionSpotPocFeed {
     const job = jobs.get(this);
     return { hour, status: 'pending', retryAt: new Date(Math.max(Date.now() + 5000, nextReadAt,
       job?.hour === hour ? job.retryAt || 0 : 0, binanceRetryAt(BASE + 'aggTrades'))).toISOString(),
-      ...(job?.owner === this && job.hour === hour ? { pages: job.pages, ...(job.lastError ? { error: job.lastError } : {}) } : {}) };
+      ...(job?.owner === this && job.hour === hour ? { pages: job.pages, tradesRead: job.count, tradesTotal: job.trades,
+        ...(job.lastError ? { error: job.lastError } : {}) } : {}) };
   }
 
   private async read(hour: number): Promise<Read> {
@@ -106,12 +223,19 @@ export class IntrusionSpotPocFeed {
     if (known) return { hour, status: 'ok', poc: { ...known } };
     const failed = this.failures.get(hour);
     if (failed && failed.status !== 'ok' && Date.parse(failed.retryAt) > Date.now()) return { ...failed };
-    if (!busy) for (const [owner, job] of jobs) if (Date.now() > Math.max(job.touched, job.retryAt || 0) + 120_000) jobs.delete(owner);
+    if (!busy) for (const [owner, job] of jobs) if (!owner.backgroundEnabled && Date.now() > Math.max(job.touched, job.retryAt || 0) + 120_000) {
+      jobs.delete(owner);
+    }
     let current = jobs.get(this);
     if (current && current.hour !== hour || !current && jobs.size >= 2) return this.pending(hour);
     if (!current) {
-      current = { owner: this, hour, touched: Date.now(), total: ZERO, count: 0, aggregates: 0, pages: 0, levels: new Map(), waiting: true };
+      current = this.restored || { owner: this, hour, touched: Date.now(), total: ZERO, count: 0, aggregates: 0, pages: 0, levels: new Map(), waiting: true };
+      this.restored = undefined;
+      if ([...jobs.values()].reduce((n, item) => n + item.levels.size, current.levels.size) > 100_000) {
+        this.restored = current; return this.pending(hour);
+      }
       jobs.set(this, current);
+      if (current.hour !== hour) return this.pending(hour);
     }
     current.touched = Date.now(); current.waiting = true;
     const yieldToOtherChart = lastOwner === this && [...jobs.values()].some(other =>
@@ -128,7 +252,7 @@ export class IntrusionSpotPocFeed {
       } catch (error) { requestFailed = true; throw error; }
     };
     try {
-      if (current.expected === undefined) {
+      if (current.expected === undefined || current.verifyRestored) {
         const response = await request('klines',
           { symbol: this.symbol, interval: '1h', startTime: hour * 1000, endTime: (hour + HOUR) * 1000 - 1, limit: 1 });
         const row = response.data?.[0] as any;
@@ -138,8 +262,12 @@ export class IntrusionSpotPocFeed {
           !Number.isFinite(Number(row[2])) || !Number.isFinite(Number(row[3])) || Number(row[3]) <= 0 || Number(row[2]) < Number(row[3])) {
           throw new Error('Exact closed Spot candle unavailable.');
         }
+        if (current.verifyRestored && (current.expected !== units(row[5]) || current.trades !== row[8] ||
+          current.high !== Number(row[2]) || current.low !== Number(row[3]))) throw new Error('POC checkpoint differs from authoritative Spot candle.');
+        current.verifyRestored = false;
         current.expected = units(row[5]); current.trades = row[8];
         current.high = Number(row[2]); current.low = Number(row[3]);
+        this.checkpoint(current);
         return this.pending(hour);
       }
       const params = current.lastId === undefined
@@ -177,10 +305,11 @@ export class IntrusionSpotPocFeed {
           aggregateTrades: current.aggregates, priceLevels: current.levels.size, pages: current.pages, fetchedAt: new Date().toISOString() };
         this.records.set(hour, poc); this.failures.delete(hour);
         while (this.records.size > MAX_RECORDS) this.records.delete(this.records.keys().next().value);
-        this.persist(); jobs.delete(this);
+        this.persist(); this.clearCheckpoint(); jobs.delete(this);
         return { hour, status: 'ok', poc: { ...poc } };
       }
       if (ended || current.pages >= 2000) throw new Error('Incomplete Spot trade history; no POC published.');
+      if (current.pages % 5 === 0) this.checkpoint(current);
       return this.pending(hour);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -192,9 +321,10 @@ export class IntrusionSpotPocFeed {
         current.lastError = message;
         current.retryAt = Math.max(Date.now() + Math.min(300_000, 15_000 * 2 ** Math.min(5, current.consecutiveFailures - 1)),
           binanceRetryAt(BASE + 'aggTrades'));
+        this.checkpoint(current);
         return this.pending(hour);
       }
-      jobs.delete(this);
+      this.clearCheckpoint(); jobs.delete(this);
       const result: Read = { hour, status: 'unavailable',
         retryAt: new Date(Math.max(Date.now() + 300_000, binanceRetryAt(BASE + 'aggTrades'))).toISOString(),
         error: error instanceof Error ? error.message : String(error) };
@@ -207,10 +337,13 @@ export class IntrusionSpotPocFeed {
   async snapshot(hour: number) {
     validatePocHour(hour); this.load();
     const record = await this.read(hour);
+    if (!this.disposed && this.backgroundEnabled) scheduleBackground();
     return { symbol: this.symbol, venue: 'Binance Spot', interval: '1h', method: METHOD,
-      persistenceAvailable: !this.persistenceDisabled, record };
+      persistenceAvailable: !this.persistenceDisabled, checkpointAvailable: !this.partialPersistenceDisabled,
+      backgroundEnabled: this.backgroundEnabled, record };
   }
 }
 
-export const btcIntrusionSpotPocFeed = new IntrusionSpotPocFeed('BTCUSDT');
-export const ethIntrusionSpotPocFeed = new IntrusionSpotPocFeed('ETHUSDT');
+export const btcIntrusionSpotPocFeed = new IntrusionSpotPocFeed('BTCUSDT', undefined, { background: true,
+  seedFile: () => path.join(process.cwd(), 'public', 'btc-spot-chart', 'history', 'btc-spot-poc.json') });
+export const ethIntrusionSpotPocFeed = new IntrusionSpotPocFeed('ETHUSDT', undefined, { background: true });

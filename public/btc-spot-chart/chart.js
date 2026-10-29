@@ -200,8 +200,9 @@
       intrusionLayer?.setPocRecords(pocRecords);
       status.textContent += ` | POC: ${intrusionModel.signals.filter(signal => pocRecords.get(signal.time)?.status === 'ok').length}/${intrusionModel.signals.length}`;
       const loadingPoc = pocRecords.get(pocWorkingHour);
-      if (loadingPoc?.status === 'pending') status.textContent += Number.isInteger(loadingPoc.pages)
-        ? ` (loading: ${loadingPoc.pages} pages)` : ' (queued)';
+      if (loadingPoc?.status === 'pending') status.textContent += Number.isInteger(loadingPoc.tradesRead) && loadingPoc.tradesTotal > 0
+        ? ` (loading: ${loadingPoc.tradesRead.toLocaleString('en-US')}/${loadingPoc.tradesTotal.toLocaleString('en-US')} trades)`
+        : Number.isInteger(loadingPoc.pages) ? ` (loading: ${loadingPoc.pages} pages)` : ' (queued)';
       const unavailablePocs = intrusionModel.signals.filter(signal => pocRecords.get(signal.time)?.status === 'unavailable').length;
       if (unavailablePocs) status.textContent += ` (${unavailablePocs} unavailable)`;
       void refreshIntrusionDelta();

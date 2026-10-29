@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "symbol": "BTCUSDT",
+  "method": "exact-price-base-volume",
+  "provenance": {
+    "source": "https://api.binance.com/api/v3/aggTrades",
+    "crossCheckedWith": "https://api.binance.com/api/v3/klines",
+    "candleOpenUtc": "2026-09-21T08:00:00.000Z",
+    "candleClosedUtc": "2026-09-21T09:00:00.000Z",
+    "reconciledBaseVolume": "4553.74746000",
+    "reconciledRawTradeCount": 373451,
+    "note": "Completed offline public-data backfill. All 152 aggregate-trade pages were checked for contiguous aggregate/raw trade IDs, valid hour/price bounds and exact agreement with both independent 1H candle totals. No candle-midpoint estimate."
+  },
+  "records": [
+    {
+      "hour": 1789977600,
+      "startedAt": 1789977600,
+      "closedAt": 1789981200,
+      "price": 83000,
+      "volumeBase": "4553.74746000",
+      "priceVolumeBase": "113.12195000",
+      "tradeCount": 373451,
+      "aggregateTrades": 151538,
+      "priceLevels": 49366,
+      "pages": 152,
+      "fetchedAt": "2026-10-29T18:41:58.449Z"
+    }
+  ]
+}

@@ -16,13 +16,15 @@ let clock = (hour + 7200) * 1000;
 
 describe('annotation-only exact-price Binance Spot POC', () => {
   let directory: string, file: string;
+  let backgroundFeeds: IntrusionSpotPocFeed[];
   beforeEach(() => {
     jest.useFakeTimers(); clock += 1_000_000; jest.setSystemTime(clock);
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'spot-poc-')); file = path.join(directory, 'history.json');
     (binanceGet as jest.Mock).mockReset().mockResolvedValueOnce({ data: [candle()] }).mockResolvedValue({ data: trades() });
     (binanceRetryAt as jest.Mock).mockReset().mockReturnValue(0);
+    backgroundFeeds = [];
   });
-  afterEach(() => { jest.restoreAllMocks(); jest.useRealTimers(); fs.rmSync(directory, { recursive: true, force: true }); });
+  afterEach(() => { for (const feed of backgroundFeeds) feed.dispose(); jest.restoreAllMocks(); jest.useRealTimers(); fs.rmSync(directory, { recursive: true, force: true }); });
   const advance = () => jest.setSystemTime(Date.now() + 5001);
   const complete = async (feed: IntrusionSpotPocFeed) => {
     expect((await feed.snapshot(hour)).record.status).toBe('pending'); advance(); return feed.snapshot(hour);
@@ -96,6 +98,82 @@ describe('annotation-only exact-price Binance Spot POC', () => {
     (binanceGet as jest.Mock).mockReset().mockRejectedValue(new Error('Binance api.binance.com HTTP 400 code -1121: Invalid symbol'));
     const result = await new IntrusionSpotPocFeed('BTCUSDT', () => file).snapshot(hour);
     expect(result.record.status).toBe('unavailable'); expect(result.record).not.toHaveProperty('poc');
+  });
+
+  test('continues a started profile server-side without another browser request', async () => {
+    const feed = new IntrusionSpotPocFeed('BTCUSDT', () => file, { background: true }); backgroundFeeds.push(feed);
+    expect((await feed.snapshot(hour)).record.status).toBe('pending');
+    await jest.advanceTimersByTimeAsync(5001);
+    expect(binanceGet).toHaveBeenCalledTimes(2);
+    expect((await feed.snapshot(hour)).record).toMatchObject({ status: 'ok', poc: { price: 100 } });
+    expect(binanceGet).toHaveBeenCalledTimes(2); expect(fs.existsSync(`${file}.partial`)).toBe(false);
+  });
+
+  test('background work shares the same five-second budget fairly across BTC and ETH', async () => {
+    (binanceGet as jest.Mock).mockReset().mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('klines') ? [candle()] : trades() }));
+    const btc = new IntrusionSpotPocFeed('BTCUSDT', () => file, { background: true });
+    const eth = new IntrusionSpotPocFeed('ETHUSDT', () => path.join(directory, 'eth.json'), { background: true });
+    backgroundFeeds.push(btc, eth);
+    await btc.snapshot(hour); await eth.snapshot(hour);
+    await jest.advanceTimersByTimeAsync(15010);
+    expect((await btc.snapshot(hour)).record.status).toBe('ok');
+    expect((await eth.snapshot(hour)).record.status).toBe('ok');
+    expect((binanceGet as jest.Mock).mock.calls.map(call => call[1].params.symbol)).toEqual(['BTCUSDT', 'ETHUSDT', 'BTCUSDT', 'ETHUSDT']);
+    expect(binanceGet).toHaveBeenCalledTimes(4);
+  });
+
+  test('a new ETH job wakes the background scheduler before an older BTC retry becomes due', async () => {
+    (binanceGet as jest.Mock).mockReset().mockRejectedValueOnce(new Error('temporary timeout'))
+      .mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('klines') ? [candle()] : trades() }));
+    const btc = new IntrusionSpotPocFeed('BTCUSDT', () => file, { background: true });
+    const eth = new IntrusionSpotPocFeed('ETHUSDT', () => path.join(directory, 'eth.json'), { background: true });
+    backgroundFeeds.push(btc, eth);
+    await btc.snapshot(hour); await jest.advanceTimersByTimeAsync(5001);
+    await eth.snapshot(hour); await jest.advanceTimersByTimeAsync(5001);
+    expect((await eth.snapshot(hour)).record.status).toBe('ok');
+    expect(binanceGet).toHaveBeenCalledTimes(3);
+  });
+
+  test('restores a checkpoint after restart, revalidates its candle and resumes at the next ID', async () => {
+    const rows = Array.from({ length: 1000 }, (_, i) => trade(i + 10, '100', '0.001'));
+    (binanceGet as jest.Mock).mockReset().mockResolvedValueOnce({ data: [candle('3', 1001)] })
+      .mockResolvedValueOnce({ data: rows }).mockResolvedValueOnce({ data: [candle('3', 1001)] })
+      .mockResolvedValueOnce({ data: [trade(1010, '101', '2')] });
+    const first = new IntrusionSpotPocFeed('BTCUSDT', () => file);
+    await complete(first); first.dispose();
+    expect(JSON.parse(fs.readFileSync(`${file}.partial`, 'utf8')).pages).toBe(1);
+    advance(); const restarted = new IntrusionSpotPocFeed('BTCUSDT', () => file);
+    expect((await restarted.snapshot(hour)).record).toMatchObject({ status: 'pending', pages: 1 });
+    expect((binanceGet as jest.Mock).mock.calls[2][0]).toContain('/klines');
+    advance(); expect((await restarted.snapshot(hour)).record).toMatchObject({ status: 'ok', poc: { price: 101, pages: 2 } });
+    expect((binanceGet as jest.Mock).mock.calls[3][1].params.fromId).toBe(1010);
+    expect(fs.existsSync(`${file}.partial`)).toBe(false);
+  });
+
+  test('corrupt checkpoints are preserved and never treated as a completed or trusted profile', async () => {
+    const partial = `${file}.partial`; fs.writeFileSync(partial, '{broken');
+    jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const feed = new IntrusionSpotPocFeed('BTCUSDT', () => file);
+    const result = await complete(feed);
+    expect(result.checkpointAvailable).toBe(false); expect(result.record.status).toBe('ok');
+    expect(fs.readFileSync(partial, 'utf8')).toBe('{broken');
+  });
+
+  test('a restored checkpoint cannot publish a POC if its independent candle totals have changed', async () => {
+    const first = new IntrusionSpotPocFeed('BTCUSDT', () => file);
+    await first.snapshot(hour); first.dispose(); advance();
+    (binanceGet as jest.Mock).mockResolvedValueOnce({ data: [candle('11')] });
+    const result = await new IntrusionSpotPocFeed('BTCUSDT', () => file).snapshot(hour);
+    expect(result.record).toMatchObject({ status: 'unavailable', error: expect.stringContaining('differs') });
+    expect(result.record).not.toHaveProperty('poc'); expect(fs.existsSync(file)).toBe(false);
+  });
+
+  test('the independently completed September BTC backfill is immediately usable without new Binance requests', async () => {
+    const seedFile = () => path.join(__dirname, '..', 'public', 'btc-spot-chart', 'history', 'btc-spot-poc.json');
+    const feed = new IntrusionSpotPocFeed('BTCUSDT', () => file, { seedFile });
+    const result = await feed.snapshot(1789977600);
+    expect(result.record).toMatchObject({ status: 'ok', poc: { price: 83000, volumeBase: '4553.74746000', tradeCount: 373451, aggregateTrades: 151538, pages: 152 } });
+    expect(binanceGet).not.toHaveBeenCalled(); browser.readPocResponse(result, 'BTCUSDT', 1789977600, Date.now());
   });
 
   test.each(['gap', 'duplicate', 'count', 'volume', 'time', 'price', 'precision', 'empty'])('rejects %s corruption without publishing any POC', async kind => {
