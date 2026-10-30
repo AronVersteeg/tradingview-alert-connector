@@ -103,6 +103,8 @@ function pocPixels(buffer, cross) {
         isMobile: mobile, hasTouch: mobile, acceptDownloads: true });
       let now = day + 4 * HOUR + 5000;
       const errors = [], writes = [], wrongMarketReads = []; let intrusionFailure = false, intrusionReads = 0, deltaReads = 0, pocReads = 0, pocReady = false;
+      let releaseCandles;
+      const candlesReady = new Promise(resolve => { releaseCandles = resolve; });
       await context.addInitScript(value => { window.__weeklyNow = value; Date.now = () => window.__weeklyNow; window.WebSocket = class { close() {} }; }, now);
       await context.route('**/*', route => {
         const req = route.request(), target = new URL(req.url());
@@ -111,8 +113,8 @@ function pocPixels(buffer, cross) {
             target.pathname.includes('gap-projection-history') || target.pathname === '/decentrader/manual-override' && target.searchParams.get('market') !== market)) wrongMarketReads.push(req.url());
         if (target.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: html });
         if (target.origin === new URL(url).origin && target.pathname.startsWith('/assets/')) return route.continue();
-        if (target.pathname.endsWith(`/${asset}-spot-candles`)) return route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h',
-          fetchedAt: iso(now), candles: candles(now), hasMore: false } });
+        if (target.pathname.endsWith(`/${asset}-spot-candles`)) return candlesReady.then(() => route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h',
+          fetchedAt: iso(now), candles: candles(now), hasMore: false } }));
         if (target.pathname.endsWith(`/${asset}-spot-fractal-projections`)) return route.fulfill({ json: bundle(now) });
         if (target.pathname.endsWith(`/${asset}-intrusion-spot-poc`)) {
           pocReads++;
@@ -148,6 +150,8 @@ function pocPixels(buffer, cross) {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
       assert.equal(await page.locator('.spot-chart-symbol').textContent(), symbol);
+      assert.equal(await page.locator('#spotChartMessage').textContent(), `Loading ${symbol} candles...`, 'Pending candle reads must show the correct market');
+      releaseCandles();
       await page.waitForFunction(() => window.btcSpotChart?.getGapWeeklyBreakouts()?.signals.length === 1);
       await page.waitForFunction(() => window.btcSpotChart?.getGapDailyBreakouts()?.signals.length === 1);
       assert.equal(await page.locator('#spotChartGapWeeklyBreaks').isChecked(), true);

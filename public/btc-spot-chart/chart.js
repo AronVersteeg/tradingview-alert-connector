@@ -8,6 +8,7 @@
   const panel = document.getElementById('btcSpotChartPanel');
   if (!panel) return;
   panel.querySelector('.spot-chart-symbol').textContent = symbol;
+  document.getElementById('spotChartMessage').textContent = `Loading ${symbol} candles...`;
   panel.setAttribute('aria-label', `${symbol} Binance Spot 1H candlestick chart`);
   panel.dataset.asset = asset;
   if (eth) {
