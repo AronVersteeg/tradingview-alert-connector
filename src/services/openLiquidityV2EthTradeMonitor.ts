@@ -5,6 +5,7 @@ import { EthGapDailySignal, EthEntryFuturesDelta,
   freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyMidpointStop } from './ethGapDailyEntry';
 import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
 import { PurpleLineContinuity } from './purpleLineContinuity';
+import { PurpleTriggerEmail, purpleTriggerEmail } from './purpleTriggerEmail';
 import { archiveIntrusionEvidence } from './liquidityObservationArchive';
 import {
   FractalEntryRequest,
@@ -308,6 +309,7 @@ type EthMonitorState = AlertState & {
     handledCandle?: number;
     futuresDelta?: EthEntryFuturesDelta;
     decision?: any;
+    triggerEmails?: PurpleTriggerEmail[];
     intent?: { signature: string; attemptedAt: string; signal: EthGapDailySignal; plan: any;
       futuresDelta?: EthEntryFuturesDelta; orderAlert: AlertObject; outcome: 'SUBMITTING' | 'UNKNOWN' | 'CONFIRMED' | 'FLATTENED' | 'NO_POSITION' };
   };
@@ -822,6 +824,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   private archiveSeeded = false;
   private readonly processStartedAt = Date.now();
   private entryContinuity?: PurpleLineContinuity;
+  private purpleEmailPromise?: Promise<void>;
 
   constructor(
     private readonly collector: OpenLiquidityV2ReplicaCollector,
@@ -894,6 +897,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
     const begin = () => {
       this.initialTimer = undefined;
+      void this.flushPurpleTriggerEmails();
       if (!this.config.informationalOnly) {
         const manage = () => this.checkManagedPosition().catch((error) =>
           console.error(`${this.config.asset} V2 position management failed:`, error));
@@ -953,7 +957,11 @@ export class OpenLiquidityV2EthTradeMonitor {
         futuresDeltaFilter: { enabled: false, reason: 'Futures delta is observe-only, not an entry requirement.' },
         activatedAt: state.gapDailyEntry?.activatedAt, decision: state.gapDailyEntry?.decision,
         executionOutcome: state.gapDailyEntry?.intent?.outcome,
-        continuity: this.entryContinuity?.snapshot()
+        continuity: this.entryContinuity?.snapshot(),
+        triggerEmail: { enabled: boolEnv('OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED', true),
+          configured: Boolean(smtpSettingsFromEnv()),
+          recent: (state.gapDailyEntry?.triggerEmails || []).slice(-5).map(({ signature, outcome, attempts, sentAt, error, retryAt }) =>
+            ({ signature, outcome, attempts, smtpSentAt: sentAt, error, retryAt })) }
       } : undefined,
       delayEntryModelEnabled: delayEntryModelEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
@@ -1195,6 +1203,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
     const close = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
     if (close <= Date.parse(entry.activatedAt) || Date.now() - close > 300_000 || entry.handledCandle === close) return;
+    let signal: EthGapDailySignal | undefined;
     try {
       const frames = payload.frames || [];
       if (frames.length < 2 || frames.at(-1)?.startedAtMs !== close - HOUR_MS) {
@@ -1210,7 +1219,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         entry.decision = { outcome: 'NO_INTRUSION', candleClosedAt: new Date(close).toISOString() };
         return;
       }
-      const signal = await (this.config.market === 'ETH-USD' ? readEthGapDailySignal(payload, intrusions)
+      signal = await (this.config.market === 'ETH-USD' ? readEthGapDailySignal(payload, intrusions)
         : readPurpleLineSignal(this.config.market as PurpleLineMarket, payload, intrusions));
       if (!signal) {
         entry.decision = { outcome: 'NO_DAILY_BREAK', candleClosedAt: new Date(close).toISOString() };
@@ -1222,7 +1231,46 @@ export class OpenLiquidityV2EthTradeMonitor {
       entry.decision = { outcome: 'ERROR', at: nowNlIso(), reason: error instanceof Error ? error.message : String(error) };
       console.error(`${this.config.asset} Spot gap/Daily entry check failed:`, entry.decision);
     }
+    if (signal && boolEnv('OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED', true)) {
+      const message = purpleTriggerEmail(this.config.market, signal, entry, result);
+      const messages = entry.triggerEmails ||= [];
+      if (!messages.some(row => row.signature === message.signature)) {
+        messages.push(message);
+        entry.triggerEmails = messages.slice(-250);
+        writeState(state, this.config);
+      }
+    }
     result.gapDailyEntry = entry.decision;
+  }
+
+  private async flushPurpleTriggerEmails(): Promise<void> {
+    if (this.purpleEmailPromise) return this.purpleEmailPromise;
+    if (!this.gapDailyEnabled() || !boolEnv('OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED', true)) return;
+    this.purpleEmailPromise = this.coordinator.withState(async state => {
+      const pending = (state.gapDailyEntry?.triggerEmails || []).filter(row => !row.sentAt && row.attempts < 5 &&
+        Date.now() - Date.parse(row.createdAt) <= 86_400_000 && (!row.retryAt || Date.parse(row.retryAt) <= Date.now()));
+      for (const message of pending.slice(0, 4)) {
+        message.attempts++;
+        message.lastAttemptAt = new Date().toISOString();
+        writeState(state, this.config);
+        try {
+          const smtp = smtpSettingsFromEnv();
+          const response = smtp ? await sendEmailBestEffort(smtp, message.subject, message.body)
+            : { sent: false, error: 'SMTP is not configured.' };
+          if (response.sent) { message.sentAt = new Date().toISOString(); delete message.error; delete message.retryAt; }
+          else { message.error = response.error || 'SMTP did not accept the message.';
+            message.retryAt = new Date(Date.now() + Math.min(900_000, 60_000 * 2 ** (message.attempts - 1))).toISOString(); }
+        } catch (error) {
+          message.error = error instanceof Error ? error.message : String(error);
+          message.retryAt = new Date(Date.now() + 60_000).toISOString();
+        }
+        writeState(state, this.config);
+        console.log(`${this.config.asset} purple trigger email result:`, {
+          signature: message.signature, sent: Boolean(message.sentAt), attempts: message.attempts, error: message.error });
+      }
+    }).catch(error => console.error(`${this.config.asset} purple email processing failed; trading unchanged:`, String(error)))
+      .finally(() => { this.purpleEmailPromise = undefined; });
+    return this.purpleEmailPromise;
   }
 
   private async executeGapDailyEntry(state: EthMonitorState, signal: EthGapDailySignal, result: any): Promise<void> {
@@ -2201,6 +2249,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       return await this.coordinator.withState((state) => this.checkWithState(state));
     } finally {
       this.running = false;
+      // SMTP is not part of the entry/stop critical path or position lock.
+      void this.flushPurpleTriggerEmails();
     }
   }
 
@@ -2228,6 +2278,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       }
       const payload = await this.collector.getPayload();
       await this.checkGapDailyEntry(state, payload, result);
+      // Notify after entry/protection, without waiting for slower research panels.
+      void this.flushPurpleTriggerEmails();
       if (!this.archiveSeeded) {
         this.archiveSeeded = true;
         void archiveIntrusionEvidence(this.collector.observationArchive(),

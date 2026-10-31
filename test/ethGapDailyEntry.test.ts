@@ -217,6 +217,8 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
         DECENTRADER_TRADE_RISK_USD: '15', DECENTRADER_TRADE_RISK_USD_CAP_BY_PCT: 'false'
       });
       position = undefined;
+      jest.spyOn(gap, 'smtpSettingsFromEnv').mockReturnValue(undefined);
+      jest.spyOn(gap, 'sendEmailBestEffort').mockResolvedValue({ sent: true });
       jest.spyOn(entry, 'readEthEntryFuturesDelta').mockImplementation(async s => ({
         symbol: 'ETHUSDT', venue: 'Binance USD-M Futures', interval: '5m', signalTime: s.time,
         startedAt: s.time + 3300, closedAt: s.closedAt, fetchedAt: iso(now),
@@ -252,6 +254,94 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
       fs.rmSync(directory, { recursive: true, force: true });
     });
     const state = () => ({ gapDailyEntry: { activatedAt: iso(closeAt - HOUR) } });
+
+  test('sends one purple trigger email after entry and stop setup, never placing a second order', async () => {
+    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+    (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid', recipients: ['fixture@example.invalid'] });
+    const send = gap.sendEmailBestEffort as jest.Mock;
+    send.mockImplementation(async (_smtp, subject, body) => {
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+      expect(orders.syncTrailingStop).toHaveBeenCalled();
+      expect(subject).toContain(`${asset} PURPLE LONG TRIGGERED`);
+      expect(body).toContain(`Execution market: dYdX ${market}`);
+      expect(body).toContain('Order result: PLACED'); expect(body).toContain('TPs: none.');
+      expect(body).toContain('118.5');
+      return { sent: true };
+    });
+    const managed: any = state(); await monitor.checkGapDailyEntry(managed, inputs().payload, {});
+    expect(send).not.toHaveBeenCalled();
+    await monitor.flushPurpleTriggerEmails();
+    await monitor.checkGapDailyEntry(managed, inputs().payload, {});
+    await monitor.flushPurpleTriggerEmails();
+    expect(send).toHaveBeenCalledTimes(1); expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+    expect(monitor.getStatus().gapDailyEntry.triggerEmail.recent[0]).toMatchObject({ outcome: 'PLACED', attempts: 1, smtpSentAt: iso(now) });
+  });
+
+  test('short purple notifications include a skipped reason, without inventing an entry or cancelling a position', async () => {
+    jest.spyOn(entry, readMethod).mockResolvedValue(signal('short'));
+    position = { market, size: .4, entryPrice: 120 };
+    (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
+    await monitor.checkGapDailyEntry(state(), inputs('short').payload, {});
+    await monitor.flushPurpleTriggerEmails();
+    expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`${asset} PURPLE SHORT TRIGGERED`),
+      expect.stringMatching(/Order result: SKIPPED[\s\S]*Existing .* position/));
+    expect(orders.placeOrder).not.toHaveBeenCalled();
+  });
+
+  test('SMTP failure is persisted and retried after restart without repeating the trade', async () => {
+    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+    (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
+    const send = gap.sendEmailBestEffort as jest.Mock;
+    send.mockResolvedValueOnce({ sent: false, error: 'fixture timeout' }).mockResolvedValue({ sent: true });
+    const result: any = {};
+    await monitor.checkGapDailyEntry(state(), inputs().payload, result);
+    await monitor.flushPurpleTriggerEmails();
+    expect(result.tradePlaced).toBe(true);
+    expect(monitor.getStatus().gapDailyEntry.triggerEmail.recent[0]).toMatchObject({ attempts: 1, error: 'fixture timeout' });
+    await monitor.flushPurpleTriggerEmails(); expect(send).toHaveBeenCalledTimes(1);
+    jest.setSystemTime(now + 60_000);
+    const restarted: any = createMonitor();
+    await restarted.flushPurpleTriggerEmails();
+    expect(send).toHaveBeenCalledTimes(2); expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+    expect(restarted.getStatus().gapDailyEntry.triggerEmail.recent[0]).toMatchObject({ attempts: 2, smtpSentAt: iso(now + 60_000) });
+  });
+
+  test('the optional mail switch suppresses new and queued notifications without blocking the trade', async () => {
+    process.env.OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED = 'false';
+    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+    const result: any = {}; await monitor.checkGapDailyEntry(state(), inputs().payload, result);
+    await monitor.flushPurpleTriggerEmails();
+    expect(result.tradePlaced).toBe(true); expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
+  });
+
+  test('slow SMTP does not hold the position lock or delay a protective stop check', async () => {
+    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+    (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
+    let finish!: (value: any) => void;
+    (gap.sendEmailBestEffort as jest.Mock).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    await monitor.checkGapDailyEntry(state(), inputs().payload, {});
+    const mail = monitor.flushPurpleTriggerEmails();
+    try {
+      const before = orders.syncTrailingStop.mock.calls.length;
+      const protection = await monitor.checkManagedPosition();
+      expect(protection.ok).toBe(true); expect(orders.syncTrailingStop.mock.calls.length).toBeGreaterThan(before);
+    } finally { finish({ sent: true }); await mail; }
+  });
+
+  test('does not backfill old confirmed intents as new trigger mail', async () => {
+    const managed: any = state(); await monitor.executeGapDailyEntry(managed, signal(), {});
+    await monitor.flushPurpleTriggerEmails();
+    expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
+  });
+
+  test('does not email source failures or non-purple candles', async () => {
+    const read = jest.spyOn(entry, readMethod).mockRejectedValue(new Error('source unavailable'));
+    await monitor.checkGapDailyEntry(state(), inputs().payload, {});
+    await monitor.flushPurpleTriggerEmails(); expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
+    read.mockResolvedValue(undefined);
+    await monitor.checkGapDailyEntry(state(), inputs().payload, {});
+    await monitor.flushPurpleTriggerEmails(); expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
+  });
 
   test('production startup resumes a proven short outage across close and places once, with no startup delay', async () => {
     jest.setSystemTime(closeAt - 30_000);

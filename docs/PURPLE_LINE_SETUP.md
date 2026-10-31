@@ -87,6 +87,43 @@ ETH keeps its existing switches and all other pairs remain untouched. Turning
 off purple restores other entry models only if their own switches permit it;
 turn the pair's autotrade switch off as well to stop all new entries.
 
+## Trigger Email
+
+New eligible purple signals send a notification by default for ETH and SOL using
+the same SMTP host, sender and recipients as BTC manual notifications. Subjects
+are `ETH PURPLE LONG TRIGGERED | <candle-open Amsterdam timestamp>` and the
+equivalent SOL/SHORT variants. Both candle-open and candle-close are in the body.
+The body includes broken Daily levels, Spot signal close, dYdX market, available
+execution result and initial SL information, and the no-TP/trailing policy.
+
+Mail is also sent for a valid observed signal whose execution is skipped or
+errors. `UNCONFIRMED` explicitly means the submission may still exist; it is not
+labelled a definitely failed order. Execution status is a snapshot at notification
+time, not a promise of later fills or protection. Source errors alone, non-purple
+candles, old chart markers and pre-existing legacy intents do not generate mail.
+
+Entry and stop handling run before notification. SMTP runs outside the position
+lock and is not an entry, protection or source-refresh gate. Pending mail survives
+restart in the pair's existing state file. Successful SMTP acceptance suppresses
+normal repeats of the same market/candle/direction. Up to five attempts are made
+by the existing monitor polls with bounded backoff, for at most 24 hours; at most
+250 signal notification records are retained. SMTP acceptance is not proven inbox
+delivery. A crash after acceptance but before persisting that acknowledgment can
+still produce a duplicate retry; SMTP cannot provide transactional exactly-once
+delivery with the local state file.
+
+No extra environment variable is needed. To disable only these emails optionally:
+
+```dotenv
+OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED=false
+```
+
+This does not change trading. Mail still requires configured SMTP and an enabled
+purple entry model; Delay/Shadow email switches do not control it. Status exposes
+`execution.gapDailyEntry.triggerEmail` with configuration and recent attempts,
+errors and `smtpSentAt`. BTC manual notifications are unchanged. Tests use mocked
+SMTP only and send no live test messages.
+
 ## Verification
 
 Shared ETH/SOL regression cases cover exact Spot source identity, both entry
