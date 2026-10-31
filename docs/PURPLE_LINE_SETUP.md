@@ -39,8 +39,11 @@ Historical chart coverage remains limited to actually available source data.
   do not qualify. Alert time identifies the candle open, not email time.
 - W/M lines do not substitute for a missing eligible Daily break. Their
   underlying Daily level qualifies only under these same confirmed/intact rules.
-- Only the latest closed hour, within five minutes, after activation/restart
-  can trigger. Historical purples never become retrospective live entries.
+- Only the latest closed hour, within five minutes, after activation can trigger.
+  A proven short restart preserves prior activation via a durable heartbeat;
+  missing, disabled, invalid or older-than-five-minute continuity arms afresh.
+  Historical purples never become retrospective live entries and the existing
+  five-minute signal limit is not widened. See [entry continuity](ENTRY_CONTINUITY.md).
 - Closed-hour monitoring starts around five seconds after the hour; source
   availability, shared throttling and retries can still introduce latency.
 - Binance triggers the entry only. The exact same-hour closed **dYdX** candle

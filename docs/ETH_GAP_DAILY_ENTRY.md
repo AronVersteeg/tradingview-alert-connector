@@ -47,8 +47,10 @@ as well when all new ETH entries should stop.
   does not request/wait for FD. All purple lines and their chart labels remain
   available, independent of FD sign. No environment change is needed.
 - Only the latest closed hour, within five minutes of its close, is eligible.
-  The first successful scan after activation/restart arms the model; earlier
-  closed candles and historical purple markers cannot open a trade retrospectively.
+  New activation arms without historical replay. Short proven interruptions now
+  preserve prior activation through a durable heartbeat; missing/disabled/invalid
+  or expired continuity arms afresh. The five-minute signal limit remains strict.
+  See [entry continuity](ENTRY_CONTINUITY.md).
 - Closed-hour checks start around five seconds after the hour. Provider latency
   and processing can delay them; failed source checks retry within the existing
   five-minute window and otherwise skip the entry.

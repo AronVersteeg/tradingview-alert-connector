@@ -4,6 +4,7 @@ import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import { EthGapDailySignal, EthEntryFuturesDelta,
   freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyMidpointStop } from './ethGapDailyEntry';
 import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
+import { PurpleLineContinuity } from './purpleLineContinuity';
 import { archiveIntrusionEvidence } from './liquidityObservationArchive';
 import {
   FractalEntryRequest,
@@ -781,9 +782,12 @@ function stateFile(config: OpenLiquidityV2TradeMonitorConfig = ETH_MONITOR_CONFI
 
 function readState(config: OpenLiquidityV2TradeMonitorConfig = ETH_MONITOR_CONFIG): EthMonitorState {
   try {
-    return JSON.parse(fs.readFileSync(stateFile(config), 'utf8'));
-  } catch {
-    return {};
+    const state = JSON.parse(fs.readFileSync(stateFile(config), 'utf8'));
+    if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('Invalid trade state.');
+    return state;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw new Error(`${config.asset} trade state cannot be read safely; refusing to assume there was no prior order.`);
   }
 }
 
@@ -817,6 +821,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   private lastFinishedAt: string | undefined;
   private archiveSeeded = false;
   private readonly processStartedAt = Date.now();
+  private entryContinuity?: PurpleLineContinuity;
 
   constructor(
     private readonly collector: OpenLiquidityV2ReplicaCollector,
@@ -881,6 +886,12 @@ export class OpenLiquidityV2EthTradeMonitor {
   start(initialDelayMs = 75_000): void {
     if (this.interval || this.initialTimer || this.managementInterval) return;
     this.gapDailyRecoveryActive = true;
+    const continuityFile = `${stateFile(this.config)}.entry-lease.json`;
+    if (purpleLineSetupForMarket(this.config.market) && (this.gapDailyEnabled() || fs.existsSync(continuityFile))) {
+      this.entryContinuity = new PurpleLineContinuity(this.config.market as PurpleLineMarket, continuityFile,
+        () => this.gapDailyEnabled() && this.enabled() && this.autoTradeEnabled());
+      this.entryContinuity.start();
+    }
     const begin = () => {
       this.initialTimer = undefined;
       if (!this.config.informationalOnly) {
@@ -900,7 +911,8 @@ export class OpenLiquidityV2EthTradeMonitor {
         }, this.pollMinutes() * 60_000);
       }
     };
-    this.initialTimer = setTimeout(begin, initialDelayMs);
+    // Active execution must not wait behind informational collectors' startup offsets.
+    this.initialTimer = setTimeout(begin, this.gapDailyEnabled() && this.autoTradeEnabled() ? 0 : initialDelayMs);
     console.log(`${this.config.asset} Public Perp V2 intrusion/trade monitor scheduled:`, {
       market: this.config.market,
       pollMinutes: this.pollMinutes(),
@@ -919,7 +931,13 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   getStatus(): any {
-    const state = readState(this.config);
+    let state: EthMonitorState;
+    try { state = readState(this.config); }
+    catch (error) {
+      return { market: this.config.market, enabled: this.enabled(), autoTradeEnabled: this.autoTradeEnabled(),
+        operational: false, tradeBlocked: 'STATE_UNREADABLE', error: error instanceof Error ? error.message : String(error),
+        stateFile: stateFile(this.config), hasTradeExecutor: Boolean(this.executor) };
+    }
     return {
       enabled: this.enabled(),
       running: this.running,
@@ -934,7 +952,8 @@ export class OpenLiquidityV2EthTradeMonitor {
           sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
         futuresDeltaFilter: { enabled: false, reason: 'Futures delta is observe-only, not an entry requirement.' },
         activatedAt: state.gapDailyEntry?.activatedAt, decision: state.gapDailyEntry?.decision,
-        executionOutcome: state.gapDailyEntry?.intent?.outcome
+        executionOutcome: state.gapDailyEntry?.intent?.outcome,
+        continuity: this.entryContinuity?.snapshot()
       } : undefined,
       delayEntryModelEnabled: delayEntryModelEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
@@ -1162,11 +1181,14 @@ export class OpenLiquidityV2EthTradeMonitor {
   private async checkGapDailyEntry(state: EthMonitorState, payload: any, result: any): Promise<void> {
     if (!purpleLineSetupForMarket(this.config.market)) return;
     if (!this.gapDailyEnabled()) {
+      this.entryContinuity?.heartbeat();
       if (state.gapDailyEntry) delete state.gapDailyEntry.activatedAt;
       return;
     }
     const entry = state.gapDailyEntry ||= {};
-    if (!entry.activatedAt || Date.parse(entry.activatedAt) < this.processStartedAt) {
+    const continuityActivation = this.entryContinuity?.activation();
+    if (continuityActivation) entry.activatedAt = continuityActivation;
+    if (!entry.activatedAt || !continuityActivation && Date.parse(entry.activatedAt) < this.processStartedAt) {
       entry.activatedAt = new Date().toISOString();
       entry.decision = { outcome: 'ARMED', at: entry.activatedAt, reason: 'Only candles closing after activation are eligible.' };
       return;
@@ -2191,6 +2213,16 @@ export class OpenLiquidityV2EthTradeMonitor {
       tradePlaced: false
     };
     try {
+      this.entryContinuity?.heartbeat();
+      const activation = this.entryContinuity?.activation();
+      if (this.gapDailyEnabled() && activation) {
+        const entry = state.gapDailyEntry ||= {};
+        if (entry.activatedAt !== activation) {
+          entry.activatedAt = activation;
+          entry.decision = { outcome: 'ARMED', at: activation, continuity: this.entryContinuity!.snapshot().reason };
+          writeState(state, this.config);
+        }
+      }
       if (this.config.refreshLatestClosedHour) {
         result.publicV2Refreshed = await this.collector.refreshForLatestClosedHour();
       }
@@ -2443,6 +2475,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   stop(): void {
+    this.entryContinuity?.stop();
     this.gapDailyRecoveryActive = false;
     if (this.gapDailyRecoveryTimer) clearTimeout(this.gapDailyRecoveryTimer);
     this.gapDailyRecoveryTimer = undefined;

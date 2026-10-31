@@ -10,6 +10,7 @@ const purple = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
 import { PURPLE_LINE_SETUPS, purpleLineEntryEnabled } from '../src/services/purpleLineSetup';
 import * as dailyHistory from '../src/services/binanceDailyFractalHistory';
 import { ethSpotChartFeed, solSpotChartFeed } from '../src/services/binanceSpotChart';
+import { PurpleLineContinuity } from '../src/services/purpleLineContinuity';
 const HOUR = 3_600_000, closeAt = Date.parse('2026-10-24T02:00:00Z'), now = closeAt + 5000;
 const iso = (ms: number) => new Date(ms).toISOString();
 const signal = (direction: 'long' | 'short' = 'long'): entry.EthGapDailySignal => ({
@@ -251,6 +252,34 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
       fs.rmSync(directory, { recursive: true, force: true });
     });
     const state = () => ({ gapDailyEntry: { activatedAt: iso(closeAt - HOUR) } });
+
+  test('production startup resumes a proven short outage across close and places once, with no startup delay', async () => {
+    jest.setSystemTime(closeAt - 30_000);
+    const lease = new PurpleLineContinuity(market, `${file}.entry-lease.json`, () => true);
+    lease.start(); const activatedAt = lease.activation()!; lease.stop();
+    jest.setSystemTime(now);
+    const restarted: any = createMonitor(); monitor = restarted;
+    restarted.configureTradeExecutor(orders);
+    const check = jest.spyOn(restarted, 'check').mockResolvedValue({ ok: true });
+    jest.spyOn(restarted, 'checkManagedPosition').mockResolvedValue({ ok: true });
+    restarted.start(255_000);
+    await jest.advanceTimersByTimeAsync(0); expect(check).toHaveBeenCalledTimes(1);
+    expect(restarted.getStatus().gapDailyEntry.continuity).toMatchObject({ resumedAfterRestart: true, ready: true });
+    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+    const managed: any = { gapDailyEntry: { activatedAt } }, result: any = {};
+    await restarted.checkGapDailyEntry(managed, inputs().payload, result);
+    expect(result.tradePlaced).toBe(true); expect(managed.gapDailyEntry.activatedAt).toBe(activatedAt);
+    delete managed.managedPosition; position = undefined;
+    await restarted.checkGapDailyEntry(managed, inputs().payload, {});
+    expect(orders.placeOrder).toHaveBeenCalledTimes(1); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+  });
+
+  test('a malformed order-state file blocks execution rather than being mistaken for no previous trade', async () => {
+    fs.writeFileSync(file, '{broken');
+    expect(monitor.getStatus()).toMatchObject({ operational: false, tradeBlocked: 'STATE_UNREADABLE' });
+    await expect(monitor.checkManagedPosition()).rejects.toThrow('no prior order');
+    expect(orders.placeOrder).not.toHaveBeenCalled(); expect(fs.readFileSync(file, 'utf8')).toBe('{broken');
+  });
 
     test('reports the correct purple setup and respects its own independent kill switches', () => {
       expect(monitor.getStatus()).toMatchObject({ market, autoTradeEnabled: true,
