@@ -1,6 +1,7 @@
 # ETH Spot Intrusion + Daily Experiment
 
-This is a separate ETH-only entry model. BTC manual entries, TPs and protective
+This entry model is now shared with SOL as the [purple line setup](PURPLE_LINE_SETUP.md).
+The ETH rules and switches remain unchanged. BTC manual entries, TPs and protective
 management are unchanged. Binance Spot ETHUSDT supplies the signal; orders are
 placed on dYdX ETH-USD, not on Binance Spot.
 

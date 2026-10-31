@@ -1,14 +1,14 @@
 import express from 'express';
 import path from 'path';
-import { binanceSpotChartFeed, ethSpotChartFeed } from '../services/binanceSpotChart';
+import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed } from '../services/binanceSpotChart';
 import { binanceCooldownHttpResponse } from '../services/binanceHttp';
-import { btcFractalProjectionFeed, ethFractalProjectionFeed } from '../services/btcFractalProjections';
-import { btcIntrusionFuturesDeltaFeed, ethIntrusionFuturesDeltaFeed, validateDeltaHours } from '../services/intrusionFuturesDelta';
-import { btcIntrusionSpotPocFeed, ethIntrusionSpotPocFeed, validatePocHour } from '../services/intrusionSpotPoc';
+import { btcFractalProjectionFeed, ethFractalProjectionFeed, solFractalProjectionFeed } from '../services/btcFractalProjections';
+import { btcIntrusionFuturesDeltaFeed, ethIntrusionFuturesDeltaFeed, solIntrusionFuturesDeltaFeed, validateDeltaHours } from '../services/intrusionFuturesDelta';
+import { btcIntrusionSpotPocFeed, ethIntrusionSpotPocFeed, solIntrusionSpotPocFeed, validatePocHour } from '../services/intrusionSpotPoc';
 
 export const btcSpotChartRouter = express.Router();
 
-for (const [asset, feed] of [['btc', btcIntrusionSpotPocFeed], ['eth', ethIntrusionSpotPocFeed]] as const) {
+for (const [asset, feed] of [['btc', btcIntrusionSpotPocFeed], ['eth', ethIntrusionSpotPocFeed], ['sol', solIntrusionSpotPocFeed]] as const) {
   btcSpotChartRouter.get(`/open-liquidity/v2/${asset}-intrusion-spot-poc`, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     let hour: number;
@@ -28,7 +28,7 @@ btcSpotChartRouter.use('/assets/btc-spot-chart', express.static(
   path.join(process.cwd(), 'public', 'btc-spot-chart'), { index: false, maxAge: 0 }
 ));
 
-for (const [asset, feed] of [['btc', btcIntrusionFuturesDeltaFeed], ['eth', ethIntrusionFuturesDeltaFeed]] as const) {
+for (const [asset, feed] of [['btc', btcIntrusionFuturesDeltaFeed], ['eth', ethIntrusionFuturesDeltaFeed], ['sol', solIntrusionFuturesDeltaFeed]] as const) {
   btcSpotChartRouter.get(`/open-liquidity/v2/${asset}-intrusion-futures-delta`, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const query = req.query.hours;
@@ -47,7 +47,8 @@ for (const [asset, feed] of [['btc', btcIntrusionFuturesDeltaFeed], ['eth', ethI
 
 for (const [asset, candles, fractals] of [
   ['btc', binanceSpotChartFeed, btcFractalProjectionFeed],
-  ['eth', ethSpotChartFeed, ethFractalProjectionFeed]
+  ['eth', ethSpotChartFeed, ethFractalProjectionFeed],
+  ['sol', solSpotChartFeed, solFractalProjectionFeed]
 ] as const) {
   btcSpotChartRouter.get(`/open-liquidity/v2/${asset}-spot-candles`, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');

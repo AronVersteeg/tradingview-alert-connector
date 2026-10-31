@@ -98,18 +98,18 @@ describe('BTC annotation-only Futures delta feed', () => {
     expect(locate).not.toHaveBeenCalled(); expect(binanceGet).not.toHaveBeenCalled();
   });
 
-  test('ETH uses ETHUSDT Futures and a separate cache, never a BTC measurement on the same hour', async () => {
+  test.each(['ETHUSDT', 'SOLUSDT'] as const)('%s uses its own Futures source and persistent cache', async symbol => {
     const ethFile = path.join(directory, 'eth.json');
-    const btc = new IntrusionFuturesDeltaFeed('BTCUSDT', () => file), eth = new IntrusionFuturesDeltaFeed('ETHUSDT', () => ethFile);
+    const btc = new IntrusionFuturesDeltaFeed('BTCUSDT', () => file), eth = new IntrusionFuturesDeltaFeed(symbol, () => ethFile);
     await btc.snapshot([hour]);
     (binanceGet as jest.Mock).mockResolvedValue({ data: [candle(hour, 60)] });
     const result = await eth.snapshot([hour]);
-    expect(result.symbol).toBe('ETHUSDT'); expect((result.records[0] as any).candle.rawDeltaPct).toBeCloseTo(20);
-    expect(binanceGet).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ params: expect.objectContaining({ symbol: 'ETHUSDT' }) }));
+    expect(result.symbol).toBe(symbol); expect((result.records[0] as any).candle.rawDeltaPct).toBeCloseTo(20);
+    expect(binanceGet).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ params: expect.objectContaining({ symbol }) }));
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).symbol).toBe('BTCUSDT');
-    expect(JSON.parse(fs.readFileSync(ethFile, 'utf8')).symbol).toBe('ETHUSDT');
+    expect(JSON.parse(fs.readFileSync(ethFile, 'utf8')).symbol).toBe(symbol);
     expect((await btc.snapshot([hour])).records[0]).toMatchObject({ candle: { rawDeltaPct: -30.000000000000004 } });
-    expect(() => new IntrusionFuturesDeltaFeed('SOLUSDT' as any)).toThrow('symbol');
+    expect(() => new IntrusionFuturesDeltaFeed('XRPUSDT' as any)).toThrow('symbol');
   });
 
   test('refuses a mixed-symbol disk cache and never overwrites that evidence with another market', async () => {

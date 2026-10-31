@@ -20,7 +20,7 @@
   }
 
   function fromSnapshot(snapshot, market = 'BTC-USD') {
-    if (!['BTC-USD', 'ETH-USD'].includes(market) || !snapshot || snapshot.market !== market) throw new Error('Unexpected manual plan market');
+    if (!['BTC-USD', 'ETH-USD', 'SOL-USD'].includes(market) || !snapshot || snapshot.market !== market) throw new Error('Unexpected manual plan market');
     const plans = Array.isArray(snapshot.overrides) ? snapshot.overrides : snapshot.override ? [snapshot.override] : null;
     if (!plans) throw new Error('Manual plans unavailable');
     const levels = [];

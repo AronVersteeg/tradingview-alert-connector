@@ -15,7 +15,7 @@
     return candidates.find(hour => range && hour >= range.from && hour <= range.to) ?? candidates[0];
   }
   function readPocResponse(payload, symbol, hour, now = Date.now()) {
-    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || payload?.symbol !== symbol || payload.venue !== 'Binance Spot' ||
+    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].includes(symbol) || payload?.symbol !== symbol || payload.venue !== 'Binance Spot' ||
         payload.interval !== '1h' || payload.method !== 'exact-price-base-volume') throw new Error('Unexpected Spot POC source');
     const record = payload.record;
     if (record?.hour !== hour || !Number.isSafeInteger(hour) || hour % 3600 || (hour + 3600) * 1000 > now) throw new Error('Unexpected POC candle');

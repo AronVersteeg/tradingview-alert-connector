@@ -6,7 +6,7 @@ import {
 const HOUR_MS = 3_600_000;
 
 export type BtcFractalProjectionSnapshot = {
-  symbol: 'BTCUSDT' | 'ETHUSDT';
+  symbol: 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT';
   venue: 'Binance Spot';
   checkedAt: string;
   evaluatedThrough: string;
@@ -21,16 +21,16 @@ export class BtcFractalProjectionFeed {
   private daily: (force?: boolean) => Promise<DailyFractalHistorySnapshot>;
   private weekly: (force?: boolean) => Promise<DailyFractalHistorySnapshot>;
   private monthly: (force?: boolean) => Promise<DailyFractalHistorySnapshot>;
-  private symbol: 'BTCUSDT' | 'ETHUSDT';
+  private symbol: 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT';
 
   constructor(
     daily?: (force?: boolean) => Promise<DailyFractalHistorySnapshot>,
     weekly?: (force?: boolean) => Promise<DailyFractalHistorySnapshot>,
     monthly?: (force?: boolean) => Promise<DailyFractalHistorySnapshot>,
-    market: 'BTC-USD' | 'ETH-USD' = 'BTC-USD'
+    market: 'BTC-USD' | 'ETH-USD' | 'SOL-USD' = 'BTC-USD'
   ) {
-    if (!['BTC-USD', 'ETH-USD'].includes(market)) throw new Error('Unsupported Spot fractal market');
-    this.symbol = market === 'ETH-USD' ? 'ETHUSDT' : 'BTCUSDT';
+    if (!['BTC-USD', 'ETH-USD', 'SOL-USD'].includes(market)) throw new Error('Unsupported Spot fractal market');
+    this.symbol = market === 'SOL-USD' ? 'SOLUSDT' : market === 'ETH-USD' ? 'ETHUSDT' : 'BTCUSDT';
     this.daily = daily || ((force = false) => binanceDailyFractalHistory(market, force, 'Binance Spot'));
     this.weekly = weekly || ((force = false) => binanceWeeklyFractalHistory(market, force));
     this.monthly = monthly || ((force = false) => binanceMonthlyFractalHistory(market, force));
@@ -74,3 +74,4 @@ export class BtcFractalProjectionFeed {
 
 export const btcFractalProjectionFeed = new BtcFractalProjectionFeed();
 export const ethFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'ETH-USD');
+export const solFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'SOL-USD');

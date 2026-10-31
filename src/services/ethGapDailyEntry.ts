@@ -1,5 +1,6 @@
 import { binanceDailyFractalHistory, latestExpectedFractalClose } from './binanceDailyFractalHistory';
-import { ethSpotChartFeed, SpotChartPage } from './binanceSpotChart';
+import { ethSpotChartFeed, solSpotChartFeed, SpotChartPage } from './binanceSpotChart';
+import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
 import { ethIntrusionFuturesDeltaFeed } from './intrusionFuturesDelta';
 
 // These are the same pure evaluators used by the purple chart overlay.
@@ -11,7 +12,7 @@ export const ETH_GAP_DAILY_ENTRY_ENV = 'OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_EN
 export const ETH_GAP_DAILY_MAX_AGE_MS = 5 * 60_000;
 const HOUR = 3_600_000;
 
-export type EthGapDailySignal = {
+export type PurpleLineSignal = {
   time: number;
   closedAt: number;
   direction: 'long' | 'short';
@@ -19,11 +20,13 @@ export type EthGapDailySignal = {
   dailyLevels: { id: string; type: 'HIGH' | 'LOW'; price: number; confirmedAt: string }[];
 };
 
-export function withEthDydxBodyMidpointStop(activePlan: any, candle: any, signal: EthGapDailySignal, referencePrice: number): any {
+export type EthGapDailySignal = PurpleLineSignal;
+
+export function withPurpleDydxBodyMidpointStop(activePlan: any, candle: any, signal: EthGapDailySignal, referencePrice: number, asset = 'ETH'): any {
   const sizingStop = activePlan?.stop;
   if (!sizingStop?.valid || !Number.isFinite(Number(sizingStop.price)) || !(Number(sizingStop.price) > 0) ||
     !sizingStop.fractal || activePlan.status === 'invalid-stop') {
-    throw new Error(sizingStop?.reason || 'ETH requires a valid original dYdX fractal for order sizing.');
+    throw new Error(sizingStop?.reason || `${asset} requires a valid original dYdX fractal for order sizing.`);
   }
   const open = Number(candle?.openRef), close = Number(candle?.closeRef);
   const high = Number(candle?.highRef), low = Number(candle?.lowRef);
@@ -31,16 +34,16 @@ export function withEthDydxBodyMidpointStop(activePlan: any, candle: any, signal
     signal.closedAt !== signal.time + 3600 || signal.closedAt * 1000 > Date.now() ||
     ![open, close, high, low, referencePrice].every(value => Number.isFinite(value) && value > 0) ||
     low > Math.min(open, close) || high < Math.max(open, close)) {
-    throw new Error('ETH midpoint SL requires valid closed dYdX OHLC from the exact Binance signal hour.');
+    throw new Error(`${asset} midpoint SL requires valid closed dYdX OHLC from the exact Binance signal hour.`);
   }
-  if (activePlan.direction !== signal.direction) throw new Error('ETH midpoint SL direction does not match the entry signal.');
+  if (activePlan.direction !== signal.direction) throw new Error(`${asset} midpoint SL direction does not match the entry signal.`);
   const midpoint = (open + close) / 2;
   if (signal.direction === 'long' ? midpoint >= referencePrice : midpoint <= referencePrice) {
-    throw new Error('ETH dYdX body-midpoint SL is not on the protective side of the current oracle price.');
+    throw new Error(`${asset} dYdX body-midpoint SL is not on the protective side of the current oracle price.`);
   }
   const distance = Math.abs(referencePrice - midpoint), riskPct = distance / Math.max(1, referencePrice);
   if (Number.isFinite(sizingStop.maxDistancePct) && riskPct > sizingStop.maxDistancePct) {
-    throw new Error('ETH dYdX body-midpoint SL exceeds the existing maximum stop distance.');
+    throw new Error(`${asset} dYdX body-midpoint SL exceeds the existing maximum stop distance.`);
   }
   // Keep sizing and the confirmed dYdX fractal anchor; replace only the execution stop price.
   return { ...activePlan, sizingStop: { ...sizingStop, fractal: { ...sizingStop.fractal } },
@@ -76,7 +79,7 @@ export async function readEthEntryFuturesDelta(signal: EthGapDailySignal): Promi
 }
 
 export function ethGapDailyEntryEnabled(): boolean {
-  return ['true', '1', 'yes', 'on'].includes(String(process.env[ETH_GAP_DAILY_ENTRY_ENV] || '').trim().toLowerCase());
+  return purpleLineEntryEnabled('ETH-USD');
 }
 
 export function freshEthGapDailySignal(signal: EthGapDailySignal, activatedAt: string, now = Date.now()): boolean {
@@ -88,35 +91,50 @@ export function freshEthGapDailySignal(signal: EthGapDailySignal, activatedAt: s
 
 export function evaluateEthGapDailySignal(payload: any, intrusions: any[], page: SpotChartPage, daily: any,
   now = Date.now()): EthGapDailySignal | undefined {
+  return evaluatePurpleLineSignal('ETH-USD', payload, intrusions, page, daily, now);
+}
+
+export function evaluatePurpleLineSignal(market: PurpleLineMarket, payload: any, intrusions: any[], page: SpotChartPage, daily: any,
+  now = Date.now()): EthGapDailySignal | undefined {
+  const config = purpleLineSetupForMarket(market);
+  if (!config) throw new Error('Unsupported purple line market.');
   const through = Math.floor(now / HOUR) * HOUR;
-  if (payload?.source?.market !== 'ETH-USD' || payload.modelVersion !== 'binance-spot-eth-liquidation-cohorts-v2.1' ||
-    payload.quality?.causalModel !== true || payload.quality?.priceStepUsd !== 5 ||
-    !payload.source.sourceStatuses?.some((source: any) => source.name === 'Binance Spot ETHUSDT 1H' && source.ok) ||
-    page.symbol !== 'ETHUSDT' || page.venue !== 'Binance Spot' || page.interval !== '1h' ||
+  if (payload?.source?.market !== market || payload.modelVersion !== config.modelVersion ||
+    payload.quality?.causalModel !== true || payload.quality?.priceStepUsd !== config.priceStepUsd ||
+    !payload.source.sourceStatuses?.some((source: any) => source.name === `Binance Spot ${config.symbol} 1H` && source.ok) ||
+    page.symbol !== config.symbol || page.venue !== 'Binance Spot' || page.interval !== '1h' ||
     daily?.interval !== '1d' || daily.stale ||
     !(Date.parse(daily.latestClosedCandleAt) >= latestExpectedFractalClose('1d', now))) {
-    throw new Error('ETH gap/Daily entry requires current Binance Spot ETHUSDT sources.');
+    throw new Error(`${config.asset} gap/Daily entry requires current Binance Spot ${config.symbol} sources.`);
   }
   const frame = payload.frames?.at(-1);
   const candle = page.candles.find(row => row.closed && row.time * 1000 === through - HOUR);
   if (!candle || frame?.startedAtMs !== through - HOUR ||
     Date.parse(String(frame.t).replace(' ', 'T') + 'Z') !== through - HOUR ||
     !['open', 'high', 'low', 'close'].every(key => Number(frame[key]) === Number((candle as any)[key]))) {
-    throw new Error('ETH replica and Spot candles do not cover the same latest closed hour.');
+    throw new Error(`${config.asset} replica and Spot candles do not cover the same latest closed hour.`);
   }
-  const bundle = { symbol: 'ETHUSDT', venue: 'Binance Spot', daily, evaluatedThrough: new Date(through).toISOString() };
-  const projection = projectDailyFractals(bundle, page.candles, 'ETHUSDT');
-  const history = compactIntrusionHistory({ source: payload.source, intrusionBenchmarks: { history: intrusions } }, now, 'ETH-USD');
-  return buildIntrusionDailyBreakouts(page.candles, history, projection, now, 'ETH-USD').signals
+  const bundle = { symbol: config.symbol, venue: 'Binance Spot', daily, evaluatedThrough: new Date(through).toISOString() };
+  const projection = projectDailyFractals(bundle, page.candles, config.symbol);
+  const history = compactIntrusionHistory({ source: payload.source, intrusionBenchmarks: { history: intrusions } }, now, market);
+  return buildIntrusionDailyBreakouts(page.candles, history, projection, now, market).signals
     .find((signal: EthGapDailySignal) => signal.closedAt * 1000 === through);
 }
 
 export async function readEthGapDailySignal(payload: any, intrusions: any[]): Promise<EthGapDailySignal | undefined> {
-  const now = Date.now();
-  let daily = await binanceDailyFractalHistory('ETH-USD', false, 'Binance Spot');
-  if (!daily.stale && Date.parse(daily.latestClosedCandleAt || '') < latestExpectedFractalClose('1d', now)) {
-    daily = await binanceDailyFractalHistory('ETH-USD', true, 'Binance Spot');
-  }
-  const page = await ethSpotChartFeed.page();
-  return evaluateEthGapDailySignal(payload, intrusions, page, daily, now);
+  return readPurpleLineSignal('ETH-USD', payload, intrusions);
 }
+
+export async function readPurpleLineSignal(market: PurpleLineMarket, payload: any, intrusions: any[]): Promise<EthGapDailySignal | undefined> {
+  if (!purpleLineSetupForMarket(market)) throw new Error('Unsupported purple line market.');
+  const now = Date.now();
+  let daily = await binanceDailyFractalHistory(market, false, 'Binance Spot');
+  if (!daily.stale && Date.parse(daily.latestClosedCandleAt || '') < latestExpectedFractalClose('1d', now)) {
+    daily = await binanceDailyFractalHistory(market, true, 'Binance Spot');
+  }
+  const page = await (market === 'SOL-USD' ? solSpotChartFeed : ethSpotChartFeed).page();
+  return evaluatePurpleLineSignal(market, payload, intrusions, page, daily, now);
+}
+
+// Preserve the existing ETH API while both markets share the execution policy.
+export const withEthDydxBodyMidpointStop = withPurpleDydxBodyMidpointStop;

@@ -1,20 +1,21 @@
 (function () {
   'use strict';
   const source = new URLSearchParams(location.search).get('source');
-  if (!['open-v2', 'open-v2-eth'].includes(source)) return;
-  const eth = source === 'open-v2-eth', asset = eth ? 'eth' : 'btc';
-  const symbol = eth ? 'ETHUSDT' : 'BTCUSDT', market = eth ? 'ETH-USD' : 'BTC-USD';
-  const intrusionLabel = eth ? 'Intrusion / D' : 'Dec intrusion / D';
+  if (!['open-v2', 'open-v2-eth', 'open-v2-sol'].includes(source)) return;
+  const asset = source === 'open-v2-sol' ? 'sol' : source === 'open-v2-eth' ? 'eth' : 'btc';
+  const nativeSpot = asset !== 'btc';
+  const symbol = `${asset.toUpperCase()}USDT`, market = `${asset.toUpperCase()}-USD`;
+  const intrusionLabel = nativeSpot ? 'Intrusion / D' : 'Dec intrusion / D';
   const panel = document.getElementById('btcSpotChartPanel');
   if (!panel) return;
   panel.querySelector('.spot-chart-symbol').textContent = symbol;
   document.getElementById('spotChartMessage').textContent = `Loading ${symbol} candles...`;
   panel.setAttribute('aria-label', `${symbol} Binance Spot 1H candlestick chart`);
   panel.dataset.asset = asset;
-  if (eth) {
+  if (nativeSpot) {
     const toggle = document.getElementById('spotChartIntrusionDailyBreaks').parentElement;
     toggle.lastChild.textContent = 'Intrusion / D';
-    toggle.title = 'Recorded Binance Spot ETH intrusion and fresh Daily close break. F5m = last-five-minute ETHUSDT Futures taker delta normalized to direction; positive means aligned flow. Observe-only.';
+    toggle.title = `Recorded Binance Spot ${asset.toUpperCase()} intrusion and fresh Daily close break. F5m = last-five-minute ${symbol} Futures taker delta normalized to direction; positive means aligned flow. Observe-only.`;
     document.getElementById('spotChartIntrusionDailyStatus').textContent = 'Intrusion / D pending';
   }
   panel.hidden = false;
@@ -70,10 +71,10 @@
     intrusionLayer?.setLabelFontSize(desktopOrderBlockLabels.matches ? 11 : 10);
   };
   desktopOrderBlockLabels.addEventListener('change', updateOrderBlockFont);
-  for (const id of ['spotChartOrderBlockControls', 'spotChartOrderBlockStatus', 'spotChartOrderBlockCredit']) byId(id).hidden = eth;
+  for (const id of ['spotChartOrderBlockControls', 'spotChartOrderBlockStatus', 'spotChartOrderBlockCredit']) byId(id).hidden = nativeSpot;
 
   function updateOrderBlocks() {
-    if (eth || !orderBlockLayer) return;
+    if (nativeSpot || !orderBlockLayer) return;
     const status = byId('spotChartOrderBlockStatus');
     try {
       orderBlockModel = orderBlocks.buildOrderBlocks(candles, {
@@ -92,7 +93,7 @@
   }
 
   function scheduleOrderBlockHistory() {
-    if (eth || orderBlockHistoryTimer || !active || destroyed || !initialData || !hasMore ||
+    if (nativeSpot || orderBlockHistoryTimer || !active || destroyed || !initialData || !hasMore ||
       candles.length >= 12000 || !byId('spotChartOrderBlocks').checked) return;
     // Reuse the chart's bounded pages and shared Binance limiter; never burst-load history.
     orderBlockHistoryTimer = setTimeout(async () => {
@@ -283,7 +284,7 @@
   }
 
   async function refreshIntrusionHistory(force = false) {
-    if (eth || !initialData || !active || destroyed || !byId('spotChartIntrusionDailyBreaks').checked ||
+    if (nativeSpot || !initialData || !active || destroyed || !byId('spotChartIntrusionDailyBreaks').checked ||
         intrusionPending || !force && Date.now() < intrusionRetryAt) return intrusionPending;
     intrusionRetryAt = Date.now() + 60_000;
     intrusionPending = (async () => {
@@ -309,11 +310,11 @@
     return intrusionPending;
   }
   window.addEventListener('btc-spot-chart:intrusion-history', event => {
-    if (!eth) return;
+    if (!nativeSpot) return;
     intrusionHistory = event.detail; intrusionReadFailed = false; updateIntrusionDailyBreakouts();
   });
   window.addEventListener('btc-spot-chart:intrusion-error', () => {
-    if (!eth) return;
+    if (!nativeSpot) return;
     intrusionReadFailed = true;
     byId('spotChartIntrusionDailyStatus').textContent = intrusionHistory
       ? 'Intrusion / D stale | saved history retained' : 'Intrusion / D unavailable';
@@ -502,7 +503,7 @@
       hourlyBoxLayer = new hourlyBoxes.HourlyFractalBoxPrimitive();
       hourlyBoxLayer.setVisible(byId('spotChartHourlyBoxes').checked);
       candlesSeries.attachPrimitive(hourlyBoxLayer);
-      if (!eth) {
+      if (!nativeSpot) {
         orderBlockLayer = new orderBlocks.OrderBlockPrimitive();
         updateOrderBlockFont();
         orderBlockLayer.setLabelAnchor(() => gapLayer?.rightEdgeCoordinate() ?? null);

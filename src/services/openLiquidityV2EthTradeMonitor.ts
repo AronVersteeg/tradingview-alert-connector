@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
-import { ETH_GAP_DAILY_ENTRY_ENV, EthGapDailySignal, EthEntryFuturesDelta, ethGapDailyEntryEnabled,
-  freshEthGapDailySignal, readEthGapDailySignal, withEthDydxBodyMidpointStop } from './ethGapDailyEntry';
+import { EthGapDailySignal, EthEntryFuturesDelta,
+  freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyMidpointStop } from './ethGapDailyEntry';
+import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
 import { archiveIntrusionEvidence } from './liquidityObservationArchive';
 import {
   FractalEntryRequest,
@@ -831,7 +832,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private gapDailyEnabled(): boolean {
-    return this.config.market === 'ETH-USD' && this.config.tradeCapable && ethGapDailyEntryEnabled();
+    return this.config.tradeCapable && purpleLineEntryEnabled(this.config.market);
   }
 
   private autoTradeEnabled(): boolean {
@@ -925,9 +926,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       positionManagement: this.managementStatus,
       market: this.config.market,
       autoTradeEnabled: this.autoTradeEnabled(),
-      gapDailyEntry: this.config.market === 'ETH-USD' ? {
-        enabled: this.gapDailyEnabled(), env: ETH_GAP_DAILY_ENTRY_ENV, source: 'Binance Spot ETHUSDT 1H + 1D',
-        executionMarket: 'ETH-USD', takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
+      gapDailyEntry: purpleLineSetupForMarket(this.config.market) ? {
+        setup: 'purple-line', enabled: this.gapDailyEnabled(), env: purpleLineSetupForMarket(this.config.market)!.enabledEnv,
+        source: `Binance Spot ${this.config.symbol} 1H + 1D`,
+        executionMarket: this.config.market, takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
         initialStop: { mode: 'signal-body-midpoint', candleSource: 'dydx-1h', sameSignalHour: true, bufferPct: 0,
           sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
         futuresDeltaFilter: { enabled: false, reason: 'Futures delta is observe-only, not an entry requirement.' },
@@ -1104,19 +1106,19 @@ export class OpenLiquidityV2EthTradeMonitor {
   private async getGapDailyStopPlan(account: DydxSizingAccountSnapshot, signal: EthGapDailySignal): Promise<any> {
     const marketInfo = account.markets?.[this.config.market];
     if (!marketInfo || String(marketInfo.status).toUpperCase() !== 'ACTIVE') {
-      throw new Error('ETH-USD must be ACTIVE with current dYdX market information.');
+      throw new Error(`${this.config.market} must be ACTIVE with current dYdX market information.`);
     }
     const price = finite(marketInfo.oraclePrice);
-    if (!(price > 0)) throw new Error('No current ETH-USD oracle price for SL sizing.');
+    if (!(price > 0)) throw new Error(`No current ${this.config.market} oracle price for SL sizing.`);
     const rows = dydxHourlyCandlesToFractalRows(await fetchDydxHourlyCandlesForMarket(this.config.market));
-    if (rows.length < 5) throw new Error('Not enough closed dYdX ETH 1H candles for the initial fractal stop.');
+    if (rows.length < 5) throw new Error(`Not enough closed dYdX ${this.config.asset} 1H candles for the initial fractal stop.`);
     if (Date.parse(rows[rows.length - 1].timestamp) !== signal.time * 1000) {
-      throw new Error('Awaiting the signal hour in dYdX ETH candles before choosing the initial SL.');
+      throw new Error(`Awaiting the signal hour in dYdX ${this.config.asset} candles before choosing the initial SL.`);
     }
     const fractalPlan = buildDirectionalPlan(signal.direction, account, marketInfo, rows, rows.length - 1,
       undefined, undefined, { longTp: [], shortTp: [] }, price,
       String(process.env.DECENTRADER_TRADE_SIZING_MODE || 'growth').trim().toLowerCase());
-    const activePlan = withEthDydxBodyMidpointStop(fractalPlan, rows[rows.length - 1], signal, price);
+    const activePlan = withPurpleDydxBodyMidpointStop(fractalPlan, rows[rows.length - 1], signal, price, this.config.asset);
     return { market: this.config.market, marketInfo, price, activePlan, fractalCandleSource: 'dydx-1h',
       timestamp: new Date(signal.time * 1000).toISOString().slice(0, 19).replace('T', ' ') };
   }
@@ -1136,7 +1138,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (age > 300_000 || directionForPosition(position) !== intent.signal.direction ||
       Math.abs(position.size) > finite(intent.orderAlert.size) + 1e-9 ||
       !(finite(position.entryPrice) > 0) || Math.abs(position.entryPrice! - reference) / reference > 0.05) {
-      throw new Error('Uncertain ETH gap/Daily execution cannot be safely attributed; inspect the live position and its SL.');
+      throw new Error(`Uncertain ${this.config.asset} gap/Daily execution cannot be safely attributed; inspect the live position and its SL.`);
     }
     this.registerManagedPosition(state, intent.signature, intent.signal.direction, position, reference,
       intent.plan, intent.orderAlert, 'RECOVERED_AFTER_PARTIAL_EXECUTION',
@@ -1153,12 +1155,12 @@ export class OpenLiquidityV2EthTradeMonitor {
       !['SUBMITTING', 'UNKNOWN'].includes(intent.outcome) || Date.now() - Date.parse(intent.attemptedAt) >= 300_000) return;
     this.gapDailyRecoveryTimer = setTimeout(() => {
       this.gapDailyRecoveryTimer = undefined;
-      void this.checkManagedPosition().catch(error => console.error('ETH gap/Daily reconciliation failed:', error));
+      void this.checkManagedPosition().catch(error => console.error(`${this.config.asset} gap/Daily reconciliation failed:`, error));
     }, 5_000);
   }
 
   private async checkGapDailyEntry(state: EthMonitorState, payload: any, result: any): Promise<void> {
-    if (this.config.market !== 'ETH-USD') return;
+    if (!purpleLineSetupForMarket(this.config.market)) return;
     if (!this.gapDailyEnabled()) {
       if (state.gapDailyEntry) delete state.gapDailyEntry.activatedAt;
       return;
@@ -1174,7 +1176,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     try {
       const frames = payload.frames || [];
       if (frames.length < 2 || frames.at(-1)?.startedAtMs !== close - HOUR_MS) {
-        throw new Error('Awaiting the latest closed ETH Spot replica hour.');
+        throw new Error(`Awaiting the latest closed ${this.config.asset} Spot replica hour.`);
       }
       const alerts = reconstructReplicaIntrusions(payload, String(frames.at(-2).t)).alerts;
       // The purple overlay rejects mixed left/right intrusions, even when one side has more weight.
@@ -1186,7 +1188,8 @@ export class OpenLiquidityV2EthTradeMonitor {
         entry.decision = { outcome: 'NO_INTRUSION', candleClosedAt: new Date(close).toISOString() };
         return;
       }
-      const signal = await readEthGapDailySignal(payload, intrusions);
+      const signal = await (this.config.market === 'ETH-USD' ? readEthGapDailySignal(payload, intrusions)
+        : readPurpleLineSignal(this.config.market as PurpleLineMarket, payload, intrusions));
       if (!signal) {
         entry.decision = { outcome: 'NO_DAILY_BREAK', candleClosedAt: new Date(close).toISOString() };
         return;
@@ -1195,7 +1198,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     } catch (error) {
       result.gapDailyEntryPending = true;
       entry.decision = { outcome: 'ERROR', at: nowNlIso(), reason: error instanceof Error ? error.message : String(error) };
-      console.error('ETH Spot gap/Daily entry check failed:', entry.decision);
+      console.error(`${this.config.asset} Spot gap/Daily entry check failed:`, entry.decision);
     }
     result.gapDailyEntry = entry.decision;
   }
@@ -1203,22 +1206,22 @@ export class OpenLiquidityV2EthTradeMonitor {
   private async executeGapDailyEntry(state: EthMonitorState, signal: EthGapDailySignal, result: any): Promise<void> {
     const entry = state.gapDailyEntry!;
     const skip = (reason: string) => { entry.decision = { outcome: 'SKIPPED', at: nowNlIso(), reason, signal }; };
-    if (!this.gapDailyEnabled() || !this.enabled() || !this.autoTradeEnabled()) return skip('ETH entry model, monitor or pair auto-trading is disabled.');
+    if (!this.gapDailyEnabled() || !this.enabled() || !this.autoTradeEnabled()) return skip(`${this.config.asset} entry model, monitor or pair auto-trading is disabled.`);
     if (!this.executor?.syncTrailingStop || !boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true) ||
       !boolEnv('DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED', true) || !boolEnv('DYDX_V4_FRACTAL_TRAIL_ENABLED', true)) {
       return skip('The initial SL and live fractal trailing executor must be enabled.');
     }
     if (!freshEthGapDailySignal(signal, entry.activatedAt!) || entry.handledCandle === signal.closedAt * 1000) return skip('Signal is expired, historical or already handled.');
-    if (entry.intent && ['SUBMITTING', 'UNKNOWN'].includes(entry.intent.outcome)) return skip('An earlier ETH execution remains unconfirmed; no duplicate order will be sent.');
+    if (entry.intent && ['SUBMITTING', 'UNKNOWN'].includes(entry.intent.outcome)) return skip(`An earlier ${this.config.asset} execution remains unconfirmed; no duplicate order will be sent.`);
     const account = await this.executor.getAccountSnapshot([this.config.market]);
     if (state.managedPosition || existingPosition(account, this.config.market)) {
       entry.handledCandle = signal.closedAt * 1000;
-      return skip('Existing ETH position; no addition or reversal.');
+      return skip(`Existing ${this.config.asset} position; no addition or reversal.`);
     }
     const plan = await this.getGapDailyStopPlan(account, signal);
-    const signature = `ETH-USD|GAP_DAILY|${signal.time}|${signal.direction}`;
+    const signature = `${this.config.market}|GAP_DAILY|${signal.time}|${signal.direction}`;
     const orderAlert = buildDecentraderOrderAlert(plan, signature);
-    Object.assign(orderAlert, { strategy: 'open_liquidity_v2_eth_gap_daily_entry', profile: 'NO_TP',
+    Object.assign(orderAlert, { strategy: `${this.config.strategyPrefix}_gap_daily_entry`, profile: 'NO_TP',
       take_profits: [], gap_daily_entry: signal });
     (orderAlert as any).decentrader = { ...(orderAlert as any).decentrader,
       sizingStop: plan.activePlan.sizingStop, initialStopPolicy: plan.activePlan.initialStopPolicy,
@@ -1239,7 +1242,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         return;
       }
       const position = await this.waitForExpectedPosition(signal.direction);
-      if (!position) throw new Error('ETH entry is not yet confirmed by the dYdX indexer.');
+      if (!position) throw new Error(`${this.config.asset} entry is not yet confirmed by the dYdX indexer.`);
       this.registerManagedPosition(state, signature, signal.direction, position, plan.price, plan, orderAlert,
         'PLACED', { model: 'GAP_DAILY', takeProfitMode: 'trailing-only', signal });
       entry.intent.outcome = 'CONFIRMED';
@@ -1449,7 +1452,7 @@ export class OpenLiquidityV2EthTradeMonitor {
 
     try {
       return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
-        if (this.gapDailyEnabled()) return { ...result, tradeSkipped: 'ETH gap/Daily experiment owns ETH entries; Shadow entry disabled.' };
+        if (this.gapDailyEnabled()) return { ...result, tradeSkipped: `${this.config.asset} purple line experiment owns entries; Shadow entry disabled.` };
         if (!fractalEntryModelEnabled()) {
           result.tradeSkipped = 'SHADOW_FRACTAL_ENTRY_MODEL_ENABLED is false.';
           return result;
@@ -1581,7 +1584,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     try {
       return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
         if (this.gapDailyEnabled()) return { ...result, tradeDeferred: true,
-          tradeSkipped: 'ETH gap/Daily experiment owns ETH entries; manual plan remains armed.' };
+          tradeSkipped: `${this.config.asset} purple line experiment owns entries; manual plan remains armed.` };
         if (!btcManualTradeOverrideEnabled()) {
           result.tradeSkipped = 'MANUAL_ENTRY_TP_OVERRIDE_ENABLED is false.';
           return result;
@@ -1772,7 +1775,7 @@ export class OpenLiquidityV2EthTradeMonitor {
 
   private async executeAlertExclusive(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
     if (this.gapDailyEnabled()) {
-      result.tradeSkipped = 'ETH gap/Daily experiment owns ETH entries; Delay entry disabled.';
+      result.tradeSkipped = `${this.config.asset} purple line experiment owns entries; Delay entry disabled.`;
       return;
     }
     if (!delayEntryModelEnabled()) {

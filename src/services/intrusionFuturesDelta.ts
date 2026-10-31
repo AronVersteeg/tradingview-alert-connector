@@ -12,9 +12,9 @@ export type FuturesDeltaCandle = {
 export type FuturesDeltaRead = { hour: number; status: 'ok'; candle: FuturesDeltaCandle } |
   { hour: number; status: 'pending' | 'unavailable'; retryAt: string; error?: string };
 
-function historyFile(symbol: 'BTCUSDT' | 'ETHUSDT'): string {
+function historyFile(symbol: 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT'): string {
   const dom = String(process.env.DECENTRALIZED_DOM_HISTORY_DIR || '').trim();
-  return path.join(dom ? path.dirname(dom) : path.join(process.cwd(), 'data'), `${symbol === 'BTCUSDT' ? 'btc' : 'eth'}-intrusion-futures-delta.json`);
+  return path.join(dom ? path.dirname(dom) : path.join(process.cwd(), 'data'), `${symbol.replace('USDT', '').toLowerCase()}-intrusion-futures-delta.json`);
 }
 
 export function validateDeltaHours(hours: number[], now = Date.now()): number[] {
@@ -47,7 +47,7 @@ function validStored(value: any): value is FuturesDeltaCandle {
     Number.isFinite(Date.parse(value.fetchedAt)) && Date.parse(value.fetchedAt) >= value.closedAt * 1000;
 }
 
-// Lazy closed-candle cache shared by chart labels and the ETH entry gate; no startup fetches.
+// Lazy closed-candle annotation cache; no startup fetches or entry dependency.
 export class IntrusionFuturesDeltaFeed {
   private records = new Map<number, FuturesDeltaCandle>();
   private failures = new Map<number, FuturesDeltaRead>();
@@ -55,8 +55,8 @@ export class IntrusionFuturesDeltaFeed {
   private loaded = false;
   private persistenceDisabled = false;
   private readonly file: () => string;
-  constructor(readonly symbol: 'BTCUSDT' | 'ETHUSDT', file?: () => string) {
-    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol)) throw new Error('Unsupported Futures delta symbol.');
+  constructor(readonly symbol: 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT', file?: () => string) {
+    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].includes(symbol)) throw new Error('Unsupported Futures delta symbol.');
     this.file = file || (() => historyFile(symbol));
   }
 
@@ -136,3 +136,4 @@ export class IntrusionFuturesDeltaFeed {
 
 export const btcIntrusionFuturesDeltaFeed = new IntrusionFuturesDeltaFeed('BTCUSDT');
 export const ethIntrusionFuturesDeltaFeed = new IntrusionFuturesDeltaFeed('ETHUSDT');
+export const solIntrusionFuturesDeltaFeed = new IntrusionFuturesDeltaFeed('SOLUSDT');

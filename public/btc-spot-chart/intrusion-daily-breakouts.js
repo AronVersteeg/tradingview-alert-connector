@@ -5,13 +5,14 @@
   const SOURCE = 'decentrader-recorded-intrusions';
 
   function compactIntrusionHistory(payload, nowMs = Date.now(), market = 'BTC-USD') {
-    const eth = market === 'ETH-USD';
-    const validSource = eth ? payload?.source?.market === market &&
-      payload.source.sourceStatuses?.some(source => source.name === 'Binance Spot ETHUSDT 1H')
+    const nativeSpot = ['ETH-USD', 'SOL-USD'].includes(market);
+    const symbol = market.replace('-USD', 'USDT');
+    const validSource = nativeSpot ? payload?.source?.market === market &&
+      payload.source.sourceStatuses?.some(source => source.name === `Binance Spot ${symbol} 1H`)
       : market === 'BTC-USD' && payload?.source?.method === 'getOHLCHourlyCalculations' &&
         payload.source.url === 'https://www.decentrader.com/liquidity-maps/?coin=btc';
     if (!validSource) throw new Error('Unexpected recorded intrusion source');
-    const histories = [eth ? payload.intrusionBenchmarks?.history : payload.intrusionDomStudy?.history, payload.delayHistory?.records].filter(Array.isArray);
+    const histories = [nativeSpot ? payload.intrusionBenchmarks?.history : payload.intrusionDomStudy?.history, payload.delayHistory?.records].filter(Array.isArray);
     if (!histories.length) throw new Error('Decentrader intrusion history missing');
     const records = new Map();
     let ignoredRecords = 0;
@@ -26,13 +27,13 @@
       const direction = long ? 'long' : 'short';
       records.set(`${ms}|${direction}`, { time: ms / 1000, alertTime: new Date(ms).toISOString(), direction });
     }
-    return { market, source: eth ? 'binance-spot-recorded-intrusions' : SOURCE, timeBasis: 'alert-candle-open-utc', fetchedAt: new Date(nowMs).toISOString(),
+    return { market, source: nativeSpot ? 'binance-spot-recorded-intrusions' : SOURCE, timeBasis: 'alert-candle-open-utc', fetchedAt: new Date(nowMs).toISOString(),
       ignoredRecords, records: [...records.values()].sort((a, b) => a.time - b.time || a.direction.localeCompare(b.direction)) };
   }
 
   function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe) {
-    const expectedSource = market === 'ETH-USD' ? 'binance-spot-recorded-intrusions' : SOURCE;
-    if (!['BTC-USD', 'ETH-USD'].includes(market) || history?.market !== market || history.source !== expectedSource || history.timeBasis !== 'alert-candle-open-utc' ||
+    const expectedSource = ['ETH-USD', 'SOL-USD'].includes(market) ? 'binance-spot-recorded-intrusions' : SOURCE;
+    if (!['BTC-USD', 'ETH-USD', 'SOL-USD'].includes(market) || history?.market !== market || history.source !== expectedSource || history.timeBasis !== 'alert-candle-open-utc' ||
         !Array.isArray(history.records)) throw new Error('Unexpected Decentrader intrusion history');
     const records = new Map();
     for (const record of history.records) {
@@ -41,7 +42,7 @@
       records.set(`${record.time}|${record.direction}`, record);
     }
     const evaluate = timeframe === 'W' ? engine.buildWeeklyFractalBreakouts : engine.buildDailyFractalBreakouts;
-    const model = evaluate(candles, fractals, nowMs, market === 'ETH-USD' ? 'ETHUSDT' : 'BTCUSDT');
+    const model = evaluate(candles, fractals, nowMs, market.replace('-USD', 'USDT'));
     return { ...model, intrusionSource: expectedSource, timeBasis: history.timeBasis, signals: model.signals.flatMap(signal => {
       const record = records.get(`${signal.time}|${signal.direction}`);
       return record ? [{ ...signal, intrusion: { ...record } }] : [];

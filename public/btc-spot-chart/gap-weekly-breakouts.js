@@ -3,7 +3,7 @@
   const HOUR = 3600;
 
   function buildFractalCloseBreakouts(input, fractals, nowMs, timeframe, levelsKey, symbol) {
-    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || fractals?.symbol !== symbol || fractals.venue !== 'Binance Spot' || !Array.isArray(fractals.levels)) {
+    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].includes(symbol) || fractals?.symbol !== symbol || fractals.venue !== 'Binance Spot' || !Array.isArray(fractals.levels)) {
       throw new Error('Unexpected BTC Spot breakout source');
     }
     const fractalThrough = Date.parse(fractals.evaluatedThrough) / 1000;

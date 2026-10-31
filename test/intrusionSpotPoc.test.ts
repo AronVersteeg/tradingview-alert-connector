@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { IntrusionSpotPocFeed, validatePocHour, btcIntrusionSpotPocFeed, ethIntrusionSpotPocFeed } from '../src/services/intrusionSpotPoc';
+import { IntrusionSpotPocFeed, validatePocHour, btcIntrusionSpotPocFeed, ethIntrusionSpotPocFeed, solIntrusionSpotPocFeed } from '../src/services/intrusionSpotPoc';
 import { binanceGet, binanceRetryAt } from '../src/services/binanceHttp';
 import { btcSpotChartRouter } from '../src/controllers/btcSpotChart';
 const browser = require('../public/btc-spot-chart/spot-poc.js');
@@ -192,7 +192,7 @@ describe('annotation-only exact-price Binance Spot POC', () => {
     await feed.snapshot(hour); expect(binanceGet).toHaveBeenCalledTimes(2);
   });
 
-  test('completed symbol-isolated results persist and reload without new network requests', async () => {
+  test.each(['ETHUSDT', 'SOLUSDT'] as const)('%s results persist separately from BTC and reload without requests', async symbol => {
     const btc = new IntrusionSpotPocFeed('BTCUSDT', () => file); const first: any = await complete(btc);
     first.record.poc.price = 999;
     expect((await new IntrusionSpotPocFeed('BTCUSDT', () => file).snapshot(hour)).record).toMatchObject({ status: 'ok', poc: { price: 100 } });
@@ -200,10 +200,14 @@ describe('annotation-only exact-price Binance Spot POC', () => {
     advance();
     (binanceGet as jest.Mock).mockResolvedValueOnce({ data: [candle()] });
     const ethFile = path.join(directory, 'eth.json');
-    expect((await complete(new IntrusionSpotPocFeed('ETHUSDT', () => ethFile))).symbol).toBe('ETHUSDT');
-    expect(binanceGet).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ params: expect.objectContaining({ symbol: 'ETHUSDT' }) }));
+    expect((await complete(new IntrusionSpotPocFeed(symbol, () => ethFile))).symbol).toBe(symbol);
+    expect(binanceGet).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ params: expect.objectContaining({ symbol }) }));
     expect(JSON.parse(fs.readFileSync(file, 'utf8')).symbol).toBe('BTCUSDT');
-    expect(JSON.parse(fs.readFileSync(ethFile, 'utf8')).symbol).toBe('ETHUSDT');
+    expect(JSON.parse(fs.readFileSync(ethFile, 'utf8')).symbol).toBe(symbol);
+    const before = (binanceGet as jest.Mock).mock.calls.length;
+    const restarted = await new IntrusionSpotPocFeed(symbol, () => ethFile).snapshot(hour);
+    expect(restarted.record).toMatchObject({ status: 'ok', poc: { price: 100 } });
+    expect(binanceGet).toHaveBeenCalledTimes(before);
   });
 
   test('admits one page globally and alternates waiting BTC/ETH profiles without starvation', async () => {
@@ -265,9 +269,9 @@ describe('annotation-only exact-price Binance Spot POC', () => {
 
   test('constructors do no I/O and invalid/open/multiple hours cannot enter a feed or endpoint', async () => {
     const locate = jest.fn(() => file); new IntrusionSpotPocFeed('BTCUSDT', locate);
-    expect(locate).not.toHaveBeenCalled(); expect(() => new IntrusionSpotPocFeed('SOLUSDT' as any)).toThrow();
+    expect(locate).not.toHaveBeenCalled(); expect(() => new IntrusionSpotPocFeed('XRPUSDT' as any)).toThrow();
     for (const bad of [NaN, -3600, hour + 1, Math.floor(Date.now() / 3_600_000) * 3600]) expect(() => validatePocHour(bad)).toThrow();
-    for (const [asset, feed] of [['btc', btcIntrusionSpotPocFeed], ['eth', ethIntrusionSpotPocFeed]] as const) {
+    for (const [asset, feed] of [['btc', btcIntrusionSpotPocFeed], ['eth', ethIntrusionSpotPocFeed], ['sol', solIntrusionSpotPocFeed]] as const) {
       const read = jest.spyOn(feed, 'snapshot').mockResolvedValue({ record: { hour, status: 'pending' } } as any);
       const layer = (btcSpotChartRouter as any).stack.find((l: any) => l.route?.path === `/open-liquidity/v2/${asset}-intrusion-spot-poc`);
       for (const query of [undefined, ['1', '2'], 'bad', `${hour},${hour}`, String(hour + 1)]) {

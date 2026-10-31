@@ -11,7 +11,7 @@
   }
 
   function projectFractals(bundle, input, symbol = 'BTCUSDT', periods = [['daily', 'D'], ['weekly', 'W'], ['monthly', 'M']]) {
-    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || bundle?.symbol !== symbol || bundle.venue !== 'Binance Spot') throw new Error('Unexpected fractal source');
+    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].includes(symbol) || bundle?.symbol !== symbol || bundle.venue !== 'Binance Spot') throw new Error('Unexpected fractal source');
     const through = Date.parse(bundle.evaluatedThrough) / 1000;
     if (!Number.isSafeInteger(through) || through % HOUR !== 0) throw new Error('Invalid projection cutoff');
     const candles = input.filter((candle) => candle.closed === true && candle.time + HOUR <= through)

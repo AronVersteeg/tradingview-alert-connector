@@ -16,7 +16,7 @@
     return { hour: record.hour, status: 'ok', candle: { ...c } };
   }
   function readDeltaResponse(payload, symbol = 'BTCUSDT') {
-    if (!['BTCUSDT', 'ETHUSDT'].includes(symbol) || payload?.symbol !== symbol || payload.venue !== 'Binance USD-M Futures' || payload.interval !== '5m' ||
+    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].includes(symbol) || payload?.symbol !== symbol || payload.venue !== 'Binance USD-M Futures' || payload.interval !== '5m' ||
       payload.timeBasis !== 'signal-last-five-minutes' || !Array.isArray(payload.records) || payload.records.length > 8) {
       throw new Error('Unexpected Futures delta source');
     }

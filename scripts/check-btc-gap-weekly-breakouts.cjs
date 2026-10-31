@@ -5,15 +5,17 @@ const { chromium } = require('playwright');
 const { PNG } = require('pngjs');
 const [url, output] = process.argv.slice(2);
 if (!url || !output) throw new Error('Supply preview URL and screenshot directory');
-const eth = new URL(url).searchParams.get('source') === 'open-v2-eth';
-const market = eth ? 'ETH-USD' : 'BTC-USD', symbol = eth ? 'ETHUSDT' : 'BTCUSDT', asset = eth ? 'eth' : 'btc';
+const source = new URL(url).searchParams.get('source');
+const asset = source === 'open-v2-sol' ? 'sol' : source === 'open-v2-eth' ? 'eth' : 'btc';
+const nativeSpot = asset !== 'btc';
+const market = `${asset.toUpperCase()}-USD`, symbol = `${asset.toUpperCase()}USDT`;
 fs.mkdirSync(output, { recursive: true });
 const html = fs.readFileSync(path.join(__dirname, '../public/decentrader_liquidity_timelapse.html'), 'utf8')
   .replace('    wireViewer();', '    window.__weeklyFixtureRefresh = () => refreshPayload().catch(error => { showRefreshError(error); throw error; });\n    wireViewer();');
 const HOUR = 3_600_000, start = Date.parse('2026-09-28T00:00:00Z'), day = Date.parse('2026-10-19T00:00:00Z');
 const iso = time => new Date(time).toISOString();
 function intrusionPayload() {
-  if (eth) return { source: { market, sourceStatuses: [{ name: 'Binance Spot ETHUSDT 1H' }] },
+  if (nativeSpot) return { source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
     intrusionBenchmarks: { history: intrusionPayloadBtc().intrusionDomStudy.history }, delayHistory: intrusionPayloadBtc().delayHistory };
   return intrusionPayloadBtc();
 }
@@ -40,7 +42,7 @@ function candles(now) {
 }
 function payload(now) {
   const rows = candles(now).filter(c => c.closed);
-  return { ...(eth ? intrusionPayload() : {}), modelVersion: 'binance-spot-liquidation-cohorts-v2.4', source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
+  return { ...(nativeSpot ? intrusionPayload() : {}), modelVersion: 'binance-spot-liquidation-cohorts-v2.4', source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
     range: { minPrice: 60, maxPrice: 160 }, events: [],
     frames: rows.map((c, i) => ({ i, startedAtMs: c.time * 1000, t: iso(c.time * 1000).slice(0, 19).replace('T', ' '), price: (c.open + c.high + c.low + c.close) / 4 })),
     gaps: rows.map(c => { const left = c.time * 1000 >= day + 5 * HOUR ? 60 : 85, right = c.time * 1000 >= day + 3 * HOUR ? 140 : 115;
@@ -109,7 +111,7 @@ function pocPixels(buffer, cross) {
       await context.route('**/*', route => {
         const req = route.request(), target = new URL(req.url());
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) { writes.push(req.method()); return route.abort(); }
-        if (eth && (target.pathname.startsWith('/open-liquidity/v2/btc-spot-') || target.pathname.includes('btc-intrusion-') || target.pathname === '/decentrader/liquidity-timelapse' ||
+        if (nativeSpot && (target.pathname.startsWith('/open-liquidity/v2/') && /\/(btc|eth|sol)-(spot-|intrusion-)/.test(target.pathname) && !target.pathname.startsWith(`/open-liquidity/v2/${asset}-`) || target.pathname === '/decentrader/liquidity-timelapse' ||
             target.pathname.includes('gap-projection-history') || target.pathname === '/decentrader/manual-override' && target.searchParams.get('market') !== market)) wrongMarketReads.push(req.url());
         if (target.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: html });
         if (target.origin === new URL(url).origin && target.pathname.startsWith('/assets/')) return route.continue();
@@ -132,11 +134,11 @@ function pocPixels(buffer, cross) {
           const hours = target.searchParams.get('hours').split(',').map(Number);
           assert(hours.length <= 8, 'Annotation requests must be bounded batches');
           return route.fulfill({ json: { symbol, venue: 'Binance USD-M Futures', interval: '5m', timeBasis: 'signal-last-five-minutes',
-            records: hours.map(hour => { const buy = hour === (day + 3 * HOUR) / 1000 ? (eth ? 65 : 62.93) : (eth ? 40 : 34.78);
+            records: hours.map(hour => { const buy = hour === (day + 3 * HOUR) / 1000 ? (nativeSpot ? 65 : 62.93) : (nativeSpot ? 40 : 34.78);
               return { hour, status: 'ok', candle: { hour, startedAt: hour + 3300, closedAt: hour + 3600,
                 volumeBase: 100, takerBuyVolumeBase: buy, rawDeltaPct: (2 * buy / 100 - 1) * 100, fetchedAt: iso(now) } }; }) } });
         }
-        if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return eth && intrusionFailure
+        if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return nativeSpot && intrusionFailure
           ? route.fulfill({ status: 503, json: { error: 'Fixture read failure' } }) : route.fulfill({ json: payload(now) });
         if (target.pathname === '/decentrader/liquidity-timelapse') {
           intrusionReads++;
@@ -290,7 +292,7 @@ function pocPixels(buffer, cross) {
       {
         await page.waitForFunction(() => window.btcSpotChart.getIntrusionDeltaLabels().filter(label => label.status === 'ok').length === 2);
         deltaLabels = await page.evaluate(() => window.btcSpotChart.getIntrusionDeltaLabels());
-        assert.deepEqual(deltaLabels.map(label => label.text), eth ? ['F5m +30.00%', 'F5m +20.00%'] : ['F5m +25.86%', 'F5m +30.44%']);
+        assert.deepEqual(deltaLabels.map(label => label.text), nativeSpot ? ['F5m +30.00%', 'F5m +20.00%'] : ['F5m +25.86%', 'F5m +30.44%']);
         for (const label of deltaLabels) assert(label.x >= 0 && label.y >= 0, 'Labels remain within the pane');
         const shot = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
         for (const label of deltaLabels) {
@@ -309,7 +311,7 @@ function pocPixels(buffer, cross) {
       assert(pocCrosses.every(cross => pocPixels(fs.readFileSync(purpleFile), cross) >= 8), 'PNG includes horizontal POC crossbars');
       await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `intrusion-daily-${mobile ? 'mobile' : 'desktop'}.png`) });
       intrusionFailure = true;
-      if (eth) await page.evaluate(() => window.__weeklyFixtureRefresh().catch(() => {}));
+      if (nativeSpot) await page.evaluate(() => window.__weeklyFixtureRefresh().catch(() => {}));
       else await page.locator('#spotChartRefresh').click();
       await page.waitForFunction(() => document.getElementById('spotChartIntrusionDailyStatus').textContent.includes('stale'));
       assert.equal((await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts())).signals.length, 2, 'Read failure preserves saved evidence');
