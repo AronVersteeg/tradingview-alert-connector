@@ -5,9 +5,17 @@ import * as Tracing from '@sentry/tracing';
 import { CaptureConsole as CaptureConsoleIntegration } from '@sentry/integrations';
 import helmet from 'helmet';
 import 'dotenv/config';
+import { RuntimeHealth } from './services/runtimeHealth';
 
 const app: express.Express = express();
 const port = process.env.PORT || 3000;
+const runtimeHealth = new RuntimeHealth();
+
+app.use(helmet());
+app.get('/healthz', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(runtimeHealth.snapshot());
+});
 
 if (process.env.SENTRY_DNS) {
 	Sentry.init({
@@ -36,8 +44,6 @@ if (process.env.SENTRY_DNS) {
 	console.log('initialized Sentry.io');
 }
 
-app.use(helmet());
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -47,6 +53,8 @@ if (process.env.SENTRY_DNS) {
 	app.use(Sentry.Handlers.errorHandler());
 }
 
-app.listen(port, () => {
+const server = app.listen(port, () => {
+	runtimeHealth.start();
 	console.log(`TV-Connector web server listening on port ${port}`);
 });
+server.once('close', () => runtimeHealth.stop());

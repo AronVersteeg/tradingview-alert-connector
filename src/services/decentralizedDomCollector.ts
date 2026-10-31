@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { jsonlLines, lastJsonlLine } from './jsonlFile';
 
 import axios from 'axios';
 
@@ -842,28 +843,32 @@ export class DecentralizedDomCollector {
     const safeFrom = Math.max(now - this.retentionDays() * 86_400_000, Math.min(fromMs, toMs));
     const safeTo = Math.max(safeFrom, Math.min(Math.max(fromMs, toMs), now + 60_000));
     const files = this.historyFilesBetween(safeFrom, safeTo);
-    const records: DomMinuteRecord[] = [];
-    for (const file of files) {
-      try {
-        const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
-        for (const line of lines) {
-          const record = JSON.parse(line) as DomMinuteRecord;
-          const timestamp = Date.parse(record.bucketStart);
-          if (timestamp >= safeFrom && timestamp <= safeTo) records.push(record);
-        }
-      } catch (error) {
-        console.warn('Decentralized DOM history file could not be read:', {
-          file,
-          error: error instanceof Error ? error.message : String(error)
-        });
-      }
-    }
-
     const maxPoints = boundedInteger(input.maxPoints, 720, 10, 5_000);
-    const stride = Math.max(1, Math.ceil(records.length / maxPoints));
-    const sampled = stride === 1
-      ? records
-      : records.filter((_record, index) => index % stride === 0 || index === records.length - 1);
+    const sampled: DomMinuteRecord[] = [];
+    let total = 0, index = 0;
+    const scan = (visit: (record: DomMinuteRecord) => void, reportErrors: boolean) => {
+      for (const file of files) {
+        try {
+          for (const line of jsonlLines(file)) {
+            const record = JSON.parse(line) as DomMinuteRecord;
+            const timestamp = Date.parse(record.bucketStart);
+            if (timestamp >= safeFrom && timestamp <= safeTo) visit(record);
+          }
+        } catch (error) {
+          if (reportErrors) console.warn('Decentralized DOM history file could not be read:', {
+            file, error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+    };
+    // Count first so sampling stays byte-for-byte equivalent to the old stride
+    // selection, while retained objects are bounded by maxPoints rather than days.
+    scan(() => { total++; }, true);
+    const stride = Math.max(1, Math.ceil(total / maxPoints));
+    scan(record => {
+      if (index % stride === 0 || index === total - 1) sampled.push(record);
+      index++;
+    }, false);
     return {
       ok: true,
       readOnly: true,
@@ -889,8 +894,9 @@ export class DecentralizedDomCollector {
 
   private readBoundaryRecord(file: string, fromEnd: boolean): DomMinuteRecord | undefined {
     try {
-      const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
-      const line = fromEnd ? lines[lines.length - 1] : lines[0];
+      let line: string | undefined;
+      if (fromEnd) line = lastJsonlLine(file);
+      else for (const row of jsonlLines(file)) { line = row; break; }
       return line ? JSON.parse(line) as DomMinuteRecord : undefined;
     } catch {
       return undefined;

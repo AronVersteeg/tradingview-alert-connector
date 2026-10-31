@@ -12,4 +12,6 @@ RUN yarn build
 
 EXPOSE 3000
 
-CMD yarn start
+ENV NODE_ENV=production
+
+CMD ["node", "scripts/start-server.cjs"]

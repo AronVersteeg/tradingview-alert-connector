@@ -6,7 +6,7 @@
 	"main": "index.js",
 	"scripts": {
 		"build": "tsc",
-		"start": "NODE_ENV=production node dist/index.js",
+		"start": "node scripts/start-server.cjs",
 		"start:test": "tsc && NODE_ENV=test ts-node dist/index.js",
 		"start:dev": "tsc && NODE_ENV=development tsc-watch --onSuccess \"ts-node dist/index.js\"",
 		"decode": "ts-node scripts/decode.ts",
