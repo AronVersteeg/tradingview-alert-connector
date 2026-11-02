@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import { EthGapDailySignal, EthEntryFuturesDelta,
-  freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyMidpointStop } from './ethGapDailyEntry';
+  freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyQuarterStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
 import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
 import { PurpleLineContinuity } from './purpleLineContinuity';
 import { PurpleTriggerEmail, purpleTriggerEmail } from './purpleTriggerEmail';
@@ -952,7 +952,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         setup: 'purple-line', enabled: this.gapDailyEnabled(), env: purpleLineSetupForMarket(this.config.market)!.enabledEnv,
         source: `Binance Spot ${this.config.symbol} 1H + 1D`,
         executionMarket: this.config.market, takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
-        initialStop: { mode: 'signal-body-midpoint', candleSource: 'dydx-1h', sameSignalHour: true, bufferPct: 0,
+        initialStop: { mode: 'signal-body-quarter', bodyFraction: PURPLE_BODY_STOP_FRACTION, candleSource: 'dydx-1h', sameSignalHour: true, bufferPct: 0,
           sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
         futuresDeltaFilter: { enabled: false, reason: 'Futures delta is observe-only, not an entry requirement.' },
         activatedAt: state.gapDailyEntry?.activatedAt, decision: state.gapDailyEntry?.decision,
@@ -1145,7 +1145,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     const fractalPlan = buildDirectionalPlan(signal.direction, account, marketInfo, rows, rows.length - 1,
       undefined, undefined, { longTp: [], shortTp: [] }, price,
       String(process.env.DECENTRADER_TRADE_SIZING_MODE || 'growth').trim().toLowerCase());
-    const activePlan = withPurpleDydxBodyMidpointStop(fractalPlan, rows[rows.length - 1], signal, price, this.config.asset);
+    const activePlan = withPurpleDydxBodyQuarterStop(fractalPlan, rows[rows.length - 1], signal, price, this.config.asset);
     return { market: this.config.market, marketInfo, price, activePlan, fractalCandleSource: 'dydx-1h',
       timestamp: new Date(signal.time * 1000).toISOString().slice(0, 19).replace('T', ' ') };
   }
@@ -1295,7 +1295,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       take_profits: [], gap_daily_entry: signal });
     (orderAlert as any).decentrader = { ...(orderAlert as any).decentrader,
       sizingStop: plan.activePlan.sizingStop, initialStopPolicy: plan.activePlan.initialStopPolicy,
-      note: 'Binance Spot purple entry; dYdX fractal sizing; same-hour dYdX body-midpoint initial SL; dYdX fractal trailing; no TPs.' };
+      note: 'Binance Spot purple entry; dYdX fractal sizing; same-hour dYdX initial SL at 25% of body from open; dYdX fractal trailing; no TPs.' };
     await this.applyStatefulOrderCapacity(orderAlert, result);
     if (!freshEthGapDailySignal(signal, entry.activatedAt!)) return skip('Signal expired during order preparation.');
     entry.handledCandle = signal.closedAt * 1000;

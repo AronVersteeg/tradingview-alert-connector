@@ -16,6 +16,9 @@ export function purpleTriggerEmail(market: string, signal: PurpleLineSignal, ent
     : ['SUBMITTING', 'UNKNOWN'].includes(intent?.outcome) ? 'UNCONFIRMED'
     : decision.outcome || (result.tradePlaced ? 'PLACED' : 'ERROR');
   const plan = intent?.plan?.activePlan;
+  const initialStopLabel = plan?.initialStopPolicy?.mode === 'signal-body-quarter'
+    ? 'dYdX signal-body 25% from open'
+    : plan?.initialStopPolicy?.mode === 'signal-body-midpoint' ? 'dYdX signal-body midpoint' : 'dYdX initial stop';
   const started = new Date(signal.time * 1000).toISOString(), closed = new Date(signal.closedAt * 1000).toISOString();
   const subject = `${asset} PURPLE ${signal.direction.toUpperCase()} TRIGGERED | ${btcManualTriggerTimestampNl(started)}`;
   const body = [
@@ -32,7 +35,7 @@ export function purpleTriggerEmail(market: string, signal: PurpleLineSignal, ent
     outcome === 'UNCONFIRMED' ? 'Submission is uncertain; it is not proof of a failed or absent order. Reconciliation remains active.' : '',
     outcome === 'PLACED' && decision.size ? `Actual position size: ${decision.size}` : '',
     outcome === 'PLACED' && decision.entryPrice ? `dYdX entry: ${decision.entryPrice}` : '',
-    plan?.stop?.price ? `Planned initial SL (dYdX signal-body midpoint): ${plan.stop.price}` : '',
+    plan?.stop?.price ? `Planned initial SL (${initialStopLabel}): ${plan.stop.price}` : '',
     plan?.sizingStop?.price ? `Original dYdX fractal sizing stop: ${plan.sizingStop.price}` : '',
     result.dynamicSlSync?.outcome ? `Protection check: ${result.dynamicSlSync.outcome}` : '',
     result.dynamicSlSync?.reason ? `Protection detail: ${result.dynamicSlSync.reason}` : '',
