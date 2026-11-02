@@ -396,6 +396,17 @@
       margin-top: 10px;
     }
 
+    .manual-override-feedback {
+      margin-top: 8px;
+      overflow-wrap: anywhere;
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .manual-override-feedback.is-error {
+      color: #ff8c91;
+    }
+
     .manual-plan-list {
       display: grid;
       gap: 6px;
@@ -1393,6 +1404,7 @@
             <button id="manualOverrideArm" type="submit">Add plan</button>
             <button id="manualOverrideCancelEdit" type="button" hidden>Cancel edit</button>
           </div>
+          <div id="manualOverrideFeedback" class="manual-override-feedback" role="status" aria-live="polite" hidden></div>
         </form>
       </div>
       <div class="gap-card delay-history-card" id="delayHistoryCard">
@@ -1969,6 +1981,7 @@
     let latestTradePlanError = '';
     let manualOverrideSnapshot = null;
     let manualOverrideFormInitialized = false;
+    let manualOverrideSaving = false;
     let manualEditingPlanId = null;
     let tradeZonesVisible = true;
     let canvasScale = 1;
@@ -5522,6 +5535,23 @@
       ].filter(Boolean).join(' | ');
     }
 
+    function manualOverrideFeedback(message = '', isError = false) {
+      const feedback = document.getElementById('manualOverrideFeedback');
+      if (!feedback) return;
+      feedback.textContent = message;
+      feedback.hidden = !message;
+      feedback.classList.toggle('is-error', isError);
+      if (isError) manualOverrideStatus.textContent = message;
+    }
+
+    function manualOverrideInvalid(event) {
+      const field = event.target;
+      const label = field === manualOverrideTrigger
+        ? '1H close trigger'
+        : field.getAttribute('aria-label') || 'Manual entry field';
+      manualOverrideFeedback(`${label}: ${field.validationMessage || 'Enter a valid number.'}`, true);
+    }
+
     function manualToken() {
       const value = String(manualOverrideToken?.value || '').trim();
       if (value) {
@@ -5574,10 +5604,11 @@
     function loadManualOverrideForm(direction) {
       manualTriggerLabel.textContent = direction === 'short' ? '1H close below' : '1H close above';
       const executing = manualOverrides().some((candidate) => candidate.status === 'EXECUTING');
-      manualOverrideArm.disabled = !manualOverrideSnapshot?.enabled || executing;
+      manualOverrideArm.disabled = manualOverrideSaving || !manualOverrideSnapshot?.enabled || executing;
     }
 
     function resetManualOverrideEditor() {
+      manualOverrideFeedback();
       manualEditingPlanId = null;
       manualOverrideTrigger.value = '';
       resetManualTpRows();
@@ -5587,9 +5618,11 @@
     }
 
     function editManualOverride(planId) {
+      if (manualOverrideSaving) return;
       const state = manualOverrides().find((candidate) => candidate.id === planId);
       if (!state || state.status !== 'ARMED') return;
       manualEditingPlanId = state.id;
+      manualOverrideFeedback();
       manualOverrideDirection.value = state.direction;
       manualOverrideTrigger.value = state.closeTrigger;
       resetManualTpRows(Array.isArray(state.takeProfits) ? state.takeProfits : []);
@@ -5666,7 +5699,7 @@
       if (!active.length && latestTerminal?.triggerEmailError) details.push(`email: ${latestTerminal.triggerEmailError}`);
       if (snapshot?.lastError) details.push(snapshot.lastError);
       manualOverrideStatus.textContent = details.join(' | ') || 'Ready';
-      manualOverrideArm.disabled = !snapshot?.enabled || active.some((state) => state.status === 'EXECUTING');
+      manualOverrideArm.disabled = manualOverrideSaving || !snapshot?.enabled || active.some((state) => state.status === 'EXECUTING');
       if (!manualOverrideFormInitialized) {
         manualOverrideFormInitialized = true;
         loadManualOverrideForm(manualOverrideDirection.value);
@@ -5703,35 +5736,59 @@
 
     async function armManualOverride(event) {
       event.preventDefault();
+      if (manualOverrideSaving) return;
       const token = manualToken();
       if (!token) {
-        manualOverrideStatus.textContent = 'API token required';
+        manualOverrideFeedback('API token required. No changes saved.', true);
+        manualOverrideToken.focus();
         return;
       }
+      const editingPlanId = manualEditingPlanId;
+      const request = {
+        market: manualOverrideMarket,
+        direction: manualOverrideDirection.value,
+        closeTrigger: Number(manualOverrideTrigger.value),
+        takeProfits: manualTakeProfitsFromForm()
+      };
+      manualOverrideSaving = true;
       manualOverrideArm.disabled = true;
+      manualOverrideArm.textContent = 'Saving...';
+      manualOverrideFeedback('Saving...');
       try {
-        const requestUrl = manualEditingPlanId
-          ? `${CLOUD_MANUAL_OVERRIDE_URL}?market=${encodeURIComponent(manualOverrideMarket)}&id=${encodeURIComponent(manualEditingPlanId)}`
+        const requestUrl = editingPlanId
+          ? `${CLOUD_MANUAL_OVERRIDE_URL}?market=${encodeURIComponent(manualOverrideMarket)}&id=${encodeURIComponent(editingPlanId)}`
           : `${CLOUD_MANUAL_OVERRIDE_URL}?market=${encodeURIComponent(manualOverrideMarket)}`;
         const response = await fetch(requestUrl, {
-          method: manualEditingPlanId ? 'PATCH' : 'POST',
+          method: editingPlanId ? 'PATCH' : 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Webhook-Token': token },
-          body: JSON.stringify({
-            market: manualOverrideMarket,
-            direction: manualOverrideDirection.value,
-            closeTrigger: Number(manualOverrideTrigger.value),
-            takeProfits: manualTakeProfitsFromForm()
-          })
+          body: JSON.stringify(request)
         });
         const result = await response.json();
         if (!response.ok || result.error) throw new Error(result.error || `Manual override ${response.status}`);
-        await refreshManualOverride();
+        const saved = result.override;
+        if (!saved || saved.direction !== request.direction || Number(saved.closeTrigger) !== request.closeTrigger ||
+            (editingPlanId && saved.id !== editingPlanId)) {
+          throw new Error('Save response could not be verified. Refresh plans before trying again.');
+        }
+        const savedSnapshot = {
+          ...manualOverrideSnapshot,
+          overrides: [...manualOverrides().filter((plan) => plan.id !== saved.id), saved]
+        };
+        updateManualOverrideMonitor(savedSnapshot);
         resetManualOverrideEditor();
+        manualOverrideFeedback(`Saved: ${saved.direction.toUpperCase()} ${saved.direction === 'short' ? '<' : '>'} ${money(saved.closeTrigger)}.`);
+        try {
+          await refreshManualOverride();
+        } catch (refreshError) {
+          manualOverrideFeedback(`Saved: ${saved.direction.toUpperCase()} ${money(saved.closeTrigger)}. Plan refresh unavailable; reload to check current status.`);
+        }
       } catch (error) {
-        manualOverrideStatus.textContent = String(error.message || error);
+        manualOverrideFeedback(String(error.message || error), true);
       } finally {
+        manualOverrideSaving = false;
         const executing = manualOverrides().some((candidate) => candidate.status === 'EXECUTING');
         manualOverrideArm.disabled = !manualOverrideSnapshot?.enabled || executing;
+        manualOverrideArm.textContent = manualEditingPlanId ? 'Save changes' : 'Add plan';
       }
     }
 
@@ -6244,6 +6301,7 @@
       });
       manualAddTp?.addEventListener('click', () => addManualTpRow());
       manualOverrideForm?.addEventListener('submit', armManualOverride);
+      manualOverrideForm?.addEventListener('invalid', manualOverrideInvalid, true);
       manualOverrideCancelEdit?.addEventListener('click', resetManualOverrideEditor);
       manualPlanList?.addEventListener('click', (event) => {
         const editButton = event.target.closest('.manual-plan-edit');
