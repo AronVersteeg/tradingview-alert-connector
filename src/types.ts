@@ -11,6 +11,8 @@ import { OrderSide as v4OrderSide } from '@dydxprotocol/v4-client-js';
 // =======================
 // ALERT OBJECT (INTENT-BASED)
 // =======================
+export type EntryExecutionOptions = { beforeEntrySubmit: () => Promise<void> };
+
 export type AlertObject = {
 	// ===== COMMON =====
 	exchange: string;

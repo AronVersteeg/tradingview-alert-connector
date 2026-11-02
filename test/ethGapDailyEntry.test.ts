@@ -627,6 +627,110 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
       expect(managed.gapDailyEntry.activatedAt).toBe(iso(now));
       expect(read).not.toHaveBeenCalled(); expect(orders.placeOrder).not.toHaveBeenCalled();
     });
+    test('saves signal mail and a PREPARING checkpoint before execution, then revalidates an unsent fresh signal after restart', async () => {
+      orders.supportsEntrySubmissionCheckpoint = true;
+      jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+      let crashed: any;
+      orders.placeOrder.mockImplementationOnce(async () => {
+        crashed = JSON.parse(fs.readFileSync(file, 'utf8'));
+        expect(crashed.gapDailyEntry.intent).toMatchObject({ phase: 'PREPARING', outcome: 'SUBMITTING' });
+        expect(crashed.gapDailyEntry.triggerEmails[0]).toMatchObject({ outcome: 'DETECTED', attempts: 0 });
+        throw new Error('simulated interruption before SDK broadcast');
+      });
+      await monitor.checkGapDailyEntry(state(), inputs().payload, {});
+      fs.writeFileSync(file, JSON.stringify(crashed));
+      const restarted: any = createMonitor(); restarted.processStartedAt = closeAt - HOUR;
+      restarted.configureTradeExecutor(orders);
+      await restarted.checkManagedPosition();
+      const recovered = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(recovered.gapDailyEntry.intent.outcome).toBe('NOT_SUBMITTED');
+      expect(recovered.gapDailyEntry.handledCandle).toBeUndefined();
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+      const actualBroadcast = jest.fn();
+      orders.placeOrder.mockImplementationOnce(async (alert, execution) => {
+        await execution.beforeEntrySubmit();
+        expect(JSON.parse(fs.readFileSync(file, 'utf8')).gapDailyEntry.intent.phase).toBe('BROADCASTING');
+        actualBroadcast(); position = { market, size: .4, entryPrice: 120 };
+      });
+      const result: any = {};
+      await restarted.checkGapDailyEntry(recovered, inputs().payload, result);
+      expect(result.tradePlaced).toBe(true); expect(actualBroadcast).toHaveBeenCalledTimes(1);
+      expect(orders.syncTrailingStop).toHaveBeenCalled(); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+      const status = restarted.getStatus().gapDailyEntry;
+      expect(status.latestExecutionAttempt).toMatchObject({ phase: 'BROADCASTING', outcome: 'CONFIRMED', signal: { time: signal().time } });
+      expect(status.recentDecisions.some(row => row.decision.outcome === 'RETRY_SAFE_BEFORE_BROADCAST')).toBe(true);
+    });
+    test.each(['expired', 'disabled', 'checkpoint-write-failed'])('does not start a broadcast when %s during preparation', async why => {
+      orders.supportsEntrySubmissionCheckpoint = true;
+      const broadcast = jest.fn();
+      orders.placeOrder.mockImplementationOnce(async (_alert, execution) => {
+        if (why === 'expired') jest.setSystemTime(closeAt + 300001);
+        if (why === 'disabled') process.env[entryEnv] = 'false';
+        if (why === 'checkpoint-write-failed') jest.spyOn(fs, 'fsyncSync').mockImplementation(() => { throw new Error('checkpoint disk failure'); });
+        await execution.beforeEntrySubmit();
+        broadcast();
+      });
+      await expect(monitor.executeGapDailyEntry(state(), signal(), {})).rejects.toThrow();
+      expect(broadcast).not.toHaveBeenCalled();
+      expect(position).toBeUndefined();
+    });
+    test.each(['BROADCASTING', 'legacy'])('never resends an ambiguous %s attempt after restart', async phase => {
+      orders.supportsEntrySubmissionCheckpoint = true;
+      let crashed: any;
+      orders.placeOrder.mockImplementationOnce(async (_alert, execution) => {
+        if (phase === 'BROADCASTING') await execution.beforeEntrySubmit();
+        crashed = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (phase === 'legacy') delete crashed.gapDailyEntry.intent.phase;
+        throw new Error('simulated interruption around submission');
+      });
+      await expect(monitor.executeGapDailyEntry(state(), signal(), {})).rejects.toThrow();
+      fs.writeFileSync(file, JSON.stringify(crashed));
+      const restarted: any = createMonitor(); restarted.processStartedAt = closeAt - HOUR;
+      restarted.configureTradeExecutor(orders);
+      await restarted.checkManagedPosition();
+      const recovered = JSON.parse(fs.readFileSync(file, 'utf8'));
+      jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+      await restarted.checkGapDailyEntry(recovered, inputs().payload, {});
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+      expect(recovered.gapDailyEntry.handledCandle).toBe(signal().closedAt * 1000);
+    });
+    test.each(['expired', 'disabled', 'position'])('does not rearm an interrupted unsent signal when %s', async why => {
+      orders.supportsEntrySubmissionCheckpoint = true;
+      let crashed: any;
+      orders.placeOrder.mockImplementationOnce(async () => {
+        crashed = JSON.parse(fs.readFileSync(file, 'utf8'));
+        throw new Error('interrupted preparation');
+      });
+      await expect(monitor.executeGapDailyEntry(state(), signal(), {})).rejects.toThrow();
+      if (why === 'expired') jest.setSystemTime(closeAt + 300001);
+      if (why === 'disabled') process.env[entryEnv] = 'false';
+      if (why === 'position') position = { market, size: -.4, entryPrice: 120 };
+      fs.writeFileSync(file, JSON.stringify(crashed));
+      const restarted: any = createMonitor(); restarted.configureTradeExecutor(orders);
+      await restarted.checkManagedPosition();
+      const recovered = JSON.parse(fs.readFileSync(file, 'utf8'));
+      expect(recovered.gapDailyEntry.intent.outcome).toBe('NOT_SUBMITTED');
+      expect(recovered.gapDailyEntry.handledCandle).toBe(signal().closedAt * 1000);
+      expect(recovered.managedPosition).toBeUndefined();
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+    });
+    test('preserves the queued signal notification across a crash without inventing a confirmed order', async () => {
+      jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+      let crashed: any;
+      orders.placeOrder.mockImplementationOnce(async () => {
+        crashed = JSON.parse(fs.readFileSync(file, 'utf8'));
+        throw new Error('crash before execution finished');
+      });
+      await monitor.checkGapDailyEntry(state(), inputs().payload, {});
+      fs.writeFileSync(file, JSON.stringify(crashed));
+      (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
+      const restarted: any = createMonitor(); restarted.configureTradeExecutor(orders);
+      await restarted.flushPurpleTriggerEmails();
+      expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`${asset} PURPLE LONG TRIGGERED`),
+        expect.stringContaining('no order or protective stop is confirmed'));
+      expect(restarted.getStatus().gapDailyEntry.triggerEmail.recent[0].smtpSentAt).toBeDefined();
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+    });
     test('reconciles an uncertain fill after five seconds without waiting for the regular management interval', async () => {
       orders.placeOrder.mockRejectedValue(new Error('uncertain submission'));
       const managed: any = state();

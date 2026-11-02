@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { readGapArchiveMonth } from './replicaGapArchive';
+import { jsonlLines, jsonlNeedsNewline } from './jsonlFile';
 
 export type ObservationIdentity = { market: string; symbol: string; source: string; modelVersion: string;
   priceStepUsd?: number; cohortWindowHours?: number };
@@ -59,41 +60,60 @@ export class LiquidityObservationArchive {
   close(): void { if (this.retry) clearTimeout(this.retry); this.retry = undefined; }
 
   async audit(month: string) {
-    const gap = await readGapArchiveMonth(this.directory, { ...this.identity,
-      accuracy: this.identity.source === 'decentrader' ? 'provider-observed-snapshot' : 'causal-model-snapshot' }, month);
-    const candles = await this.read('source-candles', month), intrusions = await this.read('intrusions', month);
-    const coverage = (rows: Array<{ candleStartedAt: string; kind: string }>, hourly: boolean) => {
-      const hours = [...new Set(rows.filter(row => row.kind === 'first-seen').map(row => Date.parse(row.candleStartedAt)))].sort((a, b) => a - b);
-      return { records: rows.length, recordedHours: hours.length,
-        from: hours.length ? new Date(hours[0]).toISOString() : null,
-        through: hours.length ? new Date(hours[hours.length - 1]).toISOString() : null,
-        missingHoursInsideRecordedSpan: hourly && hours.length ? (hours[hours.length - 1] - hours[0]) / 3_600_000 + 1 - hours.length : null,
-        fullMonthCoverageProven: false };
+    const coverage = (hourly: boolean) => {
+      const seen = new Set<number>();
+      let records = 0;
+      return { add: (row: { candleStartedAt: string; kind: string }) => {
+        records++;
+        if (row.kind === 'first-seen') seen.add(Date.parse(row.candleStartedAt));
+      }, result: () => {
+        const hours = [...seen].sort((a, b) => a - b);
+        return { records, recordedHours: hours.length,
+          from: hours.length ? new Date(hours[0]).toISOString() : null,
+          through: hours.length ? new Date(hours[hours.length - 1]).toISOString() : null,
+          missingHoursInsideRecordedSpan: hourly && hours.length ? (hours[hours.length - 1] - hours[0]) / 3_600_000 + 1 - hours.length : null,
+          fullMonthCoverageProven: false };
+      } };
     };
+    const gapCoverage = coverage(true), candleCoverage = coverage(true), intrusionCoverage = coverage(false);
+    const gap = await readGapArchiveMonth(this.directory, { ...this.identity,
+      accuracy: this.identity.source === 'decentrader' ? 'provider-observed-snapshot' : 'causal-model-snapshot' }, month, gapCoverage.add);
+    const candles = await this.read('source-candles', month, candleCoverage.add);
+    const intrusions = await this.read('intrusions', month, intrusionCoverage.add);
     let freeBytes: number | null = null;
     try { const disk = await fs.promises.statfs(this.directory); freeBytes = disk.bavail * disk.bsize; } catch { /* Unknown is not zero. */ }
     return { identity: this.identity, month, integrity: 'verified',
-      gaps: { missing: gap.missing, ...coverage(gap.rows, true) },
-      candles: { missing: candles.missing, ...coverage(candles.rows, true) },
-      intrusions: { missing: intrusions.missing, ...coverage(intrusions.rows, false) },
+      gaps: { missing: gap.missing, ...gapCoverage.result() },
+      candles: { missing: candles.missing, ...candleCoverage.result() },
+      intrusions: { missing: intrusions.missing, ...intrusionCoverage.result() },
       freeBytes, lowSpace: freeBytes === null ? null : freeBytes < 128 * 1024 * 1024, writer: this.status() };
   }
 
   append(topic: Topic, evidence: Evidence[]): Promise<void> {
     // Capture now, before callers trim or update their in-memory records.
-    const rows: Evidence[] = JSON.parse(JSON.stringify(evidence));
     const additions = new Map<string, { topic: Topic; row: Evidence; bytes: number }>();
-    for (const row of rows) {
+    let bytes = 0;
+    for (const item of evidence) {
+      const serialized = JSON.stringify(item);
+      const rowBytes = Buffer.byteLength(serialized);
+      if (rowBytes > MAX_PENDING_BYTES) {
+        this.rejectedRecords++;
+        this.details.lastError = 'Archive record exceeds memory limit; capture rejected, existing evidence retained.';
+        console.error(this.details.lastError, this.identity);
+        return Promise.reject(new Error(this.details.lastError));
+      }
+      const row: Evidence = JSON.parse(serialized);
       const { observedAt, ...facts } = row;
       const key = `${topic}|${digest(facts)}`;
-      if (!this.pending.has(key)) additions.set(key, { topic, row, bytes: Buffer.byteLength(JSON.stringify(row)) });
-    }
-    const bytes = [...additions.values()].reduce((sum, item) => sum + item.bytes, 0);
-    if (pendingBytes + bytes > MAX_PENDING_BYTES) {
-      this.rejectedRecords += additions.size;
-      this.details.lastError = 'Archive backlog memory limit reached; new capture rejected, existing evidence retained.';
-      console.error(this.details.lastError, this.identity);
-      return Promise.reject(new Error(this.details.lastError));
+      if (this.pending.has(key) || additions.has(key)) continue;
+      bytes += rowBytes;
+      if (pendingBytes + bytes > MAX_PENDING_BYTES) {
+        this.rejectedRecords += additions.size + 1;
+        this.details.lastError = 'Archive backlog memory limit reached; new capture rejected, existing evidence retained.';
+        console.error(this.details.lastError, this.identity);
+        return Promise.reject(new Error(this.details.lastError));
+      }
+      additions.set(key, { topic, row, bytes: rowBytes });
     }
     for (const [key, item] of additions) { this.pending.set(key, item); pendingBytes += item.bytes; }
     if (!this.pending.size) return Promise.resolve();
@@ -158,12 +178,13 @@ export class LiquidityObservationArchive {
       let needsNewline = false;
       if (!cached || cached.size !== (stat?.size || 0) || cached.mtimeMs !== (stat?.mtimeMs || 0)) {
         const signatures = new Map<string, string>();
-        const text = stat ? await fs.promises.readFile(file, 'utf8') : '';
-        needsNewline = Boolean(text && !text.endsWith('\n'));
-        for (const line of text.split('\n').filter(Boolean)) {
+        needsNewline = Boolean(stat && jsonlNeedsNewline(file));
+        let count = 0;
+        for (const line of stat ? jsonlLines(file) : []) {
           const stored: Row = JSON.parse(line);
           verify(stored, this.identity, topic, signatures.get(stored.id));
           signatures.set(stored.id, stored.fingerprint);
+          if (++count % 128 === 0) await new Promise<void>(resolve => setImmediate(resolve));
         }
         cached = { signatures, size: stat?.size || 0, mtimeMs: stat?.mtimeMs || 0 };
       }
@@ -207,18 +228,18 @@ export class LiquidityObservationArchive {
     return [...months].sort();
   }
 
-  async read(topic: Topic, month: string): Promise<{ rows: Row[]; integrity: 'verified'; missing: boolean }> {
+  async read(topic: Topic, month: string, visit?: (row: Row) => void): Promise<{ rows: Row[]; integrity: 'verified'; missing: boolean }> {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error('Use YYYY-MM for the archive month.');
     const file = path.join(this.directory, 'liquidity-observations', topic, `${this.identity.modelVersion}-${month}.jsonl`);
-    let text: string;
-    try { text = await fs.promises.readFile(file, 'utf8'); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { rows: [], integrity: 'verified', missing: true }; throw error; }
     const signatures = new Map<string, string>(), rows: Row[] = [];
-    for (const line of text.split('\n').filter(Boolean)) {
+    let count = 0;
+    try { for (const line of jsonlLines(file)) {
       const row: Row = JSON.parse(line);
       verify(row, this.identity, topic, signatures.get(row.id));
-      signatures.set(row.id, row.fingerprint); rows.push(row);
-    }
+      signatures.set(row.id, row.fingerprint);
+      if (visit) visit(row); else rows.push(row);
+      if (++count % 128 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+    } } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { rows: [], integrity: 'verified', missing: true }; throw error; }
     return { rows, integrity: 'verified', missing: false };
   }
 }

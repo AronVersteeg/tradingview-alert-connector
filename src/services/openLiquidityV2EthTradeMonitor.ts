@@ -309,9 +309,11 @@ type EthMonitorState = AlertState & {
     handledCandle?: number;
     futuresDelta?: EthEntryFuturesDelta;
     decision?: any;
+    decisionHistory?: any[];
     triggerEmails?: PurpleTriggerEmail[];
     intent?: { signature: string; attemptedAt: string; signal: EthGapDailySignal; plan: any;
-      futuresDelta?: EthEntryFuturesDelta; orderAlert: AlertObject; outcome: 'SUBMITTING' | 'UNKNOWN' | 'CONFIRMED' | 'FLATTENED' | 'NO_POSITION' };
+      futuresDelta?: EthEntryFuturesDelta; orderAlert: AlertObject; phase?: 'PREPARING' | 'BROADCASTING'; broadcastStartedAt?: string;
+      error?: string; outcome: 'SUBMITTING' | 'UNKNOWN' | 'CONFIRMED' | 'FLATTENED' | 'NO_POSITION' | 'NOT_SUBMITTED' };
   };
   pendingAlerts?: Record<string, PendingEthAlert>;
   normalSentSignatures?: string[];
@@ -794,10 +796,25 @@ function readState(config: OpenLiquidityV2TradeMonitorConfig = ETH_MONITOR_CONFI
 }
 
 function writeState(state: EthMonitorState, config: OpenLiquidityV2TradeMonitorConfig = ETH_MONITOR_CONFIG): void {
+  const entry = state.gapDailyEntry, decision = entry?.decision;
+  if (entry && decision) {
+    const signal = decision.signal;
+    const record = { outcome: decision.outcome, at: decision.at, reason: decision.reason,
+      candleStartedAt: signal ? new Date(signal.time * 1000).toISOString() : undefined,
+      candleClosedAt: signal ? new Date(signal.closedAt * 1000).toISOString() : decision.candleClosedAt,
+      direction: signal?.direction, executionOutcome: entry.intent?.outcome, executionPhase: entry.intent?.phase };
+    const records = entry.decisionHistory ||= [];
+    if (JSON.stringify(records.at(-1)?.decision) !== JSON.stringify(record)) {
+      records.push({ recordedAt: new Date().toISOString(), decision: record });
+      entry.decisionHistory = records.slice(-200);
+    }
+  }
   const file = stateFile(config);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(state));
+  const fd = fs.openSync(temporary, 'w');
+  try { fs.writeFileSync(fd, JSON.stringify(state)); fs.fsyncSync(fd); }
+  finally { fs.closeSync(fd); }
   fs.renameSync(temporary, file);
 }
 
@@ -957,6 +974,13 @@ export class OpenLiquidityV2EthTradeMonitor {
         futuresDeltaFilter: { enabled: false, reason: 'Futures delta is observe-only, not an entry requirement.' },
         activatedAt: state.gapDailyEntry?.activatedAt, decision: state.gapDailyEntry?.decision,
         executionOutcome: state.gapDailyEntry?.intent?.outcome,
+        latestExecutionAttempt: state.gapDailyEntry?.intent ? {
+          signature: state.gapDailyEntry.intent.signature, attemptedAt: state.gapDailyEntry.intent.attemptedAt,
+          signal: state.gapDailyEntry.intent.signal, phase: state.gapDailyEntry.intent.phase,
+          outcome: state.gapDailyEntry.intent.outcome, error: state.gapDailyEntry.intent.error,
+          broadcastStartedAt: state.gapDailyEntry.intent.broadcastStartedAt
+        } : undefined,
+        recentDecisions: state.gapDailyEntry?.decisionHistory?.slice(-20),
         continuity: this.entryContinuity?.snapshot(),
         triggerEmail: { enabled: boolEnv('OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED', true),
           configured: Boolean(smtpSettingsFromEnv()),
@@ -1156,6 +1180,22 @@ export class OpenLiquidityV2EthTradeMonitor {
     const account = await this.executor.getAccountSnapshot([this.config.market]);
     const position = existingPosition(account, this.config.market);
     const age = Date.now() - Date.parse(intent.attemptedAt);
+    if (intent.phase === 'PREPARING') {
+      // Only checkpoint-capable executors write PREPARING. No entry send was possible yet.
+      intent.outcome = 'NOT_SUBMITTED';
+      const fresh = freshEthGapDailySignal(intent.signal, state.gapDailyEntry!.activatedAt || '');
+      if (!position && fresh && this.gapDailyEnabled() && this.autoTradeEnabled()) {
+        delete state.gapDailyEntry!.handledCandle;
+        state.gapDailyEntry!.decision = { outcome: 'RETRY_SAFE_BEFORE_BROADCAST', signal: intent.signal,
+          reason: 'No entry broadcast started; fresh Spot signal and risk must be revalidated before any new attempt.' };
+      } else {
+        state.gapDailyEntry!.decision = { outcome: 'SKIPPED', signal: intent.signal,
+          reason: position ? 'A position exists; the interrupted unsent entry will not add to it.'
+            : 'Interrupted entry was not broadcast and is now expired or disabled; no late entry.' };
+      }
+      writeState(state, this.config);
+      return;
+    }
     if (!position) {
       if (age > 300_000) intent.outcome = 'NO_POSITION';
       result.gapDailyEntryRecovery = { outcome: intent.outcome, reason: 'No confirmed position; the entry will not be resubmitted.' };
@@ -1225,22 +1265,31 @@ export class OpenLiquidityV2EthTradeMonitor {
         entry.decision = { outcome: 'NO_DAILY_BREAK', candleClosedAt: new Date(close).toISOString() };
         return;
       }
+      entry.decision = { outcome: 'DETECTED', signal, reason: 'Purple signal detected; execution is not yet confirmed.' };
+      this.capturePurpleTriggerEmail(state, signal, result);
       await this.coordinator.exclusive(() => this.executeGapDailyEntry(state, signal, result));
     } catch (error) {
       result.gapDailyEntryPending = true;
       entry.decision = { outcome: 'ERROR', at: nowNlIso(), reason: error instanceof Error ? error.message : String(error) };
       console.error(`${this.config.asset} Spot gap/Daily entry check failed:`, entry.decision);
     }
-    if (signal && boolEnv('OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED', true)) {
+    if (signal) this.capturePurpleTriggerEmail(state, signal, result);
+    result.gapDailyEntry = entry.decision;
+  }
+
+  private capturePurpleTriggerEmail(state: EthMonitorState, signal: EthGapDailySignal, result: any): void {
+    const entry = state.gapDailyEntry!;
+    if (boolEnv('OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED', true)) {
       const message = purpleTriggerEmail(this.config.market, signal, entry, result);
       const messages = entry.triggerEmails ||= [];
-      if (!messages.some(row => row.signature === message.signature)) {
-        messages.push(message);
+      const previous = messages.find(row => row.signature === message.signature);
+      if (!previous || !previous.sentAt) {
+        if (previous) Object.assign(previous, { subject: message.subject, body: message.body, outcome: message.outcome });
+        else messages.push(message);
         entry.triggerEmails = messages.slice(-250);
         writeState(state, this.config);
       }
     }
-    result.gapDailyEntry = entry.decision;
   }
 
   private async flushPurpleTriggerEmails(): Promise<void> {
@@ -1299,13 +1348,25 @@ export class OpenLiquidityV2EthTradeMonitor {
     await this.applyStatefulOrderCapacity(orderAlert, result);
     if (!freshEthGapDailySignal(signal, entry.activatedAt!)) return skip('Signal expired during order preparation.');
     entry.handledCandle = signal.closedAt * 1000;
-    entry.intent = { signature, attemptedAt: new Date().toISOString(), signal, plan, orderAlert, outcome: 'SUBMITTING' };
+    entry.intent = { signature, attemptedAt: new Date().toISOString(), signal, plan, orderAlert, outcome: 'SUBMITTING',
+      ...(this.executor.supportsEntrySubmissionCheckpoint ? { phase: 'PREPARING' as const } : {}) };
     state.lastTradeAttemptedSignature = signature;
     state.lastTradeAttemptedAt = entry.intent.attemptedAt;
     // Persist the order intent before any exchange mutation, including its no-TP policy.
     writeState(state, this.config);
     try {
-      const placement = await this.executor.placeOrder(orderAlert);
+      const beforeEntrySubmit = async () => {
+        if (!freshEthGapDailySignal(signal, entry.activatedAt!) || !this.gapDailyEnabled() || !this.autoTradeEnabled()) {
+          throw new Error('Purple entry expired or disabled before broadcast; no entry order sent.');
+        }
+        entry.intent!.phase = 'BROADCASTING';
+        entry.intent!.broadcastStartedAt = new Date().toISOString();
+        writeState(state, this.config);
+        console.log(`${this.config.asset} purple entry broadcast checkpoint:`, { signature, phase: entry.intent!.phase });
+      };
+      const placement = this.executor.supportsEntrySubmissionCheckpoint
+        ? await this.executor.placeOrder(orderAlert, { beforeEntrySubmit })
+        : await this.executor.placeOrder(orderAlert);
       if (dydxTargetFailedAndFlattened(placement)) {
         entry.intent.outcome = 'FLATTENED';
         entry.decision = { outcome: 'FLATTENED', reason: placement.reason, signal };
@@ -1321,6 +1382,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       await this.syncManagedOrders(state, result, { stopOnly: true });
       entry.decision = { ...state.lastTradeDecision, protection: result.dynamicSlSync };
     } catch (error) {
+      entry.intent.error = error instanceof Error ? error.message : String(error);
       if (entry.intent.outcome === 'SUBMITTING') entry.intent.outcome = 'UNKNOWN';
       writeState(state, this.config);
       try {

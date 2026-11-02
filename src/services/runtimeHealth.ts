@@ -10,6 +10,8 @@ export class RuntimeHealth {
       uptimeSeconds: Math.floor(process.uptime()), pid: process.pid, nodeVersion: process.version,
       supervised: process.env.SERVICE_SUPERVISED === '1',
       restarts: Number(process.env.SERVICE_RESTART_COUNT || 0),
+      memoryBudget: { oldSpaceMb: Number(process.env.SERVICE_HEAP_BUDGET_MB) || null,
+        containerLimitMb: Number(process.env.SERVICE_MEMORY_LIMIT_MB) || null },
       memoryMb: { rss: mb(usage.rss), heapUsed: mb(usage.heapUsed), heapTotal: mb(usage.heapTotal),
         external: mb(usage.external), arrayBuffers: mb(usage.arrayBuffers || 0), heapLimit: mb(heapLimit) },
       heapPressure: heapLimit > 0 && usage.heapUsed / heapLimit >= 0.85 };

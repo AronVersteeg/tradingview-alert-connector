@@ -11,7 +11,31 @@ Use [the saved export procedure](RENDER_LOG_EXPORT.md), not credentials from cha
 
 Render already restarts failed health checks automatically. `Service recovered`
 does not mean the application can never crash again. A larger persistent disk
-does not increase RAM. No heap limit or paid instance-size setting is changed here.
+does not increase RAM. No paid instance-size setting is changed here.
+
+The November 2 export does prove a heap OOM: SOL's candle closed at 18:00 UTC,
+the replica refreshed at 18:00:08, entry intake and risk preflight passed at
+18:00:14-15, and V8 aborted at 18:00:26 with a roughly 259 MiB heap limit. The
+supervisor restarted the child two seconds later. The native stack includes
+JSON.parse, but does not identify the JavaScript caller. There is no logged
+entry broadcast confirmation before the crash; absence of that log alone is
+not proof that nothing was submitted. Legacy uncertain intents remain protected
+against blind re-entry. See [entry continuity](ENTRY_CONTINUITY.md).
+
+## Container-Aware Heap Budget
+
+On Render only, the supervisor now reads the actual cgroup memory limit. When a
+finite 256-2048 MiB limit is proven and NODE_OPTIONS does not already specify a
+heap maximum, it assigns 60% of the container limit to V8 old space, capped at
+1024 MiB. For a proven 512 MiB container this is 307 MiB, leaving 205 MiB for
+native allocations, buffers, the supervisor and other overhead. This is not a
+guarantee against a container OOM. No limit is guessed from host RAM and no
+override is applied when cgroup data is unavailable or unbounded.
+
+Explicit `--max-old-space-size`, underscore variants and `--max-heap-size` in
+NODE_OPTIONS are respected. The effective V8 heap limit can differ from the old
+space setting. Check the startup `Service memory budget` log and health JSON
+`memoryBudget` alongside actual `memoryMb.heapLimit` and RSS after deployment.
 
 ## Automatic Process Recovery
 
@@ -75,6 +99,15 @@ rewritten or shortened, and no trading filter or sampling rule changes.
 Malformed/oversized rows fail explicitly with the source file preserved; an
 individual row is limited to 4 MiB. Very broad queries still take disk/CPU time.
 
+Monthly gap and liquidity-observation archive verification/index rebuilds now
+use the same bounded reader, with event-loop yields every 128 rows. Coverage
+audits retain hour counters and signature indexes, not all history objects.
+Append capture clones one evidence record at a time instead of a whole history
+batch; oversized pending captures are explicitly rejected. The append-only
+files, fingerprints and revision-chain validation remain intact. Full-history
+read APIs still retain the rows explicitly requested by a caller. This removes
+identified allocation peaks; it does not prove which JSON.parse caused the OOM.
+
 ## Verification
 
 Tests simulate 134 and SIGABRT exits, check capped backoff, no overlapping children,
@@ -83,6 +116,14 @@ isolated dummy child exits with 134 once, is recovered, then shuts down without
 a third launch. It imports no application, exchanges, collectors or SMTP.
 Reader tests cover UTF-8/chunk boundaries, CRLF, empty/unfinished files, descriptor
 cleanup, oversized rows, multi-megabyte histories and exact old/new sampling.
+
+The November 2 archive stress check generated 6,000 valid fingerprinted records
+(74,716,890 bytes) and verified them with an actual measured 67 MiB V8 heap limit.
+Peak sampled heap was 7.5 MiB and RSS 54.6 MiB in the isolated reader process.
+This is an archive-allocation test, not a measurement of full trading-service
+memory and not a production uptime guarantee. Checkpoint tests use mocked SDK
+submissions only, including fresh PREPARING recovery, uncertain-send refusal,
+expiry, disabled entries and persistence failure immediately before submission.
 
 Sources:
 - <https://render.com/docs/health-checks>

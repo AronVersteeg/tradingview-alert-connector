@@ -13,7 +13,7 @@ import {
   IndexerConfig
 } from '@dydxprotocol/v4-client-js';
 
-import { AlertObject } from '../../types';
+import { AlertObject, EntryExecutionOptions } from '../../types';
 import 'dotenv/config';
 import config from 'config';
 import crypto from 'crypto';
@@ -173,6 +173,7 @@ type PriceCandidate = {
 };
 
 type CorrectionOrderPriceReference = {
+  beforeEntrySubmit?: () => Promise<void>;
   price?: number;
   source: string;
   entryRiskLimit?: EntryRiskLimit;
@@ -579,11 +580,13 @@ export class DydxV4Client extends AbstractDexClient {
     };
   }
 
-  async placeOrder(alert: AlertObject): Promise<any> {
+  readonly supportsEntrySubmissionCheckpoint = true;
+
+  async placeOrder(alert: AlertObject, execution?: EntryExecutionOptions): Promise<any> {
     const market = this.normalizeMarket((alert as any).market);
 
     return this.withStatefulOrderQueue(() =>
-      this.withMarketQueue(market, () => this.placeOrderForMarket(market, alert))
+      this.withMarketQueue(market, () => this.placeOrderForMarket(market, alert, execution))
     );
   }
 
@@ -1453,7 +1456,8 @@ export class DydxV4Client extends AbstractDexClient {
 
   private async placeOrderForMarket(
     market: string,
-    alert: AlertObject
+    alert: AlertObject,
+    execution?: EntryExecutionOptions
   ): Promise<any> {
     const signal = this.getSignal(alert);
     const telemetry = this.getTradingViewTelemetry(alert);
@@ -1499,7 +1503,9 @@ export class DydxV4Client extends AbstractDexClient {
     const requestedTargetSize = this.getTargetSize(alert, Number((alert as any).size ?? 0));
     const preparedEntry = await this.prepareEntryRiskReference(market, requestedTargetSize, alert, telemetry);
     const targetSize = preparedEntry.targetSize;
-    const priceReference = preparedEntry.priceReference;
+    const priceReference = execution
+      ? { ...preparedEntry.priceReference, source: preparedEntry.priceReference?.source || 'entry', beforeEntrySubmit: execution.beforeEntrySubmit }
+      : preparedEntry.priceReference;
 
     console.log('Target position:', {
       market,
@@ -2858,6 +2864,8 @@ export class DydxV4Client extends AbstractDexClient {
           placedOrder.goodTilBlock = goodTilBlock.goodTilBlock;
           placedOrder.goodTilBlockBuffer = goodTilBlock.goodTilBlockForward;
 
+          // Persist ambiguity before the first possible entry broadcast; never retry an uncertain send blindly.
+          if (!reduceOnly) await priceReference?.beforeEntrySubmit?.();
           return this.client.placeOrder(
             this.subaccount,
             market,

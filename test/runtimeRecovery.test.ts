@@ -4,7 +4,25 @@ import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { RuntimeHealth } from '../src/services/runtimeHealth';
-const { createSupervisor } = require('../scripts/start-server.cjs');
+const { createSupervisor, runtimeMemoryBudget } = require('../scripts/start-server.cjs');
+
+describe('container-aware heap headroom', () => {
+  const mb = 1024 * 1024;
+  test('uses the smallest proven cgroup limit and reserves native/container memory', () => {
+    const read = (file: string) => file.endsWith('memory.max') ? String(512 * mb) : String(1024 * mb);
+    expect(runtimeMemoryBudget({ RENDER: 'true' }, read, 16 * 1024 * mb))
+      .toEqual({ memoryLimitMb: 512, oldSpaceMb: 307, reservedMb: 205 });
+  });
+  test.each(['--max-old-space-size=256', '--max_old_space_size 384', '--max-heap-size=400'])('preserves explicit NODE_OPTIONS: %s', flag => {
+    expect(runtimeMemoryBudget({ RENDER: 'true', NODE_OPTIONS: flag }, () => String(512 * mb))).toBeUndefined();
+  });
+  test('does not guess a host/container limit or change local and unconstrained processes', () => {
+    expect(runtimeMemoryBudget({}, () => String(512 * mb))).toBeUndefined();
+    expect(runtimeMemoryBudget({ RENDER: 'true' }, () => 'max')).toBeUndefined();
+    expect(runtimeMemoryBudget({ RENDER: 'true' }, () => { throw new Error('missing'); })).toBeUndefined();
+    expect(runtimeMemoryBudget({ RENDER: 'true' }, () => String(8 * 1024 * mb), 1024 * mb)).toBeUndefined();
+  });
+});
 
 describe('single-child trading service supervision', () => {
   let children: any[], spawn: jest.Mock, exit: jest.Mock, log: jest.Mock;

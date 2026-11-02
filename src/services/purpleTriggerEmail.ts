@@ -13,6 +13,8 @@ export function purpleTriggerEmail(market: string, signal: PurpleLineSignal, ent
   const decision = entry.decision?.signal?.time === signal.time || entry.decision?.outcome === 'ERROR' ? entry.decision : {};
   const outcome = intent?.outcome === 'CONFIRMED' ? 'PLACED'
     : intent?.outcome === 'FLATTENED' ? 'FLATTENED'
+    : intent?.outcome === 'NO_POSITION' ? 'NO_POSITION_OBSERVED'
+    : intent?.outcome === 'NOT_SUBMITTED' ? 'NOT_SUBMITTED'
     : ['SUBMITTING', 'UNKNOWN'].includes(intent?.outcome) ? 'UNCONFIRMED'
     : decision.outcome || (result.tradePlaced ? 'PLACED' : 'ERROR');
   const plan = intent?.plan?.activePlan;
@@ -33,6 +35,9 @@ export function purpleTriggerEmail(market: string, signal: PurpleLineSignal, ent
     decision.reason ? `Reason: ${decision.reason}` : '',
     decision.warning ? `Warning: ${decision.warning}` : '',
     outcome === 'UNCONFIRMED' ? 'Submission is uncertain; it is not proof of a failed or absent order. Reconciliation remains active.' : '',
+    outcome === 'DETECTED' ? 'The signal was saved before execution; no order or protective stop is confirmed by this message.' : '',
+    outcome === 'NO_POSITION_OBSERVED' ? 'Recovery observed no position. This is not proof that an earlier broadcast was never sent.' : '',
+    intent?.error ? `Execution error: ${intent.error}` : '',
     outcome === 'PLACED' && decision.size ? `Actual position size: ${decision.size}` : '',
     outcome === 'PLACED' && decision.entryPrice ? `dYdX entry: ${decision.entryPrice}` : '',
     plan?.stop?.price ? `Planned initial SL (${initialStopLabel}): ${plan.stop.price}` : '',

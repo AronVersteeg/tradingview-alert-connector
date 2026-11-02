@@ -42,6 +42,40 @@ New status: `execution.gapDailyEntry.continuity` contains readiness, heartbeat,
 original activation, whether this startup resumed, and its reason. This is proof
 of entry-monitor continuity only, not a guaranteed future exchange fill.
 
+## Interrupted Order Preparation (November 2)
+
+ETH/SOL purple entries now distinguish a durable `PREPARING` intent from a
+`BROADCASTING` intent. The dYdX executor advertises checkpoint support and calls
+the monitor immediately before the first possible entry SDK submission. The
+monitor fsyncs the BROADCASTING checkpoint before allowing that call. The
+checkpoint also rechecks signal freshness and the entry switches. A failed
+checkpoint prevents the entry SDK call; reduce-only protection is not gated by it.
+
+A recovered PREPARING intent proves that this executor had not started an entry
+broadcast. Only when the account is flat, the model is enabled and the original
+signal remains fresh can its handled marker be cleared. Normal Spot-signal,
+Daily-break, sizing, risk and account checks must then run again. Recovery itself
+does not submit an order. Existing positions are neither added to nor adopted
+from an unsent intent. Expired signals are not traded late.
+
+BROADCASTING and legacy intents without a phase remain uncertain. They are
+reconciled against the exchange and never blindly resubmitted. There remains a
+conservative ambiguity window between persisting BROADCASTING and receiving a
+confirmed exchange result. This is intentional duplicate-order prevention, not
+an exactly-once execution guarantee. Existing persisted stops are not migrated.
+
+The signal notification is persisted before execution, then updated with the
+execution outcome when available. If a crash interrupts that update, the queued
+mail explicitly reports DETECTED / no confirmed order or protective stop, rather
+than inventing a fill. Mail is best effort; SMTP acceptance followed by a crash
+before recording success can still cause a repeat. Entry execution never waits
+for SMTP. The optional purple-email switch is still respected.
+
+Status exposes `latestExecutionAttempt` (signal, phase, outcome, error, timestamps)
+and the latest 20 decisions from a bounded 200-decision durable audit. Current
+NO_INTRUSION/NO_DAILY_BREAK status no longer hides the last execution attempt.
+No credentials, account snapshot or full execution plan is exposed by this audit.
+
 ## Limits And The Next Availability Layer
 
 - No single Render instance can guarantee uninterrupted entry detection. Long

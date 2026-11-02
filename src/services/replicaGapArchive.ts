@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { jsonlLines, jsonlNeedsNewline } from './jsonlFile';
 
 type ArchiveAccuracy = 'causal-model-snapshot' | 'provider-observed-snapshot';
 export type ArchiveIdentity = { market: string; symbol: string; modelVersion: string; accuracy?: ArchiveAccuracy };
@@ -22,31 +23,47 @@ export function verifiedGapArchiveRows(text: string, identity: ArchiveIdentity):
   const rows: ArchiveRow[] = [], latest = new Map<string, string>();
   for (const line of text.split('\n').filter(Boolean)) {
     const stored = JSON.parse(line) as ArchiveRow;
-    const { observedAt, fingerprint, previousFingerprint, kind, recordedAt, ...facts } = stored;
-    const previous = latest.get(stored.candleStartedAt);
-    if (stored.version !== 1 || stored.market !== identity.market || stored.symbol !== identity.symbol ||
-        stored.modelVersion !== identity.modelVersion || identity.accuracy && stored.accuracy !== identity.accuracy ||
-        !['causal-model-snapshot', 'provider-observed-snapshot'].includes(stored.accuracy) ||
-        !Number.isFinite(Date.parse(stored.candleStartedAt)) || Date.parse(stored.candleStartedAt) % 3_600_000 ||
-        Date.parse(stored.candleClosedAt) !== Date.parse(stored.candleStartedAt) + 3_600_000 ||
-        !Number.isFinite(Date.parse(observedAt)) || Date.parse(observedAt) < Date.parse(stored.candleClosedAt) ||
-        !['first-seen', 'revision'].includes(kind) ||
-        kind === 'first-seen' && (previous !== undefined || previousFingerprint !== undefined) ||
-        kind === 'revision' && (previous === undefined || previousFingerprint !== previous) ||
-        crypto.createHash('sha256').update(JSON.stringify(facts)).digest('hex') !== fingerprint) {
-      throw new Error('Gap archive fingerprint or revision-chain mismatch; refusing to overwrite.');
-    }
-    latest.set(stored.candleStartedAt, fingerprint); rows.push(stored);
+    verifyGapArchiveRow(stored, identity, latest);
+    rows.push(stored);
   }
   return rows;
 }
 
-export async function readGapArchiveMonth(directory: string, identity: ArchiveIdentity, month: string) {
+function verifyGapArchiveRow(stored: ArchiveRow, identity: ArchiveIdentity, latest: Map<string, string>): void {
+  const { observedAt, fingerprint, previousFingerprint, kind, recordedAt, ...facts } = stored;
+  const previous = latest.get(stored.candleStartedAt);
+  if (stored.version !== 1 || stored.market !== identity.market || stored.symbol !== identity.symbol ||
+      stored.modelVersion !== identity.modelVersion || identity.accuracy && stored.accuracy !== identity.accuracy ||
+      !['causal-model-snapshot', 'provider-observed-snapshot'].includes(stored.accuracy) ||
+      !Number.isFinite(Date.parse(stored.candleStartedAt)) || Date.parse(stored.candleStartedAt) % 3_600_000 ||
+      Date.parse(stored.candleClosedAt) !== Date.parse(stored.candleStartedAt) + 3_600_000 ||
+      !Number.isFinite(Date.parse(observedAt)) || Date.parse(observedAt) < Date.parse(stored.candleClosedAt) ||
+      !['first-seen', 'revision'].includes(kind) ||
+      kind === 'first-seen' && (previous !== undefined || previousFingerprint !== undefined) ||
+      kind === 'revision' && (previous === undefined || previousFingerprint !== previous) ||
+      crypto.createHash('sha256').update(JSON.stringify(facts)).digest('hex') !== fingerprint) {
+    throw new Error('Gap archive fingerprint or revision-chain mismatch; refusing to overwrite.');
+  }
+  latest.set(stored.candleStartedAt, fingerprint);
+}
+
+async function scanGapArchiveFile(file: string, identity: ArchiveIdentity, visit: (row: ArchiveRow) => void): Promise<void> {
+  const latest = new Map<string, string>();
+  let count = 0;
+  for (const line of jsonlLines(file)) {
+    const row = JSON.parse(line) as ArchiveRow;
+    verifyGapArchiveRow(row, identity, latest);
+    visit(row);
+    if (++count % 128 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+  }
+}
+
+export async function readGapArchiveMonth(directory: string, identity: ArchiveIdentity, month: string, visit?: (row: ArchiveRow) => void) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !/^[a-zA-Z0-9._-]+$/.test(identity.modelVersion)) throw new Error('Invalid gap archive month or model.');
-  let text: string;
-  try { text = await fs.promises.readFile(path.join(directory, 'gap-observations', `${identity.modelVersion}-${month}.jsonl`), 'utf8'); }
+  const rows: ArchiveRow[] = [];
+  try { await scanGapArchiveFile(path.join(directory, 'gap-observations', `${identity.modelVersion}-${month}.jsonl`), identity, visit || (row => rows.push(row))); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { rows: [], integrity: 'verified' as const, missing: true }; throw error; }
-  return { rows: verifiedGapArchiveRows(text, identity), integrity: 'verified' as const, missing: false };
+  return { rows, integrity: 'verified' as const, missing: false };
 }
 
 // Independent of the rolling 500-frame replay. A later calculation can append
@@ -123,13 +140,11 @@ export class ReplicaGapArchive {
         let needsNewline = false;
         if (!index) {
           index = new Map();
-          let text = '';
-          try { text = await fs.promises.readFile(file, 'utf8'); }
-          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-          needsNewline = Boolean(text && !text.endsWith('\n'));
-          for (const stored of verifiedGapArchiveRows(text, identity)) {
-            index.set(stored.candleStartedAt, stored.fingerprint);
+          try {
+            needsNewline = jsonlNeedsNewline(file);
+            await scanGapArchiveFile(file, identity, stored => index!.set(stored.candleStartedAt, stored.fingerprint));
           }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
         }
         const next = new Map(index), additions: ArchiveRow[] = [];
         for (const row of rows) {

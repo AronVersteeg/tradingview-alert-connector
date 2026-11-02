@@ -239,4 +239,46 @@ describe('managed entry stop-risk protection', () => {
     expect(client.cancelOpenOrders).not.toHaveBeenCalled();
     expect(client.indexer.markets.getPerpetualMarketOrderbook).not.toHaveBeenCalled();
   });
+
+  test('threads the checkpoint through risk preparation without invoking it before cancellations', async () => {
+    const { client, alert } = clientAndAlert();
+    const checkpoint = jest.fn();
+    await client.placeOrderForMarket('ETH-USD', alert, { beforeEntrySubmit: checkpoint });
+    expect(client.reachTargetPositionOrFailsafeFlat).toHaveBeenCalledWith('ETH-USD', .6,
+      expect.objectContaining({ beforeEntrySubmit: checkpoint }));
+    expect(checkpoint).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])('awaits the durable checkpoint only for entries, reduceOnly=%s', async reduceOnly => {
+    const client: any = new DydxV4Client();
+    const order = jest.fn().mockResolvedValue({ code: 0 });
+    client.client = { placeOrder: order };
+    client.getMarketInfoBestEffort = jest.fn().mockResolvedValue({ stepSize: .1 });
+    client.getCorrectionOrderSizeCheck = jest.fn().mockReturnValue({ roundedSize: 1, minOrderSize: .1, supported: true });
+    client.assertCorrectionOrderSizeSupported = jest.fn();
+    client.resolveCorrectionOrderPricing = jest.fn().mockResolvedValue({ price: 100 });
+    client.getMarketOrderGoodTilBlock = jest.fn().mockResolvedValue({ currentHeight: 1, goodTilBlock: 21 });
+    client.submitDydxTransaction = jest.fn().mockImplementation(async (_label, work) => work());
+    const checkpoint = jest.fn().mockImplementation(async () => { expect(order).not.toHaveBeenCalled(); });
+    await client.placeCorrectionOrder('ETH-USD', 'BUY', 1, reduceOnly, { source: 'test', beforeEntrySubmit: checkpoint });
+    expect(checkpoint).toHaveBeenCalledTimes(reduceOnly ? 0 : 1);
+    expect(order).toHaveBeenCalledTimes(1);
+  });
+
+  test('cannot broadcast an entry when the durable checkpoint fails', async () => {
+    const client: any = new DydxV4Client();
+    client.client = { placeOrder: jest.fn() };
+    client.getMarketInfoBestEffort = jest.fn().mockResolvedValue({});
+    client.getCorrectionOrderSizeCheck = jest.fn().mockReturnValue({ roundedSize: 1, supported: true });
+    client.assertCorrectionOrderSizeSupported = jest.fn();
+    client.resolveCorrectionOrderPricing = jest.fn().mockResolvedValue({ price: 100 });
+    client.getMarketOrderGoodTilBlock = jest.fn().mockResolvedValue({ currentHeight: 1, goodTilBlock: 21 });
+    client.submitDydxTransaction = jest.fn().mockImplementation(async (_label, work) => work());
+    client.logOrderDiagnostics = jest.fn();
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(client.placeCorrectionOrder('ETH-USD', 'BUY', 1, false, {
+      source: 'test', beforeEntrySubmit: async () => { throw new Error('disk full'); }
+    })).rejects.toThrow('disk full');
+    expect(client.client.placeOrder).not.toHaveBeenCalled();
+  });
 });

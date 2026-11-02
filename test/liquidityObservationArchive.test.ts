@@ -96,6 +96,30 @@ describe('Durable, independent liquidity evidence archive', () => {
     fs.writeFileSync(file, original);
   });
 
+  test('streams monthly verification and resumed indexes without whole-file reads or retaining audit rows', async () => {
+    const records = Array.from({ length: 300 }, (_, i) => candle(i));
+    await archiveSourceCandles(archive, records);
+    const gaps = new ReplicaGapArchive();
+    await gaps.append(directory, identity, records.map(row => ({ effectiveAt: new Date(row.timestampMs).toISOString(),
+      observedAt: new Date().toISOString(), referencePrice: 64000, open: 64000, high: 65000, low: 63000, close: 64500,
+      sourceHours: 8760, gap: { left: 61000, right: 67000 } })));
+    const read = jest.spyOn(fs.promises, 'readFile').mockRejectedValue(new Error('Whole-file read forbidden'));
+    const syncRead = jest.spyOn(fs, 'readFileSync').mockImplementation(() => { throw new Error('Whole-file read forbidden'); });
+    const fresh = new LiquidityObservationArchive(directory, identity), freshGaps = new ReplicaGapArchive();
+    try {
+      await archiveSourceCandles(fresh, [candle(300)]);
+      await freshGaps.append(directory, identity, [{ effectiveAt: new Date(base + 300 * hour).toISOString(),
+        observedAt: new Date().toISOString(), referencePrice: 64000, open: 64000, high: 65000, low: 63000, close: 64500,
+        sourceHours: 8760, gap: { left: 61000, right: 67000 } }]);
+      const audit = await fresh.audit('2026-08');
+      expect(audit.candles.records).toBe(301); expect(audit.gaps.records).toBe(301);
+      const visit = jest.fn();
+      expect((await fresh.read('source-candles', '2026-08', visit)).rows).toEqual([]);
+      expect(visit).toHaveBeenCalledTimes(301);
+      expect(read).not.toHaveBeenCalled(); expect(syncRead).not.toHaveBeenCalled();
+    } finally { fresh.close(); gaps.close(); freshGaps.close(); }
+  });
+
   test('rejects open/invalid candles, other identities and unsafe month paths', async () => {
     await expect(archiveSourceCandles(archive, [{ ...candle(0), closeTimeMs: Date.now() + hour }])).rejects.toThrow('closed');
     await expect(archiveSourceCandles(archive, [{ ...candle(0), high: 1 }])).rejects.toThrow('closed');

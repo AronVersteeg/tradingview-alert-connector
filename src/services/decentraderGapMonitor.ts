@@ -473,7 +473,8 @@ export type DecentraderTradeExecutor = {
       orderSlots: number;
     }>;
   }>;
-  placeOrder: (alert: AlertObject) => Promise<any>;
+  supportsEntrySubmissionCheckpoint?: boolean;
+  placeOrder: (alert: AlertObject, execution?: { beforeEntrySubmit: () => Promise<void> }) => Promise<any>;
   syncTakeProfits?: (alert: AlertObject) => Promise<any>;
   syncTrailingStop?: (alert: AlertObject) => Promise<any>;
 };

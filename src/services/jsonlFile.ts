@@ -3,6 +3,16 @@ import fs from 'fs';
 const CHUNK = 64 * 1024;
 const MAX_LINE = 4 * 1024 * 1024;
 
+export function jsonlNeedsNewline(file: string): boolean {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    if (!size) return false;
+    const byte = Buffer.alloc(1);
+    return fs.readSync(fd, byte, 0, 1, size - 1) === 1 && byte[0] !== 10;
+  } finally { fs.closeSync(fd); }
+}
+
 // Never materialize a complete history file just to inspect or sample its rows.
 export function* jsonlLines(file: string): Generator<string> {
   const fd = fs.openSync(file, 'r'), buffer = Buffer.alloc(CHUNK);
