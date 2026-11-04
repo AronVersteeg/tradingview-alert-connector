@@ -22,42 +22,8 @@ export type PurpleLineSignal = {
 
 export type EthGapDailySignal = PurpleLineSignal;
 
-export const PURPLE_BODY_STOP_FRACTION = 0.25;
-
-export function withPurpleDydxBodyQuarterStop(activePlan: any, candle: any, signal: EthGapDailySignal, referencePrice: number, asset = 'ETH'): any {
-  const sizingStop = activePlan?.stop;
-  if (!sizingStop?.valid || !Number.isFinite(Number(sizingStop.price)) || !(Number(sizingStop.price) > 0) ||
-    !sizingStop.fractal || activePlan.status === 'invalid-stop') {
-    throw new Error(sizingStop?.reason || `${asset} requires a valid original dYdX fractal for order sizing.`);
-  }
-  const open = Number(candle?.openRef), close = Number(candle?.closeRef);
-  const high = Number(candle?.highRef), low = Number(candle?.lowRef);
-  if (candle?.fractalCandleSource !== 'dydx-1h' || Date.parse(candle.timestamp) !== signal.time * 1000 ||
-    signal.closedAt !== signal.time + 3600 || signal.closedAt * 1000 > Date.now() ||
-    ![open, close, high, low, referencePrice].every(value => Number.isFinite(value) && value > 0) ||
-    low > Math.min(open, close) || high < Math.max(open, close)) {
-    throw new Error(`${asset} quarter-body SL requires valid closed dYdX OHLC from the exact Binance signal hour.`);
-  }
-  if (activePlan.direction !== signal.direction) throw new Error(`${asset} quarter-body SL direction does not match the entry signal.`);
-  const bodyStopPrice = open + PURPLE_BODY_STOP_FRACTION * (close - open);
-  if (signal.direction === 'long' ? bodyStopPrice >= referencePrice : bodyStopPrice <= referencePrice) {
-    throw new Error(`${asset} dYdX quarter-body SL is not on the protective side of the current oracle price.`);
-  }
-  const distance = Math.abs(referencePrice - bodyStopPrice), riskPct = distance / Math.max(1, referencePrice);
-  if (Number.isFinite(sizingStop.maxDistancePct) && riskPct > sizingStop.maxDistancePct) {
-    throw new Error(`${asset} dYdX quarter-body SL exceeds the existing maximum stop distance.`);
-  }
-  // Keep sizing and the confirmed dYdX fractal anchor; replace only the execution stop price.
-  return { ...activePlan, sizingStop: { ...sizingStop, fractal: { ...sizingStop.fractal } },
-    stop: { ...sizingStop, price: bodyStopPrice, source: 'dydx-signal-body-quarter', distance, riskPct,
-      buffer: 0, adjustedToMinDistance: false, wickGuardPrice: undefined, wickGuardSource: undefined,
-      reason: 'dYdX signal-body SL at 25% from open; original confirmed fractal retained as the trailing anchor.' },
-    initialStopPolicy: { mode: 'signal-body-quarter', bodyFraction: PURPLE_BODY_STOP_FRACTION, candleSource: 'dydx-1h',
-      candleStartedAt: new Date(signal.time * 1000).toISOString(), candleClosedAt: new Date(signal.closedAt * 1000).toISOString(),
-      open, close, bodyStopPrice, sizingStopPrice: sizingStop.price, sizingSource: 'dydx-fractal',
-      fractalPlannedStopRiskUsd: activePlan.sizing?.plannedStopRiskUsd,
-      bodyStopPlannedStopRiskUsd: Number(activePlan.sizing?.size) * distance } };
-}
+export { DYDX_BODY_STOP_FRACTION as PURPLE_BODY_STOP_FRACTION,
+  withDydxBodyQuarterStop as withPurpleDydxBodyQuarterStop } from './dydxSignalBodyStop';
 
 export type EthEntryFuturesDelta = {
   symbol: 'ETHUSDT'; venue: 'Binance USD-M Futures'; interval: '5m';

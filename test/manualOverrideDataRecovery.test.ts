@@ -42,6 +42,12 @@ describe('Manual entry recovery from unavailable candle data', () => {
     return [[open, '79000', '81000', '78900', '80100', '1', open + 3_600_000 - 1]];
   }
 
+  test('exposes the current manual stop policy without executing or fetching a candle', () => {
+    expect(monitor.getStatus().initialStop).toMatchObject({ mode: 'signal-body-quarter', bodyFraction: .25,
+      candleSource: 'dydx-1h', sameSignalHour: true, sizingSource: 'dydx-fractal', tightenOnly: true });
+    expect(execute).not.toHaveBeenCalled(); expect(binanceGet).not.toHaveBeenCalled();
+  });
+
   test('keeps the plan armed and retries shortly after the Binance cooldown, not an hour later', async () => {
     (binanceGet as jest.Mock).mockRejectedValue(new Error('cooldown active'));
     const retryAt = Date.now() + 300_000;
@@ -72,5 +78,34 @@ describe('Manual entry recovery from unavailable candle data', () => {
     await monitor.checkOnce();
     expect(binanceGet).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  test('keeps a quarter-body entry armed while dYdX publishes the same hour, retries promptly and mails only the final result', async () => {
+    const email = jest.fn(async () => ({ sent: true }));
+    monitor.configureEntryHandler({ executeManualBtcEntry: execute, sendManualBtcTriggerEmail: email });
+    (binanceGet as jest.Mock).mockResolvedValue({ data: rows(11) });
+    execute.mockResolvedValueOnce({ tradePlaced: false, tradeDeferred: true, tradePendingData: true,
+      tradeSkipped: 'Awaiting the same-hour dYdX body.' });
+    await monitor.checkOnce();
+    expect(readBtcManualTradeOverrideStore().overrides[0].status).toBe('ARMED');
+    expect(email).not.toHaveBeenCalled();
+    (monitor as any).scheduleNextRun();
+    expect(monitor.getStatus().nextRunAt).toBe('2026-10-02T12:02:00.000Z');
+    await monitor.checkOnce(); await monitor.checkOnce();
+    expect(readBtcManualTradeOverrideStore().overrides[0].status).toBe('TRIGGERED');
+    expect(execute).toHaveBeenCalledTimes(2); expect(email).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][0].signalCandleStartedAt).toBe(execute.mock.calls[1][0].signalCandleStartedAt);
+    expect(execute.mock.calls[0][0].signature).toBe(execute.mock.calls[1][0].signature);
+  });
+
+  test('does not widen the existing entry freshness window while waiting for dYdX', async () => {
+    (binanceGet as jest.Mock).mockResolvedValue({ data: rows(11) });
+    execute.mockResolvedValue({ tradePlaced: false, tradeDeferred: true, tradePendingData: true });
+    await monitor.checkOnce();
+    jest.setSystemTime(Date.parse('2026-10-02T12:16:00Z'));
+    await monitor.checkOnce();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(readBtcManualTradeOverrideStore().overrides[0].status).toBe('ARMED');
+    expect(monitor.getStatus().retryData).toBe(false);
   });
 });

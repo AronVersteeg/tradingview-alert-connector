@@ -152,7 +152,7 @@ describe('managed position safety independent from entry scanning', () => {
     expect(JSON.parse(fs.readFileSync(monitor.getStatus().stateFile, 'utf8')).managedPosition).toBeUndefined();
   });
 
-  test('V2 manual entry registers the shared Williams stop, locked TPs and trailing ownership', async () => {
+  test('V2 manual entry registers the quarter-body stop, locked TPs and original Williams trailing anchor', async () => {
     process.env.MANUAL_ENTRY_TP_OVERRIDE_ENABLED = 'true';
     process.env.OPEN_LIQUIDITY_V2_ETH_AUTO_TRADE_ENABLED = 'true';
     const monitor = new OpenLiquidityV2EthTradeMonitor({} as any) as any;
@@ -169,7 +169,9 @@ describe('managed position safety independent from entry scanning', () => {
     monitor.getTradePlan = jest.fn().mockResolvedValue({
       market: 'ETH-USD',
       price: 120,
-      timestamp: '2026-09-25 13:00:00',
+      timestamp: '2026-09-25 12:00:00',
+      stopReferenceCandle: { timestamp: '2026-09-25T12:00:00.000Z', fractalCandleSource: 'dydx-1h',
+        openRef: 114, closeRef: 122, highRef: 123, lowRef: 113 },
       marketInfo: { oraclePrice: 120, status: 'ACTIVE', stepSize: 0.001 },
       activePlan: {
         direction: 'long',
@@ -204,7 +206,7 @@ describe('managed position safety independent from entry scanning', () => {
     expect(result.tradePlaced).toBe(true);
     expect(orders.placeOrder).toHaveBeenCalledWith(expect.objectContaining({
       strategy: 'open_liquidity_v2_eth_manual_entry_tp_override',
-      static_sl: 110,
+      static_sl: 116,
       take_profits: [
         expect.objectContaining({ price: 135, size: 0.03, manual_locked: true }),
         expect.objectContaining({ price: 145, size: 0.02, manual_locked: true })
@@ -213,7 +215,8 @@ describe('managed position safety independent from entry scanning', () => {
     expect(JSON.parse(fs.readFileSync(monitor.getStatus().stateFile, 'utf8')).managedPosition).toMatchObject({
       market: 'ETH-USD',
       direction: 'long',
-      currentStop: 110,
+      currentStop: 116,
+      currentStopFractalTimestamp: '2026-09-25T10:00:00.000Z',
       currentStopFractalCandleSource: 'dydx-1h',
       takeProfitMode: 'manual-locked',
       takeProfits: [

@@ -3,6 +3,7 @@ import fs from 'fs';
 import net from 'net';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
+import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './dydxSignalBodyStop';
 import { GapProjectionHistory } from './decentraderGapProjectionHistory';
 import { ReplicaGapArchive } from './replicaGapArchive';
 import { decentraderObservationArchive } from './liquidityObservationArchive';
@@ -7875,7 +7876,7 @@ export class DecentraderGapMonitor {
           });
         }
 
-        const plan = await this.getTradePlan(account, market, request.direction, 'manual-override');
+        let plan = await this.getTradePlan(account, market, request.direction, 'manual-override');
         if (
           !plan.activePlan ||
           plan.activePlan.direction !== request.direction ||
@@ -7891,6 +7892,7 @@ export class DecentraderGapMonitor {
           return result;
         }
 
+        plan = withManualDydxBodyQuarterPlan(plan, request, 'BTC');
         const orderAlert = buildDecentraderOrderAlert(plan, request.signature);
         const manualTpLocked = request.takeProfits.length > 0;
         if (manualTpLocked) {
@@ -7906,9 +7908,11 @@ export class DecentraderGapMonitor {
         (orderAlert as any).manual_entry_override = { ...request, manualTpLocked };
         (orderAlert as any).decentrader = {
           ...(orderAlert as any).decentrader,
+          sizingStop: plan.activePlan.sizingStop,
+          initialStopPolicy: plan.activePlan.initialStopPolicy,
           note: manualTpLocked
-            ? 'Manual BTC 1H close entry with locked manual TP ladder and automatic Williams SL/trailing.'
-            : 'Manual BTC 1H close entry with automatic map TPs and automatic Williams SL/trailing.'
+            ? 'Manual BTC entry with locked TPs; dYdX fractal sizing, same-hour dYdX quarter-body initial SL and Williams trailing.'
+            : 'Manual BTC entry with map TPs; dYdX fractal sizing, same-hour dYdX quarter-body initial SL and Williams trailing.'
         };
         state.lastTradeAttemptedSignature = request.signature;
         state.lastTradeAttemptedAt = nowNlIso();
@@ -7983,6 +7987,7 @@ export class DecentraderGapMonitor {
           market,
           direction: request.direction,
           signature: request.signature,
+          initialStopPolicy: plan.activePlan.initialStopPolicy,
           size: Math.abs(placedPosition.size),
           entryPrice: placedPosition.entryPrice,
           stop: numberOrZero((orderAlert as any).static_sl),
@@ -7996,6 +8001,8 @@ export class DecentraderGapMonitor {
         return result;
       }));
     } catch (error) {
+      if (error instanceof ManualStopCandlePendingError) return { ...result, tradeDeferred: true,
+        tradePendingData: true, tradeSkipped: error.message };
       result.tradeError = error instanceof Error ? error.message : String(error);
       console.error('BTC manual entry/TP override failed:', error);
       return result;
@@ -8035,7 +8042,8 @@ export class DecentraderGapMonitor {
       `Order result: ${outcome}`,
       decision.entryPrice ? `dYdX entry: ${money(numberOrZero(decision.entryPrice))}` : '',
       decision.size ? `Position size: ${numberOrZero(decision.size)}` : '',
-      decision.stop ? `Williams SL: ${money(numberOrZero(decision.stop))}` : '',
+      decision.stop ? `${decision.initialStopPolicy?.mode === 'signal-body-quarter'
+        ? 'Initial SL (dYdX body 25% from open)' : 'Williams SL'}: ${money(numberOrZero(decision.stop))}` : '',
       ...tpLines
     ].filter(Boolean).join('\n');
     const subject = btcManualTriggerEmailSubject(request);
@@ -8116,6 +8124,7 @@ export class DecentraderGapMonitor {
       symbol: config.symbol,
       market: normalizedMarket,
       fractalCandleSource: 'dydx-1h',
+      stopReferenceCandle: fractalRows[fractalFrameIndex],
       timestamp: String(frame.timestamp || ''),
       timestampNl: nlTime(frame.timestamp),
       price,

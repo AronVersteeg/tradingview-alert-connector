@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
+import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './dydxSignalBodyStop';
 import { EthGapDailySignal, EthEntryFuturesDelta,
   freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyQuarterStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
 import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
@@ -1439,6 +1440,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       symbol: this.config.symbol,
       market: this.config.market,
       fractalCandleSource: 'dydx-1h',
+      stopReferenceCandle: fractalRows[fractalFrameIndex],
       timestamp: frame.t,
       timestampNl: nlTime(frame.t),
       price: finite(frame.price),
@@ -1755,7 +1757,7 @@ export class OpenLiquidityV2EthTradeMonitor {
           });
         }
 
-        const plan = await this.getTradePlan(account, undefined, request.direction);
+        let plan = await this.getTradePlan(account, undefined, request.direction);
         const marketStatus = String(plan.marketInfo?.status || '').trim().toUpperCase();
         if (marketStatus && marketStatus !== 'ACTIVE') {
           result.tradeSkipped = `${this.config.market} is ${marketStatus}; no live order was submitted.`;
@@ -1776,6 +1778,7 @@ export class OpenLiquidityV2EthTradeMonitor {
           return result;
         }
 
+        plan = withManualDydxBodyQuarterPlan(plan, request, this.config.asset);
         const orderAlert = buildDecentraderOrderAlert(plan, request.signature);
         const manualTpLocked = request.takeProfits.length > 0;
         if (manualTpLocked) {
@@ -1791,9 +1794,11 @@ export class OpenLiquidityV2EthTradeMonitor {
         (orderAlert as any).manual_entry_override = { ...request, manualTpLocked };
         (orderAlert as any).decentrader = {
           ...(orderAlert as any).decentrader,
+          sizingStop: plan.activePlan.sizingStop,
+          initialStopPolicy: plan.activePlan.initialStopPolicy,
           note: manualTpLocked
-            ? `Manual ${this.config.asset} 1H close entry with locked manual TP ladder and automatic Williams SL/trailing.`
-            : `Manual ${this.config.asset} 1H close entry with automatic map TPs and automatic Williams SL/trailing.`
+            ? `Manual ${this.config.asset} entry with locked TPs; dYdX fractal sizing, same-hour dYdX quarter-body initial SL and Williams trailing.`
+            : `Manual ${this.config.asset} entry with map TPs; dYdX fractal sizing, same-hour dYdX quarter-body initial SL and Williams trailing.`
         };
         state.lastTradeAttemptedSignature = request.signature;
         state.lastTradeAttemptedAt = nowNlIso();
@@ -1844,6 +1849,7 @@ export class OpenLiquidityV2EthTradeMonitor {
             signal: request
           }
         );
+        state.lastTradeDecision.initialStopPolicy = plan.activePlan.initialStopPolicy;
         result.tradePlaced = true;
         result.tradeDecision = state.lastTradeDecision;
         if (outcome === 'RECOVERED_AFTER_PARTIAL_EXECUTION') {
@@ -1853,6 +1859,8 @@ export class OpenLiquidityV2EthTradeMonitor {
         return result;
       }));
     } catch (error) {
+      if (error instanceof ManualStopCandlePendingError) return { ...result, tradeDeferred: true,
+        tradePendingData: true, tradeSkipped: error.message };
       result.tradeError = error instanceof Error ? error.message : String(error);
       console.error(`${this.config.asset} manual entry/TP override failed:`, error);
       return result;
@@ -1887,7 +1895,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       `Order result: ${outcome}`,
       decision.entryPrice ? `dYdX entry: ${decision.entryPrice}` : '',
       decision.size ? `Position size: ${decision.size}` : '',
-      decision.stop ? `Williams SL: ${decision.stop}` : '',
+      decision.stop ? `${decision.initialStopPolicy?.mode === 'signal-body-quarter'
+        ? 'Initial SL (dYdX body 25% from open)' : 'Williams SL'}: ${decision.stop}` : '',
       ...tpLines
     ].filter(Boolean).join('\n');
     const subject = btcManualTriggerEmailSubject(request);

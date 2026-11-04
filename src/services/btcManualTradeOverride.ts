@@ -4,6 +4,7 @@ import path from 'path';
 import { binanceGet, binanceRetryAt } from './binanceHttp';
 import { binanceHourlyCloseFeed } from './binanceHourlyCloseFeed';
 import { allocateStepSizes } from './decentraderExecutionPolicy';
+import { DYDX_BODY_STOP_FRACTION } from './dydxSignalBodyStop';
 
 const HOUR_MS = 60 * 60_000;
 const CLOSE_BUFFER_MS = 5_000;
@@ -504,6 +505,9 @@ export class BtcManualTradeOverrideMonitor {
       market: this.config.market,
       asset: this.config.asset,
       symbol: this.config.symbol,
+      initialStop: { mode: 'signal-body-quarter', bodyFraction: DYDX_BODY_STOP_FRACTION,
+        candleSource: 'dydx-1h', sameSignalHour: true, bufferPct: 0,
+        sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
       ...this.status,
       overrides: store.overrides,
       override: activeOverride || store.overrides[0]
@@ -738,6 +742,7 @@ export class BtcManualTradeOverrideMonitor {
         : { tradePlaced: false, tradeError: `No ${this.config.asset} manual entry method is configured.` };
     }
     if (result?.tradeDeferred) {
+      if (result.tradePendingData) this.status.retryData = true;
       state.status = 'ARMED';
       state.result = result;
       state.triggeredAt = undefined;
