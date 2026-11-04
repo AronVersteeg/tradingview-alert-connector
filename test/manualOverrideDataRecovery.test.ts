@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { BtcManualTradeOverrideMonitor, readBtcManualTradeOverrideStore } from '../src/services/btcManualTradeOverride';
+import { BtcManualTradeOverrideMonitor, manualTradeOverrideConfigForMarket, readBtcManualTradeOverrideStore } from '../src/services/btcManualTradeOverride';
 import { binanceGet, binanceRetryAt } from '../src/services/binanceHttp';
 import { binanceHourlyCloseFeed } from '../src/services/binanceHourlyCloseFeed';
 
@@ -71,13 +71,30 @@ describe('Manual entry recovery from unavailable candle data', () => {
     expect(readBtcManualTradeOverrideStore().overrides[0].status).toBe('TRIGGERED');
   });
 
-  test('uses the same Futures candle from the stream during a REST ban, without REST requests', async () => {
-    (binanceGet as jest.Mock).mockRejectedValue(new Error('cooldown active'));
+  test('BTC ignores the Futures stream and triggers only from Spot closes', async () => {
+    (binanceGet as jest.Mock).mockResolvedValue({ data: rows(11) });
     const openTime = Date.UTC(2026, 9, 2, 11);
-    (binanceHourlyCloseFeed.latest as jest.Mock).mockReturnValue({ symbol: 'BTCUSDT', openTime, closeTime: openTime + 3_600_000 - 1, close: '80100' });
+    (binanceHourlyCloseFeed.latest as jest.Mock).mockReturnValue({ symbol: 'BTCUSDT', openTime, closeTime: openTime + 3_600_000 - 1, close: '79900' });
     await monitor.checkOnce();
-    expect(binanceGet).not.toHaveBeenCalled();
+    expect(binanceHourlyCloseFeed.latest).not.toHaveBeenCalled();
+    expect(binanceGet).toHaveBeenCalledWith('https://api.binance.com/api/v3/klines', expect.objectContaining({ params: { symbol: 'BTCUSDT', interval: '1h', limit: 12 } }));
     expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0][0].signalClose).toBe(80100);
+    expect(monitor.getStatus().lastCandleObservation.source).toBe('binance-spot');
+  });
+
+  test('does not change the existing non-BTC manual Futures source', async () => {
+    process.env.SOL_MANUAL_TRADE_OVERRIDE_FILE = path.join(directory, 'sol-plans.json');
+    const sol = new BtcManualTradeOverrideMonitor(manualTradeOverrideConfigForMarket('SOL-USD')!);
+    sol.configureEntryHandler({ executeManualEntry: execute, sendManualTriggerEmail: async () => ({ sent: true }) });
+    jest.setSystemTime(Date.parse('2026-10-02T11:30:00Z'));
+    sol.arm({ direction: 'long', closeTrigger: 100, takeProfits: [] });
+    jest.setSystemTime(Date.parse('2026-10-02T12:01:00Z'));
+    const openTime = Date.UTC(2026, 9, 2, 11);
+    (binanceHourlyCloseFeed.latest as jest.Mock).mockReturnValue({ symbol: 'SOLUSDT', openTime, closeTime: openTime + 3_600_000 - 1, close: '110' });
+    await sol.checkOnce();
+    expect(binanceGet).not.toHaveBeenCalled(); expect(execute).toHaveBeenCalledTimes(1);
+    expect(sol.getStatus().lastCandleObservation.source).toBe('binance-futures');
   });
 
   test('keeps a quarter-body entry armed while dYdX publishes the same hour, retries promptly and mails only the final result', async () => {

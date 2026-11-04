@@ -1,4 +1,8 @@
+import { btcEntryMode } from './btcEntryMode';
+
 export const PURPLE_LINE_SETUPS = {
+  'BTC-USD': { asset: 'BTC', symbol: 'BTCUSDT', priceStepUsd: 100,
+    modelVersion: 'binance-spot-liquidation-cohorts-v2.4', enabledEnv: 'BTC_ENTRY_MODE' },
   'ETH-USD': { asset: 'ETH', symbol: 'ETHUSDT', priceStepUsd: 5,
     modelVersion: 'binance-spot-eth-liquidation-cohorts-v2.1',
     enabledEnv: 'OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_ENABLED' },
@@ -15,6 +19,7 @@ export function purpleLineSetupForMarket(market: string) {
 }
 
 export function purpleLineEntryEnabled(market: string): boolean {
+  if (market === 'BTC-USD') return btcEntryMode() === 'purple';
   const config = purpleLineSetupForMarket(market);
   return Boolean(config && ['true', '1', 'yes', 'on'].includes(
     String(process.env[config.enabledEnv] || '').trim().toLowerCase()));

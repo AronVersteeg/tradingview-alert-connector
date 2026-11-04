@@ -5,18 +5,18 @@
   const asset = source === 'open-v2-sol' ? 'sol' : source === 'open-v2-eth' ? 'eth' : 'btc';
   const nativeSpot = asset !== 'btc';
   const symbol = `${asset.toUpperCase()}USDT`, market = `${asset.toUpperCase()}-USD`;
-  const intrusionLabel = nativeSpot ? 'Intrusion / D' : 'Dec intrusion / D';
+  const intrusionLabel = 'Spot intrusion / D';
   const panel = document.getElementById('btcSpotChartPanel');
   if (!panel) return;
   panel.querySelector('.spot-chart-symbol').textContent = symbol;
   document.getElementById('spotChartMessage').textContent = `Loading ${symbol} candles...`;
   panel.setAttribute('aria-label', `${symbol} Binance Spot 1H candlestick chart`);
   panel.dataset.asset = asset;
-  if (nativeSpot) {
+  {
     const toggle = document.getElementById('spotChartIntrusionDailyBreaks').parentElement;
-    toggle.lastChild.textContent = 'Intrusion / D';
+    toggle.lastChild.textContent = intrusionLabel;
     toggle.title = `Recorded Binance Spot ${asset.toUpperCase()} intrusion and fresh Daily close break. F5m = last-five-minute ${symbol} Futures taker delta normalized to direction; positive means aligned flow. Observe-only.`;
-    document.getElementById('spotChartIntrusionDailyStatus').textContent = 'Intrusion / D pending';
+    document.getElementById('spotChartIntrusionDailyStatus').textContent = `${intrusionLabel} pending`;
   }
   panel.hidden = false;
   const assetBase = new URL('.', document.currentScript.src);
@@ -49,8 +49,10 @@
   let orderBlockLayer, orderBlockModel, orderBlockHistoryTimer;
   let gapLayer, gapTimeline = window.BTC_SPOT_GAP_TIMELINE, gapModel;
   let closedDataVersion = 0;
-  let intrusionLayer, intrusionHistory = window.BTC_SPOT_INTRUSION_HISTORY, intrusionModel, intrusionInputs, intrusionPending;
-  let intrusionRetryAt = 0, intrusionReadFailed = false;
+  const savedIntrusions = window.BTC_SPOT_INTRUSION_HISTORY;
+  let intrusionLayer, intrusionHistory = savedIntrusions?.market === market && savedIntrusions.source === 'binance-spot-recorded-intrusions'
+    ? savedIntrusions : undefined, intrusionModel, intrusionInputs;
+  let intrusionReadFailed = false;
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
   const pocRecords = new Map();
@@ -283,38 +285,14 @@
     return pocPending;
   }
 
-  async function refreshIntrusionHistory(force = false) {
-    if (nativeSpot || !initialData || !active || destroyed || !byId('spotChartIntrusionDailyBreaks').checked ||
-        intrusionPending || !force && Date.now() < intrusionRetryAt) return intrusionPending;
-    intrusionRetryAt = Date.now() + 60_000;
-    intrusionPending = (async () => {
-      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 30_000);
-      try {
-        // Reuse the existing public dashboard read; never reconstruct intrusions
-        // from today's histogram survivors or use a normal/filtered mail timestamp.
-        const response = await fetch('/decentrader/liquidity-timelapse', { signal: controller.signal, cache: 'no-store' });
-        if (!response.ok) throw new Error(`dashboard unavailable (${response.status})`);
-        const history = intrusionDailyBreaks.compactIntrusionHistory(await response.json());
-        if (destroyed) return;
-        intrusionHistory = history; intrusionReadFailed = false;
-        updateIntrusionDailyBreakouts();
-      } catch (error) {
-        if (destroyed) return;
-        intrusionReadFailed = true;
-        const status = byId('spotChartIntrusionDailyStatus');
-        status.textContent = intrusionHistory ? 'Dec intrusion / D stale | saved history retained'
-          : `Dec intrusion / D unavailable: ${error.name === 'AbortError' ? 'read timed out' : error.message}`;
-        status.dataset.stale = 'true';
-      } finally { clearTimeout(timeout); intrusionPending = undefined; }
-    })();
-    return intrusionPending;
+  function refreshIntrusionHistory() {
+    if (!destroyed) window.dispatchEvent(new CustomEvent('btc-spot-chart:intrusion-source-ready'));
   }
   window.addEventListener('btc-spot-chart:intrusion-history', event => {
-    if (!nativeSpot) return;
+    if (event.detail?.market !== market || event.detail.source !== 'binance-spot-recorded-intrusions') return;
     intrusionHistory = event.detail; intrusionReadFailed = false; updateIntrusionDailyBreakouts();
   });
   window.addEventListener('btc-spot-chart:intrusion-error', () => {
-    if (!nativeSpot) return;
     intrusionReadFailed = true;
     byId('spotChartIntrusionDailyStatus').textContent = intrusionHistory
       ? 'Intrusion / D stale | saved history retained' : 'Intrusion / D unavailable';

@@ -32,6 +32,16 @@ describe('Decentrader intrusion alert time and same-candle Daily close break, di
     expect(history.timeBasis).toBe('alert-candle-open-utc');
   });
 
+  test('accepts native BTC Public V2 recorded intrusions without reading Decentrader or SMTP timestamps', () => {
+    const native = { source: { market: 'BTC-USD', sourceStatuses: [{ name: 'Binance Spot BTCUSDT 1H', ok: true }] },
+      intrusionBenchmarks: { history: payload().intrusionDomStudy.history } };
+    const history = compactIntrusionHistory(native, now, 'BTC-USD');
+    expect(history.source).toBe('binance-spot-recorded-intrusions');
+    const result = buildIntrusionDailyBreakouts(candles(), history, model(), now, 'BTC-USD');
+    expect(result.signals.map((s: any) => [s.time, s.direction])).toEqual([[start + 2 * HOUR, 'long'], [start + 4 * HOUR, 'short']]);
+    expect(result.intrusionSource).toBe('binance-spot-recorded-intrusions');
+  });
+
   test('ignores ambiguous sides, missing/non-hour/zone-less times, future records and mail-only records', () => {
     const data: any = payload(); data.intrusionDomStudy.history = [
       { timestamp: alert(2), sideCounts: '1 left edge, 1 right edge' },

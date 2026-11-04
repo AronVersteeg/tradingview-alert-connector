@@ -4,6 +4,7 @@ import net from 'net';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './dydxSignalBodyStop';
+import { btcCompanionEntryBlockReason, btcEntryMode } from './btcEntryMode';
 import { GapProjectionHistory } from './decentraderGapProjectionHistory';
 import { ReplicaGapArchive } from './replicaGapArchive';
 import { decentraderObservationArchive } from './liquidityObservationArchive';
@@ -576,6 +577,7 @@ export type AlertState = {
   lastTradeExecutionError?: string;
   lastTradeDecision?: any;
   managedPosition?: {
+    planSource?: 'binance-spot-public-v2';
     market: string;
     direction: TradePlanDirection;
     openedAt: string;
@@ -5365,6 +5367,7 @@ export class DecentraderGapMonitor {
   private latestTimelapsePayload: any | undefined;
   private readonly gapObservationArchive = new ReplicaGapArchive();
   private tradeExecutor: DecentraderTradeExecutor | undefined;
+  private manualBtcPlanProvider?: (account: DydxSizingAccountSnapshot, direction: TradePlanDirection) => Promise<any>;
   private status: MonitorStatus = {
     enabled: false,
     running: false,
@@ -5388,6 +5391,10 @@ export class DecentraderGapMonitor {
       intrusionCandleSource: decentraderIntrusionCandleSource(),
       intrusionVolumeDeltaEnabled: decentraderIntrusionVolumeDeltaEnabled()
     };
+  }
+
+  configureManualBtcPlanProvider(provider: (account: DydxSizingAccountSnapshot, direction: TradePlanDirection) => Promise<any>): void {
+    this.manualBtcPlanProvider = provider;
   }
 
   start(): void {
@@ -5554,7 +5561,9 @@ export class DecentraderGapMonitor {
       const preparedAt = Date.now();
       const market = decentraderTradeMarket();
       const account = await executor.getAccountSnapshot([market]);
-      const plan = await this.getTradePlan(account, market);
+      const plan = managed.planSource === 'binance-spot-public-v2'
+        ? await this.getTradePlan(account, market, managed.direction, 'manual-override')
+        : await this.getTradePlan(account, market);
       await this.coordinator.exclusive(async () => {
         if (state.managedPosition !== managed) return;
         if (Date.now() - preparedAt > this.config().pollMinutes * 60_000) {
@@ -6619,7 +6628,9 @@ export class DecentraderGapMonitor {
         return;
       }
 
-      const plan = preparedPlan || await this.getTradePlan(account, market);
+      const plan = preparedPlan || (managedPosition.planSource === 'binance-spot-public-v2'
+        ? await this.getTradePlan(account, market, positionDirection, 'manual-override')
+        : await this.getTradePlan(account, market));
       plan.marketInfo = account.markets[market];
       const currentPrice = Number(plan.marketInfo?.oraclePrice);
       if (!Number.isFinite(currentPrice) || !(currentPrice > 0) || (positionDirection === 'long'
@@ -7069,6 +7080,10 @@ export class DecentraderGapMonitor {
     result: any,
     options: TradeEvaluationOptions = {}
   ): Promise<void> {
+    if (decentraderTradeMarket() === 'BTC-USD' && !options.dryRun) {
+      result.tradeSkipped = 'BTC_ENTRY_MODE owns BTC entries; the legacy Delay trade route is disabled.';
+      return;
+    }
     if (!decentraderAutoTradeEnabled()) {
       result.tradeSkipped = 'DECENTRADER_AUTO_TRADE_ENABLED is not true.';
       this.recordTradeDecision(state, result, alert, signature, 'SKIPPED', result.tradeSkipped);
@@ -7689,6 +7704,8 @@ export class DecentraderGapMonitor {
     if (request.market.replace(/_/g, '-').toUpperCase() !== market) {
       return { ...result, tradeSkipped: `Fractal entry market ${request.market} does not match ${market}.` };
     }
+    if (market === 'BTC-USD') return { ...result,
+      tradeSkipped: 'BTC_ENTRY_MODE owns BTC entries; the legacy Shadow entry route is disabled.' };
 
     try {
       return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
@@ -7838,6 +7855,8 @@ export class DecentraderGapMonitor {
 
     try {
       return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
+        if (btcEntryMode() !== 'manual') return { ...result, tradeDeferred: true,
+          tradeSkipped: `BTC_ENTRY_MODE=${btcEntryMode()}; manual plans remain armed.` };
         if (!btcManualTradeOverrideEnabled()) {
           result.tradeSkipped = 'MANUAL_ENTRY_TP_OVERRIDE_ENABLED is false.';
           return result;
@@ -7850,6 +7869,8 @@ export class DecentraderGapMonitor {
           result.tradeSkipped = 'No dYdX trade executor is configured.';
           return result;
         }
+        const blocked = btcCompanionEntryBlockReason('manual');
+        if (blocked) return { ...result, tradeDeferred: true, tradeSkipped: blocked };
         if (state.lastTradeExecutedSignature === request.signature) {
           result.tradeSkipped = 'Duplicate BTC manual override signature.';
           result.duplicate = true;
@@ -7904,7 +7925,7 @@ export class DecentraderGapMonitor {
             numberOrZero(plan.marketInfo?.oraclePrice) || numberOrZero(plan.price)
           );
         }
-        (orderAlert as any).strategy = 'decentrader_manual_entry_tp_override';
+        (orderAlert as any).strategy = 'open_liquidity_v2_btc_manual_entry_tp_override';
         (orderAlert as any).manual_entry_override = { ...request, manualTpLocked };
         (orderAlert as any).decentrader = {
           ...(orderAlert as any).decentrader,
@@ -7964,6 +7985,7 @@ export class DecentraderGapMonitor {
           currentStopFractalPrice: typeof initialStopFractal?.price === 'number' ? initialStopFractal.price : undefined,
           currentStopFractalSource: initialStopFractal?.source,
           currentStopFractalCandleSource: 'dydx-1h',
+          planSource: plan.planningSource,
           takeProfitMode: manualTpLocked ? 'manual-locked' : 'dynamic',
           takeProfits: Array.isArray((orderAlert as any).take_profits)
             ? (orderAlert as any).take_profits.map(takeProfitLevelCopy)
@@ -7988,6 +8010,7 @@ export class DecentraderGapMonitor {
           direction: request.direction,
           signature: request.signature,
           initialStopPolicy: plan.activePlan.initialStopPolicy,
+          planningSource: plan.planningSource,
           size: Math.abs(placedPosition.size),
           entryPrice: placedPosition.entryPrice,
           stop: numberOrZero((orderAlert as any).static_sl),
@@ -8033,7 +8056,7 @@ export class DecentraderGapMonitor {
       ? takeProfits.map((level: any, index: number) => (
           `TP${index + 1}: ${money(numberOrZero(level.price))} | size ${numberOrZero(level.size)}`
         ))
-      : ['TPs: dynamic Decentrader map ladder'];
+      : [decision.planningSource === 'binance-spot-public-v2' ? 'TPs: dynamic Public V2 Binance Spot map ladder' : 'TPs: dynamic Decentrader map ladder'];
     const body = [
       `BTC MANUAL ${direction} TRIGGERED`,
       `Signal candle: ${timestampNl}`,
@@ -8063,6 +8086,12 @@ export class DecentraderGapMonitor {
     simulatedDirection?: TradePlanDirection,
     directionSource: 'gap-simulation' | 'shadow-fractal' | 'manual-override' = 'gap-simulation'
   ): Promise<any> {
+    if (directionSource === 'manual-override' && market.replace(/_/g, '-').toUpperCase() === 'BTC-USD') {
+      if (!this.manualBtcPlanProvider || !simulatedDirection) {
+        throw new Error('BTC manual planning requires the Public V2 Binance Spot provider; no Decentrader fallback is allowed.');
+      }
+      return this.manualBtcPlanProvider(account, simulatedDirection);
+    }
     const config = this.config();
     const rows = this.latestRows || (await fetchSnapshot(config.symbol));
     this.latestRows = rows;

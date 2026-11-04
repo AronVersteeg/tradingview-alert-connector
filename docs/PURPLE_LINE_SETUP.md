@@ -1,17 +1,19 @@
 # Purple Line Setup
 
-This is the shared ETH and SOL setup. "Purple line setup" means this complete
-configuration, not the old Delay or Shadow entry model. BTC manual trading is
-unchanged. The SOL tab remains `/decentrader/map?source=open-v2-sol`.
+This is the shared BTC, ETH and SOL setup. "Purple line setup" means this complete
+configuration, not the old Delay or Shadow entry model. BTC uses the exclusive
+[manual/purple/off selector](BTC_ENTRY_MODE.md); its main map is Public V2.
+The SOL tab remains `/decentrader/map?source=open-v2-sol`.
 
 ## Sources And Dashboard
 
 | Pair | Signal and chart | Execution | Replica grid |
 | --- | --- | --- | --- |
+| BTC | Binance Spot BTCUSDT | dYdX BTC-USD | $100 |
 | ETH | Binance Spot ETHUSDT | dYdX ETH-USD | $5 |
 | SOL | Binance Spot SOLUSDT | dYdX SOL-USD | $0.10 |
 
-Both use the same UI and mobile interactions: Spot 1H candles, confirmed 1H
+ETH/SOL use the same UI and mobile interactions: Spot 1H candles, confirmed 1H
 fractal boxes, D/W/M fractal tables and intact overviews, projected fractal lines,
 green gap boxes, Gap/D and Gap/W break markers, purple intrusion/D markers and
 POC crossbars, plus read-only manual/TP overlays. Order blocks remain hidden,
@@ -54,7 +56,8 @@ Historical chart coverage remains limited to actually available source data.
   confirmed dYdX fractal remains the sizing/trailing anchor. Later stops only
   tighten; a worse/equal fractal does not widen the quarter-body stop. This policy
   applies only to new entries after deployment; existing positions and uncertain
-  submissions retain their recorded stops. BTC manual stops remain unchanged.
+  submissions retain their recorded stops. New manual entries also use this
+  initial-stop formula, with their own unchanged TP and fractal-sizing policies.
 - No TP orders: `NO_TP`, empty ladder and persisted `trailing-only` management,
   including after restart. Profit/loss exits therefore depend on protective
   stops. Missing protective execution support blocks new entries.

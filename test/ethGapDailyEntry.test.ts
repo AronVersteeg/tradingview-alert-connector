@@ -9,7 +9,7 @@ const fractals = require('../public/btc-spot-chart/fractals.js');
 const purple = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
 import { PURPLE_LINE_SETUPS, purpleLineEntryEnabled } from '../src/services/purpleLineSetup';
 import * as dailyHistory from '../src/services/binanceDailyFractalHistory';
-import { ethSpotChartFeed, solSpotChartFeed } from '../src/services/binanceSpotChart';
+import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed } from '../src/services/binanceSpotChart';
 import { PurpleLineContinuity } from '../src/services/purpleLineContinuity';
 const HOUR = 3_600_000, closeAt = Date.parse('2026-10-24T02:00:00Z'), now = closeAt + 5000;
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -62,14 +62,15 @@ describe('ETH final-5m Futures delta measurement utility (not an entry gate)', (
   });
 });
 
-describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset => {
-  const market = asset === 'SOL' ? 'SOL-USD' : 'ETH-USD';
-  const symbol = asset === 'SOL' ? 'SOLUSDT' : 'ETHUSDT';
+describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity', asset => {
+  const market = `${asset}-USD` as 'BTC-USD' | 'ETH-USD' | 'SOL-USD';
+  const symbol = `${asset}USDT`;
   const setup = PURPLE_LINE_SETUPS[market];
-  const stateEnv = `OPEN_LIQUIDITY_V2_${asset}_TRADE_STATE_FILE`;
+  const stateEnv = asset === 'BTC' ? 'OPEN_LIQUIDITY_V2_BTC_INTRUSION_STATE_FILE' : `OPEN_LIQUIDITY_V2_${asset}_TRADE_STATE_FILE`;
   const entryEnv = setup.enabledEnv, autoEnv = `OPEN_LIQUIDITY_V2_${asset}_AUTO_TRADE_ENABLED`, monitorEnv = `OPEN_LIQUIDITY_V2_${asset}_INTRUSION_MONITOR_ENABLED`;
   const readMethod = asset === 'ETH' ? 'readEthGapDailySignal' : 'readPurpleLineSignal';
-  const createMonitor = () => new OpenLiquidityV2EthTradeMonitor({} as any, asset === 'SOL' ? (openLiquidityV2SolTradeMonitor as any).config : undefined);
+  const createMonitor = () => new OpenLiquidityV2EthTradeMonitor({} as any, asset === 'BTC'
+    ? (openLiquidityV2BtcIntrusionMonitor as any).config : asset === 'SOL' ? (openLiquidityV2SolTradeMonitor as any).config : undefined);
   const evaluateSignal = (...args: Parameters<typeof entry.evaluateEthGapDailySignal>) => entry.evaluatePurpleLineSignal(market, ...args);
   const HOUR = 3_600_000, closeAt = Date.parse('2026-10-24T02:00:00Z'), now = closeAt + 5000;
   const iso = (ms: number) => new Date(ms).toISOString();
@@ -107,13 +108,13 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
       jest.useFakeTimers(); jest.setSystemTime(now);
       const x = inputs();
       const daily = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockResolvedValue(x.daily as any);
-      const own = market === 'SOL-USD' ? solSpotChartFeed : ethSpotChartFeed;
-      const other = market === 'SOL-USD' ? ethSpotChartFeed : solSpotChartFeed;
+      const own = market === 'BTC-USD' ? binanceSpotChartFeed : market === 'SOL-USD' ? solSpotChartFeed : ethSpotChartFeed;
       const candles = jest.spyOn(own, 'page').mockResolvedValue(x.page);
-      const wrong = jest.spyOn(other, 'page').mockRejectedValue(new Error('wrong pair read'));
+      const wrong = [binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed].filter(feed => feed !== own)
+        .map(feed => jest.spyOn(feed, 'page').mockRejectedValue(new Error('wrong pair read')));
       expect(await entry.readPurpleLineSignal(market, x.payload, x.intrusions)).toMatchObject({ direction: 'long' });
       expect(daily).toHaveBeenCalledWith(market, false, 'Binance Spot');
-      expect(candles).toHaveBeenCalledTimes(1); expect(wrong).not.toHaveBeenCalled();
+      expect(candles).toHaveBeenCalledTimes(1); for (const read of wrong) expect(read).not.toHaveBeenCalled();
     });
     test.each(['long', 'short'])('has exactly the same %s signal as the purple overlay, without Weekly/Monthly data', direction => {
       const { payload, intrusions, page, daily } = inputs(direction);
@@ -141,7 +142,7 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
         if (kind === 'futures') x.page.venue = 'Binance Futures';
         if (kind === 'stale') (x.daily as any).stale = true;
         if (kind === 'old-daily') x.daily.latestClosedCandleAt = '2026-10-22T23:59:59.999Z';
-        if (kind === 'btc') x.payload.source.market = 'BTC-USD';
+        if (kind === 'btc') x.payload.source.market = market === 'BTC-USD' ? 'ETH-USD' : 'BTC-USD';
         if (kind === 'other-pair') x.page.symbol = market === 'SOL-USD' ? 'ETHUSDT' : 'SOLUSDT';
         if (kind === 'grid') (x.payload.quality as any).priceStepUsd = 999;
         if (kind === 'source-failed') x.payload.source.sourceStatuses[0].ok = false;
@@ -217,7 +218,10 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
       directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eth-gap-daily-'));
       file = path.join(directory, 'eth.json');
       Object.assign(process.env, {
-        [stateEnv]: file, [entryEnv]: 'true',
+        BTC_ENTRY_MODE: 'manual', DECENTRADER_AUTO_TRADE_ENABLED: 'true',
+        DECENTRADER_GAP_ALERT_STATE_FILE: path.join(directory, 'btc-manual-execution.json'),
+        BTC_MANUAL_TRADE_OVERRIDE_FILE: path.join(directory, 'btc-manual-plans.json'),
+        [stateEnv]: file, [entryEnv]: asset === 'BTC' ? 'purple' : 'true',
         [autoEnv]: 'true', [monitorEnv]: 'true',
         DECENTRADER_DYNAMIC_SL_ENABLED: 'true', DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED: 'true',
         DYDX_V4_FRACTAL_TRAIL_ENABLED: 'true', DECENTRADER_DYNAMIC_TP_ENABLED: 'true',
@@ -494,7 +498,7 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
       expect(managed.managedPosition).toMatchObject({ direction: 'short', currentStop: 130, takeProfitMode: 'trailing-only' });
     });
     test.each(['pair-off', 'sl-off', 'live-off', 'executor-off', 'expired', 'position'])('blocks unsafe or inapplicable entry: %s', async kind => {
-      if (kind === 'pair-off') process.env[autoEnv] = 'false';
+      if (kind === 'pair-off') process.env[asset === 'BTC' ? 'BTC_ENTRY_MODE' : autoEnv] = asset === 'BTC' ? 'off' : 'false';
       if (kind === 'sl-off') process.env.DECENTRADER_DYNAMIC_SL_ENABLED = 'false';
       if (kind === 'live-off') process.env.DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED = 'false';
       if (kind === 'executor-off') delete orders.syncTrailingStop;
@@ -586,6 +590,18 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
       expect(plan).not.toHaveBeenCalled(); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
       expect(delta).not.toHaveBeenCalled();
     });
+    if (asset === 'BTC') test.each(['manual', 'off'])('preserves purple trailing-only ownership after switching BTC to %s', async mode => {
+      await monitor.executeGapDailyEntry(state(), signal(), {});
+      const previous = orders.syncTrailingStop.mock.calls.length;
+      process.env.BTC_ENTRY_MODE = mode;
+      const restarted: any = createMonitor(); restarted.configureTradeExecutor(orders);
+      const map = jest.spyOn(restarted, 'getTradePlan').mockRejectedValue(new Error('No map TP planning for purple positions'));
+      const result = await restarted.checkManagedPosition();
+      expect(result.ok).toBe(true); expect(orders.syncTrailingStop.mock.calls.length).toBeGreaterThan(previous);
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+      expect(map).not.toHaveBeenCalled();
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
+    });
     test.each(['fractal', 'midpoint'])('recovers a delayed legacy %s fill without moving its recorded stop or repeating an entry', async legacy => {
       orders.placeOrder.mockRejectedValue(new Error('uncertain submission'));
       const managed: any = state();
@@ -674,6 +690,16 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
       expect(broadcast).not.toHaveBeenCalled();
       expect(position).toBeUndefined();
     });
+    if (asset === 'BTC') test('rechecks manual ownership at the actual purple broadcast boundary', async () => {
+      orders.supportsEntrySubmissionCheckpoint = true;
+      const broadcast = jest.fn();
+      orders.placeOrder.mockImplementationOnce(async (_alert, execution) => {
+        fs.writeFileSync(process.env.DECENTRADER_GAP_ALERT_STATE_FILE!, JSON.stringify({ managedPosition: { market: 'BTC-USD' } }));
+        await execution.beforeEntrySubmit(); broadcast();
+      });
+      await expect(monitor.executeGapDailyEntry(state(), signal(), {})).rejects.toThrow(/still manages/);
+      expect(broadcast).not.toHaveBeenCalled(); expect(position).toBeUndefined();
+    });
     test.each(['BROADCASTING', 'legacy'])('never resends an ambiguous %s attempt after restart', async phase => {
       orders.supportsEntrySubmissionCheckpoint = true;
       let crashed: any;
@@ -746,7 +772,7 @@ describe.each(['ETH', 'SOL'] as const)('%s purple line execution parity', asset 
       const result: any = {}; await monitor.executeAlertExclusive({}, {}, 'old-delay', result);
       expect(result.tradeSkipped).toMatch(/experiment/);
       expect(orders.placeOrder).not.toHaveBeenCalled();
-      expect(openLiquidityV2BtcIntrusionMonitor.getStatus()).toMatchObject({ market: 'BTC-USD', autoTradeEnabled: false });
+      expect(openLiquidityV2BtcIntrusionMonitor.getStatus()).toMatchObject({ market: 'BTC-USD', autoTradeEnabled: asset === 'BTC' });
     });
   });
 });

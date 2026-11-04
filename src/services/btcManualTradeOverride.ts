@@ -5,6 +5,7 @@ import { binanceGet, binanceRetryAt } from './binanceHttp';
 import { binanceHourlyCloseFeed } from './binanceHourlyCloseFeed';
 import { allocateStepSizes } from './decentraderExecutionPolicy';
 import { DYDX_BODY_STOP_FRACTION } from './dydxSignalBodyStop';
+import { btcEntryMode, btcEntryModeStatus } from './btcEntryMode';
 
 const HOUR_MS = 60 * 60_000;
 const CLOSE_BUFFER_MS = 5_000;
@@ -15,6 +16,7 @@ const MAX_TAKE_PROFITS = 6;
 const MAX_ACTIVE_OVERRIDES = 20;
 const MAX_TERMINAL_OVERRIDES = 50;
 const BINANCE_FUTURES_KLINES_URL = 'https://fapi.binance.com/fapi/v1/klines';
+const BINANCE_SPOT_KLINES_URL = 'https://api.binance.com/api/v3/klines';
 
 export type BtcManualHourlyCandle = {
   openTime: number;
@@ -120,6 +122,10 @@ const MANUAL_OVERRIDE_CONFIGS: ManualTradeOverrideConfig[] = [
 ];
 
 const BTC_MANUAL_OVERRIDE_CONFIG = MANUAL_OVERRIDE_CONFIGS[0];
+
+function candleUrl(config: ManualTradeOverrideConfig): string {
+  return config.market === 'BTC-USD' ? BINANCE_SPOT_KLINES_URL : BINANCE_FUTURES_KLINES_URL;
+}
 
 function normalizedMarket(value: unknown): string {
   return String(value || '').replace(/_/g, '-').toUpperCase();
@@ -415,9 +421,9 @@ async function fetchHourlyCandles(
   config = BTC_MANUAL_OVERRIDE_CONFIG,
   nowMs = Date.now()
 ): Promise<BtcManualHourlyCandle[]> {
-  const streamed = binanceHourlyCloseFeed.latest(config.symbol, nowMs);
+  const streamed = config.market === 'BTC-USD' ? undefined : binanceHourlyCloseFeed.latest(config.symbol, nowMs);
   if (streamed) return [streamed];
-  const response = await binanceGet<unknown[]>(BINANCE_FUTURES_KLINES_URL, {
+  const response = await binanceGet<unknown[]>(candleUrl(config), {
     params: { symbol: config.symbol, interval: '1h', limit: 12 },
     timeout: 20_000
   });
@@ -489,7 +495,7 @@ export class BtcManualTradeOverrideMonitor {
     console.log(`${this.config.asset} manual entry/TP override monitor scheduled:`, {
       enabled: btcManualTradeOverrideEnabled(),
       initialDelayMs,
-      source: `Binance Futures ${this.config.symbol} 1H closed candles`,
+      source: `Binance ${this.config.market === 'BTC-USD' ? 'Spot' : 'Futures'} ${this.config.symbol} 1H closed candles`,
       stateFile: stateFile(this.config)
     });
   }
@@ -505,6 +511,8 @@ export class BtcManualTradeOverrideMonitor {
       market: this.config.market,
       asset: this.config.asset,
       symbol: this.config.symbol,
+      ...(this.config.market === 'BTC-USD' ? { entryMode: btcEntryModeStatus(),
+        entriesPaused: btcEntryMode() !== 'manual', candleSource: 'Binance Spot BTCUSDT 1H' } : {}),
       initialStop: { mode: 'signal-body-quarter', bodyFraction: DYDX_BODY_STOP_FRACTION,
         candleSource: 'dydx-1h', sameSignalHour: true, bufferPct: 0,
         sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
@@ -614,7 +622,7 @@ export class BtcManualTradeOverrideMonitor {
     const hourlyRunAt = (Math.floor(now / HOUR_MS) + 1) * HOUR_MS + CLOSE_BUFFER_MS + marketOffsetMs;
     const retryMs = now % HOUR_MS < 30_000 ? 5_000 : 60_000;
     const nextRunAt = this.status.retryData
-      ? Math.min(hourlyRunAt, Math.max(now + retryMs, binanceRetryAt(BINANCE_FUTURES_KLINES_URL) + 1000) + marketOffsetMs)
+      ? Math.min(hourlyRunAt, Math.max(now + retryMs, binanceRetryAt(candleUrl(this.config)) + 1000) + marketOffsetMs)
       : hourlyRunAt;
     this.nextTimer = setTimeout(() => {
       this.nextTimer = undefined;
@@ -629,6 +637,7 @@ export class BtcManualTradeOverrideMonitor {
     let readingCandles = false;
     try {
       if (!btcManualTradeOverrideEnabled()) return;
+      if (this.config.market === 'BTC-USD' && btcEntryMode() !== 'manual') return;
       let store = readManualTradeOverrideStore(this.config);
       const nowMs = Date.now();
       const nowIso = new Date(nowMs).toISOString();
@@ -667,7 +676,7 @@ export class BtcManualTradeOverrideMonitor {
       readingCandles = false;
       const observedAt = new Date().toISOString();
       this.status.lastCandleObservation = {
-        source: 'binance-futures',
+        source: this.config.market === 'BTC-USD' ? 'binance-spot' : 'binance-futures',
         symbol: this.config.symbol,
         candleStartedAt: new Date(latest.openTime).toISOString(),
         candleClosedAt: new Date(latest.closeTime + 1).toISOString(),

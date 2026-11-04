@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './dydxSignalBodyStop';
+import { btcCompanionEntryBlockReason, btcEntryMode, btcEntryModeStatus } from './btcEntryMode';
 import { EthGapDailySignal, EthEntryFuturesDelta,
   freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyQuarterStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
 import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
@@ -127,7 +128,7 @@ const BTC_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   symbol: 'BTCUSDT',
   asset: 'BTC',
   priceStep: 100,
-  tradeCapable: false,
+  tradeCapable: true,
   informationalOnly: true,
   informationalEmailEnv: 'DECENTRADER_BTC_GAP_INTRUSION_EMAIL_ENABLED',
   pollMinutesEnv: 'OPEN_LIQUIDITY_V2_BTC_INTRUSION_POLL_MINUTES',
@@ -137,7 +138,7 @@ const BTC_MONITOR_CONFIG: OpenLiquidityV2TradeMonitorConfig = {
   inheritDecentraderAutoTrade: false,
   stateFileEnv: 'OPEN_LIQUIDITY_V2_BTC_INTRUSION_STATE_FILE',
   stateFileName: 'open-liquidity-v2-btc-intrusion-state.json',
-  strategyPrefix: 'open_liquidity_v2_btc_observe_only',
+  strategyPrefix: 'open_liquidity_v2_btc',
   edgeBufferEnv: 'DECENTRADER_TP1_EDGE_FRONT_RUN_USD',
   coinGlassMinUsdEnv: 'COINGLASS_TP_CONFLUENCE_MIN_USD',
   coinGlassMaxDistanceEnv: 'COINGLASS_TP_CONFLUENCE_MAX_DISTANCE_USD',
@@ -863,6 +864,7 @@ export class OpenLiquidityV2EthTradeMonitor {
 
   private autoTradeEnabled(): boolean {
     if (!this.config.tradeCapable) return false;
+    if (this.config.market === 'BTC-USD') return btcEntryMode() === 'purple' && boolEnv('DECENTRADER_AUTO_TRADE_ENABLED', false);
     return boolEnv(
       this.config.autoTradeEnv,
       this.config.inheritDecentraderAutoTrade
@@ -916,7 +918,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     const begin = () => {
       this.initialTimer = undefined;
       void this.flushPurpleTriggerEmails();
-      if (!this.config.informationalOnly) {
+      if (!this.config.informationalOnly || this.config.market === 'BTC-USD') {
         const manage = () => this.checkManagedPosition().catch((error) =>
           console.error(`${this.config.asset} V2 position management failed:`, error));
         void manage();
@@ -942,7 +944,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       autoTradeEnabled: this.autoTradeEnabled(),
       gapDailyEntryEnabled: this.gapDailyEnabled(),
       delayEntryModelEnabled: delayEntryModelEnabled(),
-      observeOnly: !this.config.tradeCapable,
+      observeOnly: !this.config.tradeCapable || this.config.market === 'BTC-USD' && !this.gapDailyEnabled(),
       informationalOnly: Boolean(this.config.informationalOnly),
       informationalEmailEnabled: this.config.informationalEmailEnv
         ? boolEnv(this.config.informationalEmailEnv, false)
@@ -965,6 +967,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       running: this.running,
       positionManagement: this.managementStatus,
       market: this.config.market,
+      ...(this.config.market === 'BTC-USD' ? { entryMode: btcEntryModeStatus() } : {}),
       autoTradeEnabled: this.autoTradeEnabled(),
       gapDailyEntry: purpleLineSetupForMarket(this.config.market) ? {
         setup: 'purple-line', enabled: this.gapDailyEnabled(), env: purpleLineSetupForMarket(this.config.market)!.enabledEnv,
@@ -990,7 +993,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       } : undefined,
       delayEntryModelEnabled: delayEntryModelEnabled(),
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
-      observeOnly: !this.config.tradeCapable,
+      observeOnly: !this.config.tradeCapable || this.config.market === 'BTC-USD' && !this.gapDailyEnabled(),
       informationalOnly: Boolean(this.config.informationalOnly),
       informationalEmailEnabled: this.config.informationalEmailEnv
         ? boolEnv(this.config.informationalEmailEnv, false)
@@ -1333,6 +1336,10 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
     if (!freshEthGapDailySignal(signal, entry.activatedAt!) || entry.handledCandle === signal.closedAt * 1000) return skip('Signal is expired, historical or already handled.');
     if (entry.intent && ['SUBMITTING', 'UNKNOWN'].includes(entry.intent.outcome)) return skip(`An earlier ${this.config.asset} execution remains unconfirmed; no duplicate order will be sent.`);
+    if (this.config.market === 'BTC-USD') {
+      const blocked = btcCompanionEntryBlockReason('purple');
+      if (blocked) return skip(blocked);
+    }
     const account = await this.executor.getAccountSnapshot([this.config.market]);
     if (state.managedPosition || existingPosition(account, this.config.market)) {
       entry.handledCandle = signal.closedAt * 1000;
@@ -1359,6 +1366,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       const beforeEntrySubmit = async () => {
         if (!freshEthGapDailySignal(signal, entry.activatedAt!) || !this.gapDailyEnabled() || !this.autoTradeEnabled()) {
           throw new Error('Purple entry expired or disabled before broadcast; no entry order sent.');
+        }
+        if (this.config.market === 'BTC-USD') {
+          const blocked = btcCompanionEntryBlockReason('purple');
+          if (blocked) throw new Error(blocked);
         }
         entry.intent!.phase = 'BROADCASTING';
         entry.intent!.broadcastStartedAt = new Date().toISOString();
@@ -1440,6 +1451,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       symbol: this.config.symbol,
       market: this.config.market,
       fractalCandleSource: 'dydx-1h',
+      ...(this.config.market === 'BTC-USD' ? { planningSource: 'binance-spot-public-v2' } : {}),
       stopReferenceCandle: fractalRows[fractalFrameIndex],
       timestamp: frame.t,
       timestampNl: nlTime(frame.t),
