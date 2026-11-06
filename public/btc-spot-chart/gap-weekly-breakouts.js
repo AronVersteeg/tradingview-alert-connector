@@ -31,7 +31,7 @@
       const matches = levels.filter(level => {
         const confirmedMs = Date.parse(level.confirmedAt);
         if (!Number.isFinite(level.price) || level.price <= 0 || !Number.isFinite(confirmedMs) ||
-            confirmedMs >= candle.time * 1000 || level.breakBeforeHistory ||
+            confirmedMs >= candle.time * 1000 || level.breakBeforeHistory || level.breakUnverified ||
             level.broken && (!Number.isSafeInteger(level.brokenTime) || level.brokenTime < candle.time)) return false;
         return long ? level.type === 'HIGH' && previous.close <= level.price && candle.close > level.price
           : level.type === 'LOW' && previous.close >= level.price && candle.close < level.price;

@@ -17,7 +17,8 @@
     const candles = input.filter((candle) => candle.closed === true && candle.time + HOUR <= through)
       .slice().sort((a, b) => a.time - b.time);
     if (!candles.length || candles[candles.length - 1].time + HOUR !== through) throw new Error('Awaiting latest closed 1H candle');
-    const times = new Set(candles.map((candle) => candle.time));
+    const byTime = new Map(candles.map((candle) => [candle.time, candle]));
+    const times = new Set(byTime.keys());
     const first = candles[0].time;
     const levels = [];
     for (const [key, timeframe] of periods) {
@@ -27,8 +28,8 @@
       const coverageStart = (Date.parse(snapshot.latestClosedCandleAt) + 1) / 1000;
       if (!Number.isSafeInteger(coverageStart) || coverageStart > through) throw new Error('Invalid fractal coverage');
       if (!snapshot.records.length) continue;
-      // Only the unfinished higher-timeframe period needs new 1H break validation.
-      // Earlier breaks are already present in the confirmed higher-timeframe history.
+      // The unfinished higher-timeframe period must be completely loaded.
+      // Historical high/low breaks below are only hints, never proof of a close break.
       for (let time = coverageStart; time < through; time += HOUR) {
         if (!times.has(time)) throw new Error('Missing closed 1H candles for fractal verification');
       }
@@ -40,7 +41,7 @@
           !['HIGH', 'LOW'].includes(record.type) || !(price > 0)) continue;
         const column = record.type === 'HIGH' ? 'high' : 'low';
         const pivotEnd = periodEnd(pivot, timeframe);
-        const crosses = (candle) => candle.time > confirmed && (record.type === 'HIGH' ? candle.high > price : candle.low < price);
+        const crosses = (candle) => record.type === 'HIGH' ? candle.close > price : candle.close < price;
         let originBeforeHistory = pivotEnd <= first;
         const tailCovered = pivot < first && first < pivotEnd && pivotEnd <= through &&
           Array.from({ length: (pivotEnd - first) / HOUR }, (_, i) => first + i * HOUR).every((time) => times.has(time));
@@ -51,25 +52,29 @@
           Array.from({ length: (pivotEnd - pivot) / HOUR }, (_, i) => pivot + i * HOUR).every((time) => times.has(time));
         const origin = originCovered ? candles.find((candle) => candle.time >= pivot && candle.time < pivotEnd && candle[column] === price) : undefined;
         const coarseBreak = record.firstBrokenAt ? Date.parse(record.firstBrokenAt) / 1000 : undefined;
-        let brokenTime;
-        let broken = coarseBreak !== undefined;
-        let breakBeforeHistory = false;
-        if (coarseBreak !== undefined) {
-          const breakEnd = periodEnd(coarseBreak, timeframe);
-          breakBeforeHistory = breakEnd <= first;
-          const covered = coarseBreak >= first && Array.from({ length: (breakEnd - coarseBreak) / HOUR }, (_, i) => coarseBreak + i * HOUR)
-            .filter((time) => time < through).every((time) => times.has(time));
-          if (covered) brokenTime = candles.find((candle) => candle.time >= coarseBreak && candle.time < breakEnd && crosses(candle))?.time;
-        } else {
-          const breakCandle = candles.find(crosses);
-          if (breakCandle) { broken = true; brokenTime = breakCandle.time; }
+        if (coarseBreak !== undefined && (!Number.isSafeInteger(coarseBreak) || coarseBreak % HOUR || coarseBreak >= through)) {
+          throw new Error('Invalid historical fractal break');
         }
+        // Before the first higher-timeframe wick breach, no 1H close can have
+        // broken the level. From that period onward, verify every closed hour,
+        // including later periods: a wick-only breach must not retire the level.
+        const verificationStart = Math.max(Math.floor(confirmed / HOUR) * HOUR + HOUR,
+          coarseBreak ?? Math.min(first, coverageStart));
+        let brokenTime;
+        let breakUnverified = false;
+        for (let time = verificationStart; time < through; time += HOUR) {
+          const candle = byTime.get(time);
+          if (!candle || !Number.isFinite(candle.close) || candle.close <= 0) { breakUnverified = true; break; }
+          if (crosses(candle)) { brokenTime = time; break; }
+        }
+        const broken = brokenTime !== undefined;
+        const breakBeforeHistory = breakUnverified && verificationStart < first;
         levels.push({
           id: `${timeframe}|${record.id}`, timeframe, type: record.type,
           price, priceExact: record.priceExact, label: `${timeframe}${record.isLatestForType ? 'C' : ''}`,
           isCurrent: Boolean(record.isLatestForType), pivotAt: record.pivotAt, confirmedAt: record.confirmedAt,
           originTime: origin?.time ?? null, originBeforeHistory,
-          broken, brokenTime: brokenTime ?? null, breakBeforeHistory
+          broken, brokenTime: brokenTime ?? null, breakBeforeHistory, breakUnverified
         });
       }
     }
@@ -90,7 +95,7 @@
     setOptions(options) { Object.assign(this.options, options); this.requestUpdate?.(); }
     visibleLevels() {
       const candidates = this.levels.filter((level) => this.options[TIMEFRAMES[level.timeframe]?.option] &&
-        (!level.broken || this.options.broken) && !level.breakBeforeHistory &&
+        (!level.broken || this.options.broken) && !level.breakBeforeHistory && !level.breakUnverified &&
         (level.originTime !== null || level.originBeforeHistory) && (!level.broken || level.brokenTime !== null));
       const highestRank = new Map();
       for (const level of candidates) highestRank.set(level.price, Math.max(highestRank.get(level.price) || 0, TIMEFRAMES[level.timeframe].rank));

@@ -26,6 +26,16 @@ only, not an entry requirement. POC may require paginated historical loading;
 missing POC or FD never delays an otherwise valid trade or hides its purple line.
 All annotation feeds retain the shared request pacing and resource bounds.
 
+On BTC/ETH/SOL Spot charts, D/W/M lines become broken/dashed only at the first
+closed 1H candle strictly above a HIGH or below a LOW after confirmation. Wicks,
+equal closes and open candles do not break a line. The line's original price and
+origin still use the pivot's high/low wick. Higher-timeframe wick-break dates are
+only search hints: hourly validation continues into later periods when a wick
+does not close through. If the required historical hours are missing, that line
+is unverified, hidden and ineligible for breakout signals until coverage loads;
+it is never guessed intact or broken. These rules are shared by the overlay and
+the live purple evaluator; they do not alter dYdX stops or trailing management.
+
 SOL keeps its existing replica model, histories, gap/observation journals and
 trade-state file. No historical data or manual plans are reset or migrated.
 Separate market caches and disk files prevent BTC/ETH/SOL contamination.
@@ -37,8 +47,10 @@ Historical chart coverage remains limited to actually available source data.
   and a fresh close break of a previously confirmed, intact Daily fractal in
   the same direction. The server uses the chart's same pure purple evaluator.
 - Long closes strictly above the Daily HIGH; short strictly below the Daily LOW.
-  Equal touches, prior wick breaks, mixed-side intrusions and unconfirmed levels
-  do not qualify. Alert time identifies the candle open, not email time.
+  Equal closes, mixed-side intrusions and unconfirmed levels do not qualify.
+  A prior wick-only excursion does not disqualify a later first close break;
+  a proven earlier close break does. Alert time identifies the candle open,
+  not email time.
 - W/M lines do not substitute for a missing eligible Daily break. Their
   underlying Daily level qualifies only under these same confirmed/intact rules.
 - Only the latest closed hour, within five minutes, after activation can trigger.

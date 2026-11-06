@@ -8,7 +8,7 @@ const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
 const through = date('2026-10-21T16:00:00Z');
 const start = date('2026-09-01T00:00:00Z');
 const candles = () => Array.from({ length: (through - start) / HOUR }, (_, index) => ({
-  time: start + index * HOUR, high: 90, low: 20, closed: true
+  time: start + index * HOUR, high: 90, low: 20, close: 50, closed: true
 }));
 const record = (overrides: any = {}) => ({
   id: 'test', type: 'HIGH', price: 100, priceExact: '100.00000000',
@@ -74,6 +74,69 @@ describe('BTC Spot fractal projection read cache', () => {
 });
 
 describe('closed-hour D/W/M projection geometry', () => {
+  describe.each(['BTC', 'ETH', 'SOL'])('%s close-only fractal breaks', asset => {
+    test.each([
+      ['D', 'daily', '2026-10-10T00:00:00Z', '2026-10-12T23:59:59.999Z', '2026-10-14T00:00:00Z'],
+      ['W', 'weekly', '2026-09-14T00:00:00Z', '2026-10-04T23:59:59.999Z', '2026-10-12T00:00:00Z'],
+      ['M', 'monthly', '2026-06-01T00:00:00Z', '2026-08-31T23:59:59.999Z', '2026-10-01T00:00:00Z']
+    ])('%s highs and lows remain intact after historical wicks and equality, until the first 1H close through', (timeframe, key, pivotAt, confirmedAt, firstBrokenAt) => {
+      for (const type of ['HIGH', 'LOW']) {
+        const rows = candles();
+        const price = type === 'HIGH' ? 100 : 10;
+        const wickHour = date('2026-10-14T13:00:00Z'), equalityHour = wickHour + HOUR;
+        const closeHour = date('2026-10-17T05:00:00Z');
+        const wick = rows.find(row => row.time === wickHour)!;
+        const equal = rows.find(row => row.time === equalityHour)!;
+        if (type === 'HIGH') { wick.high = 105; equal.high = 105; }
+        else { wick.low = 5; equal.low = 5; }
+        equal.close = price;
+        const data = bundle([], [], []);
+        data.symbol = `${asset}USDT`;
+        for (const period of ['daily', 'weekly', 'monthly'] as const) {
+          data[period].symbol = `${asset}USDT`;
+          data[period].market = `${asset}-USD` as any;
+        }
+        (data as any)[key].records = [record({ type, price, priceExact: String(price), pivotAt, confirmedAt, firstBrokenAt })];
+        const project = () => projectFractals(data, rows, data.symbol).levels[0];
+        expect(project()).toMatchObject({ timeframe, broken: false, brokenTime: null, breakUnverified: false });
+        // A newer open candle can never retire the level, even when trading beyond it.
+        rows.push({ time: through, high: 105, low: 5, close: type === 'HIGH' ? 104 : 6, closed: false });
+        expect(project().broken).toBe(false);
+        const breaking = rows.find(row => row.time === closeHour)!;
+        if (type === 'HIGH') { breaking.high = 106; breaking.close = 101; }
+        else { breaking.low = 4; breaking.close = 9; }
+        expect(project()).toMatchObject({ broken: true, brokenTime: closeHour, breakUnverified: false });
+        // Returning inside afterwards cannot undo a proven first close break.
+        expect(rows.find(row => row.time === closeHour + HOUR)!.close).toBe(50);
+        expect(project().brokenTime).toBe(closeHour);
+      }
+    });
+  });
+
+  test('does not guess close-break state when the first wick breach predates loaded hours or has a coverage gap', () => {
+    const data = bundle([record({ firstBrokenAt: '2026-10-14T00:00:00Z' })]);
+    const lateRows = candles().filter(row => row.time >= date('2026-10-15T00:00:00Z'));
+    const old = projectFractals(data, lateRows).levels[0];
+    expect(old).toMatchObject({ broken: false, brokenTime: null, breakUnverified: true, breakBeforeHistory: true });
+    const missingRows = candles().filter(row => row.time !== date('2026-10-14T03:00:00Z'));
+    const missing = projectFractals(data, missingRows).levels[0];
+    expect(missing).toMatchObject({ broken: false, brokenTime: null, breakUnverified: true });
+    const invalidRows = candles();
+    invalidRows.find(row => row.time === date('2026-10-14T03:00:00Z'))!.close = NaN;
+    expect(projectFractals(data, invalidRows).levels[0].breakUnverified).toBe(true);
+    const primitive = new FractalPrimitive();
+    primitive.setData([old, missing]);
+    expect(primitive.visibleLevels()).toEqual([]);
+  });
+
+  test('a complete first close break remains proven despite a later historical coverage gap', () => {
+    const data = bundle([record({ firstBrokenAt: '2026-10-14T00:00:00Z' })]);
+    const closeHour = date('2026-10-14T01:00:00Z');
+    const rows = candles().filter(row => row.time !== closeHour + HOUR);
+    Object.assign(rows.find(row => row.time === closeHour)!, { high: 102, close: 101 });
+    expect(projectFractals(data, rows).levels[0]).toMatchObject({ broken: true, brokenTime: closeHour, breakUnverified: false });
+  });
+
   test('anchors to the first exact intraday wick, not midnight, and preserves exact prices/current labels', () => {
     const rows = candles();
     const origin = date('2026-10-10T07:00:00Z');
@@ -84,12 +147,16 @@ describe('closed-hour D/W/M projection geometry', () => {
     expect(projectFractals(bundle([record({ isLatestForType: false })]), rows).levels[0].label).toBe('D');
   });
 
-  test('exact touches and open-candle excursions do not break; a closed wick strictly through does', () => {
+  test('only a strictly higher closed-hour close breaks; wicks, equality and open candles do not', () => {
     const rows = candles();
     rows[rows.length - 1].high = 100;
-    rows.push({ time: through, high: 110, low: 20, closed: false });
+    rows.push({ time: through, high: 110, low: 20, close: 105, closed: false });
     expect(projectFractals(bundle(), rows).levels[0].broken).toBe(false);
     rows[rows.length - 2].high = 100.01;
+    expect(projectFractals(bundle(), rows).levels[0].broken).toBe(false);
+    rows[rows.length - 2].close = 100;
+    expect(projectFractals(bundle(), rows).levels[0].broken).toBe(false);
+    rows[rows.length - 2].close = 100.01;
     expect(projectFractals(bundle(), rows).levels[0]).toMatchObject({ broken: true, brokenTime: through - HOUR });
   });
 
@@ -97,7 +164,9 @@ describe('closed-hour D/W/M projection geometry', () => {
     const rows = candles();
     const brokenTime = date('2026-10-16T13:00:00Z');
     rows.find((row) => row.time === brokenTime)!.high = 101;
+    rows.find((row) => row.time === brokenTime)!.close = 101;
     rows.find((row) => row.time === brokenTime + HOUR)!.high = 102;
+    rows.find((row) => row.time === brokenTime + HOUR)!.close = 102;
     const result = projectFractals(bundle([record({ firstBrokenAt: '2026-10-16T00:00:00Z' })]), rows).levels[0];
     expect(result).toMatchObject({ broken: true, brokenTime });
   });
@@ -111,6 +180,8 @@ describe('closed-hour D/W/M projection geometry', () => {
     const result = projectFractals(bundle([], [weekly]), rows).levels[0];
     expect(result).toMatchObject({ label: 'WC', originTime: origin, broken: false });
     rows[rows.length - 1].low = 9;
+    expect(projectFractals(bundle([], [weekly]), rows).levels[0].broken).toBe(false);
+    rows[rows.length - 1].close = 9;
     expect(projectFractals(bundle([], [weekly]), rows).levels[0]).toMatchObject({ broken: true, brokenTime: through - HOUR });
   });
 
@@ -125,7 +196,7 @@ describe('closed-hour D/W/M projection geometry', () => {
 
   test('keeps a clipped Monthly line when a complete loaded month-tail proves its wick is older', () => {
     const first = date('2026-07-29T08:00:00Z');
-    const rows = Array.from({ length: (through - first) / HOUR }, (_, i) => ({ time: first + i * HOUR, high: 90, low: 20, closed: true }));
+    const rows = Array.from({ length: (through - first) / HOUR }, (_, i) => ({ time: first + i * HOUR, high: 90, low: 20, close: 50, closed: true }));
     const monthly = record({ pivotAt: '2026-07-01T00:00:00Z', confirmedAt: '2026-09-30T23:59:59.999Z' });
     const result = projectFractals(bundle([], [], [monthly]), rows).levels[0];
     expect(result).toMatchObject({ originTime: null, originBeforeHistory: true });
@@ -139,7 +210,7 @@ describe('closed-hour D/W/M projection geometry', () => {
     ['2025-12-01T00:00:00Z', '2025-12-31T23:00:00Z', '2026-03-01T00:00:00Z']
   ])('resolves the exact last-hour Monthly wick for %s without treating a month as 30 days', (pivotAt, wickAt, cutoffAt) => {
     const first = date(pivotAt), cutoff = date(cutoffAt);
-    const rows = Array.from({ length: (cutoff - first) / HOUR }, (_, i) => ({ time: first + i * HOUR, high: 90, low: 20, closed: true }));
+    const rows = Array.from({ length: (cutoff - first) / HOUR }, (_, i) => ({ time: first + i * HOUR, high: 90, low: 20, close: 50, closed: true }));
     rows.find((row) => row.time === date(wickAt))!.high = 100;
     const data = bundle([], [], [record({ pivotAt, confirmedAt: iso(cutoff - .001) })]);
     data.evaluatedThrough = iso(cutoff);
@@ -149,10 +220,11 @@ describe('closed-hour D/W/M projection geometry', () => {
     expect(projectFractals(data, rows).levels[0]).toMatchObject({ timeframe: 'M', label: 'MC', originTime: date(wickAt), broken: false });
   });
 
-  test('resolves Monthly historical and current-month breaks to closed 1H wicks', () => {
+  test('resolves Monthly historical and current-month breaks to closed 1H closes', () => {
     const rows = candles();
     const breakingHour = date('2026-10-16T13:00:00Z');
     rows.find((row) => row.time === breakingHour)!.high = 101;
+    rows.find((row) => row.time === breakingHour)!.close = 101;
     const monthly = record({ pivotAt: '2026-07-01T00:00:00Z', confirmedAt: '2026-09-30T23:59:59.999Z' });
     expect(projectFractals(bundle([], [], [monthly]), rows).levels[0]).toMatchObject({ broken: true, brokenTime: breakingHour });
     expect(projectFractals(bundle([], [], [{ ...monthly, firstBrokenAt: '2026-10-01T00:00:00Z' }]), rows).levels[0]).toMatchObject({ broken: true, brokenTime: breakingHour });

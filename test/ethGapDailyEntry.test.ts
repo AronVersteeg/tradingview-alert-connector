@@ -125,10 +125,16 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       expect(result).toEqual(purple.buildIntrusionDailyBreakouts(page.candles, history, projection, now, market).signals[0]);
       expect(result).toMatchObject({ direction, time: (closeAt - HOUR) / 1000, closedAt: closeAt / 1000 });
     });
-    test('rejects prior wick breaks, equality touches, mismatching intrusion candle/direction and unconfirmed Daily levels', () => {
-      for (const kind of ['wick', 'touch', 'other-hour', 'other-direction', 'unconfirmed']) {
+    test.each(['long', 'short'])('keeps a Daily level eligible for a %s close break after an earlier wick-only excursion', direction => {
+      const x = inputs(direction);
+      if (direction === 'long') x.page.candles[0].high = 121;
+      else x.page.candles[0].low = 79;
+      Object.assign(x.daily.records[0], { firstBrokenAt: '2026-10-24T00:00:00Z' });
+      expect(evaluateSignal(x.payload, x.intrusions, x.page, x.daily, now)).toMatchObject({ direction });
+    });
+    test('rejects equality touches, mismatching intrusion candle/direction and unconfirmed Daily levels', () => {
+      for (const kind of ['touch', 'other-hour', 'other-direction', 'unconfirmed']) {
         const x = inputs();
-        if (kind === 'wick') x.page.candles[0].high = 121;
         if (kind === 'touch') { x.page.candles[1].close = 120; x.payload.frames[1].close = 120; }
         if (kind === 'other-hour') x.intrusions[0].timestamp = x.payload.frames[0].t;
         if (kind === 'other-direction') x.intrusions[0].direction = 'short';

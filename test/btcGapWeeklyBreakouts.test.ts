@@ -68,6 +68,12 @@ describe.each(['Weekly', 'Daily'])('Joint closed-candle gap and %s breakout mark
     expect(buildGapWeeklyBreakouts(candles(), timeline(), { ...model(), evaluatedThrough: iso(start + 2 * HOUR) }, now).signals).toEqual([]);
   });
 
+  test('does not treat a level with unverified historical close coverage as intact', () => {
+    const input = model();
+    Object.assign(input.levels[0], { broken: false, brokenTime: null, breakUnverified: true });
+    expect(buildGapWeeklyBreakouts(candles(), timeline(), input, now).signals.map((signal: any) => signal.direction)).toEqual(['short']);
+  });
+
   test('earlier markers are unchanged by future candles, future fractals, or current-level labels', () => {
     const early = buildGapWeeklyBreakouts(candles().slice(0, 4), timeline(), model(), (start + 4 * HOUR) * 1000).signals;
     const later = buildGapWeeklyBreakouts(candles(), timeline(), model(), now).signals;
