@@ -18,7 +18,9 @@ export function purpleTriggerEmail(market: string, signal: PurpleLineSignal, ent
     : ['SUBMITTING', 'UNKNOWN'].includes(intent?.outcome) ? 'UNCONFIRMED'
     : decision.outcome || (result.tradePlaced ? 'PLACED' : 'ERROR');
   const plan = intent?.plan?.activePlan;
-  const initialStopLabel = plan?.initialStopPolicy?.mode === 'signal-body-quarter'
+  const initialStopLabel = plan?.initialStopPolicy?.mode === 'signal-body-open'
+    ? 'dYdX signal candle body open'
+    : plan?.initialStopPolicy?.mode === 'signal-body-quarter'
     ? 'dYdX signal-body 25% from open'
     : plan?.initialStopPolicy?.mode === 'signal-body-midpoint' ? 'dYdX signal-body midpoint' : 'dYdX initial stop';
   const started = new Date(signal.time * 1000).toISOString(), closed = new Date(signal.closedAt * 1000).toISOString();

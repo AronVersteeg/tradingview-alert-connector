@@ -11,6 +11,7 @@ import { PURPLE_LINE_SETUPS, purpleLineEntryEnabled } from '../src/services/purp
 import * as dailyHistory from '../src/services/binanceDailyFractalHistory';
 import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed } from '../src/services/binanceSpotChart';
 import { PurpleLineContinuity } from '../src/services/purpleLineContinuity';
+import { purpleTriggerEmail } from '../src/services/purpleTriggerEmail';
 const HOUR = 3_600_000, closeAt = Date.parse('2026-10-24T02:00:00Z'), now = closeAt + 5000;
 const iso = (ms: number) => new Date(ms).toISOString();
 const signal = (direction: 'long' | 'short' = 'long'): entry.EthGapDailySignal => ({
@@ -168,7 +169,7 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
     });
   });
 
-  describe('dYdX quarter-body initial stop with original fractal sizing', () => {
+  describe('dYdX body-open initial stop with original fractal sizing', () => {
     const candle = () => ({ timestamp: iso(closeAt - HOUR), fractalCandleSource: 'dydx-1h',
       openRef: 110, closeRef: 118, highRef: 150, lowRef: 80 });
     const plan = (direction = 'long') => ({ direction, status: 'watch',
@@ -178,27 +179,46 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
 
     test('changes only initial stop price, not sizing/anchor; uses dYdX body rather than Spot price or wick midpoint', () => {
       const original = plan(), before = JSON.stringify(original);
-      const result = entry.withPurpleDydxBodyQuarterStop(original, candle(), signal(), 120);
-      expect(result.stop).toMatchObject({ price: 112, source: 'dydx-signal-body-quarter', buffer: 0, distance: 8 });
+      const result = entry.withPurpleDydxBodyOpenStop(original, candle(), signal(), 120);
+      expect(result.stop).toMatchObject({ price: 110, source: 'dydx-signal-body-open', buffer: 0, distance: 10 });
       expect(result.sizing).toBe(original.sizing); expect(result.sizingStop).toEqual(original.stop);
       expect(result.stop.fractal).toEqual(original.stop.fractal);
-      expect(result.initialStopPolicy).toMatchObject({ mode: 'signal-body-quarter', bodyFraction: .25,
+      expect(result.initialStopPolicy).toMatchObject({ mode: 'signal-body-open', bodyFraction: 0,
         candleSource: 'dydx-1h', open: 110, close: 118,
-        bodyStopPrice: 112, sizingStopPrice: 100, fractalPlannedStopRiskUsd: 15, bodyStopPlannedStopRiskUsd: 6 });
+        bodyStopPrice: 110, sizingStopPrice: 100, fractalPlannedStopRiskUsd: 15, bodyStopPlannedStopRiskUsd: 7.5 });
       expect(JSON.stringify(original)).toBe(before);
     });
-    test('short moves one quarter from open toward the lower close, above the dYdX entry reference', () => {
-      const result = entry.withPurpleDydxBodyQuarterStop(plan('short'), { ...candle(), openRef: 118, closeRef: 110 }, signal('short'), 108);
-      expect(result.stop.price).toBe(116); expect(result.sizing.size).toBe(.75);
+    test('short uses the candle open above the dYdX entry reference, not its high wick or close', () => {
+      const result = entry.withPurpleDydxBodyOpenStop(plan('short'), { ...candle(), openRef: 118, closeRef: 110 }, signal('short'), 108);
+      expect(result.stop.price).toBe(118); expect(result.sizing.size).toBe(.75);
       expect(result.sizingStop.price).toBe(140);
     });
     test.each([
-      ['long', 100, 110, 102.5], ['short', 100, 90, 97.5]
-    ])('matches the agreed %s formula from open, not a quarter from close', (direction, open, close, expected) => {
-      const result = entry.withPurpleDydxBodyQuarterStop(plan(String(direction)), {
+      ['long', 100, 110, 100], ['short', 100, 90, 100]
+    ])('uses the exact %s body start without a buffer or quarter-body offset', (direction, open, close, expected) => {
+      const result = entry.withPurpleDydxBodyOpenStop(plan(String(direction)), {
         ...candle(), openRef: open, closeRef: close
       }, signal(direction as 'long' | 'short'), Number(close));
       expect(result.stop.price).toBe(expected);
+    });
+    test.each([
+      ['long', 118, 110, 120], ['short', 110, 118, 108], ['long', 110, 110, 120]
+    ])('uses the open even for %s with opposite-color or doji dYdX body %s to %s', (direction, open, close, reference) => {
+      const result = entry.withPurpleDydxBodyOpenStop(plan(String(direction)), {
+        ...candle(), openRef: open, closeRef: close
+      }, signal(direction as 'long' | 'short'), Number(reference));
+      expect(result.stop.price).toBe(open);
+      expect(result.initialStopPolicy.bodyFraction).toBe(0);
+    });
+    test.each([
+      ['signal-body-open', 'dYdX signal candle body open'],
+      ['signal-body-quarter', 'dYdX signal-body 25% from open'],
+      ['signal-body-midpoint', 'dYdX signal-body midpoint']
+    ])('reports the recorded %s mail policy, including older queued notifications', (mode, label) => {
+      const activePlan = {stop: {price: 118}, initialStopPolicy: {mode}};
+      const intent = {signature: `${market}|GAP_DAILY|${signal().time}|long`, outcome: 'CONFIRMED', plan: {activePlan}};
+      const mail = purpleTriggerEmail(market, signal(), {intent}, {});
+      expect(mail.body).toContain(`Planned initial SL (${label}): 118`);
     });
     test.each(['source', 'old-hour', 'future-close', 'invalid-ohlc', 'missing-open', 'no-fractal', 'direction', 'not-protective', 'equal-reference', 'max-distance'])('fails closed without a silent fractal fallback: %s', kind => {
       const p: any = plan(), c: any = candle(), s: any = signal(); let reference = 120;
@@ -209,10 +229,10 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       if (kind === 'missing-open') delete c.openRef;
       if (kind === 'no-fractal') p.stop.valid = false;
       if (kind === 'direction') p.direction = 'short';
-      if (kind === 'not-protective') reference = 111;
-      if (kind === 'equal-reference') reference = 112;
+      if (kind === 'not-protective') reference = 109;
+      if (kind === 'equal-reference') reference = 110;
       if (kind === 'max-distance') p.stop.maxDistancePct = .01;
-      expect(() => entry.withPurpleDydxBodyQuarterStop(p, c, s, reference)).toThrow();
+      expect(() => entry.withPurpleDydxBodyOpenStop(p, c, s, reference)).toThrow();
     });
   });
 
@@ -284,7 +304,7 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       expect(subject).toContain(`${asset} PURPLE LONG TRIGGERED`);
       expect(body).toContain(`Execution market: dYdX ${market}`);
       expect(body).toContain('Order result: PLACED'); expect(body).toContain('TPs: none.');
-      expect(body).toContain('Planned initial SL (dYdX signal-body 25% from open): 118.25');
+      expect(body).toContain('Planned initial SL (dYdX signal candle body open): 118');
       return { sent: true };
     });
     const managed: any = state(); await monitor.checkGapDailyEntry(managed, inputs().payload, {});
@@ -395,7 +415,7 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
         gapDailyEntry: { setup: 'purple-line', enabled: true, env: entryEnv,
           source: `Binance Spot ${symbol} 1H + 1D`, executionMarket: market,
           takeProfitMode: 'trailing-only', futuresDeltaFilter: { enabled: false },
-          initialStop: { mode: 'signal-body-quarter', bodyFraction: .25, candleSource: 'dydx-1h', tightenOnly: true } } });
+          initialStop: { mode: 'signal-body-open', bodyFraction: 0, candleSource: 'dydx-1h', tightenOnly: true } } });
       const otherMarket = market === 'SOL-USD' ? 'ETH-USD' : 'SOL-USD';
       process.env[PURPLE_LINE_SETUPS[otherMarket].enabledEnv] = 'false';
       expect(purpleLineEntryEnabled(market)).toBe(true);
@@ -407,20 +427,20 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
     expect(purpleLineEntryEnabled('toString')).toBe(false);
     });
 
-    test('keeps original fractal sizing but places a dYdX quarter-body SL and manages the actual smaller fill', async () => {
+    test('keeps original fractal sizing but places a dYdX body-open SL and manages the actual smaller fill', async () => {
       const managed: any = state(), result: any = {};
       await monitor.executeGapDailyEntry(managed, signal(), result);
       expect(result.tradePlaced).toBe(true);
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
       expect(gap.fetchDydxHourlyCandlesForMarket).toHaveBeenCalledWith(market);
       expect(orders.placeOrder).toHaveBeenCalledWith(expect.objectContaining({ market, profile: 'NO_TP',
-        signal: 'LONG_ENTRY', size: 1.4, static_sl: 118.25, take_profits: [] }));
-      expect(managed.managedPosition).toMatchObject({ takeProfitMode: 'trailing-only', takeProfits: [], initialSize: .4, currentStop: 118.25,
+        signal: 'LONG_ENTRY', size: 1.4, static_sl: 118, take_profits: [] }));
+      expect(managed.managedPosition).toMatchObject({ takeProfitMode: 'trailing-only', takeProfits: [], initialSize: .4, currentStop: 118,
         currentStopFractalTimestamp: iso(closeAt - 3 * HOUR), currentStopFractalCandleSource: 'dydx-1h' });
       expect(managed.gapDailyEntry.intent.plan.activePlan.sizingStop.price).toBe(109.89);
       expect(managed.gapDailyEntry.intent.plan.activePlan.sizing.plannedStopRiskUsd).toBeCloseTo(1.4 * (120 - 109.89));
       expect(orders.placeOrder.mock.calls[0][0].decentrader.initialStopPolicy).toMatchObject({ candleSource: 'dydx-1h',
-        mode: 'signal-body-quarter', bodyFraction: .25, open: 118, close: 119, bodyStopPrice: 118.25, sizingStopPrice: 109.89 });
+        mode: 'signal-body-open', bodyFraction: 0, open: 118, close: 119, bodyStopPrice: 118, sizingStopPrice: 109.89 });
       expect(orders.syncTrailingStop).toHaveBeenCalled();
       expect(orders.syncTakeProfits).not.toHaveBeenCalled();
       expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
@@ -428,7 +448,7 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       expect(orders.placeOrder.mock.calls[0][0].gap_daily_futures_delta).toBeUndefined();
       expect(entry.readEthEntryFuturesDelta).not.toHaveBeenCalled();
     });
-    test('real short plan sizes from a dYdX top fractal but stops one quarter from that hour open', async () => {
+    test('real short plan sizes from a dYdX top fractal but stops at that hour open', async () => {
       (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue([125, 128, 130, 127, 124].map((high, i) => ({
         startedAt: iso(closeAt - (5 - i) * HOUR), open: String(high - 2), close: String(high - 3),
         high: String(high), low: String(high - 8)
@@ -436,9 +456,9 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       const managed: any = state(), result: any = {};
       await monitor.executeGapDailyEntry(managed, signal('short'), result);
       expect(result.tradePlaced).toBe(true);
-      expect(orders.placeOrder).toHaveBeenCalledWith(expect.objectContaining({ size: 1.4, static_sl: 121.75, profile: 'NO_TP', take_profits: [] }));
+      expect(orders.placeOrder).toHaveBeenCalledWith(expect.objectContaining({ size: 1.4, static_sl: 122, profile: 'NO_TP', take_profits: [] }));
       expect(managed.gapDailyEntry.intent.plan.activePlan.sizingStop.price).toBeCloseTo(130.13);
-      expect(managed.managedPosition).toMatchObject({ direction: 'short', currentStop: 121.75,
+      expect(managed.managedPosition).toMatchObject({ direction: 'short', currentStop: 122,
         currentStopFractalTimestamp: iso(closeAt - 3 * HOUR) });
     });
     test.each(['long', 'short'])('first %s fractal trail never widens or equals the initial body stop; improvement ratchets it', async direction => {
@@ -572,7 +592,7 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       const managed: any = state();
       await monitor.executeGapDailyEntry(managed, signal(), {});
       expect(managed.managedPosition.takeProfitMode).toBe('trailing-only');
-      expect(managed.managedPosition.currentStop).toBe(118.25);
+      expect(managed.managedPosition.currentStop).toBe(118);
       expect(managed.managedPosition.currentStopFractalTimestamp).toBe(iso(closeAt - 3 * HOUR));
       expect(managed.gapDailyEntry.intent.outcome).toBe('CONFIRMED');
       expect(orders.syncTrailingStop).toHaveBeenCalled();
@@ -608,21 +628,24 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       expect(map).not.toHaveBeenCalled();
       expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
     });
-    test.each(['fractal', 'midpoint'])('recovers a delayed legacy %s fill without moving its recorded stop or repeating an entry', async legacy => {
+    test.each(['fractal', 'midpoint', 'quarter'])('recovers a delayed legacy %s fill without moving its recorded stop or repeating an entry', async legacy => {
       orders.placeOrder.mockRejectedValue(new Error('uncertain submission'));
       const managed: any = state();
       await expect(monitor.executeGapDailyEntry(managed, signal(), {})).rejects.toThrow('uncertain submission');
       expect(managed.gapDailyEntry.intent.outcome).toBe('UNKNOWN');
-      // Existing submissions keep the submitted SL rather than acquiring the new quarter-body policy.
+      // Existing submissions keep the submitted SL rather than acquiring the new body-open policy.
       delete managed.gapDailyEntry.intent.futuresDelta;
       delete managed.gapDailyEntry.intent.orderAlert.gap_daily_futures_delta;
       const legacyPlan = managed.gapDailyEntry.intent.plan.activePlan;
       if (legacy === 'fractal') {
         legacyPlan.stop = legacyPlan.sizingStop;
         delete legacyPlan.sizingStop; delete legacyPlan.initialStopPolicy;
-      } else {
+      } else if (legacy === 'midpoint') {
         legacyPlan.stop = { ...legacyPlan.stop, price: 118.5, source: 'dydx-signal-body-midpoint' };
         legacyPlan.initialStopPolicy = { mode: 'signal-body-midpoint', candleSource: 'dydx-1h', midpoint: 118.5 };
+      } else {
+        legacyPlan.stop = { ...legacyPlan.stop, price: 118.25, source: 'dydx-signal-body-quarter' };
+        legacyPlan.initialStopPolicy = { mode: 'signal-body-quarter', bodyFraction: .25, candleSource: 'dydx-1h', bodyStopPrice: 118.25 };
       }
       managed.gapDailyEntry.intent.orderAlert.static_sl = legacyPlan.stop.price;
       delete managed.gapDailyEntry.intent.orderAlert.decentrader.initialStopPolicy;
@@ -636,7 +659,7 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       const result = await restarted.checkManagedPosition();
       expect(result.ok).toBe(true);
       expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
-      expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.currentStop).toBe(legacy === 'fractal' ? 109.89 : 118.5);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.currentStop).toBe(legacy === 'fractal' ? 109.89 : legacy === 'midpoint' ? 118.5 : 118.25);
       expect(orders.syncTrailingStop).toHaveBeenCalled();
       expect(orders.placeOrder).toHaveBeenCalledTimes(1); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
       expect(delta).not.toHaveBeenCalled();

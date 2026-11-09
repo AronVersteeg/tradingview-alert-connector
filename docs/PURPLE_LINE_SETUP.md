@@ -63,13 +63,13 @@ Historical chart coverage remains limited to actually available source data.
 - Binance triggers the entry only. The exact same-hour closed **dYdX** candle
   supplies execution OHLC. Original dYdX fractal risk sizing and dynamic
   downsizing remain unchanged. Existing $15 risk configuration is reused.
-- Initial SL is `dydx.open + 0.25 * (dydx.close - dydx.open)`: one quarter of the
-  body from open toward close, excluding wicks and with no added buffer. The original
+- Initial purple SL is `dydx.open`: the start of the exact same-hour closed
+  dYdX candle body, excluding wicks and with no added buffer. The original
   confirmed dYdX fractal remains the sizing/trailing anchor. Later stops only
-  tighten; a worse/equal fractal does not widen the quarter-body stop. This policy
+  tighten; a worse/equal fractal does not widen the body-open stop. This policy
   applies only to new entries after deployment; existing positions and uncertain
-  submissions retain their recorded stops. New manual entries also use this
-  initial-stop formula, with their own unchanged TP and fractal-sizing policies.
+  submissions retain their recorded stops. Manual entries retain their separate
+  quarter-body initial SL (`open + 0.25 * (close - open)`), TP and fractal-sizing policies.
 - No TP orders: `NO_TP`, empty ladder and persisted `trailing-only` management,
   including after restart. Profit/loss exits therefore depend on protective
   stops. Missing protective execution support blocks new entries.

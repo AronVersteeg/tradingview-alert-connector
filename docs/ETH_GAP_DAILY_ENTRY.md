@@ -65,8 +65,8 @@ dYdX 1H candle covering that exact signal hour** provides all execution-side dat
 - Order sizing first uses the original confirmed dYdX fractal SL, with the existing
   buffer, risk budget, rounding and collateral caps. This size is not increased
   when the actual SL moves closer.
-- The actual initial SL is `dydx.open + 0.25 * (dydx.close - dydx.open)`, one quarter
-  of the body from open toward close (long or short), excluding wicks,
+- The actual initial purple SL is `dydx.open`, the start of the body of the
+  exact same-hour closed dYdX candle (long or short), excluding wicks,
   without a percentage buffer or minimum-distance widening. Exchange tick rounding
   still applies. OHLC follows the existing dYdX chart-normalization path, including
   thin-market orderbook-mid mapping where applicable.
@@ -74,8 +74,8 @@ dYdX 1H candle covering that exact signal hour** provides all execution-side dat
   fractal stops keep the existing confirmation, delay, wick-buffer and protective
   stop-breach logic. The first and all later updates must strictly improve the
   actual current stop: higher for longs, lower for shorts. Equal/worse candidates
-  leave the quarter-body stop in place, with coverage repair if necessary.
-- Missing/malformed/stale same-hour dYdX data or a quarter-body stop on the wrong side of
+  leave the body-open stop in place, with coverage repair if necessary.
+- Missing/malformed/stale same-hour dYdX data or a body-open stop on the wrong side of
   the oracle block entry; no silent fallback to Spot or the old fractal price.
   Existing freshness, maximum-distance and exchange risk/downsize checks remain.
 
@@ -108,13 +108,14 @@ reconciliation without an FD check. The chart cache and its stored measurements
 are unchanged.
 The existing ETH state file also holds the durable intent and position policy.
 `gapDailyEntry.initialStop` describes the execution policy. Each new intent's plan
-keeps `activePlan.sizingStop` (original fractal), `activePlan.stop` (actual quarter-body SL)
+keeps `activePlan.sizingStop` (original fractal), `activePlan.stop` (actual body-open SL)
 and `activePlan.initialStopPolicy` (exact dYdX hour/body and both planned risks).
 Orders carry the same policy/sizing anchor in their `decentrader` audit metadata.
 Sizing risk remains the original fractal risk; actual body-stop risk is separate
-(`bodyStopPlannedStopRiskUsd`). A quarter-body stop allows more room than the old
-midpoint on a candle moving in the trade direction, without increasing the order
-size. Risk/margin downsizing may still reduce the submitted fill.
+(`bodyStopPlannedStopRiskUsd`). A body-open stop allows more room than the old
+quarter-body or midpoint on a candle moving in the trade direction, without
+increasing the order size. Manual entries keep their separate quarter-body SL.
+Risk/margin downsizing may still reduce the submitted fill.
 No new public raw-history export endpoint is introduced.
 
 Tests: `test/ethGapDailyEntry.test.ts`, `test/dydxV4EntryRiskGuard.test.ts`,

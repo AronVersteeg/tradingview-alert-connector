@@ -844,7 +844,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
             ...payload.source,
             note:
               market === 'BTC-USD'
-                ? 'BTC Public V2 uses causal Binance Spot BTCUSDT gap intrusions. BTC_ENTRY_MODE selects manual, purple or off. Purple uses a same-hour Daily close break, dYdX quarter-body initial SL, fractal sizing/trailing and no TPs; informational intrusion emails remain independent.'
+                ? 'BTC Public V2 uses causal Binance Spot BTCUSDT gap intrusions. BTC_ENTRY_MODE selects manual, purple or off. Purple uses a same-hour Daily close break, initial SL at the dYdX signal candle open, fractal sizing/trailing and no TPs; informational intrusion emails remain independent.'
                 : market === 'PAXG-USD'
                 ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. When explicitly enabled, filtered Gold intrusions are independently managed on dYdX PAXG-USD with the shared risk, fractal SL and TP settings.'
                 : market === 'XAG-USD'

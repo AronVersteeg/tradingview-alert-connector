@@ -4,7 +4,7 @@ import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './dydxSignalBodyStop';
 import { btcCompanionEntryBlockReason, btcEntryMode, btcEntryModeStatus } from './btcEntryMode';
 import { EthGapDailySignal, EthEntryFuturesDelta,
-  freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyQuarterStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
+  freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyOpenStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
 import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
 import { PurpleLineContinuity } from './purpleLineContinuity';
 import { PurpleTriggerEmail, purpleTriggerEmail } from './purpleTriggerEmail';
@@ -973,7 +973,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         setup: 'purple-line', enabled: this.gapDailyEnabled(), env: purpleLineSetupForMarket(this.config.market)!.enabledEnv,
         source: `Binance Spot ${this.config.symbol} 1H + 1D`,
         executionMarket: this.config.market, takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
-        initialStop: { mode: 'signal-body-quarter', bodyFraction: PURPLE_BODY_STOP_FRACTION, candleSource: 'dydx-1h', sameSignalHour: true, bufferPct: 0,
+        initialStop: { mode: 'signal-body-open', bodyFraction: PURPLE_BODY_STOP_FRACTION, candleSource: 'dydx-1h', sameSignalHour: true, bufferPct: 0,
           sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
         futuresDeltaFilter: { enabled: false, reason: 'Futures delta is observe-only, not an entry requirement.' },
         activatedAt: state.gapDailyEntry?.activatedAt, decision: state.gapDailyEntry?.decision,
@@ -1173,7 +1173,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     const fractalPlan = buildDirectionalPlan(signal.direction, account, marketInfo, rows, rows.length - 1,
       undefined, undefined, { longTp: [], shortTp: [] }, price,
       String(process.env.DECENTRADER_TRADE_SIZING_MODE || 'growth').trim().toLowerCase());
-    const activePlan = withPurpleDydxBodyQuarterStop(fractalPlan, rows[rows.length - 1], signal, price, this.config.asset);
+    const activePlan = withPurpleDydxBodyOpenStop(fractalPlan, rows[rows.length - 1], signal, price, this.config.asset);
     return { market: this.config.market, marketInfo, price, activePlan, fractalCandleSource: 'dydx-1h',
       timestamp: new Date(signal.time * 1000).toISOString().slice(0, 19).replace('T', ' ') };
   }

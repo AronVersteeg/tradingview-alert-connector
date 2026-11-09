@@ -33,8 +33,10 @@ positions keep using Public V2 zones for subsequent automatic TP refreshes.
 
 Execution remains on dYdX BTC-USD. Both manual and purple use the original
 dYdX confirmed 1H fractal for sizing and the exact same-hour closed dYdX body for
-the initial stop: `open + 0.25 * (close - open)`, with no buffer. Fractal trailing
-only tightens. The existing fixed-USD risk, collateral, depth, step/tick and
+the initial stop. Purple stops at `open`; manual retains
+`open + 0.25 * (close - open)`, both without a buffer. Fractal trailing
+only tightens. Existing positions and already-submitted intents retain their
+recorded stops. The existing fixed-USD risk, collateral, depth, step/tick and
 dynamic-downsizing checks still apply.
 
 Purple uses NO_TP / trailing-only. There is no FD or OI entry gate. Only the latest

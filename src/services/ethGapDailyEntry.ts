@@ -22,8 +22,8 @@ export type PurpleLineSignal = {
 
 export type EthGapDailySignal = PurpleLineSignal;
 
-export { DYDX_BODY_STOP_FRACTION as PURPLE_BODY_STOP_FRACTION,
-  withDydxBodyQuarterStop as withPurpleDydxBodyQuarterStop } from './dydxSignalBodyStop';
+export const PURPLE_BODY_STOP_FRACTION = 0;
+export { withDydxBodyOpenStop as withPurpleDydxBodyOpenStop } from './dydxSignalBodyStop';
 
 export type EthEntryFuturesDelta = {
   symbol: 'ETHUSDT'; venue: 'Binance USD-M Futures'; interval: '5m';

@@ -4,7 +4,9 @@ type BodyStopSignal = { time: number; closedAt: number; direction: 'long' | 'sho
 
 export class ManualStopCandlePendingError extends Error {}
 
-export function withDydxBodyQuarterStop(activePlan: any, candle: any, signal: BodyStopSignal, referencePrice: number, asset = 'ETH'): any {
+function withDydxBodyStop(activePlan: any, candle: any, signal: BodyStopSignal, referencePrice: number, asset: string, bodyFraction: 0 | 0.25): any {
+  const atOpen = bodyFraction === 0;
+  const policyLabel = atOpen ? 'body-open' : 'quarter-body';
   const sizingStop = activePlan?.stop;
   if (!sizingStop?.valid || !Number.isFinite(Number(sizingStop.price)) || !(Number(sizingStop.price) > 0) ||
     !sizingStop.fractal || activePlan.status === 'invalid-stop') {
@@ -16,27 +18,35 @@ export function withDydxBodyQuarterStop(activePlan: any, candle: any, signal: Bo
     signal.closedAt !== signal.time + 3600 || signal.closedAt * 1000 > Date.now() ||
     ![open, close, high, low, referencePrice].every(value => Number.isFinite(value) && value > 0) ||
     low > Math.min(open, close) || high < Math.max(open, close)) {
-    throw new Error(`${asset} quarter-body SL requires valid closed dYdX OHLC from the exact Binance signal hour.`);
+    throw new Error(`${asset} ${policyLabel} SL requires valid closed dYdX OHLC from the exact Binance signal hour.`);
   }
-  if (activePlan.direction !== signal.direction) throw new Error(`${asset} quarter-body SL direction does not match the entry signal.`);
-  const bodyStopPrice = open + DYDX_BODY_STOP_FRACTION * (close - open);
+  if (activePlan.direction !== signal.direction) throw new Error(`${asset} ${policyLabel} SL direction does not match the entry signal.`);
+  const bodyStopPrice = open + bodyFraction * (close - open);
   if (signal.direction === 'long' ? bodyStopPrice >= referencePrice : bodyStopPrice <= referencePrice) {
-    throw new Error(`${asset} dYdX quarter-body SL is not on the protective side of the current oracle price.`);
+    throw new Error(`${asset} dYdX ${policyLabel} SL is not on the protective side of the current oracle price.`);
   }
   const distance = Math.abs(referencePrice - bodyStopPrice), riskPct = distance / Math.max(1, referencePrice);
   if (Number.isFinite(sizingStop.maxDistancePct) && riskPct > sizingStop.maxDistancePct) {
-    throw new Error(`${asset} dYdX quarter-body SL exceeds the existing maximum stop distance.`);
+    throw new Error(`${asset} dYdX ${policyLabel} SL exceeds the existing maximum stop distance.`);
   }
   // Keep sizing and the confirmed dYdX fractal anchor; replace only the execution stop price.
   return { ...activePlan, sizingStop: { ...sizingStop, fractal: { ...sizingStop.fractal } },
-    stop: { ...sizingStop, price: bodyStopPrice, source: 'dydx-signal-body-quarter', distance, riskPct,
+    stop: { ...sizingStop, price: bodyStopPrice, source: atOpen ? 'dydx-signal-body-open' : 'dydx-signal-body-quarter', distance, riskPct,
       buffer: 0, adjustedToMinDistance: false, wickGuardPrice: undefined, wickGuardSource: undefined,
-      reason: 'dYdX signal-body SL at 25% from open; original confirmed fractal retained as the trailing anchor.' },
-    initialStopPolicy: { mode: 'signal-body-quarter', bodyFraction: DYDX_BODY_STOP_FRACTION, candleSource: 'dydx-1h',
+      reason: `dYdX signal-body SL at ${atOpen ? 'candle open' : '25% from open'}; original confirmed fractal retained as the trailing anchor.` },
+    initialStopPolicy: { mode: atOpen ? 'signal-body-open' : 'signal-body-quarter', bodyFraction, candleSource: 'dydx-1h',
       candleStartedAt: new Date(signal.time * 1000).toISOString(), candleClosedAt: new Date(signal.closedAt * 1000).toISOString(),
       open, close, bodyStopPrice, sizingStopPrice: sizingStop.price, sizingSource: 'dydx-fractal',
       fractalPlannedStopRiskUsd: activePlan.sizing?.plannedStopRiskUsd,
       bodyStopPlannedStopRiskUsd: Number(activePlan.sizing?.size) * distance } };
+}
+
+export function withDydxBodyQuarterStop(activePlan: any, candle: any, signal: BodyStopSignal, referencePrice: number, asset = 'ETH'): any {
+  return withDydxBodyStop(activePlan, candle, signal, referencePrice, asset, DYDX_BODY_STOP_FRACTION);
+}
+
+export function withDydxBodyOpenStop(activePlan: any, candle: any, signal: BodyStopSignal, referencePrice: number, asset = 'ETH'): any {
+  return withDydxBodyStop(activePlan, candle, signal, referencePrice, asset, 0);
 }
 
 export function withManualDydxBodyQuarterPlan(plan: any, request: {
