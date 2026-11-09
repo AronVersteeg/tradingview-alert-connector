@@ -68,6 +68,12 @@ a trade. Existing managers continue reconciling and protecting their positions
 regardless of the selected entry mode. No stop, TP ladder or legacy position is
 migrated at a switch.
 
+The Public V2 manager also checks existing protection at roughly 1H close +2
+seconds, independently of the slower map/entry scan. Missing dYdX candle coverage
+or failed checks trigger bounded retries for five minutes; the regular poll is
+retained. This does not change the separate manual owner's scheduling or transfer
+ownership. Fractal confirmation and tighten-only rules remain unchanged.
+
 Purple includes the same durable PREPARING/BROADCASTING checkpoint, fresh unsent
 revalidation, uncertain-send duplicate protection and queued signal notifications
 as ETH/SOL. BTC's manual ownership is checked again at the purple broadcast

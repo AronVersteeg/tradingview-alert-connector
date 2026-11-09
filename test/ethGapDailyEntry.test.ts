@@ -616,6 +616,42 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       expect(plan).not.toHaveBeenCalled(); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
       expect(delta).not.toHaveBeenCalled();
     });
+    test('coalesces overlapping regular and close-aligned checks into one protective operation', async () => {
+      await monitor.executeGapDailyEntry(state(), signal(), {});
+      const account = await orders.getAccountSnapshot([market]);
+      orders.getAccountSnapshot.mockClear(); orders.syncTrailingStop.mockClear();
+      let resolve: (value: any) => void = () => {};
+      const waiting = new Promise(done => { resolve = done; });
+      orders.getAccountSnapshot.mockReturnValueOnce(waiting);
+      const regular = monitor.checkManagedPosition(), closedHour = monitor.checkManagedPosition();
+      resolve(account);
+      const [first, second] = await Promise.all([regular, closedHour]);
+      expect(first).toBe(second);
+      expect(orders.getAccountSnapshot).toHaveBeenCalledTimes(1);
+      expect(orders.syncTrailingStop).toHaveBeenCalledTimes(1);
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+      expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+    });
+    test('reports stale dYdX close coverage for retries without widening a stop or repeating an entry', async () => {
+      await monitor.executeGapDailyEntry(state(), signal(), {});
+      const candles = await gap.fetchDydxHourlyCandlesForMarket(market);
+      const oldStop = JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.currentStop;
+      jest.setSystemTime(closeAt + HOUR + 2000);
+      const stale = await monitor.checkManagedPosition();
+      expect(stale).toMatchObject({ ok: true, trailingCandle: { source: 'dydx-1h', pending: true,
+        closedAt: iso(closeAt), expectedClosedAt: iso(closeAt + HOUR) } });
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.currentStop).toBe(oldStop);
+      (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue([...candles!, {
+        startedAt: iso(closeAt), open: '119', close: '119', high: '120', low: '118'
+      }]);
+      const fresh = await monitor.checkManagedPosition();
+      expect(fresh.trailingCandle).toMatchObject({ pending: false, closedAt: iso(closeAt + HOUR) });
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+      // Old pending evidence must not survive after the position has been cleared.
+      const cleared = JSON.parse(fs.readFileSync(file, 'utf8')); delete cleared.managedPosition;
+      fs.writeFileSync(file, JSON.stringify(cleared));
+      expect((await monitor.checkManagedPosition()).trailingCandle).toBeUndefined();
+    });
     if (asset === 'BTC') test.each(['manual', 'off'])('preserves purple trailing-only ownership after switching BTC to %s', async mode => {
       await monitor.executeGapDailyEntry(state(), signal(), {});
       const previous = orders.syncTrailingStop.mock.calls.length;

@@ -62,6 +62,13 @@ as well when all new ETH entries should stop.
 For new entries, Binance Spot determines only the purple signal. The **closed
 dYdX 1H candle covering that exact signal hour** provides all execution-side data:
 
+- Position protection runs independently at roughly 1H close +2 seconds, with
+  bounded retries for missing dYdX candle coverage or failed checks (five-second
+  intervals initially, then thirty seconds, ending after five minutes). The
+  existing regular poll remains a fallback. Map reads and entry enablement do
+  not gate this clock; the normal position lock prevents overlapping processing.
+  The status exposes `trailingCloseCheck` and `positionManagement.trailingCandle`.
+  Source/exchange latency can still delay the actual stop update.
 - Order sizing first uses the original confirmed dYdX fractal SL, with the existing
   buffer, risk budget, rounding and collateral caps. This size is not increased
   when the actual SL moves closer.

@@ -95,6 +95,8 @@ const MARKET = 'ETH-USD';
 const SYMBOL = 'ETHUSDT';
 const PRICE_STEP = 5;
 const HOUR_MS = 3_600_000;
+const TRAILING_CLOSE_DELAY_MS = 2_000;
+const TRAILING_CLOSE_RETRY_WINDOW_MS = 5 * 60_000;
 
 type WhaleSnapshotProvider = {
   snapshot(): any;
@@ -825,6 +827,9 @@ export class OpenLiquidityV2EthTradeMonitor {
   private closedHourTimer: NodeJS.Timeout | undefined;
   private closedHourChecksActive = false;
   private managementInterval: NodeJS.Timeout | undefined;
+  private managementClosedHourTimer: NodeJS.Timeout | undefined;
+  private managementClosedHourActive = false;
+  private nextManagementCloseCheckAt: string | undefined;
   private managementPromise: Promise<any> | undefined;
   private gapDailyRecoveryTimer: NodeJS.Timeout | undefined;
   private gapDailyRecoveryActive = true;
@@ -906,6 +911,35 @@ export class OpenLiquidityV2EthTradeMonitor {
     }, Math.max(0, nextAt - now));
   }
 
+  private scheduleClosedHourStopCheck(retryAt?: number, targetClose?: number): void {
+    if (!this.managementClosedHourActive) return;
+    const now = Date.now();
+    const hour = Math.floor(now / HOUR_MS) * HOUR_MS;
+    const nextAt = retryAt ?? (hour + TRAILING_CLOSE_DELAY_MS > now
+      ? hour + TRAILING_CLOSE_DELAY_MS : hour + HOUR_MS + TRAILING_CLOSE_DELAY_MS);
+    const expectedClose = targetClose ?? Math.floor(nextAt / HOUR_MS) * HOUR_MS;
+    this.nextManagementCloseCheckAt = new Date(nextAt).toISOString();
+    this.managementClosedHourTimer = setTimeout(async () => {
+      this.managementClosedHourTimer = undefined;
+      this.nextManagementCloseCheckAt = undefined;
+      let retry = false;
+      try {
+        // This path shares the position lock, never the slower map/entry scan.
+        const result = await this.checkManagedPosition();
+        const readThrough = Date.parse(result?.trailingCandle?.closedAt || '');
+        retry = result?.ok === false || Boolean(result?.trailingCandle?.pending) || readThrough < expectedClose;
+      } catch (error) {
+        retry = true;
+        console.error(`${this.config.asset} V2 closed-hour protective check failed:`, error);
+      } finally {
+        const nextRetry = Date.now() + (Date.now() - expectedClose < 30_000 ? 5_000 : 30_000);
+        const withinWindow = nextRetry < expectedClose + TRAILING_CLOSE_RETRY_WINDOW_MS;
+        this.scheduleClosedHourStopCheck(retry && withinWindow ? nextRetry : undefined,
+          retry && withinWindow ? expectedClose : undefined);
+      }
+    }, Math.max(0, nextAt - now));
+  }
+
   start(initialDelayMs = 75_000): void {
     if (this.interval || this.initialTimer || this.managementInterval) return;
     this.gapDailyRecoveryActive = true;
@@ -923,6 +957,8 @@ export class OpenLiquidityV2EthTradeMonitor {
           console.error(`${this.config.asset} V2 position management failed:`, error));
         void manage();
         this.managementInterval = setInterval(manage, this.pollMinutes() * 60_000);
+        this.managementClosedHourActive = true;
+        this.scheduleClosedHourStopCheck();
       }
       if (this.enabled()) {
         if (this.config.refreshLatestClosedHour) {
@@ -966,6 +1002,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       enabled: this.enabled(),
       running: this.running,
       positionManagement: this.managementStatus,
+      trailingCloseCheck: { enabled: this.managementClosedHourActive, delaySeconds: TRAILING_CLOSE_DELAY_MS / 1000,
+        maxRetrySeconds: TRAILING_CLOSE_RETRY_WINDOW_MS / 1000, nextCheckAt: this.nextManagementCloseCheckAt },
       market: this.config.market,
       ...(this.config.market === 'BTC-USD' ? { entryMode: btcEntryModeStatus() } : {}),
       autoTradeEnabled: this.autoTradeEnabled(),
@@ -2240,6 +2278,15 @@ export class OpenLiquidityV2EthTradeMonitor {
     const rows = dydxHourlyCandlesToFractalRows(
       await fetchDydxHourlyCandlesForMarket(this.config.market)
     );
+    const observedAt = Date.now();
+    const expectedClose = Math.floor(observedAt / HOUR_MS) * HOUR_MS;
+    const latestStart = Date.parse(rows[rows.length - 1]?.timestamp || '');
+    const readThrough = latestStart + HOUR_MS;
+    result.trailingCandle = { source: 'dydx-1h', observedAt: new Date(observedAt).toISOString(),
+      startedAt: Number.isFinite(latestStart) ? new Date(latestStart).toISOString() : null,
+      closedAt: Number.isFinite(readThrough) ? new Date(readThrough).toISOString() : null,
+      expectedClosedAt: new Date(expectedClose).toISOString(),
+      pending: !Number.isFinite(readThrough) || readThrough < expectedClose };
     const fractalDelay = Math.max(0, Math.min(10, Math.floor(numberEnv(
       'DECENTRADER_DYNAMIC_SL_FRACTAL_DELAY',
       numberEnv('DECENTRADER_TRAIL_FRACTAL_DELAY', 0)
@@ -2617,6 +2664,10 @@ export class OpenLiquidityV2EthTradeMonitor {
     this.closedHourChecksActive = false;
     if (this.closedHourTimer) clearTimeout(this.closedHourTimer);
     this.closedHourTimer = undefined;
+    this.managementClosedHourActive = false;
+    if (this.managementClosedHourTimer) clearTimeout(this.managementClosedHourTimer);
+    this.managementClosedHourTimer = undefined;
+    this.nextManagementCloseCheckAt = undefined;
     if (this.initialTimer) clearTimeout(this.initialTimer);
     if (this.interval) clearInterval(this.interval);
     if (this.managementInterval) clearInterval(this.managementInterval);
@@ -2626,7 +2677,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   async checkManagedPosition(): Promise<any> {
     if (this.managementPromise) return this.managementPromise;
     this.managementPromise = this.coordinator.exclusive(() => this.coordinator.withState(async (state) => {
-      const result: any = { running: true, lastStartedAt: nowNlIso() };
+      const result: any = { running: true, lastStartedAt: nowNlIso(), trailingCandle: undefined };
       this.managementStatus = { ...this.managementStatus, ...result, error: undefined };
       try {
         await this.recoverGapDailyIntent(state, result);

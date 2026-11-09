@@ -60,6 +60,15 @@ Historical chart coverage remains limited to actually available source data.
   five-minute signal limit is not widened. See [entry continuity](ENTRY_CONTINUITY.md).
 - Closed-hour monitoring starts around five seconds after the hour; source
   availability, shared throttling and retries can still introduce latency.
+- Existing V2 positions also receive an independent protective check about two
+  seconds after each 1H close, without waiting for map reconstruction or the entry
+  scan. If dYdX's latest closed candle is missing or the check fails, retries run
+  every five seconds initially and every thirty seconds after the first half
+  minute, for at most five minutes. The normal management poll remains a fallback.
+  Entry switches do not disable this protection. `positionManagement.trailingCandle`
+  records the source coverage/observation time and pending state;
+  `trailingCloseCheck` reports the next scheduled check. These are check timings,
+  not guaranteed exchange-update latencies. Fractal confirmation is unchanged.
 - Binance triggers the entry only. The exact same-hour closed **dYdX** candle
   supplies execution OHLC. Original dYdX fractal risk sizing and dynamic
   downsizing remain unchanged. Existing $15 risk configuration is reused.
