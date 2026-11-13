@@ -16,8 +16,8 @@
     return undefined;
   }
 
-  function filterGreenPositions(candles, signals, fractals) {
-    if (!signals.length) return [];
+  function replayGreenPositions(candles, signals, fractals) {
+    if (!signals.length) return { selected: [], position: undefined };
     const byEntry = new Map(signals.map(signal => [signal.closedAt, signal]));
     const selected = [], confirmed = [];
     let position, last, fractalIndex = 0;
@@ -56,10 +56,14 @@
       }
       last = candle;
     }
-    return selected;
+    return { selected, position };
   }
 
-  const api = Object.freeze({ filterGreenPositions });
+  function filterGreenPositions(candles, signals, fractals) {
+    return replayGreenPositions(candles, signals, fractals).selected;
+  }
+
+  const api = Object.freeze({ filterGreenPositions, replayGreenPositions });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcGreenPositionReplay = api;
 })(typeof globalThis === 'object' ? globalThis : this);

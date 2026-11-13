@@ -27,7 +27,7 @@
   const gapBoxes = window.BtcSpotGapBoxes;
   const gapWeeklyBreaks = window.BtcSpotGapWeeklyBreakouts;
   const intrusionDailyBreaks = window.BtcSpotIntrusionDailyBreakouts;
-  const purpleReplay = window.BtcSpotPurpleReplay;
+  const historicalReplay = window.BtcSpotHistoricalReplay;
   const greenReplay = window.BtcGreenPositionReplay;
   const intrusionConfluence = window.BtcSpotIntrusionConfluence;
   const futuresDelta = window.BtcIntrusionFuturesDelta;
@@ -56,7 +56,10 @@
   let intrusionLayer, intrusionHistory = savedIntrusions?.market === market && savedIntrusions.source === 'binance-spot-recorded-intrusions'
     ? savedIntrusions : undefined, intrusionModel, intrusionInputs;
   let intrusionReadFailed = false;
-  let purpleReplayLayer, purpleReplayData, purpleReplayInputs, purpleReplayMarkers = [], purpleReplayRequested = false;
+  const replayOverlays = asset === 'btc' ? [
+    { kind: 'green', label: 'Green', toggle: 'spotChartGapIntrusions', color: gapBoxes.GAP_COLOR, markers: [] },
+    { kind: 'purple', label: 'Purple', toggle: 'spotChartIntrusionDailyBreaks', color: '#ba68c8', markers: [] }
+  ] : [];
   let gapIntrusionLayer, gapIntrusionMarkers = [];
   let visibleGapIntrusionMarkers = [];
   let gapIntrusionInputs;
@@ -76,8 +79,8 @@
   const projectionLead = () => Math.max(gapLead(), (manualLayer?.rightLead(candles.length) || gapLead()) - viewport.RIGHT_BUFFER + 2);
   const chartCanvas = byId('spotChartCanvas');
   const standardHistoryLimit = 12000;
-  const chartHistoryLimit = () => purpleReplayData && candles.length
-    ? Math.max(standardHistoryLimit, Math.ceil((candles.at(-1).time - purpleReplayData.first) / 3600) + 1000)
+  const chartHistoryLimit = () => candles.length
+    ? Math.max(standardHistoryLimit, ...replayOverlays.filter(o => o.data).map(o => Math.ceil((candles.at(-1).time - o.data.first) / 3600) + 1000))
     : standardHistoryLimit;
   const mergeChartCandles = incoming => data.mergeCandles(candles, incoming, chartHistoryLimit());
   const analysisCandles = () => candles.length > standardHistoryLimit ? candles.slice(-standardHistoryLimit) : candles;
@@ -220,42 +223,57 @@
     }
   }
 
-  function updatePurpleReplay() {
-    if (!purpleReplayLayer || !purpleReplayData) return;
-    const inputs = purpleReplayInputs;
-    if (inputs?.version === closedDataVersion && inputs.recorded === intrusionModel) return;
-    purpleReplayMarkers = purpleReplay.loadedReplaySignals(purpleReplayData, candles, intrusionModel?.signals || [], market);
-    purpleReplayLayer.setData(purpleReplayMarkers);
-    purpleReplayInputs = { version: closedDataVersion, recorded: intrusionModel };
-    byId('spotChartPurpleReplayStatus').textContent =
-      `Purple replay (dashed): ${purpleReplayMarkers.length}/${purpleReplayData.signals.length} on loaded candles`;
+  function updateHistoricalReplay(overlay) {
+    if (!overlay?.layer || !overlay.data) return;
+    const recorded = overlay.kind === 'purple' ? intrusionModel?.signals : undefined;
+    if (overlay.inputs?.version === closedDataVersion && overlay.inputs.recorded === recorded) return;
+    overlay.markers = historicalReplay.loadedReplaySignals(overlay.data, candles, recorded || [], market);
+    overlay.layer.setData(overlay.markers);
+    overlay.inputs = { version: closedDataVersion, recorded };
+    byId(`spotChart${overlay.label}ReplayStatus`).textContent =
+      `${overlay.label} replay (dashed): ${overlay.markers.length}/${overlay.data.signals.length} on loaded candles`;
   }
 
-  async function loadPurpleReplay() {
-    if (!purpleReplayLayer || !purpleReplay || purpleReplayRequested || destroyed) return;
-    purpleReplayRequested = true;
-    const status = byId('spotChartPurpleReplayStatus');
+  async function loadHistoricalReplay(overlay) {
+    if (!overlay?.layer || !historicalReplay || overlay.requested || destroyed) return;
+    overlay.requested = true;
+    const status = byId(`spotChart${overlay.label}ReplayStatus`);
     status.hidden = false;
-    status.textContent = 'Purple replay pending';
+    status.textContent = `${overlay.label} replay pending`;
     try {
-      const response = await fetch(new URL('btc-purple-replay.json', assetBase), { signal: AbortSignal.timeout(15000) });
-      if (!response.ok) throw new Error('Purple replay unavailable');
+      const response = await fetch(new URL(`btc-${overlay.kind}-replay.json`, assetBase), { signal: AbortSignal.timeout(15000) });
+      if (!response.ok) throw new Error('Historical replay unavailable');
       const payload = await response.json();
       if (destroyed) return;
-      purpleReplayData = purpleReplay.readReplay(payload);
-      updatePurpleReplay();
+      overlay.data = historicalReplay.readReplay(payload, overlay.kind);
+      if (overlay.kind === 'green') {
+        gapIntrusionInputs = undefined;
+        updateGapIntrusionMarkers();
+      } else updateHistoricalReplay(overlay);
     } catch {
       if (!destroyed) {
-        purpleReplayRequested = false;
-        status.textContent = 'Purple replay unavailable';
+        overlay.requested = false;
+        status.textContent = `${overlay.label} replay unavailable`;
       }
     }
+  }
+
+  const greenHistory = replayOverlays.find(o => o.kind === 'green');
+  const purpleHistory = replayOverlays.find(o => o.kind === 'purple');
+  function attachHistoricalReplay(overlay) {
+    if (!overlay) return;
+    overlay.layer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(overlay.color, 1, [5, 4]);
+    overlay.layer.setVisible(byId(overlay.toggle).checked);
+    candlesSeries.attachPrimitive(overlay.layer);
+  }
+  function loadEnabledHistoricalReplays() {
+    for (const overlay of replayOverlays) if (byId(overlay.toggle).checked) void loadHistoricalReplay(overlay);
   }
 
   function updateIntrusionDailyBreakouts() {
     const status = byId('spotChartIntrusionDailyStatus');
     if (!intrusionHistory || !fractalModel) {
-      updatePurpleReplay();
+      updateHistoricalReplay(purpleHistory);
       return updateIntrusionConfluence();
     }
     const hour = Math.floor(Date.now() / 3_600_000), inputs = intrusionInputs;
@@ -288,7 +306,7 @@
       status.textContent = `${intrusionLabel} pending: ${error.message}`;
       status.dataset.stale = 'true';
     }
-    updatePurpleReplay();
+    updateHistoricalReplay(purpleHistory);
     updateIntrusionConfluence();
   }
 
@@ -371,10 +389,14 @@
       gapIntrusionMarkers = [];
     }
     gapIntrusionInputs = { gap: gapTimeline, history: intrusionHistory, version: closedDataVersion, hour };
+    const cutoff = greenHistory?.data?.before;
+    // The prefiltered archive ends flat, so the recorded simulation can start there without an overlapping position.
     visibleGapIntrusionMarkers = asset === 'btc'
-      ? greenReplay.filterGreenPositions(candles, gapIntrusionMarkers, hourlyBoxModel?.fractals || [])
+      ? greenReplay.filterGreenPositions(candles, cutoff ? gapIntrusionMarkers.filter(marker => marker.time >= cutoff) : gapIntrusionMarkers,
+        hourlyBoxModel?.fractals || [])
       : gapIntrusionMarkers;
     gapIntrusionLayer.setData(visibleGapIntrusionMarkers);
+    updateHistoricalReplay(greenHistory);
   }
   window.addEventListener('btc-spot-chart:intrusion-history', event => {
     if (event.detail?.market !== market || event.detail.source !== 'binance-spot-recorded-intrusions') return;
@@ -578,6 +600,7 @@
       candlesSeries.attachPrimitive(orderBlockLayer);
       gapIntrusionLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(gapBoxes.GAP_COLOR);
       gapIntrusionLayer.setVisible(byId('spotChartGapIntrusions').checked);
+      attachHistoricalReplay(greenHistory);
       candlesSeries.attachPrimitive(gapIntrusionLayer);
       // Draw Weekly last so orange remains visible when both mark the same candle.
       for (const state of [...breakoutStates].reverse()) {
@@ -589,11 +612,7 @@
       confluenceLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive('#315ca8', 3);
       confluenceLayer.setVisible(byId('spotChartIntrusionConfluence').checked);
       candlesSeries.attachPrimitive(confluenceLayer);
-      if (asset === 'btc') {
-        purpleReplayLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive('#ba68c8', 1, [5, 4]);
-        purpleReplayLayer.setVisible(byId('spotChartIntrusionDailyBreaks').checked);
-        candlesSeries.attachPrimitive(purpleReplayLayer);
-      }
+      attachHistoricalReplay(purpleHistory);
       intrusionLayer = new intrusionDailyBreaks.IntrusionDailyBreakoutPrimitive();
       intrusionLayer.setDeltaEnabled(true);
       intrusionLayer.setPocEnabled(true);
@@ -659,7 +678,8 @@
         getIntrusionConfluence: () => confluenceModel ? structuredClone(confluenceModel) : null,
         getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({
           ...signal, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
-        getPurpleReplayMarkers: () => purpleReplayMarkers.map(marker => ({ ...marker })),
+        getPurpleReplayMarkers: () => purpleHistory?.markers.map(marker => ({ ...marker })) || [],
+        getGreenReplayMarkers: () => greenHistory?.markers.map(marker => ({ ...marker })) || [],
         getIntrusionDeltaLabels: () => intrusionLayer?.getDeltaLabels() || [],
         getIntrusionPocCrosses: () => intrusionLayer?.getPocCrosses() || [],
         getIntrusionSpotPoc: () => [...pocRecords.values()].map(record => ({ ...record, ...(record.poc ? { poc: { ...record.poc } } : {}) })),
@@ -787,7 +807,7 @@
       await ensureChart();
       if (!active || destroyed) return;
       openStream();
-      if (byId('spotChartIntrusionDailyBreaks').checked) void loadPurpleReplay();
+      loadEnabledHistoricalReplays();
       if (!initialData || Date.now() - lastRestAt > 30_000) void loadRecent();
       feedText();
       scheduleOrderBlockHistory();
@@ -795,7 +815,7 @@
   }
 
   byId('spotChartRefresh').addEventListener('click', async () => {
-    try { await ensureChart(); await loadRecent(); await refreshFractals(true); void refreshIntrusionHistory(true); if (byId('spotChartIntrusionDailyBreaks').checked) void loadPurpleReplay(); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
+    try { await ensureChart(); await loadRecent(); await refreshFractals(true); void refreshIntrusionHistory(true); loadEnabledHistoricalReplays(); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
   });
   for (const [id, key] of [['spotChartDaily', 'daily'], ['spotChartWeekly', 'weekly'], ['spotChartMonthly', 'monthly'], ['spotChartBroken', 'broken']]) {
     byId(id).addEventListener('change', (event) => {
@@ -828,14 +848,18 @@
     updateOrderBlocks();
   });
   byId('spotChartObMitigation').addEventListener('change', updateOrderBlocks);
-  byId('spotChartGapIntrusions').addEventListener('change', event => gapIntrusionLayer?.setVisible(event.target.checked));
+  byId('spotChartGapIntrusions').addEventListener('change', event => {
+    gapIntrusionLayer?.setVisible(event.target.checked);
+    greenHistory?.layer?.setVisible(event.target.checked);
+    if (event.target.checked) void loadHistoricalReplay(greenHistory);
+  });
   for (const state of breakoutStates) {
     byId(`spotChartGap${state.name}Breaks`).addEventListener('change', (event) => state.layer?.setVisible(event.target.checked));
   }
   byId('spotChartIntrusionDailyBreaks').addEventListener('change', (event) => {
     intrusionLayer?.setVisible(event.target.checked);
-    purpleReplayLayer?.setVisible(event.target.checked);
-    if (event.target.checked) { void loadPurpleReplay(); void refreshIntrusionHistory(); void refreshIntrusionDelta(); void refreshIntrusionPoc(); }
+    purpleHistory?.layer?.setVisible(event.target.checked);
+    if (event.target.checked) { void loadHistoricalReplay(purpleHistory); void refreshIntrusionHistory(); void refreshIntrusionDelta(); void refreshIntrusionPoc(); }
     else { deltaController?.abort(); pocController?.abort(); }
   });
   byId('spotChartManual').addEventListener('change', (event) => {
