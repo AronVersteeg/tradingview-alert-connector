@@ -21,6 +21,8 @@ export type PurpleLineSignal = {
 };
 
 export type EthGapDailySignal = PurpleLineSignal;
+export type GreenLineSignal = Omit<PurpleLineSignal, 'dailyLevels'> & { setup: 'green-line'; edge: number };
+export type SpotEntrySignal = PurpleLineSignal | GreenLineSignal;
 
 export const PURPLE_BODY_STOP_FRACTION = 0;
 export { withDydxBodyOpenStop as withPurpleDydxBodyOpenStop } from './dydxSignalBodyStop';
@@ -50,7 +52,7 @@ export function ethGapDailyEntryEnabled(): boolean {
   return purpleLineEntryEnabled('ETH-USD');
 }
 
-export function freshEthGapDailySignal(signal: EthGapDailySignal, activatedAt: string, now = Date.now()): boolean {
+export function freshEthGapDailySignal(signal: SpotEntrySignal, activatedAt: string, now = Date.now()): boolean {
   const close = signal.closedAt * 1000;
   return Number.isSafeInteger(close) && close % HOUR === 0 && signal.time * 1000 + HOUR === close &&
     close === Math.floor(now / HOUR) * HOUR && close > Date.parse(activatedAt) &&

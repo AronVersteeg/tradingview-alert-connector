@@ -2,16 +2,17 @@ import fs from 'fs';
 import path from 'path';
 
 export const BTC_ENTRY_MODE_ENV = 'BTC_ENTRY_MODE';
-export type BtcEntryMode = 'manual' | 'purple' | 'off';
+export type BtcEntryMode = 'manual' | 'green' | 'off';
 
 export function btcEntryMode(): BtcEntryMode {
   const value = String(process.env[BTC_ENTRY_MODE_ENV] || 'manual').trim().toLowerCase();
-  return value === 'manual' || value === 'purple' ? value : 'off';
+  if (value === 'purple' || value === 'green') return 'green';
+  return value === 'manual' ? value : 'off';
 }
 
 export function btcEntryModeStatus() {
   const value = String(process.env[BTC_ENTRY_MODE_ENV] || 'manual').trim().toLowerCase();
-  return { env: BTC_ENTRY_MODE_ENV, mode: btcEntryMode(), valid: ['manual', 'purple', 'off'].includes(value),
+  return { env: BTC_ENTRY_MODE_ENV, mode: btcEntryMode(), valid: ['manual', 'green', 'purple', 'off'].includes(value),
     default: 'manual', positionManagement: 'existing owner continues; switching never changes a live position' };
 }
 

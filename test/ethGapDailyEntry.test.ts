@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import * as entry from '../src/services/ethGapDailyEntry';
+import * as green from '../src/services/greenLineEntry';
 import * as gap from '../src/services/decentraderGapMonitor';
 import { ethIntrusionFuturesDeltaFeed, parseFuturesDeltaCandle } from '../src/services/intrusionFuturesDelta';
 import { OpenLiquidityV2EthTradeMonitor, openLiquidityV2BtcIntrusionMonitor, openLiquidityV2SolTradeMonitor, openLiquidityV2ZecTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
@@ -69,7 +70,6 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
   const setup = PURPLE_LINE_SETUPS[market];
   const stateEnv = asset === 'BTC' ? 'OPEN_LIQUIDITY_V2_BTC_INTRUSION_STATE_FILE' : `OPEN_LIQUIDITY_V2_${asset}_TRADE_STATE_FILE`;
   const entryEnv = setup.enabledEnv, autoEnv = `OPEN_LIQUIDITY_V2_${asset}_AUTO_TRADE_ENABLED`, monitorEnv = `OPEN_LIQUIDITY_V2_${asset}_INTRUSION_MONITOR_ENABLED`;
-  const readMethod = asset === 'ETH' ? 'readEthGapDailySignal' : 'readPurpleLineSignal';
   const createMonitor = () => new OpenLiquidityV2EthTradeMonitor({} as any, ({ BTC: openLiquidityV2BtcIntrusionMonitor,
     SOL: openLiquidityV2SolTradeMonitor, ZEC: openLiquidityV2ZecTradeMonitor, ETH: undefined }[asset] as any)?.config);
   const evaluateSignal = (...args: Parameters<typeof entry.evaluateEthGapDailySignal>) => entry.evaluatePurpleLineSignal(market, ...args);
@@ -102,6 +102,56 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
         pivotAt: '2026-09-01T00:00:00Z', confirmedAt: '2026-10-23T23:59:59.999Z', isLatestForType: true }] };
     return { payload, intrusions, page, daily };
   }
+
+  const greenSignal = (direction: 'long' | 'short' = 'long'): entry.GreenLineSignal => ({
+    time: signal(direction).time, closedAt: signal(direction).closedAt, direction, close: signal(direction).close,
+    setup: 'green-line', edge: direction === 'long' ? 115 : 85
+  });
+
+  describe('Green entry and chart parity', () => {
+    afterEach(() => { jest.restoreAllMocks(); jest.useRealTimers(); });
+
+    test.each(['long', 'short'] as const)('uses the same fresh %s gap edge as the chart, including mixed intrusions', direction => {
+      const {payload,page} = inputs(direction);
+      payload.gaps[1] = {left:60,right:140,width:80};
+      const intrusions = [{timestamp:payload.frames[1].t,direction:'mixed'}];
+      const history = purple.compactIntrusionHistory({source:payload.source,intrusionBenchmarks:{history:intrusions}},
+        now,market,{includeGapHours:true});
+      const timeline = require('../public/btc-spot-chart/gap-boxes.js').timelineFromPayload(payload,market);
+      const [marker] = purple.buildGapIntrusionMarkers(page.candles,history,timeline,now,market);
+      expect(green.evaluateGreenLineSignal(market,payload,intrusions,page,now)).toEqual({...marker,...greenSignal(direction)});
+      expect(green.evaluateGreenLineSignal(market,payload,[{...intrusions[0],timestamp:payload.frames[0].t}],page,now)).toBeUndefined();
+      expect(green.evaluateGreenLineSignal(market,payload,[],page,now)).toBeUndefined();
+    });
+
+    test('ignores touches, wick breaks, and levels already crossed; rejects stale or cross-market data', () => {
+      const {payload,intrusions,page} = inputs();
+      for (const price of [114,115]) {
+        page.candles[1].close = payload.frames[1].close = price;
+        expect(green.evaluateGreenLineSignal(market,payload,intrusions,page,now)).toBeUndefined();
+      }
+      page.candles[1].close = payload.frames[1].close = 125;
+      payload.gaps[0] = {left:85,right:99,width:14};
+      expect(green.evaluateGreenLineSignal(market,payload,intrusions,page,now)).toBeUndefined();
+      expect(() => green.evaluateGreenLineSignal(market,payload,intrusions,{...page,symbol:'XRPUSDT'},now)).toThrow('sources');
+      expect(() => green.evaluateGreenLineSignal(market,payload,intrusions,page,now+HOUR)).toThrow('consecutive');
+      page.candles[0].closed = false;
+      expect(() => green.evaluateGreenLineSignal(market,payload,intrusions,page,now)).toThrow('consecutive');
+    });
+
+    test('reads only the matching pair’s Spot feed, with no Daily dependency', async () => {
+      jest.useFakeTimers(); jest.setSystemTime(now);
+      const {payload,intrusions,page} = inputs();
+      const feeds = {BTC:binanceSpotChartFeed,ETH:ethSpotChartFeed,SOL:solSpotChartFeed,ZEC:zecSpotChartFeed};
+      const read = jest.spyOn(feeds[asset],'page').mockResolvedValue(page);
+      const wrong = Object.entries(feeds).filter(([other])=>other!==asset).map(([,feed])=>jest.spyOn(feed,'page').mockRejectedValue(new Error('wrong pair')));
+      const daily = jest.spyOn(dailyHistory,'binanceDailyFractalHistory').mockRejectedValue(new Error('Daily must not be used'));
+      await expect(green.readGreenLineSignal(market,payload,intrusions)).resolves.toEqual(greenSignal());
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(daily).not.toHaveBeenCalled();
+      for(const spy of wrong) expect(spy).not.toHaveBeenCalled();
+    });
+  });
 
   describe('Spot gap intrusion + Daily entry signal', () => {
     afterEach(() => { jest.restoreAllMocks(); jest.useRealTimers(); });
@@ -294,15 +344,16 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     });
     const state = () => ({ gapDailyEntry: { activatedAt: iso(closeAt - HOUR) } });
 
-  test('sends one purple trigger email after entry and stop setup, never placing a second order', async () => {
-    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+  test('sends one Green trigger email after entry and stop setup, never placing a second order', async () => {
+    jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
     (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid', recipients: ['fixture@example.invalid'] });
     const send = gap.sendEmailBestEffort as jest.Mock;
     send.mockImplementation(async (_smtp, subject, body) => {
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
       expect(orders.syncTrailingStop).toHaveBeenCalled();
-      expect(subject).toContain(`${asset} PURPLE LONG TRIGGERED`);
+      expect(subject).toContain(`${asset} GREEN LONG TRIGGERED`);
       expect(body).toContain(`Execution market: dYdX ${market}`);
+      expect(body).toContain('Previous gap upper edge: 115');
       expect(body).toContain('Order result: PLACED'); expect(body).toContain('TPs: none.');
       expect(body).toContain('Planned initial SL (dYdX signal candle body open): 118');
       return { sent: true };
@@ -316,19 +367,19 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     expect(monitor.getStatus().gapDailyEntry.triggerEmail.recent[0]).toMatchObject({ outcome: 'PLACED', attempts: 1, smtpSentAt: iso(now) });
   });
 
-  test('short purple notifications include a skipped reason, without inventing an entry or cancelling a position', async () => {
-    jest.spyOn(entry, readMethod).mockResolvedValue(signal('short'));
+  test('short Green notifications include a skipped reason, without inventing an entry or cancelling a position', async () => {
+    jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal('short'));
     position = { market, size: .4, entryPrice: 120 };
     (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
     await monitor.checkGapDailyEntry(state(), inputs('short').payload, {});
     await monitor.flushPurpleTriggerEmails();
-    expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`${asset} PURPLE SHORT TRIGGERED`),
+    expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`${asset} GREEN SHORT TRIGGERED`),
       expect.stringMatching(/Order result: SKIPPED[\s\S]*Existing .* position/));
     expect(orders.placeOrder).not.toHaveBeenCalled();
   });
 
   test('SMTP failure is persisted and retried after restart without repeating the trade', async () => {
-    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+    jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
     (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
     const send = gap.sendEmailBestEffort as jest.Mock;
     send.mockResolvedValueOnce({ sent: false, error: 'fixture timeout' }).mockResolvedValue({ sent: true });
@@ -347,14 +398,14 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
 
   test('the optional mail switch suppresses new and queued notifications without blocking the trade', async () => {
     process.env.OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED = 'false';
-    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+    jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
     const result: any = {}; await monitor.checkGapDailyEntry(state(), inputs().payload, result);
     await monitor.flushPurpleTriggerEmails();
     expect(result.tradePlaced).toBe(true); expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
   });
 
   test('slow SMTP does not hold the position lock or delay a protective stop check', async () => {
-    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+    jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
     (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
     let finish!: (value: any) => void;
     (gap.sendEmailBestEffort as jest.Mock).mockReturnValue(new Promise(resolve => { finish = resolve; }));
@@ -373,8 +424,8 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
   });
 
-  test('does not email source failures or non-purple candles', async () => {
-    const read = jest.spyOn(entry, readMethod).mockRejectedValue(new Error('source unavailable'));
+  test('does not email source failures or non-Green candles', async () => {
+    const read = jest.spyOn(green, 'readGreenLineSignal').mockRejectedValue(new Error('source unavailable'));
     await monitor.checkGapDailyEntry(state(), inputs().payload, {});
     await monitor.flushPurpleTriggerEmails(); expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
     read.mockResolvedValue(undefined);
@@ -384,7 +435,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
 
   test('production startup resumes a proven short outage across close and places once, with no startup delay', async () => {
     jest.setSystemTime(closeAt - 30_000);
-    const lease = new PurpleLineContinuity(market, `${file}.entry-lease.json`, () => true);
+    const lease = new PurpleLineContinuity(market, `${file}.entry-lease.json`, () => true, 'green-line');
     lease.start(); const activatedAt = lease.activation()!; lease.stop();
     jest.setSystemTime(now);
     const restarted: any = createMonitor(); monitor = restarted;
@@ -394,7 +445,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     restarted.start(255_000);
     await jest.advanceTimersByTimeAsync(0); expect(check).toHaveBeenCalledTimes(1);
     expect(restarted.getStatus().gapDailyEntry.continuity).toMatchObject({ resumedAfterRestart: true, ready: true });
-    jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+    jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
     const managed: any = { gapDailyEntry: { activatedAt } }, result: any = {};
     await restarted.checkGapDailyEntry(managed, inputs().payload, result);
     expect(result.tradePlaced).toBe(true); expect(managed.gapDailyEntry.activatedAt).toBe(activatedAt);
@@ -410,10 +461,10 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     expect(orders.placeOrder).not.toHaveBeenCalled(); expect(fs.readFileSync(file, 'utf8')).toBe('{broken');
   });
 
-    test('reports the correct purple setup and respects its own independent kill switches', () => {
+    test('reports the Green setup and respects its own independent kill switches', () => {
       expect(monitor.getStatus()).toMatchObject({ market, autoTradeEnabled: true,
-        gapDailyEntry: { setup: 'purple-line', enabled: true, env: entryEnv,
-          source: `Binance Spot ${symbol} 1H + 1D`, executionMarket: market,
+        gapDailyEntry: { setup: 'green-line', enabled: true, env: entryEnv,
+          source: `Binance Spot ${symbol} 1H`, executionMarket: market,
           takeProfitMode: 'trailing-only', futuresDeltaFilter: { enabled: false },
           initialStop: { mode: 'signal-body-open', bodyFraction: 0, candleSource: 'dydx-1h', tightenOnly: true } } });
       const otherMarket = market === 'SOL-USD' ? 'ETH-USD' : 'SOL-USD';
@@ -553,30 +604,70 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(orders.placeOrder).not.toHaveBeenCalled();
     });
     test('arms at activation without opening a trade from old chart evidence', async () => {
-      const read = jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+      const read = jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
       const managed: any = {};
       await monitor.checkGapDailyEntry(managed, inputs().payload, {});
       expect(managed.gapDailyEntry.activatedAt).toBe(iso(now));
       await monitor.checkGapDailyEntry(managed, inputs().payload, {});
       expect(read).not.toHaveBeenCalled(); expect(orders.placeOrder).not.toHaveBeenCalled();
     });
-    test('retries missing Daily data independently from Delay, then executes a fresh matching intrusion', async () => {
+    test('retries missing Spot candles independently from Delay, then executes a fresh Green signal', async () => {
       process.env.DECENTRADER_DELAY_ENTRY_MODEL_ENABLED = 'false';
-      const read = jest.spyOn(entry, readMethod).mockRejectedValueOnce(new Error('Daily unavailable')).mockResolvedValue(signal());
+      const read = jest.spyOn(green, 'readGreenLineSignal').mockRejectedValueOnce(new Error('Spot candles unavailable')).mockResolvedValue(greenSignal());
       const managed: any = state(), first: any = {}, second: any = {};
       await monitor.checkGapDailyEntry(managed, inputs().payload, first);
       expect(first.gapDailyEntryPending).toBe(true); expect(orders.placeOrder).not.toHaveBeenCalled();
       await monitor.checkGapDailyEntry(managed, inputs().payload, second);
       expect(read).toHaveBeenCalledTimes(2); expect(second.tradePlaced).toBe(true);
     });
-    test('does not trade a weighted mixed-side intrusion which the purple overlay excludes', async () => {
-      const read = jest.spyOn(entry, readMethod).mockResolvedValue(signal());
-      const payload = inputs().payload;
+    test('a mixed-side Green intrusion can place an order without a Daily break, using the real detector', async () => {
+      const {payload,page} = inputs();
       payload.zoneDeltas[1].push(['S', 5, 110, 1]);
+      const feed = { BTC:binanceSpotChartFeed, ETH:ethSpotChartFeed, SOL:solSpotChartFeed, ZEC:zecSpotChartFeed }[asset];
+      jest.spyOn(feed, 'page').mockResolvedValue(page);
+      const daily = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockRejectedValue(new Error('No Daily data'));
       const managed: any = state();
       await monitor.checkGapDailyEntry(managed, payload, {});
+      expect(managed.gapDailyEntry.intent.signal).toEqual(greenSignal());
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+      expect(orders.syncTrailingStop).toHaveBeenCalled();
+      expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+      expect(daily).not.toHaveBeenCalled();
+    });
+    test('a wick-only break does not send an order', async () => {
+      const {payload,page} = inputs();
+      page.candles[1].close = payload.frames[1].close = 114;
+      jest.spyOn({ BTC:binanceSpotChartFeed, ETH:ethSpotChartFeed, SOL:solSpotChartFeed, ZEC:zecSpotChartFeed }[asset], 'page').mockResolvedValue(page);
+      const managed: any = state();
+      await monitor.checkGapDailyEntry(managed, payload, {});
+      expect(managed.gapDailyEntry.decision.outcome).toBe('NO_GAP_BREAK');
+      expect(orders.placeOrder).not.toHaveBeenCalled();
+    });
+    test('an old saved signal cannot substitute for a new intrusion on the latest candle', async () => {
+      const {payload} = inputs();
+      payload.zoneDeltas[1].length = 0;
+      Object.assign(payload, {intrusionBenchmarks: {history: [{timestamp:payload.frames[1].t,direction:'long'}]}});
+      const read = jest.spyOn(green,'readGreenLineSignal').mockResolvedValue(greenSignal());
+      const managed: any = state();
+      await monitor.checkGapDailyEntry(managed,payload,{});
       expect(managed.gapDailyEntry.decision.outcome).toBe('NO_INTRUSION');
-      expect(read).not.toHaveBeenCalled(); expect(orders.placeOrder).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+      expect(orders.placeOrder).not.toHaveBeenCalled();
+    });
+    test('a recent Purple lease cannot arm Green retroactively at rollout', async () => {
+      jest.setSystemTime(closeAt - 30_000);
+      new PurpleLineContinuity(market, `${file}.entry-lease.json`, () => true).heartbeat();
+      jest.setSystemTime(now);
+      const read = jest.spyOn(green,'readGreenLineSignal').mockResolvedValue(greenSignal());
+      jest.spyOn(monitor,'check').mockResolvedValue({ok:true});
+      jest.spyOn(monitor,'checkManagedPosition').mockResolvedValue({ok:true});
+      monitor.start();
+      await jest.advanceTimersByTimeAsync(0);
+      const managed: any = state();
+      await monitor.checkGapDailyEntry(managed, inputs().payload, {});
+      expect(managed.gapDailyEntry.activatedAt).toBe(iso(now));
+      expect(read).not.toHaveBeenCalled();
+      expect(orders.placeOrder).not.toHaveBeenCalled();
     });
     test('does not register stale fills after an explicit fail-safe flatten', async () => {
       orders.placeOrder.mockResolvedValue({ outcome: 'TARGET_FAILED_FLATTENED', reason: 'flattened' });
@@ -702,7 +793,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     });
     test('a restart does not turn a pre-restart purple candle into a fresh entry', async () => {
       const restarted: any = createMonitor(); restarted.configureTradeExecutor(orders);
-      const read = jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+      const read = jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
       const managed: any = state();
       await restarted.checkGapDailyEntry(managed, inputs().payload, {});
       expect(managed.gapDailyEntry.activatedAt).toBe(iso(now));
@@ -710,7 +801,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     });
     test('saves signal mail and a PREPARING checkpoint before execution, then revalidates an unsent fresh signal after restart', async () => {
       orders.supportsEntrySubmissionCheckpoint = true;
-      jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+      jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
       let crashed: any;
       orders.placeOrder.mockImplementationOnce(async () => {
         crashed = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -780,7 +871,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       restarted.configureTradeExecutor(orders);
       await restarted.checkManagedPosition();
       const recovered = JSON.parse(fs.readFileSync(file, 'utf8'));
-      jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+      jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
       await restarted.checkGapDailyEntry(recovered, inputs().payload, {});
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
       expect(recovered.gapDailyEntry.handledCandle).toBe(signal().closedAt * 1000);
@@ -806,7 +897,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
     });
     test('preserves the queued signal notification across a crash without inventing a confirmed order', async () => {
-      jest.spyOn(entry, readMethod).mockResolvedValue(signal());
+      jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
       let crashed: any;
       orders.placeOrder.mockImplementationOnce(async () => {
         crashed = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -817,7 +908,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
       const restarted: any = createMonitor(); restarted.configureTradeExecutor(orders);
       await restarted.flushPurpleTriggerEmails();
-      expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`${asset} PURPLE LONG TRIGGERED`),
+      expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`${asset} GREEN LONG TRIGGERED`),
         expect.stringContaining('no order or protective stop is confirmed'));
       expect(restarted.getStatus().gapDailyEntry.triggerEmail.recent[0].smtpSentAt).toBeDefined();
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
@@ -832,10 +923,10 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(orders.placeOrder).toHaveBeenCalledTimes(1); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
     });
     test('blocks only ETH old entry routes, preserving plans, and leaves the BTC observe-only setting unchanged', async () => {
-      expect((await monitor.executeFractalEntry({ market })).tradeSkipped).toMatch(/experiment/);
+      expect((await monitor.executeFractalEntry({ market })).tradeSkipped).toMatch(/Green line setup/);
       expect(await monitor.executeManualEntry({ market })).toMatchObject({ tradeDeferred: true });
       const result: any = {}; await monitor.executeAlertExclusive({}, {}, 'old-delay', result);
-      expect(result.tradeSkipped).toMatch(/experiment/);
+      expect(result.tradeSkipped).toMatch(/Green line setup/);
       expect(orders.placeOrder).not.toHaveBeenCalled();
       expect(openLiquidityV2BtcIntrusionMonitor.getStatus()).toMatchObject({ market: 'BTC-USD', autoTradeEnabled: asset === 'BTC' });
     });

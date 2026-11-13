@@ -3,9 +3,10 @@ import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
 import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './dydxSignalBodyStop';
 import { btcCompanionEntryBlockReason, btcEntryMode, btcEntryModeStatus } from './btcEntryMode';
-import { EthGapDailySignal, EthEntryFuturesDelta,
-  freshEthGapDailySignal, readEthGapDailySignal, readPurpleLineSignal, withPurpleDydxBodyOpenStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
-import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
+import { SpotEntrySignal, EthEntryFuturesDelta,
+  freshEthGapDailySignal, withPurpleDydxBodyOpenStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
+import { readGreenLineSignal } from './greenLineEntry';
+import { PurpleLineMarket, automaticSpotEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
 import { PurpleLineContinuity } from './purpleLineContinuity';
 import { PurpleTriggerEmail, purpleTriggerEmail } from './purpleTriggerEmail';
 import { archiveIntrusionEvidence } from './liquidityObservationArchive';
@@ -315,7 +316,7 @@ type EthMonitorState = AlertState & {
     decision?: any;
     decisionHistory?: any[];
     triggerEmails?: PurpleTriggerEmail[];
-    intent?: { signature: string; attemptedAt: string; signal: EthGapDailySignal; plan: any;
+    intent?: { signature: string; attemptedAt: string; signal: SpotEntrySignal; plan: any;
       futuresDelta?: EthEntryFuturesDelta; orderAlert: AlertObject; phase?: 'PREPARING' | 'BROADCASTING'; broadcastStartedAt?: string;
       error?: string; outcome: 'SUBMITTING' | 'UNKNOWN' | 'CONFIRMED' | 'FLATTENED' | 'NO_POSITION' | 'NOT_SUBMITTED' };
   };
@@ -864,12 +865,12 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private gapDailyEnabled(): boolean {
-    return this.config.tradeCapable && purpleLineEntryEnabled(this.config.market);
+    return this.config.tradeCapable && automaticSpotEntryEnabled(this.config.market);
   }
 
   private autoTradeEnabled(): boolean {
     if (!this.config.tradeCapable) return false;
-    if (this.config.market === 'BTC-USD') return btcEntryMode() === 'purple' && boolEnv('DECENTRADER_AUTO_TRADE_ENABLED', false);
+    if (this.config.market === 'BTC-USD') return btcEntryMode() === 'green' && boolEnv('DECENTRADER_AUTO_TRADE_ENABLED', false);
     return boolEnv(
       this.config.autoTradeEnv,
       this.config.inheritDecentraderAutoTrade
@@ -946,7 +947,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     const continuityFile = `${stateFile(this.config)}.entry-lease.json`;
     if (purpleLineSetupForMarket(this.config.market) && (this.gapDailyEnabled() || fs.existsSync(continuityFile))) {
       this.entryContinuity = new PurpleLineContinuity(this.config.market as PurpleLineMarket, continuityFile,
-        () => this.gapDailyEnabled() && this.enabled() && this.autoTradeEnabled());
+        () => this.gapDailyEnabled() && this.enabled() && this.autoTradeEnabled(), 'green-line');
       this.entryContinuity.start();
     }
     const begin = () => {
@@ -1008,8 +1009,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       ...(this.config.market === 'BTC-USD' ? { entryMode: btcEntryModeStatus() } : {}),
       autoTradeEnabled: this.autoTradeEnabled(),
       gapDailyEntry: purpleLineSetupForMarket(this.config.market) ? {
-        setup: 'purple-line', enabled: this.gapDailyEnabled(), env: purpleLineSetupForMarket(this.config.market)!.enabledEnv,
-        source: `Binance Spot ${this.config.symbol} 1H + 1D`,
+        setup: 'green-line', enabled: this.gapDailyEnabled(), env: purpleLineSetupForMarket(this.config.market)!.enabledEnv,
+        source: `Binance Spot ${this.config.symbol} 1H`, rule: 'Same-hour intrusion and fresh close beyond the previous gap edge.',
         executionMarket: this.config.market, takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
         initialStop: { mode: 'signal-body-open', bodyFraction: PURPLE_BODY_STOP_FRACTION, candleSource: 'dydx-1h', sameSignalHour: true, bufferPct: 0,
           sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
@@ -1196,7 +1197,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     });
   }
 
-  private async getGapDailyStopPlan(account: DydxSizingAccountSnapshot, signal: EthGapDailySignal): Promise<any> {
+  private async getGapDailyStopPlan(account: DydxSizingAccountSnapshot, signal: SpotEntrySignal): Promise<any> {
     const marketInfo = account.markets?.[this.config.market];
     if (!marketInfo || String(marketInfo.status).toUpperCase() !== 'ACTIVE') {
       throw new Error(`${this.config.market} must be ACTIVE with current dYdX market information.`);
@@ -1247,7 +1248,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (age > 300_000 || directionForPosition(position) !== intent.signal.direction ||
       Math.abs(position.size) > finite(intent.orderAlert.size) + 1e-9 ||
       !(finite(position.entryPrice) > 0) || Math.abs(position.entryPrice! - reference) / reference > 0.05) {
-      throw new Error(`Uncertain ${this.config.asset} gap/Daily execution cannot be safely attributed; inspect the live position and its SL.`);
+      throw new Error(`Uncertain ${this.config.asset} Spot entry cannot be safely attributed; inspect the live position and its SL.`);
     }
     this.registerManagedPosition(state, intent.signature, intent.signal.direction, position, reference,
       intent.plan, intent.orderAlert, 'RECOVERED_AFTER_PARTIAL_EXECUTION',
@@ -1285,41 +1286,38 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
     const close = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
     if (close <= Date.parse(entry.activatedAt) || Date.now() - close > 300_000 || entry.handledCandle === close) return;
-    let signal: EthGapDailySignal | undefined;
+    let signal: SpotEntrySignal | undefined;
     try {
       const frames = payload.frames || [];
-      if (frames.length < 2 || frames.at(-1)?.startedAtMs !== close - HOUR_MS) {
-        throw new Error(`Awaiting the latest closed ${this.config.asset} Spot replica hour.`);
+      if (frames.length < 2 || frames.at(-2)?.startedAtMs !== close - 2 * HOUR_MS ||
+          frames.at(-1)?.startedAtMs !== close - HOUR_MS) {
+        throw new Error(`Awaiting consecutive closed ${this.config.asset} Spot replica hours.`);
       }
       const alerts = reconstructReplicaIntrusions(payload, String(frames.at(-2).t)).alerts;
-      // The purple overlay rejects mixed left/right intrusions, even when one side has more weight.
-      const intrusions = alerts.filter(alert => Boolean(alert.left.length) !== Boolean(alert.right.length))
-        .map(alert => ({ timestamp: alert.timestamp, direction: mapDirectionFromAlert(alert),
-          sideCounts: sideCounts(alert), signature: signatureForAlert(alert, this.config.market) }))
-        .filter(row => row.direction === 'long' || row.direction === 'short');
+      const intrusions = alerts.map(alert => ({ timestamp: alert.timestamp, direction: mapDirectionFromAlert(alert) || 'mixed',
+        sideCounts: sideCounts(alert), signature: signatureForAlert(alert, this.config.market) }));
       if (!intrusions.length) {
         entry.decision = { outcome: 'NO_INTRUSION', candleClosedAt: new Date(close).toISOString() };
         return;
       }
-      signal = await (this.config.market === 'ETH-USD' ? readEthGapDailySignal(payload, intrusions)
-        : readPurpleLineSignal(this.config.market as PurpleLineMarket, payload, intrusions));
+      signal = await readGreenLineSignal(this.config.market as PurpleLineMarket, payload, intrusions);
       if (!signal) {
-        entry.decision = { outcome: 'NO_DAILY_BREAK', candleClosedAt: new Date(close).toISOString() };
+        entry.decision = { outcome: 'NO_GAP_BREAK', candleClosedAt: new Date(close).toISOString() };
         return;
       }
-      entry.decision = { outcome: 'DETECTED', signal, reason: 'Purple signal detected; execution is not yet confirmed.' };
+      entry.decision = { outcome: 'DETECTED', signal, reason: 'Green signal detected; execution is not yet confirmed.' };
       this.capturePurpleTriggerEmail(state, signal, result);
       await this.coordinator.exclusive(() => this.executeGapDailyEntry(state, signal, result));
     } catch (error) {
       result.gapDailyEntryPending = true;
       entry.decision = { outcome: 'ERROR', at: nowNlIso(), reason: error instanceof Error ? error.message : String(error) };
-      console.error(`${this.config.asset} Spot gap/Daily entry check failed:`, entry.decision);
+      console.error(`${this.config.asset} Spot Green entry check failed:`, entry.decision);
     }
     if (signal) this.capturePurpleTriggerEmail(state, signal, result);
     result.gapDailyEntry = entry.decision;
   }
 
-  private capturePurpleTriggerEmail(state: EthMonitorState, signal: EthGapDailySignal, result: any): void {
+  private capturePurpleTriggerEmail(state: EthMonitorState, signal: SpotEntrySignal, result: any): void {
     const entry = state.gapDailyEntry!;
     if (boolEnv('OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED', true)) {
       const message = purpleTriggerEmail(this.config.market, signal, entry, result);
@@ -1356,15 +1354,15 @@ export class OpenLiquidityV2EthTradeMonitor {
           message.retryAt = new Date(Date.now() + 60_000).toISOString();
         }
         writeState(state, this.config);
-        console.log(`${this.config.asset} purple trigger email result:`, {
+        console.log(`${this.config.asset} Spot entry trigger email result:`, {
           signature: message.signature, sent: Boolean(message.sentAt), attempts: message.attempts, error: message.error });
       }
-    }).catch(error => console.error(`${this.config.asset} purple email processing failed; trading unchanged:`, String(error)))
+    }).catch(error => console.error(`${this.config.asset} Spot entry email processing failed; trading unchanged:`, String(error)))
       .finally(() => { this.purpleEmailPromise = undefined; });
     return this.purpleEmailPromise;
   }
 
-  private async executeGapDailyEntry(state: EthMonitorState, signal: EthGapDailySignal, result: any): Promise<void> {
+  private async executeGapDailyEntry(state: EthMonitorState, signal: SpotEntrySignal, result: any): Promise<void> {
     const entry = state.gapDailyEntry!;
     const skip = (reason: string) => { entry.decision = { outcome: 'SKIPPED', at: nowNlIso(), reason, signal }; };
     if (!this.gapDailyEnabled() || !this.enabled() || !this.autoTradeEnabled()) return skip(`${this.config.asset} entry model, monitor or pair auto-trading is disabled.`);
@@ -1390,7 +1388,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       take_profits: [], gap_daily_entry: signal });
     (orderAlert as any).decentrader = { ...(orderAlert as any).decentrader,
       sizingStop: plan.activePlan.sizingStop, initialStopPolicy: plan.activePlan.initialStopPolicy,
-      note: 'Binance Spot purple entry; dYdX fractal sizing; same-hour dYdX initial SL at 25% of body from open; dYdX fractal trailing; no TPs.' };
+      note: 'Binance Spot Green entry; dYdX fractal sizing; initial SL at the dYdX signal candle open; dYdX fractal trailing; no TPs.' };
     await this.applyStatefulOrderCapacity(orderAlert, result);
     if (!freshEthGapDailySignal(signal, entry.activatedAt!)) return skip('Signal expired during order preparation.');
     entry.handledCandle = signal.closedAt * 1000;
@@ -1403,7 +1401,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     try {
       const beforeEntrySubmit = async () => {
         if (!freshEthGapDailySignal(signal, entry.activatedAt!) || !this.gapDailyEnabled() || !this.autoTradeEnabled()) {
-          throw new Error('Purple entry expired or disabled before broadcast; no entry order sent.');
+          throw new Error('Green entry expired or disabled before broadcast; no entry order sent.');
         }
         if (this.config.market === 'BTC-USD') {
           const blocked = btcCompanionEntryBlockReason('purple');
@@ -1412,7 +1410,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         entry.intent!.phase = 'BROADCASTING';
         entry.intent!.broadcastStartedAt = new Date().toISOString();
         writeState(state, this.config);
-        console.log(`${this.config.asset} purple entry broadcast checkpoint:`, { signature, phase: entry.intent!.phase });
+        console.log(`${this.config.asset} Green entry broadcast checkpoint:`, { signature, phase: entry.intent!.phase });
       };
       const placement = this.executor.supportsEntrySubmissionCheckpoint
         ? await this.executor.placeOrder(orderAlert, { beforeEntrySubmit })
@@ -1636,7 +1634,7 @@ export class OpenLiquidityV2EthTradeMonitor {
 
     try {
       return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
-        if (this.gapDailyEnabled()) return { ...result, tradeSkipped: `${this.config.asset} purple line experiment owns entries; Shadow entry disabled.` };
+        if (this.gapDailyEnabled()) return { ...result, tradeSkipped: `${this.config.asset} Green line setup owns entries; Shadow entry disabled.` };
         if (!fractalEntryModelEnabled()) {
           result.tradeSkipped = 'SHADOW_FRACTAL_ENTRY_MODEL_ENABLED is false.';
           return result;
@@ -1768,7 +1766,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     try {
       return await this.coordinator.withState((state) => this.coordinator.exclusive(async () => {
         if (this.gapDailyEnabled()) return { ...result, tradeDeferred: true,
-          tradeSkipped: `${this.config.asset} purple line experiment owns entries; manual plan remains armed.` };
+          tradeSkipped: `${this.config.asset} Green line setup owns entries; manual plan remains armed.` };
         if (!btcManualTradeOverrideEnabled()) {
           result.tradeSkipped = 'MANUAL_ENTRY_TP_OVERRIDE_ENABLED is false.';
           return result;
@@ -1966,7 +1964,7 @@ export class OpenLiquidityV2EthTradeMonitor {
 
   private async executeAlertExclusive(state: EthMonitorState, alert: GapAlert, signature: string, result: any): Promise<void> {
     if (this.gapDailyEnabled()) {
-      result.tradeSkipped = `${this.config.asset} purple line experiment owns entries; Delay entry disabled.`;
+      result.tradeSkipped = `${this.config.asset} Green line setup owns entries; Delay entry disabled.`;
       return;
     }
     if (!delayEntryModelEnabled()) {

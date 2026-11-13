@@ -4,7 +4,7 @@ import { PurpleLineMarket, PURPLE_LINE_SETUPS } from './purpleLineSetup';
 
 const MAX_GAP_MS = 5 * 60_000;
 type Lease = { version: 1; market: string; modelVersion: string; active: boolean;
-  activatedAt: string; observedAt: string };
+  activatedAt: string; observedAt: string; entrySetup?: 'green-line' };
 
 // A small durable heartbeat, separate from large chart/research state. It proves
 // that the model was already armed before a short interruption, not a new entry.
@@ -13,7 +13,8 @@ export class PurpleLineContinuity {
   private activatedAt?: string;
   private lastSeen?: number;
   private status: any = { ready: false };
-  constructor(private market: PurpleLineMarket, private file: string, private enabled: () => boolean) {}
+  constructor(private market: PurpleLineMarket, private file: string, private enabled: () => boolean,
+    private entrySetup?: 'green-line') {}
 
   start() {
     if (this.timer) return;
@@ -42,13 +43,15 @@ export class PurpleLineContinuity {
         } catch { /* Missing/invalid continuity never grants retrospective eligibility. */ }
         const seen = Date.parse(previous?.observedAt || ''), activated = Date.parse(previous?.activatedAt || '');
         const resume = previous?.version === 1 && previous.market === this.market && previous.modelVersion === config.modelVersion &&
+          previous.entrySetup === this.entrySetup &&
           previous.active === true && Number.isFinite(activated) && activated <= seen && seen <= now && now - seen <= MAX_GAP_MS;
         this.activatedAt = resume ? previous!.activatedAt : new Date(now).toISOString();
         this.status = { ready: false, resumedAfterRestart: resume, reason: resume ? 'SHORT_INTERRUPTION_RESUMED' : 'NEW_ACTIVATION',
           previousHeartbeatAt: previous?.observedAt, maxInterruptionSeconds: MAX_GAP_MS / 1000 };
       }
       const record: Lease = { version: 1, market: this.market, modelVersion: config.modelVersion,
-        active: Boolean(this.activatedAt), activatedAt: this.activatedAt || new Date(now).toISOString(), observedAt: new Date(now).toISOString() };
+        active: Boolean(this.activatedAt), activatedAt: this.activatedAt || new Date(now).toISOString(), observedAt: new Date(now).toISOString(),
+        entrySetup: this.entrySetup };
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       const temporary = `${this.file}.${process.pid}.tmp`;
       let fd: number | undefined;

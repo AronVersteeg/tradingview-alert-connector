@@ -1,13 +1,15 @@
 import { btcManualTriggerTimestampNl } from './btcManualTradeOverride';
-import { PurpleLineSignal } from './ethGapDailyEntry';
+import type { SpotEntrySignal } from './ethGapDailyEntry';
 
 export type PurpleTriggerEmail = {
   signature: string; subject: string; body: string; outcome: string; createdAt: string;
   attempts: number; sentAt?: string; lastAttemptAt?: string; retryAt?: string; error?: string;
 };
 
-export function purpleTriggerEmail(market: string, signal: PurpleLineSignal, entry: any, result: any): PurpleTriggerEmail {
+export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entry: any, result: any): PurpleTriggerEmail {
   const asset = market.replace('-USD', '');
+  const green = 'edge' in signal;
+  const headline = `${asset} ${green ? 'GREEN' : 'PURPLE'} ${signal.direction.toUpperCase()} TRIGGERED`;
   const signature = `${market}|GAP_DAILY|${signal.time}|${signal.direction}`;
   const intent = entry.intent?.signature === signature ? entry.intent : undefined;
   const decision = entry.decision?.signal?.time === signal.time || entry.decision?.outcome === 'ERROR' ? entry.decision : {};
@@ -24,14 +26,15 @@ export function purpleTriggerEmail(market: string, signal: PurpleLineSignal, ent
     ? 'dYdX signal-body 25% from open'
     : plan?.initialStopPolicy?.mode === 'signal-body-midpoint' ? 'dYdX signal-body midpoint' : 'dYdX initial stop';
   const started = new Date(signal.time * 1000).toISOString(), closed = new Date(signal.closedAt * 1000).toISOString();
-  const subject = `${asset} PURPLE ${signal.direction.toUpperCase()} TRIGGERED | ${btcManualTriggerTimestampNl(started)}`;
+  const subject = `${headline} | ${btcManualTriggerTimestampNl(started)}`;
   const body = [
-    `${asset} PURPLE ${signal.direction.toUpperCase()} TRIGGERED`,
-    `Source: Binance Spot ${asset}USDT 1H intrusion + Daily fractal close break`,
+    headline,
+    `Source: Binance Spot ${asset}USDT 1H intrusion + ${green ? 'gap edge' : 'Daily fractal'} close break`,
     `Signal candle open: ${btcManualTriggerTimestampNl(started)}`,
     `Signal candle close: ${btcManualTriggerTimestampNl(closed)}`,
     `Binance Spot signal close: ${signal.close}`,
-    ...signal.dailyLevels.map(level => `Daily ${level.type}: ${level.price}`),
+    ...(green ? [`Previous gap ${signal.direction === 'long' ? 'upper' : 'lower'} edge: ${signal.edge}`]
+      : signal.dailyLevels.map(level => `Daily ${level.type}: ${level.price}`)),
     `Execution market: dYdX ${market}`,
     `Order result: ${outcome}`,
     decision.reason ? `Reason: ${decision.reason}` : '',

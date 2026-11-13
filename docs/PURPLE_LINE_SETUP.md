@@ -1,5 +1,9 @@
 # Purple Line Setup
 
+Historical reference: Purple is now chart-only. The four automatic entry routes
+use Green. See [current entry configuration](BTC_ENTRY_MODE.md) for the live
+signal, compatibility aliases and unchanged protection.
+
 This is the shared BTC, ETH and SOL setup. "Purple line setup" means this complete
 configuration, not the old Delay or Shadow entry model. BTC uses the exclusive
 [manual/purple/off selector](BTC_ENTRY_MODE.md); its main map is Public V2.

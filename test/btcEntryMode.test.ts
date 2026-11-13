@@ -36,7 +36,7 @@ describe('BTC single entry model selector and ownership interlock', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test.each([[undefined, 'manual'], ['manual', 'manual'], [' PURPLE ', 'purple'], ['off', 'off'], ['true', 'off'], ['typo', 'off']])(
+  test.each([[undefined, 'manual'], ['manual', 'manual'], [' PURPLE ', 'green'], ['green', 'green'], ['off', 'off'], ['true', 'off'], ['typo', 'off']])(
     'value %s selects %s, with invalid values failing closed', (value, expected) => {
       if (value === undefined) delete process.env.BTC_ENTRY_MODE; else process.env.BTC_ENTRY_MODE = value;
       expect(btcEntryMode()).toBe(expected);
@@ -74,12 +74,12 @@ describe('BTC single entry model selector and ownership interlock', () => {
     expect(provider).toHaveBeenCalledTimes(1); expect(axios.get).not.toHaveBeenCalled();
     expect(result.dynamicTpSync.outcome).not.toBe('ERROR'); expect(orders.placeOrder).not.toHaveBeenCalled();
   });
-  test('purple is an explicit opt-in, while the existing global execution kill switch is still respected', () => {
+  test.each(['green', 'purple'])('%s arms Green while respecting the global execution kill switch', mode => {
     const monitor = new OpenLiquidityV2EthTradeMonitor({} as any, (openLiquidityV2BtcIntrusionMonitor as any).config);
     expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: false, observeOnly: true, entryMode: { mode: 'manual' } });
-    process.env.BTC_ENTRY_MODE = 'purple';
-    expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: true, observeOnly: false, entryMode: { mode: 'purple' },
-      gapDailyEntry: { enabled: true, source: 'Binance Spot BTCUSDT 1H + 1D', takeProfitMode: 'trailing-only' } });
+    process.env.BTC_ENTRY_MODE = mode;
+    expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: true, observeOnly: false, entryMode: { mode: 'green' },
+      gapDailyEntry: { setup: 'green-line', enabled: true, source: 'Binance Spot BTCUSDT 1H', takeProfitMode: 'trailing-only' } });
     process.env.DECENTRADER_AUTO_TRADE_ENABLED = 'false';
     expect(monitor.getStatus().autoTradeEnabled).toBe(false);
   });

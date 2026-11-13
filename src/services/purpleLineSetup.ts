@@ -21,9 +21,12 @@ export function purpleLineSetupForMarket(market: string) {
     ? PURPLE_LINE_SETUPS[market as PurpleLineMarket] : undefined;
 }
 
-export function purpleLineEntryEnabled(market: string): boolean {
-  if (market === 'BTC-USD') return btcEntryMode() === 'purple';
+export function automaticSpotEntryEnabled(market: string): boolean {
+  if (market === 'BTC-USD') return btcEntryMode() === 'green';
   const config = purpleLineSetupForMarket(market);
   return Boolean(config && ['true', '1', 'yes', 'on'].includes(
     String(process.env[config.enabledEnv] || '').trim().toLowerCase()));
 }
+
+// Retain the existing configuration helper for compatibility.
+export const purpleLineEntryEnabled = automaticSpotEntryEnabled;
