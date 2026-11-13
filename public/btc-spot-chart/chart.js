@@ -56,10 +56,8 @@
   let intrusionLayer, intrusionHistory = savedIntrusions?.market === market && savedIntrusions.source === 'binance-spot-recorded-intrusions'
     ? savedIntrusions : undefined, intrusionModel, intrusionInputs;
   let intrusionReadFailed = false;
-  const replayOverlays = asset === 'btc' ? [
-    { kind: 'green', label: 'Green', toggle: 'spotChartGapIntrusions', color: gapBoxes.GAP_COLOR, markers: [] },
-    { kind: 'purple', label: 'Purple', toggle: 'spotChartIntrusionDailyBreaks', color: '#ba68c8', markers: [] }
-  ] : [];
+  const replayOverlays = [{ kind: 'green', label: 'Green', toggle: 'spotChartGapIntrusions', color: gapBoxes.GAP_COLOR, markers: [] }];
+  if (asset === 'btc') replayOverlays.push({ kind: 'purple', label: 'Purple', toggle: 'spotChartIntrusionDailyBreaks', color: '#ba68c8', markers: [] });
   let gapIntrusionLayer, gapIntrusionMarkers = [];
   let visibleGapIntrusionMarkers = [];
   let gapIntrusionInputs;
@@ -90,8 +88,8 @@
     intrusionLayer?.setLabelFontSize(desktopOrderBlockLabels.matches ? 11 : 10);
   };
   desktopOrderBlockLabels.addEventListener('change', updateOrderBlockFont);
-  if (asset === 'btc') byId('spotChartGapIntrusions').parentElement.title =
-    'Same-hour intrusion and gap close break. At most one simulated BTC Spot position, with a signal-open stop and fractal trailing.';
+  byId('spotChartGapIntrusions').parentElement.title =
+    `Same-hour intrusion and gap close break. At most one simulated ${symbol} Spot position, with a signal-open stop and fractal trailing.`;
   byId('spotChartOrderBlocks').parentElement.title = `LuxAlgo order blocks. PV = summed unique origin-candle Spot volume in ${baseAsset}, not volume inside the price zone or resting orders. #1 = largest active cluster by PV.`;
 
   function updateOrderBlocks() {
@@ -241,11 +239,11 @@
     status.hidden = false;
     status.textContent = `${overlay.label} replay pending`;
     try {
-      const response = await fetch(new URL(`btc-${overlay.kind}-replay.json`, assetBase), { signal: AbortSignal.timeout(15000) });
+      const response = await fetch(new URL(`${asset}-${overlay.kind}-replay.json`, assetBase), { signal: AbortSignal.timeout(15000) });
       if (!response.ok) throw new Error('Historical replay unavailable');
       const payload = await response.json();
       if (destroyed) return;
-      overlay.data = historicalReplay.readReplay(payload, overlay.kind);
+      overlay.data = historicalReplay.readReplay(payload, overlay.kind, symbol);
       if (overlay.kind === 'green') {
         gapIntrusionInputs = undefined;
         updateGapIntrusionMarkers();
@@ -391,10 +389,8 @@
     gapIntrusionInputs = { gap: gapTimeline, history: intrusionHistory, version: closedDataVersion, hour };
     const cutoff = greenHistory?.data?.before;
     // The prefiltered archive ends flat, so the recorded simulation can start there without an overlapping position.
-    visibleGapIntrusionMarkers = asset === 'btc'
-      ? greenReplay.filterGreenPositions(candles, cutoff ? gapIntrusionMarkers.filter(marker => marker.time >= cutoff) : gapIntrusionMarkers,
-        hourlyBoxModel?.fractals || [])
-      : gapIntrusionMarkers;
+    visibleGapIntrusionMarkers = greenReplay.filterGreenPositions(candles,
+      cutoff ? gapIntrusionMarkers.filter(marker => marker.time >= cutoff) : gapIntrusionMarkers, hourlyBoxModel?.fractals || []);
     gapIntrusionLayer.setData(visibleGapIntrusionMarkers);
     updateHistoricalReplay(greenHistory);
   }

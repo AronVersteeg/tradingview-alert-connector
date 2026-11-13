@@ -41,3 +41,18 @@ describe('BTC Green visual-only backfill', () => {
     expect(loadedReplaySignals(replay, [{...replay.signals[0],closed:true}], [], 'BTC-USD')).toEqual([replay.signals[0]]);
   });
 });
+
+describe('Market-specific Green backfills', () => {
+  test.each([['ETH',212],['SOL',297],['ZEC',330]])('%s loads only its own Spot replay', (asset,count) => {
+    const market = `${asset}-USD`, symbol = `${asset}USDT`;
+    const history = require(`../public/btc-spot-chart/${String(asset).toLowerCase()}-green-replay.json`);
+    const replay = readReplay(history,'green',symbol);
+    const candle = {...replay.signals[0],closed:true};
+    expect(replay.signals).toHaveLength(count);
+    expect(loadedReplaySignals(replay,[candle],[],market)).toHaveLength(1);
+    expect(loadedReplaySignals(replay,[candle],[],'BTC-USD')).toEqual([]);
+    expect(() => readReplay(history,'green','BTCUSDT')).toThrow();
+    expect(() => readReplay(history,'purple',symbol)).toThrow();
+    expect(() => readReplay({...history,modelVersion:greenPayload.modelVersion},'green',symbol)).toThrow();
+  });
+});
