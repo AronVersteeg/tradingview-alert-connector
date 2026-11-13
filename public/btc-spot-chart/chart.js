@@ -3,8 +3,8 @@
   const source = new URLSearchParams(location.search).get('source');
   if (!['open-v2', 'open-v2-eth', 'open-v2-sol'].includes(source)) return;
   const asset = source === 'open-v2-sol' ? 'sol' : source === 'open-v2-eth' ? 'eth' : 'btc';
-  const nativeSpot = asset !== 'btc';
-  const symbol = `${asset.toUpperCase()}USDT`, market = `${asset.toUpperCase()}-USD`;
+  const baseAsset = asset.toUpperCase();
+  const symbol = `${baseAsset}USDT`, market = `${baseAsset}-USD`;
   const intrusionLabel = 'Spot intrusion / D';
   const panel = document.getElementById('btcSpotChartPanel');
   if (!panel) return;
@@ -73,14 +73,14 @@
     intrusionLayer?.setLabelFontSize(desktopOrderBlockLabels.matches ? 11 : 10);
   };
   desktopOrderBlockLabels.addEventListener('change', updateOrderBlockFont);
-  for (const id of ['spotChartOrderBlockControls', 'spotChartOrderBlockStatus', 'spotChartOrderBlockCredit']) byId(id).hidden = nativeSpot;
+  byId('spotChartOrderBlocks').parentElement.title = `LuxAlgo order blocks. PV = summed unique origin-candle Spot volume in ${baseAsset}, not volume inside the price zone or resting orders. #1 = largest active cluster by PV.`;
 
   function updateOrderBlocks() {
-    if (nativeSpot || !orderBlockLayer) return;
+    if (!orderBlockLayer) return;
     const status = byId('spotChartOrderBlockStatus');
     try {
       orderBlockModel = orderBlocks.buildOrderBlocks(candles, {
-        length: Number(byId('spotChartObLength').value), mitigation: byId('spotChartObMitigation').value
+        symbol, length: Number(byId('spotChartObLength').value), mitigation: byId('spotChartObMitigation').value
       });
       orderBlockLayer.setData(orderBlockModel, candles);
       const intact = orderBlockModel.blocks.filter(block => block.state === 'intact').length;
@@ -95,7 +95,7 @@
   }
 
   function scheduleOrderBlockHistory() {
-    if (nativeSpot || orderBlockHistoryTimer || !active || destroyed || !initialData || !hasMore ||
+    if (orderBlockHistoryTimer || !active || destroyed || !initialData || !hasMore ||
       candles.length >= 12000 || !byId('spotChartOrderBlocks').checked) return;
     // Reuse the chart's bounded pages and shared Binance limiter; never burst-load history.
     orderBlockHistoryTimer = setTimeout(async () => {
@@ -481,13 +481,11 @@
       hourlyBoxLayer = new hourlyBoxes.HourlyFractalBoxPrimitive();
       hourlyBoxLayer.setVisible(byId('spotChartHourlyBoxes').checked);
       candlesSeries.attachPrimitive(hourlyBoxLayer);
-      if (!nativeSpot) {
-        orderBlockLayer = new orderBlocks.OrderBlockPrimitive();
-        updateOrderBlockFont();
-        orderBlockLayer.setLabelAnchor(() => gapLayer?.rightEdgeCoordinate() ?? null);
-        orderBlockLayer.setVisible(byId('spotChartOrderBlocks').checked);
-        candlesSeries.attachPrimitive(orderBlockLayer);
-      }
+      orderBlockLayer = new orderBlocks.OrderBlockPrimitive();
+      updateOrderBlockFont();
+      orderBlockLayer.setLabelAnchor(() => gapLayer?.rightEdgeCoordinate() ?? null);
+      orderBlockLayer.setVisible(byId('spotChartOrderBlocks').checked);
+      candlesSeries.attachPrimitive(orderBlockLayer);
       // Draw Weekly last so orange remains visible when both mark the same candle.
       for (const state of [...breakoutStates].reverse()) {
         state.layer = new gapWeeklyBreaks[`Gap${state.name}BreakoutPrimitive`]();

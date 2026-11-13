@@ -5,6 +5,10 @@ const { chromium } = require('playwright');
 const { PNG } = require('pngjs');
 const [url, output] = process.argv.slice(2);
 if (!url || !output) throw new Error('Supply a read-only preview URL and screenshot directory');
+const source = new URL(url).searchParams.get('source');
+const asset = source === 'open-v2-sol' ? 'sol' : source === 'open-v2-eth' ? 'eth' : 'btc';
+const baseAsset = asset.toUpperCase(), market = `${baseAsset}-USD`, symbol = `${baseAsset}USDT`;
+const priceDivisor = { btc: 1, eth: 40, sol: 800 }[asset];
 fs.mkdirSync(output, { recursive: true });
 const HOUR = 3600000, initialNow = Math.floor(Date.now() / HOUR) * HOUR + 5000;
 const start = Math.floor(initialNow / HOUR) * HOUR - 150 * HOUR;
@@ -14,7 +18,8 @@ function candles(now) {
     const values = { 25: [80200, 81000, 79000, 80500, 1000], 60: [82500, 83500, 81500, 82000, 1100],
       80: [79900, 81200, 78800, 80000, 1], 100: [80600, 81000, 80000, 80500, 1200],
       115: [81000, 84000, 80800, 81050, 1], 150: [81000, 81200, 79900, 81050, 1] }[i] || [81000, 81200, 80800, 81050, 1];
-    const [open, high, low, close, volume] = values;
+    const [open, high, low, close] = values.slice(0, 4).map(price => price / priceDivisor);
+    const volume = values[4];
     return { time: (start + i * HOUR) / 1000, open, high, low, close, volume, quoteVolume: volume * close,
       closed: start + (i + 1) * HOUR <= now };
   });
@@ -38,34 +43,38 @@ const pixel = (buffer, point) => {
         const request = route.request(), target = new URL(request.url());
         if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method())) { writes.push(request.method()); return route.abort(); }
         if (target.origin === new URL(url).origin && (target.pathname === '/decentrader/map' || target.pathname.startsWith('/assets/'))) return route.continue();
-        if (target.pathname.endsWith('/btc-spot-candles')) {
+        if (target.pathname.endsWith(`/${asset}-spot-candles`)) {
           const before = Number(target.searchParams.get('before'));
           if (before) olderReads++;
           const rows = candles(now).filter(c => !before || c.time * 1000 < before);
-          return route.fulfill({ json: { symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', fetchedAt: iso(now),
+          return route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h', fetchedAt: iso(now),
             candles: before ? rows : rows.slice(50), hasMore: !before } });
         }
-        if (target.pathname.endsWith('/btc-spot-fractal-projections')) {
-          const snapshot = interval => ({ venue: 'Binance Spot', symbol: 'BTCUSDT', interval,
+        if (target.pathname.endsWith(`/${asset}-spot-fractal-projections`)) {
+          const snapshot = interval => ({ venue: 'Binance Spot', symbol, interval,
             latestClosedCandleAt: iso(Math.floor(now / 86400000) * 86400000 - 1), records: [] });
-          return route.fulfill({ json: { symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThrough: iso(Math.floor(now / HOUR) * HOUR),
+          return route.fulfill({ json: { symbol, venue: 'Binance Spot', evaluatedThrough: iso(Math.floor(now / HOUR) * HOUR),
             daily: snapshot('1d'), weekly: snapshot('1w'), monthly: snapshot('1M') } });
         }
         if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') {
           const rows = candles(now).filter(c => c.closed);
           return route.fulfill({ json: { modelVersion: 'binance-spot-liquidation-cohorts-v2.4',
-            source: { market: 'BTC-USD', sourceStatuses: [{ name: 'Binance Spot BTCUSDT 1H' }] },
-            range: { minPrice: 78000, maxPrice: 85000 }, events: [],
+            source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
+            range: { minPrice: 78000 / priceDivisor, maxPrice: 85000 / priceDivisor }, events: [],
             frames: rows.map((c, i) => ({ i, startedAtMs: c.time * 1000, t: iso(c.time * 1000).slice(0, 19).replace('T', ' '), price: c.close })),
-            gaps: rows.map(() => ({ left: 78500, right: 84500, width: 6000,
+            gaps: rows.map(() => ({ left: 78500 / priceDivisor, right: 84500 / priceDivisor, width: 6000 / priceDivisor,
               leftEdge: { leverage: 10, relativeCount: 1 }, rightEdge: { leverage: 10, relativeCount: 1 } })) } });
         }
-        if (target.pathname === '/decentrader/manual-override') return route.fulfill({ json: { enabled: true, market: 'BTC-USD', overrides: [] } });
+        if (target.pathname === '/decentrader/manual-override') return route.fulfill({ json: { enabled: true, market, overrides: [] } });
         return route.fulfill({ status: 503, json: { error: 'Unrelated source isolated in read-only fixture' } });
       });
       const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
       await page.goto(url); await page.locator('#btcSpotChartPanel').scrollIntoViewIfNeeded();
       await page.waitForFunction(() => window.btcSpotChart?.getOrderBlocks()?.candleCount === 150);
+      assert(await page.locator('#spotChartOrderBlockControls').isVisible());
+      assert(await page.locator('#spotChartOrderBlockStatus').isVisible());
+      assert(await page.locator('#spotChartOrderBlockCredit').isVisible());
+      assert(await page.locator('#spotChartOrderBlocks').isChecked());
       assert.equal(olderReads, 1, 'Older candles should be fetched once and merged without duplicates');
       for (const id of ['HourlyBoxes', 'Gap', 'Daily', 'Weekly', 'Monthly', 'GapWeeklyBreaks', 'GapDailyBreaks', 'IntrusionDailyBreaks', 'Manual']) {
         await page.locator('#spotChart' + id).uncheck();
@@ -73,12 +82,14 @@ const pixel = (buffer, point) => {
       await page.locator('[data-spot-range="all"]').click();
       await page.locator('#spotChartCanvas').scrollIntoViewIfNeeded(); await frames(page);
       const model = await page.evaluate(() => window.btcSpotChart.getOrderBlocks());
+      assert.equal(model.symbol, symbol); assert.equal(model.baseAsset, baseAsset);
+      assert.equal(model.length, 5); assert.equal(model.mitigation, 'Wick');
       assert.equal(model.blocks.length, 3); assert.equal(model.blocks.filter(b => b.state === 'broken').length, 2);
       assert.deepEqual(model.blocks.filter(b => b.state === 'broken').map(b => b.volumeRankAtBreak), [2, 2],
         'Historical ranks must reflect the active clusters at each break, not current ranks');
       const brokenRanks = await page.evaluate(() => window.btcSpotChart.getBrokenOrderBlockRankLabels());
       assert(brokenRanks.length > 0, 'Historical rank text must render without the green gapbox');
-      assert(brokenRanks.every(label => label.text === '#2' && !/PV|BTC/.test(label.text)));
+      assert(brokenRanks.every(label => label.text === '#2'));
       const points = await page.evaluate(() => {
         const api = window.btcSpotChart, rows = api.getCandles(), blocks = api.getOrderBlocks().blocks;
         return Object.fromEntries(blocks.filter(b => b.direction === 'bullish').map(b => [b.state, {
@@ -104,10 +115,10 @@ const pixel = (buffer, point) => {
         const edge = api.chart.timeScale().logicalToCoordinate(api.getCandles().length - 1 + Number(document.getElementById('spotChartGapLead').value));
         return { ...label, edge, paneWidth: api.chart.timeScale().width() };
       });
-      assert.equal(label.bottom, 80000); assert.equal(label.top, 80500); assert.equal(label.x, label.edge + 10);
-      assert.equal(label.pivotVolumeBtc, 1200); assert.equal(label.volumeRank, 1);
+      assert.equal(label.bottom, 80000 / priceDivisor); assert.equal(label.top, 80500 / priceDivisor); assert.equal(label.x, label.edge + 10);
+      assert.equal(label.pivotVolume, 1200); assert.equal(label.baseAsset, baseAsset); assert.equal(label.volumeRank, 1);
       assert.equal(label.fontSize, mobile ? 10 : 15, 'Desktop text is 1.5x larger; mobile is unchanged');
-      assert(label.lines.join(' ').includes('PV ~1.2K BTC #1'), 'Volume and relative rank must appear alongside the price range');
+      assert(label.lines.join(' ').includes(`PV ~1.2K ${baseAsset} #1`), 'Volume must use the chart market base asset');
       assert(label.x + label.width <= label.paneWidth - 3, 'Full price label must fit in the right column');
       const labeled = await canvas.screenshot();
       let labelPixels = 0; const png = PNG.sync.read(labeled);
@@ -155,8 +166,8 @@ const pixel = (buffer, point) => {
       const overflow = await page.locator('#btcSpotChartPanel').evaluate(node => node.scrollWidth > node.clientWidth + 1);
       assert.equal(overflow, false, 'Chart panel must fit on mobile and desktop');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
-      results.push({ mobile, blocks: model.blocks.length, olderReads, activeDelta, brokenDelta, toggle: true,
-        controls: true, clusterLabel: true, labelPixels, fontSize: label.fontSize, pivotVolumeBtc: label.pivotVolumeBtc,
+      results.push({ symbol, mobile, blocks: model.blocks.length, olderReads, activeDelta, brokenDelta, toggle: true,
+        controls: true, clusterLabel: true, labelPixels, fontSize: label.fontSize, pivotVolume: label.pivotVolume, baseAsset,
         volumeRank: label.volumeRank, brokenRanks: brokenRanks.map(label => label.text),
         gapLeadAlignment: true, closedHourRefresh: true, overflow, writes });
       await context.close();

@@ -10,7 +10,11 @@
   const priceText = new Intl.NumberFormat('en-US', { maximumFractionDigits: 8 });
   const volumeText = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
 
-  function clusterActiveBlocks(blocks) {
+  function volumeFields(pivotVolume, baseAsset) {
+    return { pivotVolume, baseAsset, ...(baseAsset === 'BTC' ? { pivotVolumeBtc: pivotVolume } : {}) };
+  }
+
+  function clusterActiveBlocks(blocks, baseAsset = 'BTC') {
     const active = blocks.filter(block => block.state === 'intact' && Number.isFinite(block.bottom) &&
       Number.isFinite(block.top) && block.bottom > 0 && block.top >= block.bottom)
       .slice().sort((a, b) => a.bottom - b.bottom || a.top - b.top || a.id.localeCompare(b.id));
@@ -31,20 +35,20 @@
     }
     const result = clusters.map(({ pivotVolumes, ...cluster }) => ({ ...cluster, count: cluster.blockIds.length,
       id: cluster.blockIds.join(','), volumeCandleCount: pivotVolumes.size,
-      pivotVolumeBtc: cluster.volumeComplete ? [...pivotVolumes.values()].reduce((sum, volume) => sum + volume, 0) : null,
+      ...volumeFields(cluster.volumeComplete ? [...pivotVolumes.values()].reduce((sum, volume) => sum + volume, 0) : null, baseAsset),
       volumeRank: null, volumeSharePct: null, volumeSource: 'origin-candle-base-volume' }));
-    const ranked = result.filter(cluster => cluster.volumeComplete).slice().sort((a, b) => b.pivotVolumeBtc - a.pivotVolumeBtc || a.bottom - b.bottom);
-    const total = ranked.reduce((sum, cluster) => sum + cluster.pivotVolumeBtc, 0);
+    const ranked = result.filter(cluster => cluster.volumeComplete).slice().sort((a, b) => b.pivotVolume - a.pivotVolume || a.bottom - b.bottom);
+    const total = ranked.reduce((sum, cluster) => sum + cluster.pivotVolume, 0);
     ranked.forEach((cluster, i) => {
-      cluster.volumeRank = i && cluster.pivotVolumeBtc === ranked[i - 1].pivotVolumeBtc ? ranked[i - 1].volumeRank : i + 1;
-      cluster.volumeSharePct = total > 0 ? cluster.pivotVolumeBtc / total * 100 : 0;
+      cluster.volumeRank = i && cluster.pivotVolume === ranked[i - 1].pivotVolume ? ranked[i - 1].volumeRank : i + 1;
+      cluster.volumeSharePct = total > 0 ? cluster.pivotVolume / total * 100 : 0;
     });
     return result;
   }
 
   function placeClusterLabels(items, height) {
     let used = 0;
-    const selected = items.slice().sort((a, b) => (b.pivotVolumeBtc ?? -1) - (a.pivotVolumeBtc ?? -1) || b.count - a.count ||
+    const selected = items.slice().sort((a, b) => (b.pivotVolume ?? b.pivotVolumeBtc ?? -1) - (a.pivotVolume ?? a.pivotVolumeBtc ?? -1) || b.count - a.count ||
       Math.abs(a.anchorY - height / 2) - Math.abs(b.anchorY - height / 2)).filter(item => {
       if (used + item.height + 3 > height - 8) return false;
       used += item.height + 3; return true;
@@ -77,6 +81,9 @@
   }
 
   function buildOrderBlocks(input, options = {}, nowMs = Date.now()) {
+    const symbol = options.symbol ?? 'BTCUSDT';
+    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].includes(symbol)) throw new Error('Unsupported Spot order block symbol');
+    const baseAsset = symbol.slice(0, -4);
     const length = options.length ?? 5, mitigation = options.mitigation ?? 'Wick';
     if (!Number.isInteger(length) || length < 1 || length > 100 || !['Wick', 'Close'].includes(mitigation)) {
       throw new Error('Invalid order block settings');
@@ -122,7 +129,7 @@
       // Freeze one common pre-mitigation snapshot for this close, never today's ranks.
       const ranks = new Map();
       if (breaking.length) {
-        for (const cluster of clusterActiveBlocks([...active])) for (const id of cluster.blockIds) ranks.set(id, cluster);
+        for (const cluster of clusterActiveBlocks([...active], baseAsset)) for (const id of cluster.blockIds) ranks.set(id, cluster);
       }
       for (const block of breaking) {
         const cluster = ranks.get(block.id);
@@ -133,7 +140,7 @@
         active.delete(block);
       }
     }
-    return { symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', length, mitigation, blocks, gaps,
+    return { symbol, baseAsset, venue: 'Binance Spot', interval: '1h', length, mitigation, blocks, gaps,
       candleCount: candles.length, historyFrom: candles[0]?.time ?? null,
       evaluatedThrough: candles.at(-1)?.time + HOUR || null,
       confirmationDelayCandles: length, brokenOpacityMultiplier: .5 };
@@ -142,7 +149,7 @@
   class OrderBlockPrimitive {
     constructor() {
       this.blocks = []; this.clusters = []; this.labels = []; this.brokenGroups = []; this.brokenLabels = [];
-      this.indices = new Map(); this.visible = true; this.labelFontSize = 10;
+      this.indices = new Map(); this.visible = true; this.labelFontSize = 10; this.baseAsset = 'BTC';
       this.view = { zOrder: () => 'bottom', renderer: () => ({ draw: target => this.draw(target) }) };
       this.labelView = { zOrder: () => 'top', renderer: () => ({ draw: target => this.drawLabels(target) }) };
     }
@@ -160,7 +167,8 @@
     getLabels() { return this.labels.map(label => ({ ...label, lines: [...label.lines] })); }
     getBrokenRankLabels() { return this.brokenLabels.map(label => ({ ...label })); }
     setData(model, candles) {
-      this.blocks = model.blocks; this.clusters = clusterActiveBlocks(this.blocks); this.brokenGroups = brokenRankGroups(this.blocks);
+      this.baseAsset = model.baseAsset ?? 'BTC';
+      this.blocks = model.blocks; this.clusters = clusterActiveBlocks(this.blocks, this.baseAsset); this.brokenGroups = brokenRankGroups(this.blocks);
       this.labels = []; this.brokenLabels = []; this.indices = new Map();
       candles.forEach((c, i) => { this.indices.set(c.time, i); this.indices.set(c.time + HOUR, i + 1); });
       this.requestUpdate?.();
@@ -228,7 +236,7 @@
           const a = this.series.priceToCoordinate(cluster.top), b = this.series.priceToCoordinate(cluster.bottom);
           if (!Number.isFinite(a) || !Number.isFinite(b) || Math.max(a, b) < 4 || Math.min(a, b) > height - 4) continue;
           const low = priceText.format(cluster.bottom), high = priceText.format(cluster.top);
-          const volume = cluster.volumeComplete ? `PV ~${volumeText.format(cluster.pivotVolumeBtc)} BTC #${cluster.volumeRank}` : 'PV n/a';
+          const volume = cluster.volumeComplete ? `PV ~${volumeText.format(cluster.pivotVolume)} ${cluster.baseAsset} #${cluster.volumeRank}` : 'PV n/a';
           let fontSize = this.labelFontSize, lines = [`${low} - ${high} | ${volume}`];
           ctx.font = `${fontSize}px Arial`;
           if (ctx.measureText(lines[0]).width > available) {
@@ -245,7 +253,7 @@
           if (fontSize < this.labelFontSize * .8) continue;
           ctx.font = `${fontSize}px Arial`;
           items.push({ id: cluster.id, count: cluster.count, direction: cluster.direction, bottom: cluster.bottom, top: cluster.top,
-            pivotVolumeBtc: cluster.pivotVolumeBtc, volumeComplete: cluster.volumeComplete, volumeRank: cluster.volumeRank,
+            ...volumeFields(cluster.pivotVolume, cluster.baseAsset), volumeComplete: cluster.volumeComplete, volumeRank: cluster.volumeRank,
             x, lines, fontSize, width: Math.max(...lines.map(line => ctx.measureText(line).width)),
             height: lines.length * (fontSize + 2), anchorY: Math.max(4, Math.min(height - 4, (a + b) / 2)) });
         }

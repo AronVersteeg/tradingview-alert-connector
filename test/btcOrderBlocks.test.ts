@@ -7,6 +7,18 @@ const bear = () => [bar(0), bar(1, { high: 110, low: 90, volume: 10 }), bar(2, {
 const build = (candles: any[], options: any = { length: 1 }, now = (start + 1000 * HOUR) * 1000) => buildOrderBlocks(candles, options, now);
 
 describe('LuxAlgo volume-pivot order block reconstruction', () => {
+  test.each(['BTC', 'ETH', 'SOL'])('uses identical settings and own base-volume units for %s Spot', baseAsset => {
+    const symbol = `${baseAsset}USDT`;
+    const candles = Array.from({ length: 11 }, (_, i) => bar(i, i === 5 ? { high: 110, low: 90, volume: 100 } : {}));
+    const model = buildOrderBlocks(candles, { symbol });
+    expect(model).toMatchObject({ symbol, baseAsset, venue: 'Binance Spot', interval: '1h', length: 5, mitigation: 'Wick' });
+    expect(model.blocks).toEqual(buildOrderBlocks(candles).blocks);
+    const primitive = new OrderBlockPrimitive();
+    primitive.setData(model, candles);
+    expect(primitive.getClusters()[0]).toMatchObject({ baseAsset, pivotVolume: 100, volumeRank: 1 });
+    if (baseAsset !== 'BTC') expect(primitive.getClusters()[0]).not.toHaveProperty('pivotVolumeBtc');
+  });
+
   test('matches bullish low-to-hl2 and bearish hl2-to-high coordinates, including the average', () => {
     expect(build(bull()).blocks).toEqual([expect.objectContaining({ direction: 'bullish', bottom: 90, top: 100, average: 95,
       originTime: start + HOUR, confirmedAt: start + 3 * HOUR, state: 'intact' })]);

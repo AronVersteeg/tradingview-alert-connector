@@ -1,8 +1,7 @@
-# BTC Spot Order Blocks
+# Public V2 Spot Order Blocks
 
-Chart-only overlay on BTC Public V2. No changes to entry models, manual plans,
-exchange execution, SL, TP, trailing or existing data collection. ETH's chart
-retains its existing controls and behavior.
+The same chart-only overlay is shared by BTC, ETH and SOL Public V2. No changes
+to entry models, manual plans, exchange execution, SL, TP or trailing.
 
 ## Provenance
 
@@ -22,7 +21,7 @@ Its core distinction is retained: OHLCV-derived zones, **not resting orders**.
 
 ## Rules And Intentional Differences
 
-- Actual Binance Spot BTCUSDT 1H OHLC and base `volume`, not cohort heights,
+- Each chart's actual Binance Spot BTCUSDT, ETHUSDT or SOLUSDT 1H OHLC and base `volume`, not cohort heights,
   quote volume, Futures, Decentrader or an order-book feed.
 - Default volume pivot length 5. Confirmation requires five closed candles on
   each side. The zone is drawn at its original pivot; it was only known at
@@ -47,7 +46,7 @@ The checkbox is on by default. The numeric pivot input and Wick/Close selector
 recompute the same loaded OHLCV history. Detection updates after closed hours,
 REST corrections and history prepends, not on unfinished-candle excursions.
 
-Visible, enabled BTC charts gradually reuse the existing candle pagination,
+Visible, enabled Spot charts gradually reuse the existing candle pagination,
 at least 2.5 seconds between automatic pages, to the existing **12,000-candle**
 browser bound (about 500 days). This preserves the existing shared Binance
 request limiter and bounded server cache. Background/hidden/offline charts and
@@ -85,18 +84,19 @@ size, with limited shrink-to-fit only when the right column is constrained.
 
 ### Cluster Volume
 
-Labels also show `PV ~1.2K BTC #1`: approximate compact **pivot-candle volume**
+Labels also show e.g. `PV ~1.2K BTC #1`: approximate compact **pivot-candle volume**
 and the rank among all active clusters in the loaded history (#1 is largest).
 The cluster's price position is unchanged. Equal volumes share a rank; ranks
 recompute when blocks appear, break or older candles are loaded. Labels with
 larger PV take priority if the pane cannot fit every label without collisions.
 
-`pivotVolumeBtc` sums actual Binance Spot base volumes from unique block-origin
+`pivotVolume` sums actual Binance Spot base volumes from unique block-origin
 1H candles. A candle appearing twice inside a cluster is counted once. Broken
 or unknown blocks do not contribute. Missing, negative or contradictory volume
 produces `PV n/a`, not zero. API snapshots retain the unabridged numeric total,
-`volumeRank`, `volumeSharePct`, `volumeCandleCount` and the explicit source
+`baseAsset` (BTC, ETH or SOL), `volumeRank`, `volumeSharePct`, `volumeCandleCount` and the explicit source
 `origin-candle-base-volume`.
+BTC snapshots also retain `pivotVolumeBtc` for existing consumers.
 
 PV is a contextual proxy for relative historical traded activity. It is **not**
 volume traded specifically inside the block's price band, cumulative volume
@@ -142,7 +142,8 @@ can refine it. Ranks cannot account for older active blocks outside coverage.
   not a live BTC source or proof of complete TradingView event-by-event parity.
 - `node scripts/check-btc-order-blocks.cjs <read-only preview URL> <output dir>`:
   intercepted desktop/mobile fixture, canvas pixels and half-strength checks,
-  checkbox, parameters, hourly update, pagination and no write requests.
+  checkbox, parameters, hourly update, pagination and no write requests. Run with
+  `source=open-v2`, `source=open-v2-eth` and `source=open-v2-sol` to check all three.
 
 Use `scripts/preview-btc-spot-chart.ts` for QA. Do not start the trading
 application or submit orders to test a visual overlay.

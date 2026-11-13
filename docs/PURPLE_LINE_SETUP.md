@@ -16,8 +16,9 @@ The SOL tab remains `/decentrader/map?source=open-v2-sol`.
 ETH/SOL use the same UI and mobile interactions: Spot 1H candles, confirmed 1H
 fractal boxes, D/W/M fractal tables and intact overviews, projected fractal lines,
 green gap boxes, Gap/D and Gap/W break markers, purple intrusion/D markers and
-POC crossbars, plus read-only manual/TP overlays. Order blocks remain hidden,
-exactly as on ETH. The loading label and WebSocket subscription follow the pair.
+POC crossbars, plus read-only manual/TP overlays. The [orderblock overlay](BTC_ORDER_BLOCKS.md)
+uses the same defaults and rendering as BTC, with each pair's own Spot candles
+and base-volume units. The loading label and WebSocket subscription follow the pair.
 
 Candles, D/W/M fractals, gap/intrusion reconstruction and POC use that pair's
 Binance Spot source, never Decentrader or another pair. F5m is deliberately the
