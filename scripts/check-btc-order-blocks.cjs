@@ -13,6 +13,7 @@ fs.mkdirSync(output, { recursive: true });
 const HOUR = 3600000, initialNow = Math.floor(Date.now() / HOUR) * HOUR + 5000;
 const start = Math.floor(initialNow / HOUR) * HOUR - 150 * HOUR;
 const iso = ms => new Date(ms).toISOString();
+const fixtureTime = i => (start + i * HOUR) / 1000;
 function candles(now) {
   return Array.from({ length: Math.floor((now - start) / HOUR) + 1 }, (_, i) => {
     const values = { 25: [80200, 81000, 79000, 80500, 1000], 60: [82500, 83500, 81500, 82000, 1100],
@@ -53,13 +54,18 @@ const pixel = (buffer, point) => {
         if (target.pathname.endsWith(`/${asset}-spot-fractal-projections`)) {
           const snapshot = interval => ({ venue: 'Binance Spot', symbol, interval,
             latestClosedCandleAt: iso(Math.floor(now / 86400000) * 86400000 - 1), records: [] });
+          const daily = snapshot('1d');
+          daily.records = [{ id: 'fixture-high', type: 'HIGH', priceExact: String(81500 / priceDivisor),
+            pivotAt: iso(Math.floor(start / 86400000) * 86400000 - 4 * 86400000), confirmedAt: iso(start - 1) }];
           return route.fulfill({ json: { symbol, venue: 'Binance Spot', evaluatedThrough: iso(Math.floor(now / HOUR) * HOUR),
-            daily: snapshot('1d'), weekly: snapshot('1w'), monthly: snapshot('1M') } });
+            daily, weekly: snapshot('1w'), monthly: snapshot('1M') } });
         }
         if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') {
           const rows = candles(now).filter(c => c.closed);
           return route.fulfill({ json: { modelVersion: 'binance-spot-liquidation-cohorts-v2.4',
             source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
+            intrusionBenchmarks: { history: [[60, 'long'], [80, 'short'], [105, 'long'], [115, 'long'], [150, 'short']]
+              .map(([i, direction]) => ({ timestamp: iso(fixtureTime(i) * 1000), direction })) },
             range: { minPrice: 78000 / priceDivisor, maxPrice: 85000 / priceDivisor }, events: [],
             frames: rows.map((c, i) => ({ i, startedAtMs: c.time * 1000, t: iso(c.time * 1000).slice(0, 19).replace('T', ' '), price: c.close })),
             gaps: rows.map(() => ({ left: 78500 / priceDivisor, right: 84500 / priceDivisor, width: 6000 / priceDivisor,
@@ -81,6 +87,25 @@ const pixel = (buffer, point) => {
       }
       await page.locator('[data-spot-range="all"]').click();
       await page.locator('#spotChartCanvas').scrollIntoViewIfNeeded(); await frames(page);
+      const confluence = page.locator('#spotChartIntrusionConfluence');
+      assert(await confluence.isChecked());
+      await page.waitForFunction(() => window.btcSpotChart.getIntrusionConfluence()?.signals.length === 4);
+      const matches = await page.evaluate(() => window.btcSpotChart.getIntrusionConfluence().signals);
+      assert.deepEqual(matches.map(signal => signal.time), [60, 80, 105, 115].map(fixtureTime));
+      assert(matches[0].matches[0].dailyBreak);
+      assert(matches[1].matches[0].brokenBlockIds.length);
+      assert(matches[2].matches[0].newBlockIds.length);
+      const markerX = await page.evaluate(time => window.btcSpotChart.chart.timeScale().timeToCoordinate(time), fixtureTime(105));
+      const blueOn = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
+      await page.screenshot({ path: path.join(output, mobile ? 'intrusion-confluence-mobile.png' : 'intrusion-confluence-desktop.png') });
+      await confluence.uncheck(); await frames(page);
+      const blueOff = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
+      let bluePixels = 0;
+      for (let y = 0; y < blueOn.height - 40; y++) {
+        const i = (y * blueOn.width + Math.floor(markerX)) * 4;
+        if (blueOn.data[i + 2] - blueOff.data[i + 2] > 45) bluePixels++;
+      }
+      assert(bluePixels > 30, 'Blue confluence line must render and respond to its own checkbox');
       const model = await page.evaluate(() => window.btcSpotChart.getOrderBlocks());
       assert.equal(model.symbol, symbol); assert.equal(model.baseAsset, baseAsset);
       assert.equal(model.length, 5); assert.equal(model.mitigation, 'Wick');
@@ -159,6 +184,7 @@ const pixel = (buffer, point) => {
       now += HOUR; await page.evaluate(value => { window.__obNow = value; }, now);
       await page.locator('#spotChartRefresh').click();
       await page.waitForFunction(() => window.btcSpotChart.getOrderBlocks().blocks.every(b => b.state === 'broken'));
+      await page.waitForFunction(time => window.btcSpotChart.getIntrusionConfluence()?.signals.some(signal => signal.time === time), fixtureTime(150));
       const latest = await page.evaluate(() => window.btcSpotChart.getOrderBlocks());
       assert.equal(latest.blocks.at(-1).brokenAt, (start + 151 * HOUR) / 1000);
       assert.deepEqual(latest.blocks.map(b => b.volumeRankAtBreak), [2, 2, 1], 'Past ranks must stay frozen when a new block breaks');
@@ -169,7 +195,7 @@ const pixel = (buffer, point) => {
       results.push({ symbol, mobile, blocks: model.blocks.length, olderReads, activeDelta, brokenDelta, toggle: true,
         controls: true, clusterLabel: true, labelPixels, fontSize: label.fontSize, pivotVolume: label.pivotVolume, baseAsset,
         volumeRank: label.volumeRank, brokenRanks: brokenRanks.map(label => label.text),
-        gapLeadAlignment: true, closedHourRefresh: true, overflow, writes });
+        gapLeadAlignment: true, closedHourRefresh: true, confluence: true, bluePixels, overflow, writes });
       await context.close();
     }
   } finally { await browser.close(); }

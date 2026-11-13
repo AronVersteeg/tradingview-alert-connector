@@ -27,6 +27,7 @@
   const gapBoxes = window.BtcSpotGapBoxes;
   const gapWeeklyBreaks = window.BtcSpotGapWeeklyBreakouts;
   const intrusionDailyBreaks = window.BtcSpotIntrusionDailyBreakouts;
+  const intrusionConfluence = window.BtcSpotIntrusionConfluence;
   const futuresDelta = window.BtcIntrusionFuturesDelta;
   const spotPoc = window.BtcIntrusionSpotPoc;
   const manualLevels = window.BtcSpotManualLevels;
@@ -53,6 +54,7 @@
   let intrusionLayer, intrusionHistory = savedIntrusions?.market === market && savedIntrusions.source === 'binance-spot-recorded-intrusions'
     ? savedIntrusions : undefined, intrusionModel, intrusionInputs;
   let intrusionReadFailed = false;
+  let confluenceLayer, confluenceModel, confluenceInputs;
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
   const pocRecords = new Map();
@@ -91,16 +93,19 @@
       orderBlockModel = undefined; orderBlockLayer.setData({ blocks: [] }, candles);
       status.textContent = `Order blocks unavailable: ${error.message}`; status.dataset.stale = 'true';
     }
+    updateIntrusionConfluence();
     scheduleOrderBlockHistory();
   }
 
+  const needsOrderBlockHistory = () => byId('spotChartOrderBlocks').checked || byId('spotChartIntrusionConfluence').checked;
+
   function scheduleOrderBlockHistory() {
     if (orderBlockHistoryTimer || !active || destroyed || !initialData || !hasMore ||
-      candles.length >= 12000 || !byId('spotChartOrderBlocks').checked) return;
+      candles.length >= 12000 || !needsOrderBlockHistory()) return;
     // Reuse the chart's bounded pages and shared Binance limiter; never burst-load history.
     orderBlockHistoryTimer = setTimeout(async () => {
       orderBlockHistoryTimer = undefined;
-      if (!active || destroyed || !byId('spotChartOrderBlocks').checked) return;
+      if (!active || destroyed || !needsOrderBlockHistory()) return;
       await loadOlder();
       scheduleOrderBlockHistory();
     }, Math.max(2500, olderRetryAt - Date.now()));
@@ -184,9 +189,25 @@
       [state.levelsKey]: signal[state.levelsKey].map(level => ({ ...level })) })) } : null;
   }
 
+  function updateIntrusionConfluence() {
+    if (!confluenceLayer || !intrusionHistory) return;
+    const status = byId('spotChartIntrusionConfluenceStatus');
+    const inputs = [intrusionHistory, intrusionModel, orderBlockModel, closedDataVersion];
+    if (confluenceInputs?.every((input, index) => input === inputs[index])) return;
+    try {
+      confluenceModel = intrusionConfluence.buildIntrusionConfluence(candles, intrusionHistory, intrusionModel, orderBlockModel, Date.now(), market);
+      confluenceLayer.setData(confluenceModel.signals);
+      confluenceInputs = inputs;
+      status.textContent = `Intrusion / D or OB: ${confluenceModel.signals.length}${!intrusionModel || !orderBlockModel ? ' | partial' : ''}`;
+    } catch (error) {
+      confluenceInputs = undefined; confluenceModel = undefined; confluenceLayer.setData([]);
+      status.textContent = `Intrusion / D or OB unavailable: ${error.message}`;
+    }
+  }
+
   function updateIntrusionDailyBreakouts() {
     const status = byId('spotChartIntrusionDailyStatus');
-    if (!intrusionHistory || !fractalModel) return;
+    if (!intrusionHistory || !fractalModel) return updateIntrusionConfluence();
     const hour = Math.floor(Date.now() / 3_600_000), inputs = intrusionInputs;
     try {
       if (!inputs || inputs.history !== intrusionHistory || inputs.fractals !== fractalModel ||
@@ -217,6 +238,7 @@
       status.textContent = `${intrusionLabel} pending: ${error.message}`;
       status.dataset.stale = 'true';
     }
+    updateIntrusionConfluence();
   }
 
   async function refreshIntrusionDelta() {
@@ -493,6 +515,9 @@
         candlesSeries.attachPrimitive(state.layer);
       }
       updateGapFractalBreakouts();
+      confluenceLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive('#315ca8', 3);
+      confluenceLayer.setVisible(byId('spotChartIntrusionConfluence').checked);
+      candlesSeries.attachPrimitive(confluenceLayer);
       intrusionLayer = new intrusionDailyBreaks.IntrusionDailyBreakoutPrimitive();
       intrusionLayer.setDeltaEnabled(true);
       intrusionLayer.setPocEnabled(true);
@@ -553,6 +578,7 @@
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
+        getIntrusionConfluence: () => confluenceModel ? structuredClone(confluenceModel) : null,
         getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({
           ...signal, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
         getIntrusionDeltaLabels: () => intrusionLayer?.getDeltaLabels() || [],
@@ -704,10 +730,17 @@
     chart?.priceScale('right').applyOptions({ autoScale: true });
   });
   byId('spotChartHourlyBoxes').addEventListener('change', (event) => hourlyBoxLayer?.setVisible(event.target.checked));
+  function updateOrderBlockHistoryDemand() {
+    if (needsOrderBlockHistory()) scheduleOrderBlockHistory();
+    else { clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; }
+  }
   byId('spotChartOrderBlocks').addEventListener('change', event => {
     orderBlockLayer?.setVisible(event.target.checked);
-    if (event.target.checked) scheduleOrderBlockHistory();
-    else { clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; }
+    updateOrderBlockHistoryDemand();
+  });
+  byId('spotChartIntrusionConfluence').addEventListener('change', event => {
+    confluenceLayer?.setVisible(event.target.checked);
+    updateOrderBlockHistoryDemand();
   });
   byId('spotChartObLength').addEventListener('change', event => {
     const length = Number(event.target.value);
