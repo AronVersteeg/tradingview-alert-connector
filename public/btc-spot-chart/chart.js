@@ -55,6 +55,7 @@
     ? savedIntrusions : undefined, intrusionModel, intrusionInputs;
   let intrusionReadFailed = false;
   let gapIntrusionLayer, gapIntrusionMarkers = [];
+  let gapIntrusionInputs;
   let confluenceLayer, confluenceModel, confluenceInputs;
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
@@ -160,6 +161,7 @@
       status.dataset.stale = 'true';
     }
     updateGapFractalBreakouts();
+    updateGapIntrusionMarkers();
   }
 
   function updateGapFractalBreakouts() {
@@ -313,7 +315,14 @@
   }
   function updateGapIntrusionMarkers() {
     if (!gapIntrusionLayer) return;
-    gapIntrusionMarkers = intrusionDailyBreaks.buildGapIntrusionMarkers(candles, intrusionHistory, Date.now(), market);
+    const now = Date.now(), hour = Math.floor(now / 3_600_000), inputs = gapIntrusionInputs;
+    if (inputs && inputs.gap === gapTimeline && inputs.history === intrusionHistory && inputs.version === closedDataVersion && inputs.hour === hour) return;
+    try {
+      gapIntrusionMarkers = intrusionDailyBreaks.buildGapIntrusionMarkers(candles, intrusionHistory, gapTimeline, now, market);
+    } catch {
+      gapIntrusionMarkers = [];
+    }
+    gapIntrusionInputs = { gap: gapTimeline, history: intrusionHistory, version: closedDataVersion, hour };
     gapIntrusionLayer.setData(gapIntrusionMarkers);
   }
   window.addEventListener('btc-spot-chart:intrusion-history', event => {
@@ -456,7 +465,6 @@
       hourlyBoxLayer.setData(hourlyBoxModel.boxes, candles);
       updateOrderBlocks();
       updateGapProjection();
-      updateGapIntrusionMarkers();
       updateIntrusionDailyBreakouts();
     }
     if (key !== fractalKey || !singleUpdate) { fractalKey = key; projectLoadedCandles(); }

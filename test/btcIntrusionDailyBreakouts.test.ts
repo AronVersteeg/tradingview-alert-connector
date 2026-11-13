@@ -22,7 +22,7 @@ const model = () => ({ symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThroug
 ] });
 
 describe('Standalone Binance Spot gap intrusion markers', () => {
-  test.each(['BTC', 'ETH', 'SOL', 'ZEC'])('%s marks each saved closed hour once, without requiring a fractal break', asset => {
+  test.each(['BTC', 'ETH', 'SOL', 'ZEC'])('%s marks a saved intrusion only on a fresh same-hour gap edge close break', asset => {
     const market = `${asset}-USD`;
     const data = {
       source: { market, sourceStatuses: [{ name: `Binance Spot ${asset}USDT 1H` }] },
@@ -44,13 +44,20 @@ describe('Standalone Binance Spot gap intrusion markers', () => {
     const history = compactIntrusionHistory(data, now, market, { includeGapHours: true });
     const { gapHours, ...directionalHistory } = history;
     expect(directionalHistory).toEqual(compactIntrusionHistory(data, now, market));
-    const chartCandles = candles().slice(1).filter(c => c.time !== start + 4 * HOUR)
-      .map(c => c.time === start + 5 * HOUR ? { ...c, closed: false } : c);
-    expect(buildGapIntrusionMarkers(chartCandles, history, now - 1, market)).toEqual(
-      [1, 2, 3].map(hour => ({ time: start + hour * HOUR }))
-    );
-    expect(buildGapIntrusionMarkers(chartCandles, history, now, 'OTHER-USD')).toEqual([]);
-    expect(buildGapIntrusionMarkers(chartCandles, { ...history, source: 'decentrader-recorded-intrusions' }, now, market)).toEqual([]);
+    const chartCandles = candles().map(c => c.time === start + HOUR ? { ...c, close: 103, high: 104 } : c);
+    const timeline = {symbol: `${asset}USDT`, venue: 'Binance Spot',
+      records: [[90,102], [90,120], [85,140], [80,150], [80,130], [65,120], [60,140]].map(([lower,upper], i) =>
+        ({candleTime:start+i*HOUR, availableAt:start+(i+1)*HOUR, lower, upper}))};
+    const expected = [[1, 'long', 102], [2, 'long', 120], [4, 'short', 80]].map(([hour, direction, edge]) =>
+      ({time:start+Number(hour)*HOUR, closedAt:start+(Number(hour)+1)*HOUR, direction, edge}));
+    expect(buildGapIntrusionMarkers(chartCandles, history, timeline, now - 1, market)).toEqual(expected);
+    expect(buildGapIntrusionMarkers(chartCandles.filter(c => c.time !== start + 3*HOUR), history, timeline, now - 1, market)).toEqual(expected.slice(0, 2));
+    expect(buildGapIntrusionMarkers(chartCandles, history, undefined, now, market)).toEqual([]);
+    expect(buildGapIntrusionMarkers(chartCandles, history, timeline, now, 'OTHER-USD')).toEqual([]);
+    expect(buildGapIntrusionMarkers(chartCandles, { ...history, source: 'decentrader-recorded-intrusions' }, timeline, now, market)).toEqual([]);
+    expect(() => buildGapIntrusionMarkers(chartCandles, history, {...timeline, symbol:'OTHERUSDT'}, now, market)).toThrow('source');
+    const wickOnly = chartCandles.map(c => c.time === start + 2*HOUR ? {...c, close:120} : c);
+    expect(buildGapIntrusionMarkers(wickOnly, history, timeline, now - 1, market)).toEqual([expected[0], expected[2]]);
   });
 });
 

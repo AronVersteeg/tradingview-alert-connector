@@ -44,7 +44,7 @@
       evaluatedThrough: through ? new Date(through * 1000).toISOString() : null };
   }
 
-  function buildGapFractalBreakouts(input, timeline, fractals, nowMs, timeframe, levelsKey, symbol) {
+  function indexGapEdges(timeline, symbol) {
     if (timeline?.symbol !== symbol || timeline.venue !== 'Binance Spot' || !Array.isArray(timeline.records)) {
       throw new Error('Unexpected BTC Spot breakout source');
     }
@@ -58,15 +58,24 @@
       }
       gaps.set(row.availableAt, row); lastGap = row.availableAt;
     }
+    return { gaps, lastGap };
+  }
+
+  function closeBreaksGap(gap, priorClose, close, direction) {
+    return !!gap && gap.lower !== null && gap.upper !== null &&
+      (direction === 'long' ? priorClose <= gap.upper && close > gap.upper
+        : priorClose >= gap.lower && close < gap.lower);
+  }
+
+  function buildGapFractalBreakouts(input, timeline, fractals, nowMs, timeframe, levelsKey, symbol) {
+    const { gaps, lastGap } = indexGapEdges(timeline, symbol);
     const model = buildFractalCloseBreakouts(input, fractals, nowMs, timeframe, levelsKey, symbol);
     const through = Math.min(Date.parse(model.evaluatedThrough || '') / 1000 || 0, lastGap ? lastGap + HOUR : 0);
     const previous = new Map(input.filter(candle => candle.closed === true).map(candle => [candle.time + HOUR, candle.close]));
     const signals = model.signals.flatMap(signal => {
       // Use the completed box known at candle OPEN, not its expanded replacement.
       const gap = gaps.get(signal.time), priorClose = previous.get(signal.time);
-      if (signal.closedAt > through || !gap || gap.lower === null || gap.upper === null ||
-          !(signal.direction === 'long' ? priorClose <= gap.upper && signal.close > gap.upper
-            : priorClose >= gap.lower && signal.close < gap.lower)) return [];
+      if (signal.closedAt > through || !closeBreaksGap(gap, priorClose, signal.close, signal.direction)) return [];
       return [{ ...signal, gap: { lower: gap.lower, upper: gap.upper, candleTime: gap.candleTime } }];
     });
     return { ...model, signals, evaluatedThrough: through ? new Date(through * 1000).toISOString() : null };
@@ -121,7 +130,7 @@
     constructor() { super('#fff59d'); }
   }
 
-  const api = Object.freeze({ buildGapWeeklyBreakouts, buildGapDailyBreakouts, buildDailyFractalBreakouts, buildWeeklyFractalBreakouts,
+  const api = Object.freeze({ indexGapEdges, closeBreaksGap, buildGapWeeklyBreakouts, buildGapDailyBreakouts, buildDailyFractalBreakouts, buildWeeklyFractalBreakouts,
     GapWeeklyBreakoutPrimitive, GapDailyBreakoutPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcSpotGapWeeklyBreakouts = api;

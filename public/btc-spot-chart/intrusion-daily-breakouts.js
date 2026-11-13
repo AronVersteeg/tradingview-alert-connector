@@ -36,11 +36,20 @@
       ...(gapHours ? { gapHours: [...gapHours].sort((a, b) => a - b) } : {}) };
   }
 
-  function buildGapIntrusionMarkers(candles, history, nowMs = Date.now(), market = 'BTC-USD') {
-    if (history?.market !== market || history.source !== 'binance-spot-recorded-intrusions' ||
+  function buildGapIntrusionMarkers(candles, history, timeline, nowMs = Date.now(), market = 'BTC-USD') {
+    if (!timeline || history?.market !== market || history.source !== 'binance-spot-recorded-intrusions' ||
         history.timeBasis !== 'alert-candle-open-utc' || !Array.isArray(history.gapHours)) return [];
-    const closedHours = new Set(candles.filter(candle => candle.closed && (candle.time + 3600) * 1000 <= nowMs).map(candle => candle.time));
-    return history.gapHours.filter(time => closedHours.has(time)).map(time => ({ time }));
+    const { gaps } = engine.indexGapEdges(timeline, market.replace('-USD', 'USDT'));
+    const closed = new Map(candles.filter(candle => candle.closed === true).map(candle => [candle.time, candle]));
+    return history.gapHours.flatMap(time => {
+      const candle = closed.get(time), previous = closed.get(time - 3600), gap = gaps.get(time);
+      const closedAt = time + 3600;
+      if (!candle || !previous || closedAt * 1000 > nowMs || !Number.isFinite(candle.close) || !Number.isFinite(previous.close)) return [];
+      const direction = candle.close > previous.close ? 'long' : 'short';
+      // Check the box already known at candle open; its replacement can follow this break.
+      if (!engine.closeBreaksGap(gap, previous.close, candle.close, direction)) return [];
+      return [{ time, closedAt, direction, edge: direction === 'long' ? gap.upper : gap.lower }];
+    });
   }
 
   function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe) {
