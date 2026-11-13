@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { IntrusionSpotPocFeed, validatePocHour, btcIntrusionSpotPocFeed, ethIntrusionSpotPocFeed, solIntrusionSpotPocFeed } from '../src/services/intrusionSpotPoc';
+import { IntrusionSpotPocFeed, validatePocHour, btcIntrusionSpotPocFeed, ethIntrusionSpotPocFeed, solIntrusionSpotPocFeed, zecIntrusionSpotPocFeed } from '../src/services/intrusionSpotPoc';
 import { binanceGet, binanceRetryAt } from '../src/services/binanceHttp';
 import { btcSpotChartRouter } from '../src/controllers/btcSpotChart';
 const browser = require('../public/btc-spot-chart/spot-poc.js');
@@ -271,7 +271,7 @@ describe('annotation-only exact-price Binance Spot POC', () => {
     const locate = jest.fn(() => file); new IntrusionSpotPocFeed('BTCUSDT', locate);
     expect(locate).not.toHaveBeenCalled(); expect(() => new IntrusionSpotPocFeed('XRPUSDT' as any)).toThrow();
     for (const bad of [NaN, -3600, hour + 1, Math.floor(Date.now() / 3_600_000) * 3600]) expect(() => validatePocHour(bad)).toThrow();
-    for (const [asset, feed] of [['btc', btcIntrusionSpotPocFeed], ['eth', ethIntrusionSpotPocFeed], ['sol', solIntrusionSpotPocFeed]] as const) {
+    for (const [asset, feed] of [['btc', btcIntrusionSpotPocFeed], ['eth', ethIntrusionSpotPocFeed], ['sol', solIntrusionSpotPocFeed], ['zec', zecIntrusionSpotPocFeed]] as const) {
       const read = jest.spyOn(feed, 'snapshot').mockResolvedValue({ record: { hour, status: 'pending' } } as any);
       const layer = (btcSpotChartRouter as any).stack.find((l: any) => l.route?.path === `/open-liquidity/v2/${asset}-intrusion-spot-poc`);
       for (const query of [undefined, ['1', '2'], 'bad', `${hour},${hour}`, String(hour + 1)]) {

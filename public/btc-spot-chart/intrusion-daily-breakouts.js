@@ -5,7 +5,7 @@
   const SOURCE = 'decentrader-recorded-intrusions';
 
   function compactIntrusionHistory(payload, nowMs = Date.now(), market = 'BTC-USD') {
-    const nativeSpot = ['ETH-USD', 'SOL-USD'].includes(market) || market === 'BTC-USD' && payload?.source?.market === market &&
+    const nativeSpot = ['ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || market === 'BTC-USD' && payload?.source?.market === market &&
       payload.source.sourceStatuses?.some(source => source.name === 'Binance Spot BTCUSDT 1H');
     const symbol = market.replace('-USD', 'USDT');
     const validSource = nativeSpot ? payload?.source?.market === market &&
@@ -35,7 +35,7 @@
   function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe) {
     const expectedSource = history?.source;
     const validSource = expectedSource === 'binance-spot-recorded-intrusions' || market === 'BTC-USD' && expectedSource === SOURCE;
-    if (!['BTC-USD', 'ETH-USD', 'SOL-USD'].includes(market) || history?.market !== market || !validSource || history.timeBasis !== 'alert-candle-open-utc' ||
+    if (!['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || history?.market !== market || !validSource || history.timeBasis !== 'alert-candle-open-utc' ||
         !Array.isArray(history.records)) throw new Error('Unexpected Decentrader intrusion history');
     const records = new Map();
     for (const record of history.records) {

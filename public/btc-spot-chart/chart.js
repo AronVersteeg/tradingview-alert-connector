@@ -1,8 +1,8 @@
 (function () {
   'use strict';
   const source = new URLSearchParams(location.search).get('source');
-  if (!['open-v2', 'open-v2-eth', 'open-v2-sol'].includes(source)) return;
-  const asset = source === 'open-v2-sol' ? 'sol' : source === 'open-v2-eth' ? 'eth' : 'btc';
+  if (!['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(source)) return;
+  const asset = source === 'open-v2' ? 'btc' : source.slice('open-v2-'.length);
   const baseAsset = asset.toUpperCase();
   const symbol = `${baseAsset}USDT`, market = `${baseAsset}-USD`;
   const intrusionLabel = 'Spot intrusion / D';

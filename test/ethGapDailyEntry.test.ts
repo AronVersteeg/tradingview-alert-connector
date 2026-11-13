@@ -4,12 +4,12 @@ import path from 'path';
 import * as entry from '../src/services/ethGapDailyEntry';
 import * as gap from '../src/services/decentraderGapMonitor';
 import { ethIntrusionFuturesDeltaFeed, parseFuturesDeltaCandle } from '../src/services/intrusionFuturesDelta';
-import { OpenLiquidityV2EthTradeMonitor, openLiquidityV2BtcIntrusionMonitor, openLiquidityV2SolTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
+import { OpenLiquidityV2EthTradeMonitor, openLiquidityV2BtcIntrusionMonitor, openLiquidityV2SolTradeMonitor, openLiquidityV2ZecTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
 const fractals = require('../public/btc-spot-chart/fractals.js');
 const purple = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
 import { PURPLE_LINE_SETUPS, purpleLineEntryEnabled } from '../src/services/purpleLineSetup';
 import * as dailyHistory from '../src/services/binanceDailyFractalHistory';
-import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed } from '../src/services/binanceSpotChart';
+import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed, zecSpotChartFeed } from '../src/services/binanceSpotChart';
 import { PurpleLineContinuity } from '../src/services/purpleLineContinuity';
 import { purpleTriggerEmail } from '../src/services/purpleTriggerEmail';
 const HOUR = 3_600_000, closeAt = Date.parse('2026-10-24T02:00:00Z'), now = closeAt + 5000;
@@ -63,15 +63,15 @@ describe('ETH final-5m Futures delta measurement utility (not an entry gate)', (
   });
 });
 
-describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity', asset => {
-  const market = `${asset}-USD` as 'BTC-USD' | 'ETH-USD' | 'SOL-USD';
+describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution parity', asset => {
+  const market = `${asset}-USD` as const;
   const symbol = `${asset}USDT`;
   const setup = PURPLE_LINE_SETUPS[market];
   const stateEnv = asset === 'BTC' ? 'OPEN_LIQUIDITY_V2_BTC_INTRUSION_STATE_FILE' : `OPEN_LIQUIDITY_V2_${asset}_TRADE_STATE_FILE`;
   const entryEnv = setup.enabledEnv, autoEnv = `OPEN_LIQUIDITY_V2_${asset}_AUTO_TRADE_ENABLED`, monitorEnv = `OPEN_LIQUIDITY_V2_${asset}_INTRUSION_MONITOR_ENABLED`;
   const readMethod = asset === 'ETH' ? 'readEthGapDailySignal' : 'readPurpleLineSignal';
-  const createMonitor = () => new OpenLiquidityV2EthTradeMonitor({} as any, asset === 'BTC'
-    ? (openLiquidityV2BtcIntrusionMonitor as any).config : asset === 'SOL' ? (openLiquidityV2SolTradeMonitor as any).config : undefined);
+  const createMonitor = () => new OpenLiquidityV2EthTradeMonitor({} as any, ({ BTC: openLiquidityV2BtcIntrusionMonitor,
+    SOL: openLiquidityV2SolTradeMonitor, ZEC: openLiquidityV2ZecTradeMonitor, ETH: undefined }[asset] as any)?.config);
   const evaluateSignal = (...args: Parameters<typeof entry.evaluateEthGapDailySignal>) => entry.evaluatePurpleLineSignal(market, ...args);
   const HOUR = 3_600_000, closeAt = Date.parse('2026-10-24T02:00:00Z'), now = closeAt + 5000;
   const iso = (ms: number) => new Date(ms).toISOString();
@@ -109,9 +109,9 @@ describe.each(['BTC', 'ETH', 'SOL'] as const)('%s purple line execution parity',
       jest.useFakeTimers(); jest.setSystemTime(now);
       const x = inputs();
       const daily = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockResolvedValue(x.daily as any);
-      const own = market === 'BTC-USD' ? binanceSpotChartFeed : market === 'SOL-USD' ? solSpotChartFeed : ethSpotChartFeed;
+      const own = { BTC: binanceSpotChartFeed, ETH: ethSpotChartFeed, SOL: solSpotChartFeed, ZEC: zecSpotChartFeed }[asset];
       const candles = jest.spyOn(own, 'page').mockResolvedValue(x.page);
-      const wrong = [binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed].filter(feed => feed !== own)
+      const wrong = [binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed, zecSpotChartFeed].filter(feed => feed !== own)
         .map(feed => jest.spyOn(feed, 'page').mockRejectedValue(new Error('wrong pair read')));
       expect(await entry.readPurpleLineSignal(market, x.payload, x.intrusions)).toMatchObject({ direction: 'long' });
       expect(daily).toHaveBeenCalledWith(market, false, 'Binance Spot');

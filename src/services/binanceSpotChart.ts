@@ -35,7 +35,7 @@ export function parseSpotChartCandles(rows: unknown[], nowMs = Date.now()): Spot
 }
 
 export type SpotChartPage = {
-  symbol: 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT';
+  symbol: 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT' | 'ZECUSDT';
   venue: 'Binance Spot';
   interval: '1h';
   fetchedAt: string;
@@ -45,8 +45,8 @@ export type SpotChartPage = {
 
 // Shared read-only Spot data: bounded memory, no disk writes or trading callbacks.
 export class BinanceSpotChartFeed {
-  constructor(readonly symbol: 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT' = 'BTCUSDT') {
-    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].includes(symbol)) throw new Error('Unsupported Spot chart symbol');
+  constructor(readonly symbol: SpotChartPage['symbol'] = 'BTCUSDT') {
+    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'ZECUSDT'].includes(symbol)) throw new Error('Unsupported Spot chart symbol');
   }
   private cache = new Map<number, { expiresAt: number; page: SpotChartPage }>();
   private pending = new Map<number, Promise<SpotChartPage>>();
@@ -91,3 +91,4 @@ export class BinanceSpotChartFeed {
 export const binanceSpotChartFeed = new BinanceSpotChartFeed();
 export const ethSpotChartFeed = new BinanceSpotChartFeed('ETHUSDT');
 export const solSpotChartFeed = new BinanceSpotChartFeed('SOLUSDT');
+export const zecSpotChartFeed = new BinanceSpotChartFeed('ZECUSDT');

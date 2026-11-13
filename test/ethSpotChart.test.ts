@@ -9,9 +9,9 @@ const breaks = require('../public/btc-spot-chart/gap-weekly-breakouts.js');
 const intrusions = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
 const manuals = require('../public/btc-spot-chart/manual-levels.js');
 jest.mock('../src/services/binanceHttp', () => ({ binanceGet: jest.fn() }));
-describe.each(['ETH', 'SOL'] as const)('%s Spot parity', asset => {
-  const market = asset === 'SOL' ? 'SOL-USD' : 'ETH-USD';
-  const symbol = asset === 'SOL' ? 'SOLUSDT' : 'ETHUSDT';
+describe.each(['ETH', 'SOL', 'ZEC'] as const)('%s Spot parity', asset => {
+  const market = `${asset}-USD` as const;
+  const symbol = `${asset}USDT` as const;
   const HOUR = 3600, time = Date.parse('2026-10-23T00:00:00Z') / 1000, now = (time + 3 * HOUR) * 1000;
   const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
   const source = { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] };
@@ -75,8 +75,7 @@ describe.each(['ETH', 'SOL'] as const)('%s Spot parity', asset => {
         daily: snap('1d', 'D'), weekly: snap('1w', 'W'), monthly: snap('1M', 'M') };
       expect(fractals.projectFractals(input, candles, symbol).levels.map((l: any) => l.label)).toEqual(['DC', 'WC', 'MC']);
       expect(() => fractals.projectFractals(input, candles)).toThrow('source');
-      input.weekly.symbol = 'BTCUSDT';
-      expect(() => fractals.projectFractals(input, candles, symbol)).toThrow('invalid');
+      expect(() => fractals.projectFractals({ ...input, weekly: { ...input.weekly, symbol: 'BTCUSDT' } }, candles, symbol)).toThrow('invalid');
     });
     test('draws ETH gap boxes and same-candle Gap/D and Gap/W markers, refusing BTC substitutions', () => {
       const timeline = gaps.timelineFromPayload(payload(), market);

@@ -82,7 +82,7 @@
 
   function buildOrderBlocks(input, options = {}, nowMs = Date.now()) {
     const symbol = options.symbol ?? 'BTCUSDT';
-    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].includes(symbol)) throw new Error('Unsupported Spot order block symbol');
+    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'ZECUSDT'].includes(symbol)) throw new Error('Unsupported Spot order block symbol');
     const baseAsset = symbol.slice(0, -4);
     const length = options.length ?? 5, mitigation = options.mitigation ?? 'Wick';
     if (!Number.isInteger(length) || length < 1 || length > 100 || !['Wick', 'Close'].includes(mitigation)) {

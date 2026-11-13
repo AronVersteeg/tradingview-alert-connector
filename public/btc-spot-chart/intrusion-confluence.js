@@ -5,7 +5,7 @@
 
   function buildIntrusionConfluence(candles, history, daily, orderBlocks, nowMs = Date.now(), market = 'BTC-USD') {
     const symbol = market.replace('-USD', 'USDT');
-    if (!['BTC-USD', 'ETH-USD', 'SOL-USD'].includes(market) || history?.market !== market || history.source !== SOURCE ||
+    if (!['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || history?.market !== market || history.source !== SOURCE ||
         history.timeBasis !== 'alert-candle-open-utc' || !Array.isArray(history.records) ||
         [daily, orderBlocks].some(model => model && (model.symbol !== symbol || model.venue !== 'Binance Spot')) ||
         daily && daily.intrusionSource !== SOURCE || orderBlocks && orderBlocks.interval !== '1h') {

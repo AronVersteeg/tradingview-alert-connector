@@ -2,11 +2,13 @@ import {
   binanceDailyFractalHistory, binanceWeeklyFractalHistory, binanceMonthlyFractalHistory,
   DailyFractalHistorySnapshot, latestExpectedFractalClose
 } from './binanceDailyFractalHistory';
+import { PurpleLineMarket, purpleLineSetupForMarket } from './purpleLineSetup';
+import type { SpotChartPage } from './binanceSpotChart';
 
 const HOUR_MS = 3_600_000;
 
 export type BtcFractalProjectionSnapshot = {
-  symbol: 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT';
+  symbol: SpotChartPage['symbol'];
   venue: 'Binance Spot';
   checkedAt: string;
   evaluatedThrough: string;
@@ -21,16 +23,17 @@ export class BtcFractalProjectionFeed {
   private daily: (force?: boolean) => Promise<DailyFractalHistorySnapshot>;
   private weekly: (force?: boolean) => Promise<DailyFractalHistorySnapshot>;
   private monthly: (force?: boolean) => Promise<DailyFractalHistorySnapshot>;
-  private symbol: 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT';
+  private symbol: SpotChartPage['symbol'];
 
   constructor(
     daily?: (force?: boolean) => Promise<DailyFractalHistorySnapshot>,
     weekly?: (force?: boolean) => Promise<DailyFractalHistorySnapshot>,
     monthly?: (force?: boolean) => Promise<DailyFractalHistorySnapshot>,
-    market: 'BTC-USD' | 'ETH-USD' | 'SOL-USD' = 'BTC-USD'
+    market: PurpleLineMarket = 'BTC-USD'
   ) {
-    if (!['BTC-USD', 'ETH-USD', 'SOL-USD'].includes(market)) throw new Error('Unsupported Spot fractal market');
-    this.symbol = market === 'SOL-USD' ? 'SOLUSDT' : market === 'ETH-USD' ? 'ETHUSDT' : 'BTCUSDT';
+    const setup = purpleLineSetupForMarket(market);
+    if (!setup) throw new Error('Unsupported Spot fractal market');
+    this.symbol = setup.symbol;
     this.daily = daily || ((force = false) => binanceDailyFractalHistory(market, force, 'Binance Spot'));
     this.weekly = weekly || ((force = false) => binanceWeeklyFractalHistory(market, force));
     this.monthly = monthly || ((force = false) => binanceMonthlyFractalHistory(market, force));
@@ -75,3 +78,4 @@ export class BtcFractalProjectionFeed {
 export const btcFractalProjectionFeed = new BtcFractalProjectionFeed();
 export const ethFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'ETH-USD');
 export const solFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'SOL-USD');
+export const zecFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'ZEC-USD');

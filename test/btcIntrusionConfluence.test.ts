@@ -9,7 +9,7 @@ const intrusion = (hour: number, direction: string) => ({ time: time(hour), aler
 const candle = (hour: number, overrides = {}) => ({ time: time(hour), open: 100, high: 115, low: 95,
   close: 100, volume: 1, closed: true, ...overrides });
 
-describe.each(['BTC', 'ETH', 'SOL'])('%s intrusion confluence', asset => {
+describe.each(['BTC', 'ETH', 'SOL', 'ZEC'])('%s intrusion confluence', asset => {
   const market = `${asset}-USD`, symbol = `${asset}USDT`;
   const candles = Array.from({ length: 9 }, (_, hour) => candle(hour));
   const history = (records: any[]) => ({ market, source, timeBasis: 'alert-candle-open-utc', records });
