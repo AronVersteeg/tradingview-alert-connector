@@ -19,7 +19,8 @@ describe('BTC Public V2 always uses native Binance Spot intrusion history', () =
       CustomEvent: class { constructor(public type: string, public options: any) {} } };
     vm.runInNewContext(`${publisher}\npublishSpotIntrusions();`, context);
     expect(events).toHaveLength(1); expect(events[0].type).toBe('btc-spot-chart:intrusion-history');
-    expect(context.window.BTC_SPOT_INTRUSION_HISTORY).toMatchObject({ market: 'BTC-USD', source: 'binance-spot-recorded-intrusions' });
+    expect(context.window.BTC_SPOT_INTRUSION_HISTORY).toMatchObject({ market: 'BTC-USD', source: 'binance-spot-recorded-intrusions',
+      gapHours: [Date.parse('2026-10-19T02:00:00Z') / 1000] });
   });
   test('does not publish changes into the Decentrader map tab', () => {
     const events: any[] = [];
@@ -33,14 +34,17 @@ describe('BTC Public V2 always uses native Binance Spot intrusion history', () =
     const start = chart.indexOf("  window.addEventListener('btc-spot-chart:intrusion-history'");
     const end = chart.indexOf("  window.addEventListener('btc-spot-chart:intrusion-error'", start);
     let listener: (event: any) => void = () => { throw new Error('Missing history listener'); };
-    const update = jest.fn();
+    const update = jest.fn(), updateMarkers = jest.fn();
     const context: any = { market: 'BTC-USD', intrusionHistory: undefined, intrusionReadFailed: false,
-      updateIntrusionDailyBreakouts: update, window: { addEventListener: (_name: string, fn: any) => { listener = fn; } } };
+      updateIntrusionDailyBreakouts: update, updateGapIntrusionMarkers: updateMarkers,
+      window: { addEventListener: (_name: string, fn: any) => { listener = fn; } } };
     vm.runInNewContext(chart.slice(start, end), context);
     listener({ detail: { market: 'BTC-USD', source: 'decentrader-recorded-intrusions' } });
     listener({ detail: { market: 'ETH-USD', source: 'binance-spot-recorded-intrusions' } });
     expect(update).not.toHaveBeenCalled();
+    expect(updateMarkers).not.toHaveBeenCalled();
     const history = { market: 'BTC-USD', source: 'binance-spot-recorded-intrusions', records: [] };
     listener({ detail: history }); expect(context.intrusionHistory).toBe(history); expect(update).toHaveBeenCalledTimes(1);
+    expect(updateMarkers).toHaveBeenCalledTimes(1);
   });
 });

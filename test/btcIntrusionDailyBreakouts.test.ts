@@ -1,6 +1,6 @@
 export {};
 const intrusionBreakouts = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
-const { compactIntrusionHistory, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
+const { compactIntrusionHistory, buildGapIntrusionMarkers, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
 const HOUR = 3600, start = Date.parse('2026-10-19T00:00:00Z') / 1000;
 const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
 const now = (start + 8 * HOUR) * 1000;
@@ -20,6 +20,39 @@ const model = () => ({ symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThroug
   { id: 'D|high', timeframe: 'D', type: 'HIGH', price: 120, confirmedAt: iso(start - .001), broken: true, brokenTime: start + 2 * HOUR },
   { id: 'D|low', timeframe: 'D', type: 'LOW', price: 80, confirmedAt: iso(start - .001), broken: true, brokenTime: start + 4 * HOUR }
 ] });
+
+describe('Standalone Binance Spot gap intrusion markers', () => {
+  test.each(['BTC', 'ETH', 'SOL', 'ZEC'])('%s marks each saved closed hour once, without requiring a fractal break', asset => {
+    const market = `${asset}-USD`;
+    const data = {
+      source: { market, sourceStatuses: [{ name: `Binance Spot ${asset}USDT 1H` }] },
+      intrusionBenchmarks: { history: [
+        { timestamp: alert(0), direction: 'short' },
+        { timestamp: alert(1), direction: 'mixed' },
+        { timestamp: alert(2), direction: 'long' },
+        { timestamp: alert(4), direction: 'short' },
+        { timestamp: alert(5), direction: 'short' },
+        { timestamp: alert(6) },
+        { timestamp: alert(7), direction: 'long' },
+        { smtpSentAt: iso(start + 6 * HOUR), direction: 'long' }
+      ] },
+      delayHistory: { records: [
+        { intrusionTimestamp: alert(2), signature: `${market}|${alert(2)}|L|10|100:1` },
+        { intrusionTimestamp: alert(3), signature: `${market}|${alert(3)}|S|10|130:1`, smtpSentAt: iso(start + 6 * HOUR) }
+      ] }
+    };
+    const history = compactIntrusionHistory(data, now, market, { includeGapHours: true });
+    const { gapHours, ...directionalHistory } = history;
+    expect(directionalHistory).toEqual(compactIntrusionHistory(data, now, market));
+    const chartCandles = candles().slice(1).filter(c => c.time !== start + 4 * HOUR)
+      .map(c => c.time === start + 5 * HOUR ? { ...c, closed: false } : c);
+    expect(buildGapIntrusionMarkers(chartCandles, history, now - 1, market)).toEqual(
+      [1, 2, 3].map(hour => ({ time: start + hour * HOUR }))
+    );
+    expect(buildGapIntrusionMarkers(chartCandles, history, now, 'OTHER-USD')).toEqual([]);
+    expect(buildGapIntrusionMarkers(chartCandles, { ...history, source: 'decentrader-recorded-intrusions' }, now, market)).toEqual([]);
+  });
+});
 
 describe('Decentrader intrusion alert time and same-candle Daily close break, display only', () => {
   test('normalizes UTC alert-open times and deduplicates normal, filtered and study records without using mail time', () => {

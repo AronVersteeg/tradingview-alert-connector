@@ -4,7 +4,7 @@
   const delta = typeof module === 'object' && module.exports ? require('./futures-delta.js') : root.BtcIntrusionFuturesDelta;
   const SOURCE = 'decentrader-recorded-intrusions';
 
-  function compactIntrusionHistory(payload, nowMs = Date.now(), market = 'BTC-USD') {
+  function compactIntrusionHistory(payload, nowMs = Date.now(), market = 'BTC-USD', { includeGapHours = false } = {}) {
     const nativeSpot = ['ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || market === 'BTC-USD' && payload?.source?.market === market &&
       payload.source.sourceStatuses?.some(source => source.name === 'Binance Spot BTCUSDT 1H');
     const symbol = market.replace('-USD', 'USDT');
@@ -16,6 +16,7 @@
     const histories = [nativeSpot ? payload.intrusionBenchmarks?.history : payload.intrusionDomStudy?.history, payload.delayHistory?.records].filter(Array.isArray);
     if (!histories.length) throw new Error('Decentrader intrusion history missing');
     const records = new Map();
+    const gapHours = includeGapHours && nativeSpot ? new Set() : undefined;
     let ignoredRecords = 0;
     for (const row of histories.flat()) {
       const raw = row?.timestamp || row?.intrusionTimestamp;
@@ -24,12 +25,22 @@
       const text = `${row?.sideCounts || ''} ${row?.signature || ''}`;
       const long = row?.direction === 'long' || /left edge|\|L\|/i.test(text);
       const short = row?.direction === 'short' || /right edge|\|S\|/i.test(text);
-      if (!Number.isFinite(ms) || ms % 3_600_000 || ms < 0 || ms >= nowMs || long === short) { ignoredRecords++; continue; }
+      if (!Number.isFinite(ms) || ms % 3_600_000 || ms < 0 || ms >= nowMs) { ignoredRecords++; continue; }
+      if (long || short || row?.direction === 'mixed') gapHours?.add(ms / 1000);
+      if (long === short) { ignoredRecords++; continue; }
       const direction = long ? 'long' : 'short';
       records.set(`${ms}|${direction}`, { time: ms / 1000, alertTime: new Date(ms).toISOString(), direction });
     }
     return { market, source: nativeSpot ? 'binance-spot-recorded-intrusions' : SOURCE, timeBasis: 'alert-candle-open-utc', fetchedAt: new Date(nowMs).toISOString(),
-      ignoredRecords, records: [...records.values()].sort((a, b) => a.time - b.time || a.direction.localeCompare(b.direction)) };
+      ignoredRecords, records: [...records.values()].sort((a, b) => a.time - b.time || a.direction.localeCompare(b.direction)),
+      ...(gapHours ? { gapHours: [...gapHours].sort((a, b) => a - b) } : {}) };
+  }
+
+  function buildGapIntrusionMarkers(candles, history, nowMs = Date.now(), market = 'BTC-USD') {
+    if (history?.market !== market || history.source !== 'binance-spot-recorded-intrusions' ||
+        history.timeBasis !== 'alert-candle-open-utc' || !Array.isArray(history.gapHours)) return [];
+    const closedHours = new Set(candles.filter(candle => candle.closed && (candle.time + 3600) * 1000 <= nowMs).map(candle => candle.time));
+    return history.gapHours.filter(time => closedHours.has(time)).map(time => ({ time }));
   }
 
   function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe) {
@@ -117,7 +128,7 @@
     }
   }
 
-  const api = Object.freeze({ compactIntrusionHistory, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, IntrusionDailyBreakoutPrimitive });
+  const api = Object.freeze({ compactIntrusionHistory, buildGapIntrusionMarkers, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, IntrusionDailyBreakoutPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {
     root.BtcSpotIntrusionDailyBreakouts = api;

@@ -54,6 +54,7 @@
   let intrusionLayer, intrusionHistory = savedIntrusions?.market === market && savedIntrusions.source === 'binance-spot-recorded-intrusions'
     ? savedIntrusions : undefined, intrusionModel, intrusionInputs;
   let intrusionReadFailed = false;
+  let gapIntrusionLayer, gapIntrusionMarkers = [];
   let confluenceLayer, confluenceModel, confluenceInputs;
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
@@ -310,9 +311,16 @@
   function refreshIntrusionHistory() {
     if (!destroyed) window.dispatchEvent(new CustomEvent('btc-spot-chart:intrusion-source-ready'));
   }
+  function updateGapIntrusionMarkers() {
+    if (!gapIntrusionLayer) return;
+    gapIntrusionMarkers = intrusionDailyBreaks.buildGapIntrusionMarkers(candles, intrusionHistory, Date.now(), market);
+    gapIntrusionLayer.setData(gapIntrusionMarkers);
+  }
   window.addEventListener('btc-spot-chart:intrusion-history', event => {
     if (event.detail?.market !== market || event.detail.source !== 'binance-spot-recorded-intrusions') return;
-    intrusionHistory = event.detail; intrusionReadFailed = false; updateIntrusionDailyBreakouts();
+    intrusionHistory = event.detail; intrusionReadFailed = false;
+    updateGapIntrusionMarkers();
+    updateIntrusionDailyBreakouts();
   });
   window.addEventListener('btc-spot-chart:intrusion-error', () => {
     intrusionReadFailed = true;
@@ -448,6 +456,7 @@
       hourlyBoxLayer.setData(hourlyBoxModel.boxes, candles);
       updateOrderBlocks();
       updateGapProjection();
+      updateGapIntrusionMarkers();
       updateIntrusionDailyBreakouts();
     }
     if (key !== fractalKey || !singleUpdate) { fractalKey = key; projectLoadedCandles(); }
@@ -508,6 +517,9 @@
       orderBlockLayer.setLabelAnchor(() => gapLayer?.rightEdgeCoordinate() ?? null);
       orderBlockLayer.setVisible(byId('spotChartOrderBlocks').checked);
       candlesSeries.attachPrimitive(orderBlockLayer);
+      gapIntrusionLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(gapBoxes.GAP_COLOR);
+      gapIntrusionLayer.setVisible(byId('spotChartGapIntrusions').checked);
+      candlesSeries.attachPrimitive(gapIntrusionLayer);
       // Draw Weekly last so orange remains visible when both mark the same candle.
       for (const state of [...breakoutStates].reverse()) {
         state.layer = new gapWeeklyBreaks[`Gap${state.name}BreakoutPrimitive`]();
@@ -576,6 +588,7 @@
         getOrderBlockLabels: () => orderBlockLayer?.getLabels() || [],
         getBrokenOrderBlockRankLabels: () => orderBlockLayer?.getBrokenRankLabels() || [],
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
+        getGapIntrusionMarkers: () => gapIntrusionMarkers.map(marker => ({ ...marker })),
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
         getIntrusionConfluence: () => confluenceModel ? structuredClone(confluenceModel) : null,
@@ -748,6 +761,7 @@
     updateOrderBlocks();
   });
   byId('spotChartObMitigation').addEventListener('change', updateOrderBlocks);
+  byId('spotChartGapIntrusions').addEventListener('change', event => gapIntrusionLayer?.setVisible(event.target.checked));
   for (const state of breakoutStates) {
     byId(`spotChartGap${state.name}Breaks`).addEventListener('change', (event) => state.layer?.setVisible(event.target.checked));
   }

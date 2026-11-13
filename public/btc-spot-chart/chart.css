@@ -31,6 +31,7 @@
 .spot-fractal-swatch.daily { background: #ffeb3b; }
 .spot-fractal-swatch.weekly { background: #ff9800; }
 .spot-fractal-swatch.gap-weekly-break { width: 1px; height: 12px; background: #ff9800; margin: 0 5px; }
+.spot-fractal-swatch.gap-intrusion { width: 1px; height: 12px; background: #00ff00; margin: 0 5px; }
 .spot-fractal-swatch.gap-daily-break { width: 1px; height: 12px; background: #fff59d; margin: 0 5px; }
 .spot-fractal-swatch.intrusion-daily-break { width: 1px; height: 12px; background: #ba68c8; margin: 0 5px; }
 .spot-fractal-swatch.intrusion-confluence { width: 3px; height: 12px; background: #315ca8; margin: 0 4px; }

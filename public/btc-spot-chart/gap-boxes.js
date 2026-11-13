@@ -1,5 +1,6 @@
 (function (root) {
   'use strict';
+  const GAP_COLOR = '#00ff00';
   const HOUR = 3600;
 
   function timelineFromPayload(payload, market = 'BTC-USD') {
@@ -104,7 +105,7 @@
           const gap = this.model?.boxes.find((box) => box.openEnded);
           return gap && this.series ? this.series.priceFormatter().format(gap[edge]) : '';
         },
-        textColor: () => '#131722', backColor: () => '#00ff00', tickVisible: () => true,
+        textColor: () => '#131722', backColor: () => GAP_COLOR, tickVisible: () => true,
         visible: () => Boolean(this.visible && this.series && this.model?.boxes.some((box) => box.openEnded) &&
           this.model.evaluatedThrough >= Math.floor(Date.now() / (HOUR * 1000)) * HOUR)
       }));
@@ -137,7 +138,7 @@
       const stale = this.model.evaluatedThrough < Math.floor(Date.now() / (HOUR * 1000)) * HOUR;
       target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width, height } }) => {
         ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();
-        ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 1.5;
+        ctx.strokeStyle = GAP_COLOR; ctx.lineWidth = 1.5;
         for (const box of this.model.boxes) {
           const clippedStart = box.fromTime < this.firstTime;
           const from = this.indices.get(box.fromTime), to = this.indices.get(box.toTime);
@@ -156,7 +157,7 @@
     }
   }
 
-  const api = Object.freeze({ timelineFromPayload, validateHistory, withDecentraderHistory, buildGapBoxes, GapBoxPrimitive });
+  const api = Object.freeze({ GAP_COLOR, timelineFromPayload, validateHistory, withDecentraderHistory, buildGapBoxes, GapBoxPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {
     root.BtcSpotGapBoxes = api;
