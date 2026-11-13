@@ -27,6 +27,8 @@
   const gapBoxes = window.BtcSpotGapBoxes;
   const gapWeeklyBreaks = window.BtcSpotGapWeeklyBreakouts;
   const intrusionDailyBreaks = window.BtcSpotIntrusionDailyBreakouts;
+  const purpleReplay = window.BtcSpotPurpleReplay;
+  const greenReplay = window.BtcGreenPositionReplay;
   const intrusionConfluence = window.BtcSpotIntrusionConfluence;
   const futuresDelta = window.BtcIntrusionFuturesDelta;
   const spotPoc = window.BtcIntrusionSpotPoc;
@@ -54,7 +56,9 @@
   let intrusionLayer, intrusionHistory = savedIntrusions?.market === market && savedIntrusions.source === 'binance-spot-recorded-intrusions'
     ? savedIntrusions : undefined, intrusionModel, intrusionInputs;
   let intrusionReadFailed = false;
+  let purpleReplayLayer, purpleReplayData, purpleReplayInputs, purpleReplayMarkers = [], purpleReplayRequested = false;
   let gapIntrusionLayer, gapIntrusionMarkers = [];
+  let visibleGapIntrusionMarkers = [];
   let gapIntrusionInputs;
   let confluenceLayer, confluenceModel, confluenceInputs;
   const deltaRecords = new Map();
@@ -71,19 +75,27 @@
   const gapLead = () => Number(byId('spotChartGapLead').value);
   const projectionLead = () => Math.max(gapLead(), (manualLayer?.rightLead(candles.length) || gapLead()) - viewport.RIGHT_BUFFER + 2);
   const chartCanvas = byId('spotChartCanvas');
+  const standardHistoryLimit = 12000;
+  const chartHistoryLimit = () => purpleReplayData && candles.length
+    ? Math.max(standardHistoryLimit, Math.ceil((candles.at(-1).time - purpleReplayData.first) / 3600) + 1000)
+    : standardHistoryLimit;
+  const mergeChartCandles = incoming => data.mergeCandles(candles, incoming, chartHistoryLimit());
+  const analysisCandles = () => candles.length > standardHistoryLimit ? candles.slice(-standardHistoryLimit) : candles;
   const desktopOrderBlockLabels = window.matchMedia('(min-width: 681px)');
   const updateOrderBlockFont = () => {
     orderBlockLayer?.setLabelFontSize(desktopOrderBlockLabels.matches ? 15 : 10);
     intrusionLayer?.setLabelFontSize(desktopOrderBlockLabels.matches ? 11 : 10);
   };
   desktopOrderBlockLabels.addEventListener('change', updateOrderBlockFont);
+  if (asset === 'btc') byId('spotChartGapIntrusions').parentElement.title =
+    'Same-hour intrusion and gap close break. At most one simulated BTC Spot position, with a signal-open stop and fractal trailing.';
   byId('spotChartOrderBlocks').parentElement.title = `LuxAlgo order blocks. PV = summed unique origin-candle Spot volume in ${baseAsset}, not volume inside the price zone or resting orders. #1 = largest active cluster by PV.`;
 
   function updateOrderBlocks() {
     if (!orderBlockLayer) return;
     const status = byId('spotChartOrderBlockStatus');
     try {
-      orderBlockModel = orderBlocks.buildOrderBlocks(candles, {
+      orderBlockModel = orderBlocks.buildOrderBlocks(analysisCandles(), {
         symbol, length: Number(byId('spotChartObLength').value), mitigation: byId('spotChartObMitigation').value
       });
       orderBlockLayer.setData(orderBlockModel, candles);
@@ -103,11 +115,11 @@
 
   function scheduleOrderBlockHistory() {
     if (orderBlockHistoryTimer || !active || destroyed || !initialData || !hasMore ||
-      candles.length >= 12000 || !needsOrderBlockHistory()) return;
+      candles.length >= standardHistoryLimit || !needsOrderBlockHistory()) return;
     // Reuse the chart's bounded pages and shared Binance limiter; never burst-load history.
     orderBlockHistoryTimer = setTimeout(async () => {
       orderBlockHistoryTimer = undefined;
-      if (!active || destroyed || !needsOrderBlockHistory()) return;
+      if (!active || destroyed || candles.length >= standardHistoryLimit || !needsOrderBlockHistory()) return;
       await loadOlder();
       scheduleOrderBlockHistory();
     }, Math.max(2500, olderRetryAt - Date.now()));
@@ -172,7 +184,7 @@
       if (inputs?.gap === gapTimeline && inputs.fractals === fractalModel &&
           inputs.version === closedDataVersion && inputs.hour === hour) continue;
       try {
-        state.model = gapWeeklyBreaks[`buildGap${state.name}Breakouts`](candles, gapTimeline, fractalModel, Date.now(), symbol);
+        state.model = gapWeeklyBreaks[`buildGap${state.name}Breakouts`](analysisCandles(), gapTimeline, fractalModel, Date.now(), symbol);
         state.layer?.setData(state.model.signals);
         state.inputs = { gap: gapTimeline, fractals: fractalModel, version: closedDataVersion, hour };
         const stale = Date.parse(state.model.evaluatedThrough || '') < hour * 3_600_000 || !state.model.evaluatedThrough;
@@ -198,7 +210,7 @@
     const inputs = [intrusionHistory, intrusionModel, orderBlockModel, closedDataVersion];
     if (confluenceInputs?.every((input, index) => input === inputs[index])) return;
     try {
-      confluenceModel = intrusionConfluence.buildIntrusionConfluence(candles, intrusionHistory, intrusionModel, orderBlockModel, Date.now(), market);
+      confluenceModel = intrusionConfluence.buildIntrusionConfluence(analysisCandles(), intrusionHistory, intrusionModel, orderBlockModel, Date.now(), market);
       confluenceLayer.setData(confluenceModel.signals);
       confluenceInputs = inputs;
       status.textContent = `Intrusion / D or OB: ${confluenceModel.signals.length}${!intrusionModel || !orderBlockModel ? ' | partial' : ''}`;
@@ -208,14 +220,49 @@
     }
   }
 
+  function updatePurpleReplay() {
+    if (!purpleReplayLayer || !purpleReplayData) return;
+    const inputs = purpleReplayInputs;
+    if (inputs?.version === closedDataVersion && inputs.recorded === intrusionModel) return;
+    purpleReplayMarkers = purpleReplay.loadedReplaySignals(purpleReplayData, candles, intrusionModel?.signals || [], market);
+    purpleReplayLayer.setData(purpleReplayMarkers);
+    purpleReplayInputs = { version: closedDataVersion, recorded: intrusionModel };
+    byId('spotChartPurpleReplayStatus').textContent =
+      `Purple replay (dashed): ${purpleReplayMarkers.length}/${purpleReplayData.signals.length} on loaded candles`;
+  }
+
+  async function loadPurpleReplay() {
+    if (!purpleReplayLayer || !purpleReplay || purpleReplayRequested || destroyed) return;
+    purpleReplayRequested = true;
+    const status = byId('spotChartPurpleReplayStatus');
+    status.hidden = false;
+    status.textContent = 'Purple replay pending';
+    try {
+      const response = await fetch(new URL('btc-purple-replay.json', assetBase), { signal: AbortSignal.timeout(15000) });
+      if (!response.ok) throw new Error('Purple replay unavailable');
+      const payload = await response.json();
+      if (destroyed) return;
+      purpleReplayData = purpleReplay.readReplay(payload);
+      updatePurpleReplay();
+    } catch {
+      if (!destroyed) {
+        purpleReplayRequested = false;
+        status.textContent = 'Purple replay unavailable';
+      }
+    }
+  }
+
   function updateIntrusionDailyBreakouts() {
     const status = byId('spotChartIntrusionDailyStatus');
-    if (!intrusionHistory || !fractalModel) return updateIntrusionConfluence();
+    if (!intrusionHistory || !fractalModel) {
+      updatePurpleReplay();
+      return updateIntrusionConfluence();
+    }
     const hour = Math.floor(Date.now() / 3_600_000), inputs = intrusionInputs;
     try {
       if (!inputs || inputs.history !== intrusionHistory || inputs.fractals !== fractalModel ||
           inputs.version !== closedDataVersion || inputs.hour !== hour) {
-        intrusionModel = intrusionDailyBreaks.buildIntrusionDailyBreakouts(candles, intrusionHistory, fractalModel, Date.now(), market);
+        intrusionModel = intrusionDailyBreaks.buildIntrusionDailyBreakouts(analysisCandles(), intrusionHistory, fractalModel, Date.now(), market);
         intrusionLayer?.setData(intrusionModel.signals);
         intrusionInputs = { history: intrusionHistory, fractals: fractalModel, version: closedDataVersion, hour };
       }
@@ -241,6 +288,7 @@
       status.textContent = `${intrusionLabel} pending: ${error.message}`;
       status.dataset.stale = 'true';
     }
+    updatePurpleReplay();
     updateIntrusionConfluence();
   }
 
@@ -323,7 +371,10 @@
       gapIntrusionMarkers = [];
     }
     gapIntrusionInputs = { gap: gapTimeline, history: intrusionHistory, version: closedDataVersion, hour };
-    gapIntrusionLayer.setData(gapIntrusionMarkers);
+    visibleGapIntrusionMarkers = asset === 'btc'
+      ? greenReplay.filterGreenPositions(candles, gapIntrusionMarkers, hourlyBoxModel?.fractals || [])
+      : gapIntrusionMarkers;
+    gapIntrusionLayer.setData(visibleGapIntrusionMarkers);
   }
   window.addEventListener('btc-spot-chart:intrusion-history', event => {
     if (event.detail?.market !== market || event.detail.source !== 'binance-spot-recorded-intrusions') return;
@@ -350,7 +401,7 @@
   function projectLoadedCandles() {
     if (!fractalBundle || !fractalLayer) return;
     try {
-      fractalModel = fractals.projectFractals(fractalBundle, candles, symbol);
+      fractalModel = fractals.projectFractals(fractalBundle, analysisCandles(), symbol);
       fractalLayer.setData(fractalModel.levels);
       updateGapFractalBreakouts();
       updateIntrusionDailyBreakouts();
@@ -538,6 +589,11 @@
       confluenceLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive('#315ca8', 3);
       confluenceLayer.setVisible(byId('spotChartIntrusionConfluence').checked);
       candlesSeries.attachPrimitive(confluenceLayer);
+      if (asset === 'btc') {
+        purpleReplayLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive('#ba68c8', 1, [5, 4]);
+        purpleReplayLayer.setVisible(byId('spotChartIntrusionDailyBreaks').checked);
+        candlesSeries.attachPrimitive(purpleReplayLayer);
+      }
       intrusionLayer = new intrusionDailyBreaks.IntrusionDailyBreakoutPrimitive();
       intrusionLayer.setDeltaEnabled(true);
       intrusionLayer.setPocEnabled(true);
@@ -597,11 +653,13 @@
         getBrokenOrderBlockRankLabels: () => orderBlockLayer?.getBrokenRankLabels() || [],
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
         getGapIntrusionMarkers: () => gapIntrusionMarkers.map(marker => ({ ...marker })),
+        getVisibleGapIntrusionMarkers: () => visibleGapIntrusionMarkers.map(marker => ({ ...marker })),
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
         getIntrusionConfluence: () => confluenceModel ? structuredClone(confluenceModel) : null,
         getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({
           ...signal, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
+        getPurpleReplayMarkers: () => purpleReplayMarkers.map(marker => ({ ...marker })),
         getIntrusionDeltaLabels: () => intrusionLayer?.getDeltaLabels() || [],
         getIntrusionPocCrosses: () => intrusionLayer?.getPocCrosses() || [],
         getIntrusionSpotPoc: () => [...pocRecords.values()].map(record => ({ ...record, ...(record.poc ? { poc: { ...record.poc } } : {}) })),
@@ -656,7 +714,7 @@
         const page = await fetchPage();
         if (destroyed) return;
         if (!page.candles.length) throw new Error(`No ${symbol} candles returned`);
-        const next = data.mergeCandles(candles, page.candles);
+        const next = mergeChartCandles(page.candles);
         if (!next.length) throw new Error(`No valid ${symbol} candles returned`);
         hasMore = hasMore && page.hasMore;
         lastSourceTime = Math.max(lastSourceTime, Date.parse(page.fetchedAt));
@@ -672,13 +730,13 @@
     return recentPending;
   }
   async function loadOlder() {
-    if (olderPending || !hasMore || !candles.length || Date.now() < olderRetryAt || candles.length >= 12000) return;
+    if (olderPending || !hasMore || !candles.length || Date.now() < olderRetryAt || candles.length >= chartHistoryLimit()) return;
     olderPending = true;
     const before = candles[0].time * 1000;
     try {
       const page = await fetchPage(before);
       if (destroyed) return;
-      const next = data.mergeCandles(candles, page.candles);
+      const next = mergeChartCandles(page.candles);
       hasMore = page.hasMore && next[0]?.time < candles[0].time;
       applyCandles(next);
     } catch (error) {
@@ -707,8 +765,8 @@
       lastTickAt = Date.now();
       lastSourceTime = candle.version;
       failures = 0;
-      if (!initialData) candles = data.mergeCandles(candles, [candle]);
-      else applyCandles(data.mergeCandles(candles, [candle]), previous && candle.time >= previous.time ? candle : undefined);
+      if (!initialData) candles = mergeChartCandles([candle]);
+      else applyCandles(mergeChartCandles([candle]), previous && candle.time >= previous.time ? candle : undefined);
       feedText();
     };
     current.onerror = () => { if (socket === current) setFeed('retry', 'Reconnecting'); };
@@ -729,6 +787,7 @@
       await ensureChart();
       if (!active || destroyed) return;
       openStream();
+      if (byId('spotChartIntrusionDailyBreaks').checked) void loadPurpleReplay();
       if (!initialData || Date.now() - lastRestAt > 30_000) void loadRecent();
       feedText();
       scheduleOrderBlockHistory();
@@ -736,7 +795,7 @@
   }
 
   byId('spotChartRefresh').addEventListener('click', async () => {
-    try { await ensureChart(); await loadRecent(); await refreshFractals(true); void refreshIntrusionHistory(true); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
+    try { await ensureChart(); await loadRecent(); await refreshFractals(true); void refreshIntrusionHistory(true); if (byId('spotChartIntrusionDailyBreaks').checked) void loadPurpleReplay(); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
   });
   for (const [id, key] of [['spotChartDaily', 'daily'], ['spotChartWeekly', 'weekly'], ['spotChartMonthly', 'monthly'], ['spotChartBroken', 'broken']]) {
     byId(id).addEventListener('change', (event) => {
@@ -775,7 +834,8 @@
   }
   byId('spotChartIntrusionDailyBreaks').addEventListener('change', (event) => {
     intrusionLayer?.setVisible(event.target.checked);
-    if (event.target.checked) { void refreshIntrusionHistory(); void refreshIntrusionDelta(); void refreshIntrusionPoc(); }
+    purpleReplayLayer?.setVisible(event.target.checked);
+    if (event.target.checked) { void loadPurpleReplay(); void refreshIntrusionHistory(); void refreshIntrusionDelta(); void refreshIntrusionPoc(); }
     else { deltaController?.abort(); pocController?.abort(); }
   });
   byId('spotChartManual').addEventListener('change', (event) => {

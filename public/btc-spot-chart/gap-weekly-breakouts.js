@@ -98,9 +98,10 @@
   }
 
   class GapWeeklyBreakoutPrimitive {
-    constructor(color = '#ff9800', lineWidth = 1) {
+    constructor(color = '#ff9800', lineWidth = 1, dash = []) {
       this.color = color;
       this.lineWidth = lineWidth;
+      this.dash = dash;
       this.signals = []; this.visible = true;
       this.view = { zOrder: () => 'top', renderer: () => ({ draw: target => this.draw(target) }) };
     }
@@ -114,7 +115,7 @@
       if (!this.visible || !this.chart || !this.signals.length) return;
       target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width, height } }) => {
         ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();
-        ctx.strokeStyle = this.color; ctx.lineWidth = this.lineWidth; ctx.globalAlpha = .9; ctx.setLineDash([]);
+        ctx.strokeStyle = this.color; ctx.lineWidth = this.lineWidth; ctx.globalAlpha = .9; ctx.setLineDash(this.dash);
         for (const signal of this.signals) {
           const x = this.chart.timeScale().timeToCoordinate(signal.time);
           if (x === null || x < 0 || x > width) continue;
