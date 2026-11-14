@@ -57,7 +57,7 @@ import {
 import { coinGlassFreshness, coinGlassRefreshWaitMs } from './coinGlassRefreshPolicy';
 import { coinGlassSnapshotTimeoutMs, fetchCoinGlassWhaleMessage } from './coinGlassWhaleSocket';
 import tls from 'tls';
-import { AlertObject } from '../types';
+import { AlertObject, EntryExecutionOptions, TrailingStopOptions } from '../types';
 
 const API_URL = 'https://www.decentrader.com/api';
 const LEVERAGES = [3, 5, 10];
@@ -476,9 +476,9 @@ export type DecentraderTradeExecutor = {
     }>;
   }>;
   supportsEntrySubmissionCheckpoint?: boolean;
-  placeOrder: (alert: AlertObject, execution?: { beforeEntrySubmit: () => Promise<void> }) => Promise<any>;
+  placeOrder: (alert: AlertObject, execution?: EntryExecutionOptions) => Promise<any>;
   syncTakeProfits?: (alert: AlertObject) => Promise<any>;
-  syncTrailingStop?: (alert: AlertObject) => Promise<any>;
+  syncTrailingStop?: (alert: AlertObject, options?: TrailingStopOptions) => Promise<any>;
 };
 
 export function dydxTargetFailedAndFlattened(result: any): boolean {

@@ -146,7 +146,7 @@ function configureDecentraderTradeExecutor() {
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
-    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+    syncTrailingStop: (alert, options) => client.syncTrailingStop(alert, options)
   });
   decentraderGapMonitor.configureManualBtcPlanProvider((account, direction) =>
     openLiquidityV2BtcIntrusionMonitor.getTradePlan(account, undefined, direction));
@@ -156,7 +156,7 @@ function configureDecentraderTradeExecutor() {
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
-    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+    syncTrailingStop: (alert, options) => client.syncTrailingStop(alert, options)
   });
   openLiquidityV2InjTradeMonitor.configureTradeExecutor({
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
@@ -171,7 +171,7 @@ function configureDecentraderTradeExecutor() {
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
-    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+    syncTrailingStop: (alert, options) => client.syncTrailingStop(alert, options)
   });
   openLiquidityV2ZecTradeMonitor.configureTradeExecutor({
     supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
@@ -179,7 +179,7 @@ function configureDecentraderTradeExecutor() {
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
-    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+    syncTrailingStop: (alert, options) => client.syncTrailingStop(alert, options)
   });
   openLiquidityV2GoldIntrusionMonitor.configureTradeExecutor({
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),

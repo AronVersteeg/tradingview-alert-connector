@@ -249,6 +249,55 @@ describe('managed entry stop-risk protection', () => {
     expect(checkpoint).not.toHaveBeenCalled();
   });
 
+  test('does not cancel existing orders if a position appeared while Green was preparing', async () => {
+    const { client, alert } = clientAndAlert();
+    client.cancelOpenOrders = (DydxV4Client.prototype as any).cancelOpenOrders;
+    client.getOpenOrdersForMarket = jest.fn().mockResolvedValue([{ clientId: 101 }]);
+    client.getCurrentSize = jest.fn().mockResolvedValue(-0.4);
+    client.cancelSpecificOrders = jest.fn();
+    const checkpoint = jest.fn();
+
+    await expect(client.placeOrderForMarket('ETH-USD', alert, {
+      beforeEntrySubmit: checkpoint, requireFlat: true
+    })).rejects.toThrow(/flat dYdX position could not be verified/);
+
+    expect(client.cancelSpecificOrders).not.toHaveBeenCalled();
+    expect(client.reachTargetPositionOrFailsafeFlat).not.toHaveBeenCalled();
+    expect(checkpoint).not.toHaveBeenCalled();
+  });
+
+  test.each([0, 0.4])('checks the latest position at broadcast without an entry timer: size=%s', async size => {
+    const { client } = clientAndAlert();
+    client.reachTargetPositionOrFailsafeFlat = (DydxV4Client.prototype as any).reachTargetPositionOrFailsafeFlat;
+    client.client = { placeOrder: jest.fn().mockResolvedValue({ code: 0 }) };
+    client.getMarketOrderGoodTilBlock = jest.fn().mockResolvedValue({ currentHeight: 1, goodTilBlock: 21 });
+    client.getCurrentSize = jest.fn().mockResolvedValue(size);
+    client.sleep = jest.fn().mockResolvedValue(undefined);
+    client.waitForTargetProgress = jest.fn().mockResolvedValue({ kind: 'target', currentSize: 0.6 });
+    client.flattenPositionSafely = jest.fn();
+    const flatEntry = { broadcastStarted: false };
+    const checkpoint = jest.fn().mockImplementation(async () => {
+      expect(client.getCurrentSize).toHaveBeenCalledTimes(1);
+      expect(client.sleep).not.toHaveBeenCalled();
+      expect(client.client.placeOrder).not.toHaveBeenCalled();
+    });
+    const run = client.reachTargetPositionOrFailsafeFlat('ETH-USD', 0.6, {
+      source: 'test', flatEntry, beforeEntrySubmit: checkpoint, entryRiskSizing: { stop: 90 }
+    });
+
+    if (size) {
+      await expect(run).rejects.toThrow(/flat dYdX position could not be verified/);
+      expect(client.client.placeOrder).not.toHaveBeenCalled();
+      expect(checkpoint).not.toHaveBeenCalled();
+    } else {
+      await expect(run).resolves.toBe(0.6);
+      expect(checkpoint).toHaveBeenCalledTimes(1);
+      expect(client.client.placeOrder).toHaveBeenCalledTimes(1);
+    }
+    expect(client.flattenPositionSafely).not.toHaveBeenCalled();
+    expect(flatEntry.broadcastStarted).toBe(size === 0);
+  });
+
   test.each([false, true])('awaits the durable checkpoint only for entries, reduceOnly=%s', async reduceOnly => {
     const client: any = new DydxV4Client();
     const order = jest.fn().mockResolvedValue({ code: 0 });

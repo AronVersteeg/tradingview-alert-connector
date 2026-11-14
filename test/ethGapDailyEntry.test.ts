@@ -530,6 +530,13 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       }
       const better = direction === 'long' ? initial + .5 : initial - .5;
       candidate.mockReturnValue({ valid: true, price: better, fractal: { index: 3, timestamp: iso(closeAt - 2 * HOUR), price: better, source: 'lowRef' } } as any);
+      const pending: any = {};
+      orders.syncTrailingStop.mockResolvedValueOnce({ outcome: 'PENDING_VERIFICATION', verified: false });
+      await monitor.syncManagedStop(managed, pending, position, { marketInfo: { oraclePrice: 120 }, price: 120 });
+      expect(pending.dynamicSlSync.outcome).toBe('PENDING_VERIFICATION');
+      expect(managed.managedPosition.currentStop).toBe(initial);
+      expect(managed.managedPosition.currentStopFractalTimestamp).toBe(anchor);
+      expect(orders.syncTrailingStop.mock.calls.at(-1)[1]).toEqual({ requireVisibleReplacement: true });
       await monitor.syncManagedStop(managed, {}, position, { marketInfo: { oraclePrice: 120 }, price: 120 });
       expect(managed.managedPosition.currentStop).toBe(better);
       expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(better);
@@ -839,6 +846,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
       const actualBroadcast = jest.fn();
       orders.placeOrder.mockImplementationOnce(async (alert, execution) => {
+        expect(execution.requireFlat).toBe(true);
         await execution.beforeEntrySubmit();
         expect(JSON.parse(fs.readFileSync(file, 'utf8')).gapDailyEntry.intent.phase).toBe('BROADCASTING');
         actualBroadcast(); position = { market, size: .4, entryPrice: 120 };

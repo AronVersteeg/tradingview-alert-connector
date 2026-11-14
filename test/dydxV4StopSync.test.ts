@@ -33,6 +33,68 @@ const visibleStop = (clientId: number) => ({
 });
 
 describe('dYdX v4 trailing stop synchronization', () => {
+  describe('Green protection', () => {
+    const options = { requireVisibleReplacement: true };
+    const oldStop = { ...visibleStop(101), triggerPrice: 61000 };
+    function setup() {
+      const client = new DydxV4Client() as any;
+      client.getCurrentPosition = jest.fn().mockResolvedValue({ size: 0.001 });
+      client.getOpenOrdersForMarket = jest.fn().mockResolvedValue([oldStop]);
+      client.getAllOrdersForMarket = jest.fn().mockResolvedValue([]);
+      client.placeSafetyStopOrder = jest.fn().mockResolvedValue({ clientId: 202, size: 0.001, goodTilBlockTime: 1900000000 });
+      client.cancelSpecificOrders = jest.fn().mockResolvedValue(undefined);
+      client.cancelOtherProtectiveStopsBestEffort = jest.fn().mockResolvedValue([]);
+      client.cancelManagedStopBestEffort = jest.fn();
+      client.sleep = jest.fn().mockResolvedValue(undefined);
+      client.SAFETY_STOP_VERIFY_POLLS = 1;
+      client.saveManagedOrdersState = jest.fn();
+      client.managedStops.set('BTC-USD', { ...managedStop, triggerPrice: oldStop.triggerPrice });
+      return client;
+    }
+
+    test('preserves the stop when there is no free replacement slot', async () => {
+      const client = setup();
+      client.initialized = true;
+      client.getStatefulOrderCapacity = jest.fn().mockResolvedValue({ availableSlots: 0 });
+      await expect(client.syncTrailingStop(alert, options)).resolves.toMatchObject({ outcome: 'PENDING_CAPACITY', verified: false });
+      expect(client.cancelSpecificOrders).not.toHaveBeenCalled();
+      expect(client.placeSafetyStopOrder).not.toHaveBeenCalled();
+    });
+
+    test('leaves the old stop in place and does not resubmit while replacement is pending', async () => {
+      const client = setup();
+      client.CANCEL_OLD_STOPS_AFTER_TRAIL_SUBMIT = true;
+      await expect(client.syncTrailingStop(alert, options)).resolves.toMatchObject({ outcome: 'PENDING_VERIFICATION', verified: false });
+      expect(client.managedStops.get('BTC-USD')).toMatchObject({ clientId: 202, verificationPending: true });
+      await expect(client.syncTrailingStop(alert, options)).resolves.toMatchObject({ outcome: 'PENDING_VERIFICATION', verified: false });
+      expect(client.placeSafetyStopOrder).toHaveBeenCalledTimes(1);
+      expect(client.cancelSpecificOrders).not.toHaveBeenCalled();
+      expect(client.cancelOtherProtectiveStopsBestEffort).not.toHaveBeenCalled();
+
+      client.getOpenOrdersForMarket.mockResolvedValue([oldStop, visibleStop(202)]);
+      await expect(client.syncTrailingStop(alert, options)).resolves.toMatchObject({ outcome: 'UNCHANGED', visibility: 'DYDX_OPEN_ORDER' });
+      expect(client.cancelOtherProtectiveStopsBestEffort).toHaveBeenCalledWith('BTC-USD', expect.anything(), 202, expect.any(String), expect.objectContaining({ size: 0.001 }));
+      expect(client.placeSafetyStopOrder).toHaveBeenCalledTimes(1);
+      expect(client.managedStops.get('BTC-USD').verificationPending).not.toBe(true);
+    });
+
+    test('verification requires the expected ID and full size, allowing rounding to one market tick', async () => {
+      const client = setup();
+      client.getOpenOrdersForMarket.mockResolvedValue([visibleStop(101), { ...visibleStop(202), size: '0.0001' }]);
+      await expect(client.waitForSafetyStopVisibleBestEffort('BTC-USD', 'SELL', 61242.9, 202, { size: 0.001, tickSize: 1 })).resolves.toBe(false);
+      client.getOpenOrdersForMarket.mockResolvedValue([visibleStop(202)]);
+      await expect(client.waitForSafetyStopVisibleBestEffort('BTC-USD', 'SELL', 61242.9, 202, { size: 0.001, tickSize: 1 })).resolves.toBe(true);
+    });
+
+    test('does not cancel the old stop if the replacement disappears before cleanup', async () => {
+      const client = setup();
+      client.cancelOtherProtectiveStopsBestEffort = (DydxV4Client.prototype as any).cancelOtherProtectiveStopsBestEffort;
+      const result = await client.cancelOtherProtectiveStopsBestEffort('BTC-USD', 'SELL', 202, 'test', { size: 0.001, triggerPrice: 61242 });
+      expect(result).toEqual([oldStop]);
+      expect(client.cancelSpecificOrders).not.toHaveBeenCalled();
+    });
+  });
+
   test('loads active conditional orders independently from paginated order history', async () => {
     const client = new DydxV4Client() as any;
     const getSubaccountOrders = jest.fn().mockImplementation(

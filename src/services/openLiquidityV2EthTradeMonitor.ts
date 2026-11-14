@@ -807,7 +807,8 @@ function writeState(state: EthMonitorState, config: OpenLiquidityV2TradeMonitorC
     const record = { outcome: decision.outcome, at: decision.at, reason: decision.reason,
       candleStartedAt: signal ? new Date(signal.time * 1000).toISOString() : undefined,
       candleClosedAt: signal ? new Date(signal.closedAt * 1000).toISOString() : decision.candleClosedAt,
-      direction: signal?.direction, executionOutcome: entry.intent?.outcome, executionPhase: entry.intent?.phase };
+      direction: signal?.direction, executionOutcome: entry.intent?.outcome, executionPhase: entry.intent?.phase,
+      protectionOutcome: decision.protection?.outcome };
     const records = entry.decisionHistory ||= [];
     if (JSON.stringify(records.at(-1)?.decision) !== JSON.stringify(record)) {
       records.push({ recordedAt: new Date().toISOString(), decision: record });
@@ -1259,10 +1260,14 @@ export class OpenLiquidityV2EthTradeMonitor {
     result.gapDailyEntryRecovery = { outcome: 'RECOVERED_AFTER_PARTIAL_EXECUTION' };
   }
 
-  private scheduleGapDailyRecovery(state: EthMonitorState): void {
+  private scheduleGapDailyRecovery(state: EthMonitorState, result?: any): void {
     const intent = state.gapDailyEntry?.intent;
-    if (!this.gapDailyRecoveryActive || this.gapDailyRecoveryTimer || state.managedPosition || !intent ||
-      !['SUBMITTING', 'UNKNOWN'].includes(intent.outcome) || Date.now() - Date.parse(intent.attemptedAt) >= 300_000) return;
+    if (!this.gapDailyRecoveryActive || this.gapDailyRecoveryTimer || !intent ||
+      Date.now() - Date.parse(intent.attemptedAt) >= 300_000) return;
+    const unknownEntry = !state.managedPosition && ['SUBMITTING', 'UNKNOWN'].includes(intent.outcome);
+    const pendingProtection = state.managedPosition?.takeProfitMode === 'trailing-only' &&
+      (result?.dynamicSlSync?.verified === false || result?.ok === false);
+    if (!unknownEntry && !pendingProtection) return;
     this.gapDailyRecoveryTimer = setTimeout(() => {
       this.gapDailyRecoveryTimer = undefined;
       void this.checkManagedPosition().catch(error => console.error(`${this.config.asset} gap/Daily reconciliation failed:`, error));
@@ -1413,7 +1418,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         console.log(`${this.config.asset} Green entry broadcast checkpoint:`, { signature, phase: entry.intent!.phase });
       };
       const placement = this.executor.supportsEntrySubmissionCheckpoint
-        ? await this.executor.placeOrder(orderAlert, { beforeEntrySubmit })
+        ? await this.executor.placeOrder(orderAlert, { beforeEntrySubmit, requireFlat: true })
         : await this.executor.placeOrder(orderAlert);
       if (dydxTargetFailedAndFlattened(placement)) {
         entry.intent.outcome = 'FLATTENED';
@@ -1427,6 +1432,12 @@ export class OpenLiquidityV2EthTradeMonitor {
       entry.intent.outcome = 'CONFIRMED';
       writeState(state, this.config);
       result.tradePlaced = true;
+      if (placement?.outcome === 'STOP_VERIFICATION_PENDING') {
+        result.dynamicSlSync = { outcome: 'PENDING_VERIFICATION', verified: false,
+          clientId: placement.stop?.clientId, trailStop: placement.stop?.triggerPrice };
+        entry.decision = { ...state.lastTradeDecision, protection: result.dynamicSlSync };
+        writeState(state, this.config);
+      }
       await this.syncManagedOrders(state, result, { stopOnly: true });
       entry.decision = { ...state.lastTradeDecision, protection: result.dynamicSlSync };
     } catch (error) {
@@ -1436,7 +1447,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       try {
         await this.recoverGapDailyIntent(state, result);
       } finally {
-        this.scheduleGapDailyRecovery(state);
+        this.scheduleGapDailyRecovery(state, { ...result, ok: false });
       }
       if (result.gapDailyEntryRecovery?.outcome === 'RECOVERED_AFTER_PARTIAL_EXECUTION') {
         result.tradePlaced = true;
@@ -1445,6 +1456,8 @@ export class OpenLiquidityV2EthTradeMonitor {
         return;
       }
       throw error;
+    } finally {
+      this.scheduleGapDailyRecovery(state, result);
     }
   }
 
@@ -2194,7 +2207,10 @@ export class OpenLiquidityV2EthTradeMonitor {
     // Protective orders must not depend on the map, TP capacity or TP submissions.
     if (!options.skipStop) await this.syncManagedStop(state, result, position, stopPlan);
     if (!state.managedPosition || result.dynamicSlSync?.outcome === 'FLATTENED_AFTER_STOP_BREACH') return;
-    if (['UPDATED', 'UNCHANGED', 'READY'].includes(result.dynamicSlSync?.outcome)) {
+    const confirmedStopOutcomes = managed.takeProfitMode === 'trailing-only'
+      ? ['UPDATED', 'UNCHANGED', 'UNCHANGED_WITH_DUPLICATES', 'TIGHTER_STOP_RETAINED']
+      : ['UPDATED', 'UNCHANGED', 'READY'];
+    if (confirmedStopOutcomes.includes(result.dynamicSlSync?.outcome)) {
       result.lastSuccessfulStopCheckAt = nowNlIso();
     }
     if (options.stopOnly) return;
@@ -2255,6 +2271,9 @@ export class OpenLiquidityV2EthTradeMonitor {
     const executor = this.executor!;
     const managed = state.managedPosition!;
     const direction = directionForPosition(position);
+    const syncStop = (alert: AlertObject) => managed.takeProfitMode === 'trailing-only'
+      ? executor.syncTrailingStop!(alert, { requireVisibleReplacement: true })
+      : executor.syncTrailingStop!(alert);
     if (!boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true)) {
       result.dynamicSlSync = { outcome: 'DISABLED' };
       return;
@@ -2333,7 +2352,7 @@ export class OpenLiquidityV2EthTradeMonitor {
 
       const coverageAlert = buildDecentraderDynamicSlAlert(plan, position, managed.currentStop);
       (coverageAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_sl_coverage`;
-      const coverageSync = await executor.syncTrailingStop(coverageAlert);
+      const coverageSync = await syncStop(coverageAlert);
       result.dynamicSlSync = {
         ...coverageSync,
         currentStop: managed.currentStop,
@@ -2356,9 +2375,11 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
     const slAlert = buildDecentraderDynamicSlAlert(plan, position, candidateStop, candidate);
     (slAlert as any).strategy = `${this.config.strategyPrefix}_dynamic_sl`;
-    const sync = await executor.syncTrailingStop(slAlert);
+    const sync = await syncStop(slAlert);
     result.dynamicSlSync = { ...sync, needsDydxFractalRebase };
-    if (sync?.outcome === 'UPDATED' || sync?.outcome === 'UNCHANGED') {
+    if ((managed.takeProfitMode !== 'trailing-only' || sync?.verified !== false) &&
+        (sync?.outcome === 'UPDATED' || sync?.outcome === 'UNCHANGED' ||
+          (managed.takeProfitMode === 'trailing-only' && sync?.outcome === 'UNCHANGED_WITH_DUPLICATES'))) {
       managed.currentStop = candidateStop;
       managed.currentStopUpdatedAt = nowNlIso();
       managed.currentStopFractalIndex = candidate.fractal?.index;
@@ -2680,7 +2701,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       try {
         await this.recoverGapDailyIntent(state, result);
         await this.syncManagedOrders(state, result, { stopOnly: true });
-        result.ok = result.dynamicTpSync?.outcome !== 'ERROR';
+        result.ok = result.dynamicTpSync?.outcome !== 'ERROR' &&
+          (state.managedPosition?.takeProfitMode !== 'trailing-only' || result.dynamicSlSync?.verified !== false);
         if (state.managedPosition && state.managedPosition.takeProfitMode !== 'trailing-only' && result.dynamicSlSync?.outcome !== 'FLATTENED_AFTER_STOP_BREACH') {
           this.scheduleTakeProfitSync();
         }
@@ -2689,7 +2711,11 @@ export class OpenLiquidityV2EthTradeMonitor {
         result.error = error instanceof Error ? error.message : String(error);
         console.error(`${this.config.asset} V2 protective order check failed:`, result.error);
       } finally {
-        this.scheduleGapDailyRecovery(state);
+        const entry = state.gapDailyEntry;
+        if (entry?.decision?.signature && entry.decision.signature === state.managedPosition?.entrySignature && result.dynamicSlSync) {
+          entry.decision = { ...entry.decision, protection: result.dynamicSlSync };
+        }
+        this.scheduleGapDailyRecovery(state, result);
         this.managementStatus = { ...this.managementStatus, ...result, running: false, lastFinishedAt: nowNlIso() };
       }
       return this.managementStatus;
