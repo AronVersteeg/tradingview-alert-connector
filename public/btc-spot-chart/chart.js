@@ -29,7 +29,6 @@
   const intrusionDailyBreaks = window.BtcSpotIntrusionDailyBreakouts;
   const historicalReplay = window.BtcSpotHistoricalReplay;
   const greenReplay = window.BtcGreenPositionReplay;
-  const intrusionConfluence = window.BtcSpotIntrusionConfluence;
   const futuresDelta = window.BtcIntrusionFuturesDelta;
   const spotPoc = window.BtcIntrusionSpotPoc;
   const manualLevels = window.BtcSpotManualLevels;
@@ -61,7 +60,6 @@
   let gapIntrusionLayer, gapIntrusionMarkers = [];
   let visibleGapIntrusionMarkers = [];
   let gapIntrusionInputs;
-  let confluenceLayer, confluenceModel, confluenceInputs;
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
   const pocRecords = new Map();
@@ -108,11 +106,10 @@
       orderBlockModel = undefined; orderBlockLayer.setData({ blocks: [] }, candles);
       status.textContent = `Order blocks unavailable: ${error.message}`; status.dataset.stale = 'true';
     }
-    updateIntrusionConfluence();
     scheduleOrderBlockHistory();
   }
 
-  const needsOrderBlockHistory = () => byId('spotChartOrderBlocks').checked || byId('spotChartIntrusionConfluence').checked;
+  const needsOrderBlockHistory = () => byId('spotChartOrderBlocks').checked;
 
   function scheduleOrderBlockHistory() {
     if (orderBlockHistoryTimer || !active || destroyed || !initialData || !hasMore ||
@@ -205,22 +202,6 @@
       [state.levelsKey]: signal[state.levelsKey].map(level => ({ ...level })) })) } : null;
   }
 
-  function updateIntrusionConfluence() {
-    if (!confluenceLayer || !intrusionHistory) return;
-    const status = byId('spotChartIntrusionConfluenceStatus');
-    const inputs = [intrusionHistory, intrusionModel, orderBlockModel, closedDataVersion];
-    if (confluenceInputs?.every((input, index) => input === inputs[index])) return;
-    try {
-      confluenceModel = intrusionConfluence.buildIntrusionConfluence(analysisCandles(), intrusionHistory, intrusionModel, orderBlockModel, Date.now(), market);
-      confluenceLayer.setData(confluenceModel.signals);
-      confluenceInputs = inputs;
-      status.textContent = `Intrusion / D or OB: ${confluenceModel.signals.length}${!intrusionModel || !orderBlockModel ? ' | partial' : ''}`;
-    } catch (error) {
-      confluenceInputs = undefined; confluenceModel = undefined; confluenceLayer.setData([]);
-      status.textContent = `Intrusion / D or OB unavailable: ${error.message}`;
-    }
-  }
-
   function updateHistoricalReplay(overlay) {
     if (!overlay?.layer || !overlay.data) return;
     const recorded = overlay.kind === 'purple' ? intrusionModel?.signals : undefined;
@@ -272,7 +253,7 @@
     const status = byId('spotChartIntrusionDailyStatus');
     if (!intrusionHistory || !fractalModel) {
       updateHistoricalReplay(purpleHistory);
-      return updateIntrusionConfluence();
+      return;
     }
     const hour = Math.floor(Date.now() / 3_600_000), inputs = intrusionInputs;
     try {
@@ -305,7 +286,6 @@
       status.dataset.stale = 'true';
     }
     updateHistoricalReplay(purpleHistory);
-    updateIntrusionConfluence();
   }
 
   async function refreshIntrusionDelta() {
@@ -605,9 +585,6 @@
         candlesSeries.attachPrimitive(state.layer);
       }
       updateGapFractalBreakouts();
-      confluenceLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive('#315ca8', 3);
-      confluenceLayer.setVisible(byId('spotChartIntrusionConfluence').checked);
-      candlesSeries.attachPrimitive(confluenceLayer);
       attachHistoricalReplay(purpleHistory);
       intrusionLayer = new intrusionDailyBreaks.IntrusionDailyBreakoutPrimitive();
       intrusionLayer.setDeltaEnabled(true);
@@ -671,7 +648,6 @@
         getVisibleGapIntrusionMarkers: () => visibleGapIntrusionMarkers.map(marker => ({ ...marker })),
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
-        getIntrusionConfluence: () => confluenceModel ? structuredClone(confluenceModel) : null,
         getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({
           ...signal, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
         getPurpleReplayMarkers: () => purpleHistory?.markers.map(marker => ({ ...marker })) || [],
@@ -832,10 +808,6 @@
   }
   byId('spotChartOrderBlocks').addEventListener('change', event => {
     orderBlockLayer?.setVisible(event.target.checked);
-    updateOrderBlockHistoryDemand();
-  });
-  byId('spotChartIntrusionConfluence').addEventListener('change', event => {
-    confluenceLayer?.setVisible(event.target.checked);
     updateOrderBlockHistoryDemand();
   });
   byId('spotChartObLength').addEventListener('change', event => {

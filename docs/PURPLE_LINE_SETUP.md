@@ -24,13 +24,8 @@ POC crossbars, plus read-only manual/TP overlays. The [orderblock overlay](BTC_O
 uses the same defaults and rendering as BTC, with each pair's own Spot candles
 and base-volume units. The loading label and WebSocket subscription follow the pair.
 
-The separate **Intrusion / D or OB** dark-blue overlay marks one line per closed
-Spot 1H candle with a recorded gap intrusion and any matching event: the existing
-same-direction Daily close break, mitigation of an opposing order block, or
-confirmation of a same-direction new order block. It uses the current chart's
-Pivot and Wick/Close settings. The new-block event is its confirmation candle,
-not the earlier pivot where the box starts. It is visual only and does not add
-any entry rule, mail, or dependency on Futures delta or POC.
+The former **Intrusion / D or OB** dark-blue overlay is no longer shown. The
+order block and manual entry/TP overlays are unchanged.
 
 Candles, D/W/M fractals, gap/intrusion reconstruction and POC use that pair's
 Binance Spot source, never Decentrader or another pair. F5m is deliberately the

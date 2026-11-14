@@ -1558,7 +1558,6 @@
           <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Weekly fractal"><input type="checkbox" id="spotChartGapWeeklyBreaks" checked><i class="spot-fractal-swatch gap-weekly-break"></i>Gap / W break</label>
           <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Daily fractal"><input type="checkbox" id="spotChartGapDailyBreaks" checked><i class="spot-fractal-swatch gap-daily-break"></i>Gap / D break</label>
           <label class="spot-chart-toggle" title="Recorded Binance Spot intrusion and fresh Daily close break. F5m labels show the last five minutes of the matching Binance USD-M Futures symbol's taker delta, normalized to trade direction: positive = aligned selling for shorts / buying for longs. n/a = unavailable. Observe-only, not an entry filter."><input type="checkbox" id="spotChartIntrusionDailyBreaks" checked><i class="spot-fractal-swatch intrusion-daily-break"></i>Spot intrusion / D</label>
-          <label class="spot-chart-toggle" title="Same closed Spot 1H candle: recorded gap intrusion and a same-direction Daily close break, opposing order block break, or newly confirmed matching order block"><input type="checkbox" id="spotChartIntrusionConfluence" checked><i class="spot-fractal-swatch intrusion-confluence"></i>Intrusion / D or OB</label>
           <label class="spot-chart-toggle" title="Monthly fractals"><input type="checkbox" id="spotChartMonthly" checked><i class="spot-fractal-swatch monthly"></i>Monthly</label>
           <label class="spot-chart-toggle" title="Planned manual entries and their take profits"><input type="checkbox" id="spotChartManual" checked><i class="spot-fractal-swatch manual"></i>Manual / TP</label>
           <label class="spot-chart-toggle" title="Broken fractal segments"><input type="checkbox" id="spotChartBroken" checked>Broken</label>
@@ -1573,7 +1572,6 @@
         <span id="spotChartPurpleReplayStatus" role="status" hidden></span>
         <span id="spotChartGreenReplayStatus" role="status" hidden></span>
         <span id="spotChartOrderBlockStatus" role="status">Order blocks pending</span>
-        <span id="spotChartIntrusionConfluenceStatus" role="status">Intrusion / D or OB pending</span>
       </div>
       <div class="spot-chart-ohlc" id="spotChartOhlc">
         <span class="spot-chart-date" id="spotChartCandleTime">-</span>
@@ -1785,7 +1783,6 @@
   <script defer src="/assets/btc-spot-chart/intrusion-daily-breakouts.js"></script>
   <script defer src="/assets/btc-spot-chart/historical-replay.js"></script>
   <script defer src="/assets/btc-spot-chart/green-position-replay.js"></script>
-  <script defer src="/assets/btc-spot-chart/intrusion-confluence.js"></script>
   <script defer src="/assets/btc-spot-chart/manual-levels.js"></script>
   <script defer src="/assets/btc-spot-chart/viewport.js"></script>
   <script defer src="/assets/btc-spot-chart/interactions.js"></script>
