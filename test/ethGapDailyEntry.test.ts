@@ -799,6 +799,25 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(managed.gapDailyEntry.activatedAt).toBe(iso(now));
       expect(read).not.toHaveBeenCalled(); expect(orders.placeOrder).not.toHaveBeenCalled();
     });
+    test.each([false, true])('reports a risk failure with broadcast checkpoint crossed: %s', async broadcasting => {
+      orders.supportsEntrySubmissionCheckpoint = true;
+      jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
+      const error = broadcasting ? 'Uncertain submission' : 'Entry risk guard: protective stop is no longer valid against the current dYdX oracle.';
+      orders.placeOrder.mockImplementationOnce(async (_alert, execution) => {
+        if (broadcasting) await execution.beforeEntrySubmit();
+        throw new Error(error);
+      });
+      await monitor.checkGapDailyEntry(state(), inputs().payload, {});
+      const status = monitor.getStatus().gapDailyEntry;
+      const expected = broadcasting ? 'UNKNOWN' : 'NOT_SUBMITTED';
+      expect(status.latestExecutionAttempt).toMatchObject({
+        phase: broadcasting ? 'BROADCASTING' : 'PREPARING', outcome: expected, error
+      });
+      expect(Boolean(status.latestExecutionAttempt.broadcastStartedAt)).toBe(broadcasting);
+      expect(status.triggerEmail.recent[0].outcome).toBe(broadcasting ? 'UNCONFIRMED' : 'NOT_SUBMITTED');
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+      expect(orders.syncTrailingStop).not.toHaveBeenCalled();
+    });
     test('saves signal mail and a PREPARING checkpoint before execution, then revalidates an unsent fresh signal after restart', async () => {
       orders.supportsEntrySubmissionCheckpoint = true;
       jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());

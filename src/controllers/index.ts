@@ -174,9 +174,10 @@ function configureDecentraderTradeExecutor() {
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
   openLiquidityV2ZecTradeMonitor.configureTradeExecutor({
+    supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
-    placeOrder: (alert: any) => client.placeOrder(alert),
+    placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
   });
