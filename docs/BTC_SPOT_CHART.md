@@ -254,30 +254,22 @@ hour-close updates, pre-candle gap selection, independent toggling, actual orang
 and light-yellow canvas pixels, overlap priority, PNG export and absence of write
 requests.
 
-## Decentrader Intrusion / D Overlay
+## Purple: Intrusion + Gap + D
 
-The default-on `Dec intrusion / D` checkbox adds thin purple (`#ba68c8`)
-vertical lines. A saved Decentrader intrusion must have the exact same candle-open
-UTC timestamp and direction as a fresh Daily fractal close break on Binance Spot
-BTCUSDT 1H. The Daily level must already be confirmed and intact at candle open;
-the previous close must be on the other side. Wick-only touches, open candles,
-previously broken levels and Weekly-only breaks do not qualify. A green-box edge
-break is not an additional requirement for this overlay.
+On BTC, ETH, SOL and ZEC, the default-on Purple overlay requires a saved Spot
+intrusion, a fresh close through the gap edge known at candle open and a fresh
+close through an intact, confirmed Daily fractal. All three must agree in direction
+and belong to the same closed Binance Spot 1H candle. The green marker's visibility
+and position-overlap filter do not affect this overlay. Wick-only touches and
+Weekly-only breaks do not qualify.
 
-The existing `/decentrader/liquidity-timelapse` response supplies
-`intrusionDomStudy.history[].timestamp` and `delayHistory.records[].intrusionTimestamp`.
-Both are alert-candle **open** times in UTC, not SMTP, first-observed or filtered
-mail times. Normal/filtered duplicates are combined by candle and direction.
-Missing/ambiguous timestamps or directions are ignored. Today's histogram survivor
-flags are never replayed as historical intrusion evidence. This overlay represents
-saved records, not complete coverage or proof that no other intrusions occurred.
-A late-recorded intrusion appears retroactively on its original alert candle.
+The existing Public V2 read supplies saved intrusion alert-candle **open** times
+in UTC, not SMTP times, and its own market's gap frames. A late-recorded intrusion
+appears on its original alert candle. BTC's dashed historical candidates are only
+shown when the preceding Spot close and gap edge also confirm the new box-break
+requirement; missing gap coverage is not treated as a break.
 
-The existing dashboard is read at most once per minute while the chart is active
-and this checkbox is enabled (explicit Refresh can retry sooner). Reads are shared
-within the chart; failures retain the last saved evidence with a stale indication.
-Disabling it stops further automatic reads. No new public endpoint, backend export,
-provider polling, entry logic, orders, SMTP, SL, TP or trailing behavior is added.
+This does not change live Green entries, orders, SMTP, SL, TP or trailing behavior.
 Purple is drawn above the Gap/D and Gap/W markers when they overlap; its checkbox
 reveals those underlying lines. PNG exports include the purple overlay.
 
@@ -306,7 +298,7 @@ Existing ETH candle/gap/intrusion storage and retention remain unchanged.
 Manual overlays read only ETH-USD plans and targets. This does not arm, edit or
 execute a plan, change live pair switches, or modify SL/TP/trailing logic. The
 orange Gap/W and light-yellow Gap/D rules are identical to BTC. ETH's purple
-`Intrusion / D` overlay uses its own saved Binance Spot replica intrusion alert
+overlay uses its own saved Binance Spot replica intrusion alert
 times from `intrusionBenchmarks.history` / `delayHistory.records`, not Decentrader
 BTC and not mail time. The existing ETH histomap read is reused; no additional
 intrusion poll is needed. Source/market mismatches fail closed.

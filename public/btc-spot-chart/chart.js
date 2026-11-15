@@ -5,7 +5,7 @@
   const asset = source === 'open-v2' ? 'btc' : source.slice('open-v2-'.length);
   const baseAsset = asset.toUpperCase();
   const symbol = `${baseAsset}USDT`, market = `${baseAsset}-USD`;
-  const intrusionLabel = 'Spot intrusion / D';
+  const intrusionLabel = 'Purple: intrusion + gap + D';
   const panel = document.getElementById('btcSpotChartPanel');
   if (!panel) return;
   panel.querySelector('.spot-chart-symbol').textContent = symbol;
@@ -15,7 +15,7 @@
   {
     const toggle = document.getElementById('spotChartIntrusionDailyBreaks').parentElement;
     toggle.lastChild.textContent = intrusionLabel;
-    toggle.title = `Recorded Binance Spot ${asset.toUpperCase()} intrusion and fresh Daily close break. F5m = last-five-minute ${symbol} Futures taker delta normalized to direction; positive means aligned flow. Observe-only.`;
+    toggle.title = `Same closed ${symbol} Spot candle: gap intrusion, fresh gap box break and fresh Daily fractal break in the same direction. F5m is observe-only.`;
     document.getElementById('spotChartIntrusionDailyStatus').textContent = `${intrusionLabel} pending`;
   }
   panel.hidden = false;
@@ -172,6 +172,7 @@
     }
     updateGapFractalBreakouts();
     updateGapIntrusionMarkers();
+    updateIntrusionDailyBreakouts();
   }
 
   function updateGapFractalBreakouts() {
@@ -204,13 +205,18 @@
 
   function updateHistoricalReplay(overlay) {
     if (!overlay?.layer || !overlay.data) return;
-    const recorded = overlay.kind === 'purple' ? intrusionModel?.signals : undefined;
-    if (overlay.inputs?.version === closedDataVersion && overlay.inputs.recorded === recorded) return;
-    overlay.markers = historicalReplay.loadedReplaySignals(overlay.data, candles, recorded || [], market);
+    const purple = overlay.kind === 'purple', recorded = purple ? intrusionModel?.signals : undefined;
+    const gap = purple ? gapTimeline : undefined;
+    if (overlay.inputs?.version === closedDataVersion && overlay.inputs.recorded === recorded && overlay.inputs.gap === gap) return;
+    if (purple) {
+      try { overlay.markers = historicalReplay.loadedPurpleReplaySignals(overlay.data, candles, recorded || [], market, gap); }
+      catch { overlay.markers = []; }
+    } else overlay.markers = historicalReplay.loadedReplaySignals(overlay.data, candles, [], market);
     overlay.layer.setData(overlay.markers);
-    overlay.inputs = { version: closedDataVersion, recorded };
+    overlay.inputs = { version: closedDataVersion, recorded, gap };
     byId(`spotChart${overlay.label}ReplayStatus`).textContent =
-      `${overlay.label} replay (dashed): ${overlay.markers.length}/${overlay.data.signals.length} on loaded candles`;
+      purple ? `Purple replay (dashed): ${overlay.markers.length} verified box breaks on loaded candles`
+        : `${overlay.label} replay (dashed): ${overlay.markers.length}/${overlay.data.signals.length} on loaded candles`;
   }
 
   async function loadHistoricalReplay(overlay) {
@@ -251,21 +257,21 @@
 
   function updateIntrusionDailyBreakouts() {
     const status = byId('spotChartIntrusionDailyStatus');
-    if (!intrusionHistory || !fractalModel) {
+    if (!intrusionHistory || !fractalModel || !gapTimeline) {
       updateHistoricalReplay(purpleHistory);
       return;
     }
     const hour = Math.floor(Date.now() / 3_600_000), inputs = intrusionInputs;
     try {
-      if (!inputs || inputs.history !== intrusionHistory || inputs.fractals !== fractalModel ||
+      if (!inputs || inputs.history !== intrusionHistory || inputs.fractals !== fractalModel || inputs.gap !== gapTimeline ||
           inputs.version !== closedDataVersion || inputs.hour !== hour) {
-        intrusionModel = intrusionDailyBreaks.buildIntrusionDailyBreakouts(analysisCandles(), intrusionHistory, fractalModel, Date.now(), market);
+        intrusionModel = intrusionDailyBreaks.buildPurpleLineBreakouts(analysisCandles(), intrusionHistory, gapTimeline, fractalModel, Date.now(), market);
         intrusionLayer?.setData(intrusionModel.signals);
-        intrusionInputs = { history: intrusionHistory, fractals: fractalModel, version: closedDataVersion, hour };
+        intrusionInputs = { history: intrusionHistory, fractals: fractalModel, gap: gapTimeline, version: closedDataVersion, hour };
       }
       const stale = intrusionReadFailed || !intrusionModel.evaluatedThrough ||
         Date.parse(intrusionModel.evaluatedThrough) < hour * 3_600_000;
-      status.textContent = `${intrusionLabel}: ${intrusionModel.signals.length} | saved alert times${stale ? ' | stale' : ''}`;
+      status.textContent = `${intrusionLabel}: ${intrusionModel.signals.length}${stale ? ' | stale' : ''}`;
       intrusionLayer?.setDeltaRecords(deltaRecords);
       const available = intrusionModel.signals.filter(signal => deltaRecords.get(signal.time)?.status === 'ok').length;
       status.textContent += ` | F5m: ${available}/${intrusionModel.signals.length}`;
@@ -383,7 +389,7 @@
   window.addEventListener('btc-spot-chart:intrusion-error', () => {
     intrusionReadFailed = true;
     byId('spotChartIntrusionDailyStatus').textContent = intrusionHistory
-      ? 'Intrusion / D stale | saved history retained' : 'Intrusion / D unavailable';
+      ? `${intrusionLabel} stale | saved history retained` : `${intrusionLabel} unavailable`;
     byId('spotChartIntrusionDailyStatus').dataset.stale = 'true';
   });
   window.addEventListener('btc-spot-chart:gap-timeline', (event) => { gapTimeline = event.detail; updateGapProjection(); });
@@ -649,7 +655,7 @@
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
         getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({
-          ...signal, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
+          ...signal, gap: { ...signal.gap }, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
         getPurpleReplayMarkers: () => purpleHistory?.markers.map(marker => ({ ...marker })) || [],
         getGreenReplayMarkers: () => greenHistory?.markers.map(marker => ({ ...marker })) || [],
         getIntrusionDeltaLabels: () => intrusionLayer?.getDeltaLabels() || [],

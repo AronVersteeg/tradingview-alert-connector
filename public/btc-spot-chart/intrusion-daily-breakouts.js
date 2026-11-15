@@ -52,7 +52,7 @@
     });
   }
 
-  function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe) {
+  function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe, timeline) {
     const expectedSource = history?.source;
     const validSource = expectedSource === 'binance-spot-recorded-intrusions' || market === 'BTC-USD' && expectedSource === SOURCE;
     if (!['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || history?.market !== market || !validSource || history.timeBasis !== 'alert-candle-open-utc' ||
@@ -64,7 +64,9 @@
       records.set(`${record.time}|${record.direction}`, record);
     }
     const evaluate = timeframe === 'W' ? engine.buildWeeklyFractalBreakouts : engine.buildDailyFractalBreakouts;
-    const model = evaluate(candles, fractals, nowMs, market.replace('-USD', 'USDT'));
+    const symbol = market.replace('-USD', 'USDT');
+    const model = timeline ? engine.buildGapDailyBreakouts(candles, timeline, fractals, nowMs, symbol)
+      : evaluate(candles, fractals, nowMs, symbol);
     return { ...model, intrusionSource: expectedSource, timeBasis: history.timeBasis, signals: model.signals.flatMap(signal => {
       const record = records.get(`${signal.time}|${signal.direction}`);
       return record ? [{ ...signal, intrusion: { ...record } }] : [];
@@ -73,6 +75,11 @@
 
   function buildIntrusionDailyBreakouts(candles, history, fractals, nowMs = Date.now(), market = 'BTC-USD') {
     return buildIntrusionBreakouts(candles, history, fractals, nowMs, market, 'D');
+  }
+
+  function buildPurpleLineBreakouts(candles, history, timeline, fractals, nowMs = Date.now(), market = 'BTC-USD') {
+    if (!timeline || history?.source !== 'binance-spot-recorded-intrusions') throw new Error('Spot gap and intrusion history required');
+    return buildIntrusionBreakouts(candles, history, fractals, nowMs, market, 'D', timeline);
   }
 
   function buildIntrusionWeeklyBreakouts(candles, history, fractals, nowMs = Date.now(), market = 'BTC-USD') {
@@ -137,7 +144,8 @@
     }
   }
 
-  const api = Object.freeze({ compactIntrusionHistory, buildGapIntrusionMarkers, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, IntrusionDailyBreakoutPrimitive });
+  const api = Object.freeze({ compactIntrusionHistory, buildGapIntrusionMarkers, buildIntrusionDailyBreakouts,
+    buildIntrusionWeeklyBreakouts, buildPurpleLineBreakouts, IntrusionDailyBreakoutPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {
     root.BtcSpotIntrusionDailyBreakouts = api;

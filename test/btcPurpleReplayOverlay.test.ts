@@ -1,5 +1,5 @@
 export {};
-const { readReplay, loadedReplaySignals } = require('../public/btc-spot-chart/historical-replay.js');
+const { readReplay, loadedReplaySignals, loadedPurpleReplaySignals } = require('../public/btc-spot-chart/historical-replay.js');
 const payload = require('../public/btc-spot-chart/btc-purple-replay.json');
 const greenPayload = require('../public/btc-spot-chart/btc-green-replay.json');
 
@@ -25,6 +25,21 @@ describe('BTC Purple visual-only backfill', () => {
     expect(() => readReplay({ ...payload, symbol: 'ETHUSDT' })).toThrow();
     expect(() => readReplay({ ...payload, signals: [payload.signals[0], payload.signals[0]] })).toThrow();
     expect(() => readReplay({ ...payload, signals: [[payload.before, 'short', 80000]] })).toThrow();
+  });
+
+  test('only projects old Purple candidates with a provable previous-box break', () => {
+    const replay = readReplay(payload);
+    const s = replay.signals[0];
+    const candles = [{ time: s.time - 3600, close: s.close - 100, closed: true }, { ...s, closed: true }];
+    const timeline = { symbol: 'BTCUSDT', venue: 'Binance Spot', records: [
+      { candleTime: s.time - 3600, availableAt: s.time, lower: s.close - 200, upper: s.close - 50 },
+      { candleTime: s.time, availableAt: s.closedAt, lower: s.close - 200, upper: s.close + 200 }
+    ] };
+    expect(loadedPurpleReplaySignals(replay, candles, [], 'BTC-USD', timeline)).toEqual([s]);
+    expect(loadedPurpleReplaySignals(replay, candles, [s], 'BTC-USD', timeline)).toEqual([]);
+    expect(loadedPurpleReplaySignals(replay, candles.slice(1), [], 'BTC-USD', timeline)).toEqual([]);
+    expect(loadedPurpleReplaySignals(replay, candles, [], 'BTC-USD', { ...timeline, records: timeline.records.slice(1) })).toEqual([]);
+    expect(loadedPurpleReplaySignals(replay, candles, [], 'BTC-USD', { ...timeline, records: [{ ...timeline.records[0], upper: s.close }] })).toEqual([]);
   });
 });
 

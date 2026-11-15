@@ -6,8 +6,7 @@ const { PNG } = require('pngjs');
 const [url, output] = process.argv.slice(2);
 if (!url || !output) throw new Error('Supply preview URL and screenshot directory');
 const source = new URL(url).searchParams.get('source');
-const asset = source === 'open-v2-sol' ? 'sol' : source === 'open-v2-eth' ? 'eth' : 'btc';
-const nativeSpot = asset !== 'btc';
+const asset = source === 'open-v2' ? 'btc' : source.slice('open-v2-'.length);
 const market = `${asset.toUpperCase()}-USD`, symbol = `${asset.toUpperCase()}USDT`;
 fs.mkdirSync(output, { recursive: true });
 const html = fs.readFileSync(path.join(__dirname, '../public/decentrader_liquidity_timelapse.html'), 'utf8')
@@ -15,13 +14,7 @@ const html = fs.readFileSync(path.join(__dirname, '../public/decentrader_liquidi
 const HOUR = 3_600_000, start = Date.parse('2026-09-28T00:00:00Z'), day = Date.parse('2026-10-19T00:00:00Z');
 const iso = time => new Date(time).toISOString();
 function intrusionPayload() {
-  if (nativeSpot) return { source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
-    intrusionBenchmarks: { history: intrusionPayloadBtc().intrusionDomStudy.history }, delayHistory: intrusionPayloadBtc().delayHistory };
-  return intrusionPayloadBtc();
-}
-function intrusionPayloadBtc() {
-  return { source: { url: 'https://www.decentrader.com/liquidity-maps/?coin=btc', method: 'getOHLCHourlyCalculations' },
-    intrusionDomStudy: { history: [
+  return { intrusionBenchmarks: { history: [
       { timestamp: iso(day + 3 * HOUR).slice(0, 19).replace('T', ' '), direction: 'long', normalEmailSentAt: iso(day + 12 * HOUR) },
       { timestamp: iso(day + 4 * HOUR).slice(0, 19).replace('T', ' '), direction: 'long' },
       { timestamp: iso(day + 5 * HOUR).slice(0, 19).replace('T', ' '), direction: 'short', filteredEmailSentAt: iso(day + 12 * HOUR) }
@@ -42,7 +35,7 @@ function candles(now) {
 }
 function payload(now) {
   const rows = candles(now).filter(c => c.closed);
-  return { ...(nativeSpot ? intrusionPayload() : {}), modelVersion: 'binance-spot-liquidation-cohorts-v2.4', source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
+  return { ...intrusionPayload(), modelVersion: 'binance-spot-liquidation-cohorts-v2.4', source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
     range: { minPrice: 60, maxPrice: 160 }, events: [],
     frames: rows.map((c, i) => ({ i, startedAtMs: c.time * 1000, t: iso(c.time * 1000).slice(0, 19).replace('T', ' '), price: (c.open + c.high + c.low + c.close) / 4 })),
     gaps: rows.map(c => { const left = c.time * 1000 >= day + 5 * HOUR ? 60 : 85, right = c.time * 1000 >= day + 3 * HOUR ? 140 : 115;
@@ -111,8 +104,8 @@ function pocPixels(buffer, cross) {
       await context.route('**/*', route => {
         const req = route.request(), target = new URL(req.url());
         if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) { writes.push(req.method()); return route.abort(); }
-        if (nativeSpot && (target.pathname.startsWith('/open-liquidity/v2/') && /\/(btc|eth|sol)-(spot-|intrusion-)/.test(target.pathname) && !target.pathname.startsWith(`/open-liquidity/v2/${asset}-`) || target.pathname === '/decentrader/liquidity-timelapse' ||
-            target.pathname.includes('gap-projection-history') || target.pathname === '/decentrader/manual-override' && target.searchParams.get('market') !== market)) wrongMarketReads.push(req.url());
+        if (target.pathname.startsWith('/open-liquidity/v2/') && /\/(btc|eth|sol|zec)-(spot-|intrusion-)/.test(target.pathname) && !target.pathname.startsWith(`/open-liquidity/v2/${asset}-`) || target.pathname === '/decentrader/liquidity-timelapse' ||
+            asset !== 'btc' && target.pathname.includes('gap-projection-history') || target.pathname === '/decentrader/manual-override' && target.searchParams.get('market') !== market) wrongMarketReads.push(req.url());
         if (target.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: html });
         if (target.origin === new URL(url).origin && target.pathname.startsWith('/assets/')) return route.continue();
         if (target.pathname.endsWith(`/${asset}-spot-candles`)) return candlesReady.then(() => route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h',
@@ -134,16 +127,15 @@ function pocPixels(buffer, cross) {
           const hours = target.searchParams.get('hours').split(',').map(Number);
           assert(hours.length <= 8, 'Annotation requests must be bounded batches');
           return route.fulfill({ json: { symbol, venue: 'Binance USD-M Futures', interval: '5m', timeBasis: 'signal-last-five-minutes',
-            records: hours.map(hour => { const buy = hour === (day + 3 * HOUR) / 1000 ? (nativeSpot ? 65 : 62.93) : (nativeSpot ? 40 : 34.78);
+            records: hours.map(hour => { const buy = hour === (day + 3 * HOUR) / 1000 ? 65 : 40;
               return { hour, status: 'ok', candle: { hour, startedAt: hour + 3300, closedAt: hour + 3600,
                 volumeBase: 100, takerBuyVolumeBase: buy, rawDeltaPct: (2 * buy / 100 - 1) * 100, fetchedAt: iso(now) } }; }) } });
         }
-        if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return nativeSpot && intrusionFailure
+        if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return intrusionFailure
           ? route.fulfill({ status: 503, json: { error: 'Fixture read failure' } }) : route.fulfill({ json: payload(now) });
         if (target.pathname === '/decentrader/liquidity-timelapse') {
           intrusionReads++;
-          return intrusionFailure ? route.fulfill({ status: 503, json: { error: 'Fixture read failure' } })
-            : route.fulfill({ json: intrusionPayload() });
+          return route.fulfill({ status: 503, json: { error: 'Legacy source is not used' } });
         }
         if (target.pathname === '/decentrader/manual-override') return route.fulfill({ json: { enabled: true, market, overrides: [] } });
         return route.fulfill({ status: 503, json: { error: 'Unrelated source isolated in read-only fixture' } });
@@ -179,6 +171,17 @@ function pocPixels(buffer, cross) {
       const intrusionState = await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts());
       assert.deepEqual(intrusionState.signals.map(s => [s.time, s.direction]), state.signals.map(s => [s.time, s.direction]));
       assert.equal(intrusionState.signals[0].intrusion.alertTime, iso(day + 3 * HOUR), 'Use alert open time, not SMTP time');
+      assert.deepEqual(intrusionState.signals.map(s => [s.gap.lower, s.gap.upper]), state.signals.map(s => [s.gap.lower, s.gap.upper]));
+      await page.locator('#spotChartGapIntrusions').uncheck();
+      const reverted = await page.evaluate(time => {
+        const original = window.BTC_SPOT_GAP_TIMELINE;
+        const records = original.records.map(row => row.availableAt === time ? { ...row, upper: 125 } : row);
+        window.dispatchEvent(new CustomEvent('btc-spot-chart:gap-timeline', { detail: { ...original, records } }));
+        const directions = window.btcSpotChart.getIntrusionDailyBreakouts().signals.map(s => s.direction);
+        window.dispatchEvent(new CustomEvent('btc-spot-chart:gap-timeline', { detail: original }));
+        return { directions, restored: window.btcSpotChart.getIntrusionDailyBreakouts().signals.length };
+      }, (day + 3 * HOUR) / 1000);
+      assert.deepEqual(reverted, { directions: ['short'], restored: 2 }, 'Purple follows gap-only updates independently of Green visibility');
       await page.locator('#spotChartIntrusionDailyBreaks').uncheck();
       for (const id of ['spotChartGapWeeklyBreaks', 'spotChartGapDailyBreaks']) await page.locator('#' + id).uncheck();
       await page.evaluate(time => {
@@ -292,7 +295,7 @@ function pocPixels(buffer, cross) {
       {
         await page.waitForFunction(() => window.btcSpotChart.getIntrusionDeltaLabels().filter(label => label.status === 'ok').length === 2);
         deltaLabels = await page.evaluate(() => window.btcSpotChart.getIntrusionDeltaLabels());
-        assert.deepEqual(deltaLabels.map(label => label.text), nativeSpot ? ['F5m +30.00%', 'F5m +20.00%'] : ['F5m +25.86%', 'F5m +30.44%']);
+        assert.deepEqual(deltaLabels.map(label => label.text), ['F5m +30.00%', 'F5m +20.00%']);
         for (const label of deltaLabels) assert(label.x >= 0 && label.y >= 0, 'Labels remain within the pane');
         const shot = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
         for (const label of deltaLabels) {
@@ -311,8 +314,7 @@ function pocPixels(buffer, cross) {
       assert(pocCrosses.every(cross => pocPixels(fs.readFileSync(purpleFile), cross) >= 8), 'PNG includes horizontal POC crossbars');
       await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `intrusion-daily-${mobile ? 'mobile' : 'desktop'}.png`) });
       intrusionFailure = true;
-      if (nativeSpot) await page.evaluate(() => window.__weeklyFixtureRefresh().catch(() => {}));
-      else await page.locator('#spotChartRefresh').click();
+      await page.evaluate(() => window.__weeklyFixtureRefresh().catch(() => {}));
       await page.waitForFunction(() => document.getElementById('spotChartIntrusionDailyStatus').textContent.includes('stale'));
       assert.equal((await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts())).signals.length, 2, 'Read failure preserves saved evidence');
       await page.locator('#spotChartIntrusionDailyBreaks').uncheck();

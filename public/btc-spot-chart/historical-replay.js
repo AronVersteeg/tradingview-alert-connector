@@ -1,5 +1,6 @@
 (function (root) {
   'use strict';
+  const gapEngine = typeof module === 'object' && module.exports ? require('./gap-weekly-breakouts.js') : root.BtcSpotGapWeeklyBreakouts;
   const HOUR = 3600;
   const CUTOFF = Date.UTC(2026, 8, 21) / 1000;
   const MODEL_VERSIONS = Object.freeze({
@@ -40,7 +41,18 @@
     return replay.signals.filter(signal => !observed.has(signal.time) && closed.get(signal.time) === signal.close);
   }
 
-  const api = Object.freeze({ readReplay, loadedReplaySignals });
+  function loadedPurpleReplaySignals(replay, candles, recorded, market, timeline) {
+    if (!timeline) return [];
+    const { gaps } = gapEngine.indexGapEdges(timeline, market.replace('-USD', 'USDT'));
+    const closed = new Map(candles.filter(c => c.closed === true).map(c => [c.time, c.close]));
+    // The archived candidates already met the intrusion and Daily criteria; verify the additional box break.
+    return loadedReplaySignals(replay, candles, recorded, market).filter(signal => {
+      const previous = closed.get(signal.time - HOUR);
+      return Number.isFinite(previous) && gapEngine.closeBreaksGap(gaps.get(signal.time), previous, signal.close, signal.direction);
+    });
+  }
+
+  const api = Object.freeze({ readReplay, loadedReplaySignals, loadedPurpleReplaySignals });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcSpotHistoricalReplay = api;
 })(typeof globalThis === 'object' ? globalThis : this);

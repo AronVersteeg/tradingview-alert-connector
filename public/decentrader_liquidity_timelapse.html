@@ -1557,7 +1557,7 @@
           <label class="spot-chart-toggle" title="Recorded intrusion and a fresh gap edge close break on the same Binance Spot 1H candle"><input type="checkbox" id="spotChartGapIntrusions" checked><i class="spot-fractal-swatch gap-intrusion"></i>Intrusion / gap break</label>
           <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Weekly fractal"><input type="checkbox" id="spotChartGapWeeklyBreaks" checked><i class="spot-fractal-swatch gap-weekly-break"></i>Gap / W break</label>
           <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Daily fractal"><input type="checkbox" id="spotChartGapDailyBreaks" checked><i class="spot-fractal-swatch gap-daily-break"></i>Gap / D break</label>
-          <label class="spot-chart-toggle" title="Recorded Binance Spot intrusion and fresh Daily close break. F5m labels show the last five minutes of the matching Binance USD-M Futures symbol's taker delta, normalized to trade direction: positive = aligned selling for shorts / buying for longs. n/a = unavailable. Observe-only, not an entry filter."><input type="checkbox" id="spotChartIntrusionDailyBreaks" checked><i class="spot-fractal-swatch intrusion-daily-break"></i>Spot intrusion / D</label>
+          <label class="spot-chart-toggle" title="Binance Spot: intrusion, gap box break and Daily fractal break on the same closed candle."><input type="checkbox" id="spotChartIntrusionDailyBreaks" checked><i class="spot-fractal-swatch intrusion-daily-break"></i>Purple: intrusion + gap + D</label>
           <label class="spot-chart-toggle" title="Monthly fractals"><input type="checkbox" id="spotChartMonthly" checked><i class="spot-fractal-swatch monthly"></i>Monthly</label>
           <label class="spot-chart-toggle" title="Planned manual entries and their take profits"><input type="checkbox" id="spotChartManual" checked><i class="spot-fractal-swatch manual"></i>Manual / TP</label>
           <label class="spot-chart-toggle" title="Broken fractal segments"><input type="checkbox" id="spotChartBroken" checked>Broken</label>
@@ -1568,7 +1568,7 @@
         <span id="spotChartManualStatus" role="status">Manual levels pending</span>
         <span id="spotChartGapWeeklyStatus" role="status">Gap / W breaks pending</span>
         <span id="spotChartGapDailyStatus" role="status">Gap / D breaks pending</span>
-        <span id="spotChartIntrusionDailyStatus" role="status">Spot intrusion / D pending</span>
+        <span id="spotChartIntrusionDailyStatus" role="status">Purple: intrusion + gap + D pending</span>
         <span id="spotChartPurpleReplayStatus" role="status" hidden></span>
         <span id="spotChartGreenReplayStatus" role="status" hidden></span>
         <span id="spotChartOrderBlockStatus" role="status">Order blocks pending</span>
@@ -6251,7 +6251,7 @@
     }
 
     function showRefreshError(error) {
-      if (['open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(activeSource)) {
+      if (['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(activeSource)) {
         window.dispatchEvent(new CustomEvent('btc-spot-chart:intrusion-error'));
       }
       if (['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(activeSource) && ['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(manualOverrideMarket)) {

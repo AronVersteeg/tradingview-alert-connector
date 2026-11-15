@@ -1,6 +1,6 @@
 export {};
 const intrusionBreakouts = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
-const { compactIntrusionHistory, buildGapIntrusionMarkers, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
+const { compactIntrusionHistory, buildGapIntrusionMarkers, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, buildPurpleLineBreakouts, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
 const HOUR = 3600, start = Date.parse('2026-10-19T00:00:00Z') / 1000;
 const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
 const now = (start + 8 * HOUR) * 1000;
@@ -61,7 +61,37 @@ describe('Standalone Binance Spot gap intrusion markers', () => {
   });
 });
 
-describe('Decentrader intrusion alert time and same-candle Daily close break, display only', () => {
+describe('Purple is a raw Green signal and a fresh same-candle Daily break', () => {
+  test.each(['BTC', 'ETH', 'SOL', 'ZEC'])('%s requires all three conditions for both directions', asset => {
+    const market = `${asset}-USD`, symbol = `${asset}USDT`;
+    const data = { source: { market, sourceStatuses: [{ name: `Binance Spot ${symbol} 1H` }] },
+      intrusionBenchmarks: { history: [{ timestamp: alert(2), direction: 'long' },
+        { timestamp: alert(4), direction: 'short' }, { timestamp: alert(5), direction: 'short' }] } };
+    const history = compactIntrusionHistory(data, now, market, { includeGapHours: true });
+    const timeline = { symbol, venue: 'Binance Spot', records: [[85, 123], [85, 123], [85, 140], [78, 140], [73, 150]].map(([lower, upper], i) =>
+      ({ candleTime: start + i * HOUR, availableAt: start + (i + 1) * HOUR, lower, upper })) };
+    const fractals = { ...model(), symbol };
+    const evaluate = (rows = candles(), evidence = history, gaps = timeline, levels = fractals, cutoff = now) =>
+      buildPurpleLineBreakouts(rows, evidence, gaps, levels, cutoff, market).signals;
+    const green = buildGapIntrusionMarkers(candles(), history, timeline, now, market);
+    expect(green).toHaveLength(3); // The last Green does not break a new Daily level.
+    const signals = evaluate();
+    expect(signals).toHaveLength(2);
+    expect(signals.map(({ time, direction }: any) => ({ time, direction }))).toEqual(green.slice(0, 2).map(({ time, direction }: any) => ({ time, direction })));
+    expect(signals[0]).toMatchObject({ direction: 'long', gap: { upper: 123 }, dailyLevels: [{ price: 120 }], intrusion: { alertTime: iso(start + 2 * HOUR) } });
+    expect(signals[1]).toMatchObject({ direction: 'short', gap: { lower: 78 }, dailyLevels: [{ price: 80 }] });
+
+    const wick = candles(); wick[2] = { ...wick[2], close: 123 }; // Daily broken, gap only touched by the close.
+    expect(evaluate(wick)).toEqual([signals[1]]);
+    expect(evaluate(candles(), { ...history, records: [] })).toEqual([]);
+    expect(evaluate(candles(), { ...history, records: history.records.map((row: any) => ({ ...row, direction: 'long' })) })).toEqual([signals[0]]);
+    expect(evaluate(candles(), history, { ...timeline, records: timeline.records.filter(r => r.availableAt !== start + 2 * HOUR) })).toEqual([signals[1]]);
+    expect(evaluate(candles(), history, timeline, { ...fractals, levels: fractals.levels.map(level => ({ ...level, timeframe: 'W' })) })).toEqual([]);
+    expect(evaluate(candles(), history, timeline, fractals, (start + 3 * HOUR) * 1000 - 1)).toEqual([]);
+  });
+});
+
+describe('Legacy intrusion and same-candle Daily break evaluator', () => {
   test('normalizes UTC alert-open times and deduplicates normal, filtered and study records without using mail time', () => {
     const history = compactIntrusionHistory(payload(), now);
     expect(history.records).toEqual([
