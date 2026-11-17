@@ -1,5 +1,5 @@
 import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed, zecSpotChartFeed, SpotChartPage } from './binanceSpotChart';
-import type { GreenLineSignal } from './ethGapDailyEntry';
+import { BtcPurpleTrailSignal, GreenLineSignal, evaluatePurpleLineSignal, readSpotDailyFractals } from './ethGapDailyEntry';
 import { PurpleLineMarket, purpleLineSetupForMarket } from './purpleLineSetup';
 
 const { timelineFromPayload } = require('../../public/btc-spot-chart/gap-boxes.js');
@@ -44,4 +44,15 @@ export async function readGreenLineSignal(market: PurpleLineMarket, payload: any
   const now = Date.now();
   const page = await feeds[market].page();
   return evaluateGreenLineSignal(market, payload, intrusions, page, now);
+}
+
+export async function readBtcPurpleTrailSignal(payload: any, intrusions: any[]): Promise<BtcPurpleTrailSignal | undefined> {
+  const market = 'BTC-USD', now = Date.now();
+  const page = await feeds[market].page();
+  const green = evaluateGreenLineSignal(market, payload, intrusions, page, now);
+  if (!green) return undefined;
+  const timeline = timelineFromPayload({ ...payload, frames: payload.frames.slice(-2), gaps: payload.gaps.slice(-2) }, market);
+  const daily = await readSpotDailyFractals(market, now);
+  const purple = evaluatePurpleLineSignal(market, payload, intrusions, page, daily, now, timeline) as Omit<BtcPurpleTrailSignal, 'setup'> | undefined;
+  return purple ? { ...purple, setup: 'purple-green-trail' } : undefined;
 }

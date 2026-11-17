@@ -54,6 +54,20 @@ describe('durable, short-interruption purple continuity', () => {
     jest.setSystemTime(close + 5000); active = true; monitor.heartbeat();
     expect(monitor.activation()).not.toBe(before); expect(monitor.snapshot().resumedAfterRestart).toBe(false);
   });
+  test('BTC starts a new activation when switching from Green to Purple, but resumes the same Purple setup', () => {
+    const green = new PurpleLineContinuity('BTC-USD', file, () => true, 'green-line');
+    green.heartbeat();
+    jest.setSystemTime(close + 5000);
+    const purple = new PurpleLineContinuity('BTC-USD', file, () => true, 'purple-green-trail');
+    purple.heartbeat();
+    expect(purple.snapshot()).toMatchObject({ resumedAfterRestart: false, reason: 'NEW_ACTIVATION' });
+    expect(freshEthGapDailySignal({ time: close / 1000 - 3600, closedAt: close / 1000 } as any, purple.activation()!)).toBe(false);
+    jest.setSystemTime(close + 15_000);
+    const restarted = new PurpleLineContinuity('BTC-USD', file, () => true, 'purple-green-trail');
+    restarted.heartbeat();
+    expect(restarted.snapshot().resumedAfterRestart).toBe(true);
+    expect(restarted.activation()).toBe(purple.activation());
+  });
   test('only a tiny heartbeat is persisted every minute and stopping leaves no timer', () => {
     const monitor = make(); monitor.start(); const write = jest.spyOn(fs, 'writeFileSync');
     jest.advanceTimersByTime(120_000); expect(write).toHaveBeenCalledTimes(2);

@@ -1,5 +1,5 @@
 import { btcManualTriggerTimestampNl } from './btcManualTradeOverride';
-import type { SpotEntrySignal } from './ethGapDailyEntry';
+import { isBtcPurpleTrailSignal, type SpotEntrySignal } from './ethGapDailyEntry';
 
 export type PurpleTriggerEmail = {
   signature: string; subject: string; body: string; outcome: string; createdAt: string;
@@ -9,6 +9,7 @@ export type PurpleTriggerEmail = {
 export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entry: any, result: any): PurpleTriggerEmail {
   const asset = market.replace('-USD', '');
   const green = 'edge' in signal;
+  const purpleTrail = isBtcPurpleTrailSignal(signal);
   const headline = `${asset} ${green ? 'GREEN' : 'PURPLE'} ${signal.direction.toUpperCase()} TRIGGERED`;
   const signature = `${market}|GAP_DAILY|${signal.time}|${signal.direction}`;
   const intent = entry.intent?.signature === signature ? entry.intent : undefined;
@@ -20,7 +21,8 @@ export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entr
     : ['SUBMITTING', 'UNKNOWN'].includes(intent?.outcome) ? 'UNCONFIRMED'
     : decision.outcome || (result.tradePlaced ? 'PLACED' : 'ERROR');
   const plan = intent?.plan?.activePlan;
-  const initialStopLabel = plan?.initialStopPolicy?.mode === 'signal-body-open'
+  const initialStopLabel = purpleTrail ? 'confirmed dYdX fractal'
+    : plan?.initialStopPolicy?.mode === 'signal-body-open'
     ? 'dYdX signal candle body open'
     : plan?.initialStopPolicy?.mode === 'signal-body-quarter'
     ? 'dYdX signal-body 25% from open'
@@ -29,12 +31,13 @@ export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entr
   const subject = `${headline} | ${btcManualTriggerTimestampNl(started)}`;
   const body = [
     headline,
-    `Source: Binance Spot ${asset}USDT 1H intrusion + ${green ? 'gap edge' : 'Daily fractal'} close break`,
+    `Source: Binance Spot ${asset}USDT 1H intrusion + ${purpleTrail ? 'gap edge and Daily fractal' : green ? 'gap edge' : 'Daily fractal'} close break`,
     `Signal candle open: ${btcManualTriggerTimestampNl(started)}`,
     `Signal candle close: ${btcManualTriggerTimestampNl(closed)}`,
     `Binance Spot signal close: ${signal.close}`,
     ...(green ? [`Previous gap ${signal.direction === 'long' ? 'upper' : 'lower'} edge: ${signal.edge}`]
       : signal.dailyLevels.map(level => `Daily ${level.type}: ${level.price}`)),
+    purpleTrail ? `Broken gap edge: ${signal.direction === 'long' ? signal.gap.upper : signal.gap.lower}` : '',
     `Execution market: dYdX ${market}`,
     `Order result: ${outcome}`,
     decision.reason ? `Reason: ${decision.reason}` : '',
@@ -49,7 +52,8 @@ export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entr
     plan?.sizingStop?.price ? `Original dYdX fractal sizing stop: ${plan.sizingStop.price}` : '',
     result.dynamicSlSync?.outcome ? `Protection check: ${result.dynamicSlSync.outcome}` : '',
     result.dynamicSlSync?.reason ? `Protection detail: ${result.dynamicSlSync.reason}` : '',
-    'TPs: none. Management: initial SL and tighten-only dYdX fractal trailing.',
+    purpleTrail ? 'TPs: none. Fractal trailing tightens only on later same-direction Green closes.'
+      : 'TPs: none. Management: initial SL and tighten-only dYdX fractal trailing.',
     'This message reports the signal and the execution result available at notification time.'
   ].filter(Boolean).join('\n');
   return { signature, subject, body, outcome, createdAt: new Date().toISOString(), attempts: 0 };

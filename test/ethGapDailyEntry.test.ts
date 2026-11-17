@@ -155,6 +155,27 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
 
   describe('Spot gap intrusion + Daily entry signal', () => {
     afterEach(() => { jest.restoreAllMocks(); jest.useRealTimers(); });
+    if (asset === 'BTC') test.each(['long', 'short'] as const)('BTC Purple trail reads a fresh %s break of both levels', async direction => {
+      jest.useFakeTimers(); jest.setSystemTime(now);
+      const x = inputs(direction);
+      const candleRead = jest.spyOn(binanceSpotChartFeed, 'page').mockResolvedValue(x.page);
+      const dailyRead = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockResolvedValue(x.daily as any);
+      const [prev] = x.payload.gaps;
+      x.payload.gaps[1] = { left: 65, right: 145, width: 80 };
+      await expect(green.readBtcPurpleTrailSignal(x.payload, x.intrusions)).resolves.toMatchObject({
+        setup: 'purple-green-trail', ...signal(direction), gap: { lower: prev.left, upper: prev.right }
+      });
+      expect(candleRead).toHaveBeenCalledTimes(1);
+      expect(dailyRead).toHaveBeenCalledWith('BTC-USD', false, 'Binance Spot');
+      await expect(green.readBtcPurpleTrailSignal(x.payload, [{ ...x.intrusions[0], direction: 'mixed' }])).resolves.toBeUndefined();
+      x.daily.records[0].priceExact = direction === 'long' ? '126' : '74';
+      await expect(green.readBtcPurpleTrailSignal(x.payload, x.intrusions)).resolves.toBeUndefined();
+      x.daily.records[0].priceExact = direction === 'long' ? '120' : '80';
+      x.payload.gaps[0] = { left: 75, right: 125, width: 50 };
+      dailyRead.mockClear();
+      await expect(green.readBtcPurpleTrailSignal(x.payload, x.intrusions)).resolves.toBeUndefined();
+      expect(dailyRead).not.toHaveBeenCalled();
+    });
     test('reads only its own Spot candles and Daily source', async () => {
       jest.useFakeTimers(); jest.setSystemTime(now);
       const x = inputs();
@@ -540,6 +561,77 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       await monitor.syncManagedStop(managed, {}, position, { marketInfo: { oraclePrice: 120 }, price: 120 });
       expect(managed.managedPosition.currentStop).toBe(better);
       expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(better);
+    });
+    if (asset === 'BTC') test.each(['long', 'short'] as const)('Purple %s sizes on its initial SL and trails only on later Greens after a mode switch', async direction => {
+      process.env.BTC_ENTRY_MODE = 'purple-trail';
+      const isLong = direction === 'long';
+      const signals = { ...signal(direction), setup: 'purple-green-trail', gap: { lower: 85, upper: 115, candleTime: signal().time - 3600 } };
+      const initial = isLong ? 109.89 : 130.13;
+      const updated = isLong ? 113.886 : 126.126;
+      const dydxRows = (lows: number[]) => lows.map((low, i) => {
+        const high = 240 - low, open = isLong ? low + 2 : high - 2;
+        return { startedAt: iso(closeAt + (i - 5) * HOUR), resolution: '1HOUR', open: String(open),
+          high: String(isLong ? low + 5 : high), low: String(isLong ? low : high - 5), close: String(isLong ? open + 1 : open - 1) };
+      });
+      const read = gap.fetchDydxHourlyCandlesForMarket as jest.Mock;
+      read.mockResolvedValue(dydxRows([115, 112, 110, 113, 116]));
+      const managed: any = state();
+      orders.supportsEntrySubmissionCheckpoint = true;
+      orders.placeOrder.mockImplementationOnce(async (_alert: any, execution: any) => {
+        expect(execution.requireFlat).toBe(true);
+        await execution.beforeEntrySubmit();
+        position = { market, size: isLong ? .4 : -.4, entryPrice: 120 };
+      });
+      await monitor.executeGapDailyEntry(managed, greenSignal(direction), {});
+      expect(orders.placeOrder).not.toHaveBeenCalled();
+      await monitor.executeGapDailyEntry(managed, signals, {});
+      const alert = orders.placeOrder.mock.calls[0][0];
+      expect(alert).toMatchObject({ profile: 'NO_TP', take_profits: [], static_sl: initial,
+        decentrader: { riskBudgetUsd: 15, stop: { price: initial } } });
+      expect(alert.size * Math.abs(120 - alert.static_sl)).toBeLessThanOrEqual(15);
+      expect(managed.managedPosition).toMatchObject({ takeProfitMode: 'trailing-only', currentStop: initial,
+        btcPurpleTrail: { entryClosedAt: signal().closedAt } });
+      expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(initial);
+      expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+
+      process.env.BTC_ENTRY_MODE = 'off';
+      const newClose = closeAt + 4 * HOUR;
+      jest.setSystemTime(newClose + 5000);
+      const greenRead = jest.spyOn(green, 'readGreenLineSignal');
+      const markGreen = (direction: 'long' | 'short', close: number) => ({ ...greenSignal(direction), time: close / 1000 - 3600, closedAt: close / 1000 });
+      const scanIntrusions = jest.spyOn(monitor, 'latestSpotIntrusions').mockReturnValue([{ direction: 'short' }]);
+      greenRead.mockResolvedValueOnce(markGreen(isLong ? 'short' : 'long', newClose - HOUR));
+      jest.setSystemTime(newClose - HOUR + 5000);
+      await monitor.checkBtcPurpleTrail(managed, {}, {});
+      expect(managed.managedPosition.btcPurpleTrail.lastGreenClosedAt).toBeUndefined();
+      jest.setSystemTime(newClose + 5000);
+      scanIntrusions.mockReturnValue([{ direction: 'long' }]);
+      greenRead.mockResolvedValueOnce(markGreen(direction, newClose));
+      read.mockRejectedValueOnce(new Error('temporary dYdX failure'));
+      await monitor.checkBtcPurpleTrail(managed, {}, {});
+      expect(monitor.getStatus().managedPosition.btcPurpleTrail).toMatchObject({ lastGreenClosedAt: newClose / 1000 });
+      expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(initial);
+
+      const rows = dydxRows([115, 112, 110, 113, 116, 117, 114, 118, 119, 115, 110, 115, 118]);
+      // Later dYdX candles cannot influence the Green decision even if the stop check is retried much later.
+      jest.setSystemTime(newClose + 5 * HOUR);
+      read.mockResolvedValue(rows);
+      orders.syncTrailingStop.mockResolvedValueOnce({ outcome: 'PENDING_VERIFICATION', verified: false });
+      const pending = await monitor.checkManagedPosition();
+      expect(pending.dynamicSlSync.outcome).toBe('PENDING_VERIFICATION');
+      expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBeCloseTo(updated);
+      expect(monitor.getStatus().managedPosition.currentStop).toBe(initial);
+      orders.syncTrailingStop.mockResolvedValueOnce({ outcome: 'UPDATED', verified: true });
+      const restarted: any = createMonitor();
+      restarted.configureTradeExecutor(orders);
+      await restarted.checkManagedPosition();
+      expect(restarted.getStatus().managedPosition.currentStop).toBeCloseTo(updated);
+      expect(restarted.getStatus().managedPosition.btcPurpleTrail.pending).toBeUndefined();
+      const reads = read.mock.calls.length;
+      await restarted.checkManagedPosition();
+      expect(read).toHaveBeenCalledTimes(reads);
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+      expect(orders.syncTakeProfits).not.toHaveBeenCalled();
     });
     test.each([
       ['long', 'negative'], ['long', 'zero'], ['long', 'unavailable'],

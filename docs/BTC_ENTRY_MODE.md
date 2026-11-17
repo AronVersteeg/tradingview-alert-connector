@@ -10,7 +10,8 @@ This is the single authoritative BTC entry selector:
 | --- | --- |
 | `manual` | Saved manual plans only (default when absent). |
 | `green` | Binance Spot Public V2 intrusion plus a fresh close beyond the previous gap edge on the same closed 1H candle. |
-| `purple` | Legacy alias for `green`; the Purple overlay no longer opens trades. |
+| `purple-trail` | BTC only: Purple entry (same-hour directional intrusion, fresh gap break and fresh Daily close break), with a confirmed dYdX fractal SL and later Green-gated trailing. |
+| `purple` | Legacy alias for `green`; use `purple-trail` for the new strategy. |
 | `off` | No new BTC entries. Existing positions keep their original management. |
 
 Values are case-insensitive. Unknown values fail closed as `off`; status reports
@@ -60,6 +61,30 @@ existing `OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED` switch also controls
 new Green trigger emails.
 Legacy BTC Delay and Shadow entry handlers cannot compete with these models.
 
+## BTC Purple With Green Trailing
+
+Set `BTC_ENTRY_MODE=purple-trail` and keep `DECENTRADER_AUTO_TRADE_ENABLED=true`
+and `DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED=true`. The entry uses the same
+spot Purple evaluator as the chart, on current BTCUSDT Public V2 data only. The
+initial stop is the confirmed dYdX 1H high/low fractal stop (including existing
+distance checks and buffer); risk sizing and the execution check use that same
+stop. No confirmed protective fractal, no entry. No TP orders.
+
+The stop is active immediately. One later raw Green close in the same direction
+permits one evaluation of a newer, improving dYdX fractal. Only dYdX candles
+closed by that Green hour may confirm the fractal. No better fractal means no
+move until another Green. Late exchange verification retries the same proposed
+price, leaving the old stop in place. The current stop and trail policy persist
+with the position and are not converted when the entry mode changes. A restart
+can reconcile persisted events, but does not replay missed historical Greens.
+The BTC Public V2 intrusion monitor must remain enabled to scan for fresh Green
+signals; the existing protective order does not depend on the scanner.
+
+For verification, check `execution.entryMode.mode=purple-trail` and
+`execution.gapDailyEntry.setup=purple-green-trail` on the public BTC status route.
+To roll back for new entries, set `BTC_ENTRY_MODE=green`. Other markets retain
+their existing switches and Green management.
+
 ## Plans, Ownership And Restart Safety
 
 Pausing manual entries does not rewrite, cancel or trigger their stored plans.
@@ -88,8 +113,8 @@ boundary. A mode switch, process recovery or apparently flat indexer does not
 grant permission to blindly repeat an uncertain order.
 
 The Decentrader map's observations, chart and historical records are not converted
-or deleted. The Purple overlay remains visual only, including its separate
-Binance Spot reconstruction. Switching entry mode does not change its source. Informational BTC
+or deleted. Dashed historical Purple reconstruction remains visual only.
+Switching entry mode does not change its source. Informational BTC
 intrusion emails remain controlled independently by their existing switch.
 
 ## Read-only Verification

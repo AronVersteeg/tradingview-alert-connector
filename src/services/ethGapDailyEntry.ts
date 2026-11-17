@@ -5,7 +5,7 @@ import { ethIntrusionFuturesDeltaFeed } from './intrusionFuturesDelta';
 
 // These are the same pure evaluators used by the purple chart overlay.
 const { projectDailyFractals } = require('../../public/btc-spot-chart/fractals.js');
-const { compactIntrusionHistory, buildIntrusionDailyBreakouts } = require('../../public/btc-spot-chart/intrusion-daily-breakouts.js');
+const { compactIntrusionHistory, buildIntrusionDailyBreakouts, buildPurpleLineBreakouts } = require('../../public/btc-spot-chart/intrusion-daily-breakouts.js');
 const { readDeltaResponse, deltaLabel } = require('../../public/btc-spot-chart/futures-delta.js');
 
 export const ETH_GAP_DAILY_ENTRY_ENV = 'OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_ENABLED';
@@ -22,7 +22,12 @@ export type PurpleLineSignal = {
 
 export type EthGapDailySignal = PurpleLineSignal;
 export type GreenLineSignal = Omit<PurpleLineSignal, 'dailyLevels'> & { setup: 'green-line'; edge: number };
-export type SpotEntrySignal = PurpleLineSignal | GreenLineSignal;
+export type BtcPurpleTrailSignal = PurpleLineSignal & { setup: 'purple-green-trail'; gap: { lower: number; upper: number; candleTime: number } };
+export type SpotEntrySignal = PurpleLineSignal | GreenLineSignal | BtcPurpleTrailSignal;
+
+export function isBtcPurpleTrailSignal(signal: SpotEntrySignal): signal is BtcPurpleTrailSignal {
+  return 'setup' in signal && signal.setup === 'purple-green-trail';
+}
 
 export const PURPLE_BODY_STOP_FRACTION = 0;
 export { withDydxBodyOpenStop as withPurpleDydxBodyOpenStop } from './dydxSignalBodyStop';
@@ -65,7 +70,7 @@ export function evaluateEthGapDailySignal(payload: any, intrusions: any[], page:
 }
 
 export function evaluatePurpleLineSignal(market: PurpleLineMarket, payload: any, intrusions: any[], page: SpotChartPage, daily: any,
-  now = Date.now()): EthGapDailySignal | undefined {
+  now = Date.now(), gapTimeline?: any): EthGapDailySignal | undefined {
   const config = purpleLineSetupForMarket(market);
   if (!config) throw new Error('Unsupported purple line market.');
   const through = Math.floor(now / HOUR) * HOUR;
@@ -87,7 +92,9 @@ export function evaluatePurpleLineSignal(market: PurpleLineMarket, payload: any,
   const bundle = { symbol: config.symbol, venue: 'Binance Spot', daily, evaluatedThrough: new Date(through).toISOString() };
   const projection = projectDailyFractals(bundle, page.candles, config.symbol);
   const history = compactIntrusionHistory({ source: payload.source, intrusionBenchmarks: { history: intrusions } }, now, market);
-  return buildIntrusionDailyBreakouts(page.candles, history, projection, now, market).signals
+  const breakouts = gapTimeline ? buildPurpleLineBreakouts(page.candles, history, gapTimeline, projection, now, market)
+    : buildIntrusionDailyBreakouts(page.candles, history, projection, now, market);
+  return breakouts.signals
     .find((signal: EthGapDailySignal) => signal.closedAt * 1000 === through);
 }
 
@@ -98,12 +105,15 @@ export async function readEthGapDailySignal(payload: any, intrusions: any[]): Pr
 export async function readPurpleLineSignal(market: PurpleLineMarket, payload: any, intrusions: any[]): Promise<EthGapDailySignal | undefined> {
   if (!purpleLineSetupForMarket(market)) throw new Error('Unsupported purple line market.');
   const now = Date.now();
-  let daily = await binanceDailyFractalHistory(market, false, 'Binance Spot');
-  if (!daily.stale && Date.parse(daily.latestClosedCandleAt || '') < latestExpectedFractalClose('1d', now)) {
-    daily = await binanceDailyFractalHistory(market, true, 'Binance Spot');
-  }
+  const daily = await readSpotDailyFractals(market, now);
   const feed = { 'BTC-USD': binanceSpotChartFeed, 'ETH-USD': ethSpotChartFeed,
     'SOL-USD': solSpotChartFeed, 'ZEC-USD': zecSpotChartFeed }[market];
   const page = await feed.page();
   return evaluatePurpleLineSignal(market, payload, intrusions, page, daily, now);
+}
+
+export async function readSpotDailyFractals(market: PurpleLineMarket, now: number) {
+  const daily = await binanceDailyFractalHistory(market, false, 'Binance Spot');
+  return !daily.stale && Date.parse(daily.latestClosedCandleAt || '') < latestExpectedFractalClose('1d', now)
+    ? binanceDailyFractalHistory(market, true, 'Binance Spot') : daily;
 }

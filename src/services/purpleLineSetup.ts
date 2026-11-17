@@ -1,4 +1,4 @@
-import { btcEntryMode } from './btcEntryMode';
+import { BTC_PURPLE_TRAIL_MODE, btcEntryMode } from './btcEntryMode';
 
 export const PURPLE_LINE_SETUPS = {
   'BTC-USD': { asset: 'BTC', symbol: 'BTCUSDT', priceStepUsd: 100,
@@ -15,6 +15,11 @@ export const PURPLE_LINE_SETUPS = {
 } as const;
 
 export type PurpleLineMarket = keyof typeof PURPLE_LINE_SETUPS;
+export type SpotEntrySetup = 'green-line' | 'purple-green-trail';
+
+export function spotEntrySetup(market: string): SpotEntrySetup {
+  return market === 'BTC-USD' && btcEntryMode() === BTC_PURPLE_TRAIL_MODE ? 'purple-green-trail' : 'green-line';
+}
 
 export function purpleLineSetupForMarket(market: string) {
   return Object.prototype.hasOwnProperty.call(PURPLE_LINE_SETUPS, market)
@@ -22,7 +27,7 @@ export function purpleLineSetupForMarket(market: string) {
 }
 
 export function automaticSpotEntryEnabled(market: string): boolean {
-  if (market === 'BTC-USD') return btcEntryMode() === 'green';
+  if (market === 'BTC-USD') return btcEntryMode() === 'green' || btcEntryMode() === BTC_PURPLE_TRAIL_MODE;
   const config = purpleLineSetupForMarket(market);
   return Boolean(config && ['true', '1', 'yes', 'on'].includes(
     String(process.env[config.enabledEnv] || '').trim().toLowerCase()));
