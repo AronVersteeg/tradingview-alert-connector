@@ -70,10 +70,13 @@ initial stop is the confirmed dYdX 1H high/low fractal stop (including existing
 distance checks and buffer); risk sizing and the execution check use that same
 stop. No confirmed protective fractal, no entry. No TP orders.
 
-The stop is active immediately. One later raw Green close in the same direction
-permits one evaluation of a newer, improving dYdX fractal. Only dYdX candles
-closed by that Green hour may confirm the fractal. No better fractal means no
-move until another Green. Late exchange verification retries the same proposed
+The stop is active immediately. One later raw Green or Purple close in the same
+direction permits one evaluation of a newer, improving dYdX fractal. Purple
+includes every Green condition, so its candle is already accepted by the raw
+Green reader, even if the chart only shows the purple overlay. Each candle is
+evaluated once, not once per color. No extra Daily read is needed for trailing.
+Only dYdX candles closed by that signal hour may confirm the fractal. No better
+fractal means no move until another Green or Purple. Late exchange verification retries the same proposed
 price, leaving the old stop in place. The current stop and trail policy persist
 with the position and are not converted when the entry mode changes. A restart
 can reconcile persisted events, but does not replay missed historical Greens.

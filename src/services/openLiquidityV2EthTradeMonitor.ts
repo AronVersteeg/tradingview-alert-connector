@@ -1032,7 +1032,7 @@ export class OpenLiquidityV2EthTradeMonitor {
           ? 'Same-hour directional intrusion, previous gap edge close break and fresh confirmed Daily fractal close break.'
           : 'Same-hour intrusion and fresh close beyond the previous gap edge.',
         executionMarket: this.config.market, takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
-        initialStop: { ...(purple ? { mode: 'confirmed-fractal', trailingGate: 'later-same-direction-green' }
+        initialStop: { ...(purple ? { mode: 'confirmed-fractal', trailingGate: 'later-same-direction-green', trailingSignals: ['green', 'purple'] }
           : { mode: 'signal-body-open', bodyFraction: PURPLE_BODY_STOP_FRACTION, bufferPct: 0 }), candleSource: 'dydx-1h', sameSignalHour: true,
           sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
         futuresDeltaFilter: { enabled: false, reason: 'Futures delta is observe-only, not an entry requirement.' },
@@ -1319,6 +1319,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (closedAt / 1000 <= Math.max(trail.entryClosedAt, trail.lastScannedClosedAt ?? 0) || Date.now() - closedAt >= TRAILING_CLOSE_RETRY_WINDOW_MS) return;
     try {
       const intrusions = this.latestSpotIntrusions(payload, closedAt);
+      // Purple is Green plus a Daily break: this raw signal includes both, once per candle.
       const signal = intrusions.length ? await readGreenLineSignal('BTC-USD', payload, intrusions) : undefined;
       const accepted = await this.coordinator.exclusive(async () => {
         if (state.managedPosition !== managed) return false;

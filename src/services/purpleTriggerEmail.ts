@@ -52,7 +52,7 @@ export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entr
     plan?.sizingStop?.price ? `Original dYdX fractal sizing stop: ${plan.sizingStop.price}` : '',
     result.dynamicSlSync?.outcome ? `Protection check: ${result.dynamicSlSync.outcome}` : '',
     result.dynamicSlSync?.reason ? `Protection detail: ${result.dynamicSlSync.reason}` : '',
-    purpleTrail ? 'TPs: none. Fractal trailing tightens only on later same-direction Green closes.'
+    purpleTrail ? 'TPs: none. Fractal trailing tightens only on later same-direction Green or Purple closes, once per candle.'
       : 'TPs: none. Management: initial SL and tighten-only dYdX fractal trailing.',
     'This message reports the signal and the execution result available at notification time.'
   ].filter(Boolean).join('\n');

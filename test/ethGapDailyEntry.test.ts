@@ -633,6 +633,59 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
       expect(orders.syncTakeProfits).not.toHaveBeenCalled();
     });
+    if (asset === 'BTC') test.each(['long', 'short'] as const)('a later real Purple %s qualifies as one Green trailing event without Daily reads or new entries', async direction => {
+      process.env.BTC_ENTRY_MODE = 'purple-trail';
+      const nextClose = closeAt + 4 * HOUR;
+      jest.setSystemTime(nextClose + 5000);
+      const x = inputs(direction);
+      x.page.candles.forEach((c: any) => { c.time += 4 * HOUR / 1000; c.closeTime += 4 * HOUR; });
+      const first = x.page.candles[0].time;
+      x.page.candles.unshift(...Array.from({ length: 4 }, (_, i) => ({
+        time: first - (4 - i) * 3600, closeTime: (first - (3 - i) * 3600) * 1000 - 1,
+        open: 100, high: 101, low: 99, close: 100, closed: true, volume: 1, quoteVolume: 100
+      })));
+      x.payload.frames.forEach(f => {
+        f.time += 4 * HOUR / 1000;
+        f.startedAtMs += 4 * HOUR;
+        f.t = iso(f.startedAtMs).slice(0, 19).replace('T', ' ');
+      });
+      x.intrusions[0].timestamp = x.payload.frames[1].t;
+      jest.spyOn(binanceSpotChartFeed, 'page').mockResolvedValue(x.page);
+      const dailyRead = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockResolvedValue(x.daily as any);
+      const actualPurple = await green.readBtcPurpleTrailSignal(x.payload, x.intrusions);
+      expect(actualPurple).toMatchObject({ setup: 'purple-green-trail', direction, closedAt: nextClose / 1000 });
+      dailyRead.mockClear();
+      const rawGreenRead = jest.spyOn(green, 'readGreenLineSignal');
+      jest.spyOn(monitor, 'latestSpotIntrusions').mockReturnValue(x.intrusions);
+      const isLong = direction === 'long';
+      position = { market, size: isLong ? .4 : -.4, entryPrice: 120 };
+      const prices = isLong ? [115, 112, 110, 113, 116] : [125, 128, 130, 127, 124];
+      (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue(prices.map((price, i) => ({
+        startedAt: iso(nextClose - (5 - i) * HOUR), open: String(isLong ? price + 2 : price - 2),
+        close: String(isLong ? price + 3 : price - 3), high: String(isLong ? price + 5 : price), low: String(isLong ? price : price - 5)
+      })));
+      const managed: any = { ...state(), managedPosition: { market, direction, openedAt: iso(closeAt),
+        entrySignature: `${market}|GAP_DAILY|${signal().time}|${direction}`, initialSize: .4, entryPrice: 120,
+        currentStop: isLong ? 100 : 140, currentStopFractalTimestamp: iso(closeAt - 3 * HOUR),
+        currentStopFractalCandleSource: 'dydx-1h', currentStopFractalSource: isLong ? 'lowRef' : 'highRef',
+        takeProfitMode: 'trailing-only', btcPurpleTrail: { entryClosedAt: closeAt / 1000 } } };
+      fs.writeFileSync(file, JSON.stringify(managed));
+      orders.syncTrailingStop.mockResolvedValue({ outcome: 'UPDATED', verified: true });
+      await monitor.checkBtcPurpleTrail(managed, x.payload, {});
+      expect(rawGreenRead).toHaveBeenCalledTimes(1);
+      expect(orders.syncTrailingStop).toHaveBeenCalledTimes(1);
+      expect(orders.syncTrailingStop.mock.calls[0][0].static_sl).toBeCloseTo(isLong ? 109.89 : 130.13);
+      const after = monitor.getStatus().managedPosition;
+      expect(after.btcPurpleTrail.evaluatedGreenClosedAt).toBe(actualPurple!.closedAt);
+      await monitor.checkBtcPurpleTrail({ ...managed, managedPosition: after }, x.payload, {});
+      expect(rawGreenRead).toHaveBeenCalledTimes(1);
+      expect(orders.syncTrailingStop).toHaveBeenCalledTimes(1);
+      expect(dailyRead).not.toHaveBeenCalled();
+      expect(orders.placeOrder).not.toHaveBeenCalled();
+      expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+      const mail = purpleTriggerEmail(market, actualPurple!, {}, {});
+      expect(mail.body).toContain('Green or Purple closes, once per candle');
+    });
     test.each([
       ['long', 'negative'], ['long', 'zero'], ['long', 'unavailable'],
       ['short', 'negative'], ['short', 'zero'], ['short', 'unavailable']
