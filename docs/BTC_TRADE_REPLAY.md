@@ -29,6 +29,8 @@ checks, pivot/confirmation, initial and updated stop, and exit candle.
   use the simulated exit price; an open trade is marked to the last closed
   dYdX hour in the replay. That value is explicitly unrealized. Incomplete
   trades show no estimate; no trading fees, funding or slippage are deducted.
+  The amount next to the trade picker sums all available estimates in the
+  list, including unrealized P&L, before those costs. Unknown values are excluded.
 
 The retest is read-only, loaded on request, and cached for 60 seconds. It has
 no dYdX account reads or writes and never invokes order placement. The recent

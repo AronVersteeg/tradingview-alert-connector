@@ -33,6 +33,7 @@ async function run() {
     for (const viewport of [{ width: 1280, height: 850 }, { width: 390, height: 844 }]) {
       const page = await browser.newPage({ viewport });
       const errors = [];
+      let listed = trades;
       page.on('pageerror', error => errors.push(error.message));
       await page.route('**/*', async route => {
         const url = new URL(route.request().url());
@@ -42,8 +43,8 @@ async function run() {
           assert.equal(route.request().method(), 'GET');
           assert.equal(route.request().headers()['x-webhook-token'], undefined);
           return route.fulfill({ json: url.searchParams.has('id')
-            ? { trade: trades.find(row => row.id === url.searchParams.get('id')), candles: capsules, ...coverage }
-            : { trades, ...coverage } });
+            ? { trade: listed.find(row => row.id === url.searchParams.get('id')), candles: capsules, ...coverage }
+            : { trades: listed, ...coverage } });
         }
         if (url.pathname.startsWith('/assets/btc-spot-chart/')) {
           const file = path.join('public', url.pathname.replace('/assets/', ''));
@@ -73,6 +74,12 @@ async function run() {
       assert.match(await page.locator('#btcReplayStatus').textContent(), /archief \+ recent.*3 gesimuleerde trades.*3 dYdX-uren ontbreken/);
       assert.match(await page.locator('#btcReplayTrade option:checked').textContent(), /\$\s?\+15,00.*gesloten/);
       assert.match(await page.locator('#btcReplayTrade option').nth(1).textContent(), /\$\s?[-\u2212]2,50.*open/u);
+      const total = page.locator('#btcReplayTotalPnl');
+      assert.match(await total.textContent(), /\$\s?\+12,50/);
+      assert.equal(await total.getAttribute('data-result'), 'gain');
+      assert.equal(await total.evaluate(node => getComputedStyle(node).borderColor), 'rgb(51, 147, 110)');
+      const selectBox = await page.locator('#btcReplayTrade').boundingBox(), totalBox = await total.boundingBox();
+      assert(totalBox.x >= selectBox.x + selectBox.width && Math.abs(totalBox.y - selectBox.y) < 2);
       assert(await page.locator('#btcTradeReplay').evaluate(panel => panel.scrollWidth <= panel.clientWidth + 1));
       const previous = await page.locator('#btcReplayTime').textContent();
       await page.locator('#btcReplayCursor').fill('10');
@@ -86,6 +93,16 @@ async function run() {
       assert.match(await page.locator('#btcReplaySummary .btc-replay-loss').textContent(), /\$\s?[-\u2212]2,50.*dYdX-close/u);
       await page.locator('#btcReplayTrade').selectOption(incomplete.id);
       await page.locator('#btcReplaySummary .btc-replay-pnl').getByText('Onbekend').waitFor();
+      assert.match(await total.textContent(), /\$\s?\+12,50/);
+      listed = [incomplete, open];
+      await page.locator('#btcReplayLoad').click();
+      await page.locator('#btcReplayTotalPnl[data-result="loss"]').waitFor();
+      assert.match(await total.textContent(), /\$\s?[-\u2212]2,50/u);
+      assert.equal(await total.evaluate(node => getComputedStyle(node).borderColor), 'rgb(170, 76, 93)');
+      listed = [open, { ...trade, grossPnl: 2.5 }];
+      await page.locator('#btcReplayLoad').click();
+      await page.locator('#btcReplayTotalPnl[data-result="flat"]').waitFor();
+      assert.match(await total.textContent(), /\$\s?0,00/);
       assert.deepEqual(errors, []);
       console.log(`BTC Green retest ${viewport.width}px: chart, stops, Yellows, event list and scrub/play passed.`);
       await page.goto('https://btc-replay.test/decentrader/map?source=open-v2-eth');

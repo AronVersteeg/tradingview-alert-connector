@@ -5,6 +5,7 @@ function init() {
   root.hidden = false;
   const el = id => document.getElementById(`btcReplay${id}`);
   const load = el('Load'), select = el('Trade'), summary = el('Summary'), events = el('Events');
+  const picker = el('TradePicker'), totalPnl = el('TotalPnl');
   const status = el('Status'), host = el('Canvas'), cursor = el('Cursor'), play = el('Play');
   const playback = el('Playback'), time = el('Time'), legend = el('Legend');
   const date = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', dateStyle: 'short', timeStyle: 'short' });
@@ -240,18 +241,20 @@ function init() {
   async function showList() {
     const request = ++nonce;
     pause();
-    host.hidden = playback.hidden = legend.hidden = summary.hidden = events.hidden = select.hidden = true;
+    host.hidden = playback.hidden = legend.hidden = summary.hidden = events.hidden = picker.hidden = true;
     status.textContent = 'Green-signalen en dYdX-candles laden...';
     load.disabled = true;
     try {
       const data = await read();
       if (request !== nonce) return;
       select.replaceChildren();
+      let total = 0, known = 0;
       for (const trade of data.trades.slice().reverse()) {
         const option = document.createElement('option');
         option.value = trade.id;
         const state = trade.status === 'OPEN' ? 'open' : trade.status === 'INCOMPLETE' ? 'onvolledig' : 'gesloten';
         const { value } = pnl(trade);
+        if (value !== undefined) { total += value; known++; }
         option.textContent = `${value === undefined ? 'P&L —' : pnlMoney.format(value)} | ${state} | ${trade.direction.toUpperCase()} | ${date.format(trade.openedAt)}`;
         select.append(option);
       }
@@ -259,7 +262,14 @@ function init() {
         status.textContent = [`Geen gesimuleerde entries · ${data.candidateCount} Green-signalen`, coverageText(data)].filter(Boolean).join(' | ');
         return;
       }
-      select.hidden = false;
+      const amount = known ? pnlMoney.format(total) : '\u2014';
+      const description = 'Totaalresultaat van de retest, v\u00f3\u00f3r kosten, inclusief bekende ongerealiseerde P&L.' +
+        (known < data.trades.length ? ` ${data.trades.length - known} zonder P&L niet meegeteld.` : '');
+      totalPnl.value = amount;
+      totalPnl.dataset.result = !known || amount === pnlMoney.format(0) ? 'flat' : total > 0 ? 'gain' : 'loss';
+      totalPnl.title = description;
+      totalPnl.setAttribute('aria-label', `${description} ${amount}`);
+      picker.hidden = false;
       await showTrade();
     } catch (error) { if (request === nonce) status.textContent = error.message; }
     finally { load.disabled = false; }
