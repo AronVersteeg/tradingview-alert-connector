@@ -30,23 +30,27 @@ const pageHtml = fs.readFileSync('public/decentrader_liquidity_timelapse.html', 
 async function run() {
   const browser = await chromium.launch({ headless: true, channel: 'msedge' });
   try {
-    for (const viewport of [{ width: 1280, height: 850 }, { width: 390, height: 844 }]) {
+    const sources = [['BTC', 'open-v2'], ['ETH', 'open-v2-eth'], ['SOL', 'open-v2-sol'], ['ZEC', 'open-v2-zec']];
+    for (const [asset, source] of sources) for (const viewport of [{ width: 1280, height: 850 }, { width: 390, height: 844 }]) {
+      const market = `${asset}-USD`;
       const page = await browser.newPage({ viewport });
       const errors = [];
       let listed = trades;
       let reads = 0;
+      let replyMarket = market;
       page.on('pageerror', error => errors.push(error.message));
       await page.route('**/*', async route => {
         const url = new URL(route.request().url());
         if (url.host !== 'btc-replay.test') return route.abort();
         if (url.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: pageHtml });
-        if (url.pathname === '/open-liquidity/v2/btc-green-retest') {
+        if (url.pathname === '/open-liquidity/v2/green-retest') {
           reads++;
           assert.equal(route.request().method(), 'GET');
           assert.equal(route.request().headers()['x-webhook-token'], undefined);
+          assert.equal(url.searchParams.get('market'), market);
           return route.fulfill({ json: url.searchParams.has('id')
-            ? { trade: listed.find(row => row.id === url.searchParams.get('id')), candles: capsules, ...coverage }
-            : { trades: listed, ...coverage } });
+            ? { trade: listed.find(row => row.id === url.searchParams.get('id')), candles: capsules, ...coverage, market: replyMarket }
+            : { trades: listed, ...coverage, market: replyMarket } });
         }
         if (url.pathname.startsWith('/assets/btc-spot-chart/')) {
           const file = path.join('public', url.pathname.replace('/assets/', ''));
@@ -54,13 +58,14 @@ async function run() {
         }
         return route.abort();
       });
-      await page.goto('https://btc-replay.test/decentrader/map?source=open-v2');
+      await page.goto(`https://btc-replay.test/decentrader/map?source=${source}`);
+      assert.equal(await page.locator('#btcReplayTitle').textContent(), `${asset} Green Retest`);
       await page.locator('#btcReplayLoad').click();
       await page.waitForFunction(() => document.querySelector('#btcReplayCanvas canvas') && !document.querySelector('#btcReplayLegend').hidden);
       const host = page.locator('#btcReplayCanvas');
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const screenshot = await host.screenshot();
-      if (process.argv[2]) fs.writeFileSync(path.join(process.argv[2], `btc-trade-replay-${viewport.width}.png`), screenshot);
+      if (process.argv[2]) fs.writeFileSync(path.join(process.argv[2], `${asset.toLowerCase()}-trade-replay-${viewport.width}.png`), screenshot);
       const image = PNG.sync.read(screenshot);
       let green = 0, red = 0, blue = 0, yellow = 0;
       for (let i = 0; i < image.data.length; i += 4) {
@@ -96,7 +101,7 @@ async function run() {
       assert.match(await page.locator('#btcReplayTrade option:checked').textContent(), /\$\s?\+60,00/);
       const scaledSummary = await page.locator('#btcReplaySummary').textContent();
       assert.match(scaledSummary, /\$\s?\+60,00/);
-      assert.match(scaledSummary, /Positiegrootte \(model\)0,2 BTC.*Initieel prijsrisico\$40/);
+      assert(scaledSummary.includes(`Positiegrootte (model)0,2 ${asset}Initieel prijsrisico$40`));
       assert.match(scaledSummary, /Initi.le SL\$81\.850/);
       assert.match(await page.locator('#btcReplayStatus').textContent(), /\$60 modelbudget/);
       assert.equal(await page.locator('#btcReplayTrade').inputValue(), selectedTrade);
@@ -133,9 +138,15 @@ async function run() {
       await page.locator('#btcReplayLoad').click();
       await page.locator('#btcReplayTotalPnl[data-result="flat"]').waitFor();
       assert.match(await total.textContent(), /\$\s?0,00/);
+      if (asset !== 'BTC') {
+        replyMarket = 'BTC-USD';
+        await page.locator('#btcReplayLoad').click();
+        await page.locator('#btcReplayStatus').getByText(`Onverwachte markt in de ${asset} Green-retest.`).waitFor();
+        assert(await page.locator('#btcReplayTradePicker').isHidden());
+      }
       assert.deepEqual(errors, []);
-      console.log(`BTC Green retest ${viewport.width}px: chart, stops, Yellows, event list and scrub/play passed.`);
-      await page.goto('https://btc-replay.test/decentrader/map?source=open-v2-eth');
+      console.log(`${asset} Green retest ${viewport.width}px: chart, P&L, risk, market identity and scrub/play passed.`);
+      await page.goto('https://btc-replay.test/decentrader/map?source=open-v2-inj');
       assert(await page.locator('#btcTradeReplay').isHidden());
       await page.close();
     }

@@ -1,10 +1,10 @@
-# BTC Trade Replay
+# Green Retest and BTC Trade Replay
 
 ## Dashboard: Green Retest
 
-The BTC Public V2 panel now shows a hypothetical retest, not the dYdX account
-positions. It uses an offline reconstruction from public Binance BTCUSDT
-Spot and dYdX BTC-USD 1H candles, starting in January 2025. Green and
+The BTC, ETH, SOL and ZEC Public V2 panels show a hypothetical retest, not
+dYdX account positions. For each market, the archive is reconstructed from
+its own Binance USDT Spot and corresponding dYdX USD 1H candles. Green and
 directional Yellow signals are computed with the same causal cohort model
 as the recent native Public V2 frames, not with older filtered chart markers.
 No historical account orders or fills are used.
@@ -44,13 +44,19 @@ Both periods are simulated together, so an open position cannot reset at the
 join. Without a verified join the dashboard explicitly shows the archive cutoff.
 With no usable archive it falls back to the recent window only.
 
-To refresh the bundled `research-data/btc-green-retest-history.json`, run the
-offline job from the repository root, before the recent window no longer
-overlaps the archive. No heavy historical downloads or rebuilding run on
-Render. Pass a UTC cutoff for a reproducible build:
+The bundled BTC and ZEC retests start on 1 January 2025. ETH and SOL start
+on 11 October 2025 at 02:00 UTC, after missing dYdX hours that can interrupt
+open positions under the configured stop guards. A replay starts flat; it
+does not infer that an earlier position survived the missing candles.
+
+The public endpoint is `GET /open-liquidity/v2/green-retest?market=ETH-USD`
+with optional `id`. The older BTC-only URL remains an alias for BTC. Refresh
+each `research-data/*-green-retest-history.json` from the repository root
+before the recent window no longer overlaps it. No heavy historical downloads
+or rebuilding run on Render. Pass explicit UTC bounds for a reproducible build:
 
 ```shell
-node -r ts-node/register scripts/build-btc-green-retest-history.ts 2025-01-01T00:00:00Z 2026-11-19T19:00:00Z
+node -r ts-node/register scripts/build-green-retest-history.ts ETH-USD 2025-10-11T02:00:00Z 2026-11-19T20:00:00Z
 ```
 
 The builder warms up the Spot model with 8,760 consecutive candles. Missing

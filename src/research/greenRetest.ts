@@ -1,7 +1,7 @@
 import { buildFractalStop, type DecentraderRow, type DydxRsiCandle, dydxHourlyCandlesToFractalRows, mapDirectionFromAlert } from '../services/decentraderGapMonitor';
 import { withDydxBodyOpenStop } from '../services/dydxSignalBodyStop';
 import { reconstructReplicaIntrusions } from '../services/openLiquidityV2EthTradeMonitor';
-import { PURPLE_LINE_SETUPS } from '../services/purpleLineSetup';
+import { PURPLE_LINE_SETUPS, type PurpleLineMarket } from '../services/purpleLineSetup';
 import type { GreenLineSignal } from '../services/ethGapDailyEntry';
 
 const { timelineFromPayload } = require('../../public/btc-spot-chart/gap-boxes.js');
@@ -20,30 +20,30 @@ type Trade = {
   status: 'OPEN' | 'CLOSED' | 'INCOMPLETE';
 };
 
-export function btcGreenRetestSignals(payload: any, now: number) {
-  const setup = PURPLE_LINE_SETUPS['BTC-USD'];
-  if (payload?.source?.market !== 'BTC-USD' || payload.modelVersion !== setup.modelVersion ||
+export function greenRetestSignals(market: PurpleLineMarket, payload: any, now: number) {
+  const setup = PURPLE_LINE_SETUPS[market];
+  if (payload?.source?.market !== market || payload.modelVersion !== setup.modelVersion ||
       payload.quality?.causalModel !== true || payload.quality?.priceStepUsd !== setup.priceStepUsd ||
-      !payload.source.sourceStatuses?.some((source: any) => source.name === 'Binance Spot BTCUSDT 1H' && source.ok)) {
-    throw new Error('Current native BTC Spot replica is unavailable.');
+      !payload.source.sourceStatuses?.some((source: any) => source.name === `Binance Spot ${setup.symbol} 1H` && source.ok)) {
+    throw new Error(`Current native ${setup.asset} Spot replica is unavailable.`);
   }
   const frames = payload.frames;
   if (!Array.isArray(frames) || frames.length < 2 || frames.some((row: any, index: number) =>
     !Number.isSafeInteger(row.startedAtMs) || row.startedAtMs % HOUR || row.startedAtMs + HOUR > now ||
-    (index > 0 && row.startedAtMs !== frames[index - 1].startedAtMs + HOUR))) throw new Error('Incomplete BTC Spot replay hours.');
+    (index > 0 && row.startedAtMs !== frames[index - 1].startedAtMs + HOUR))) throw new Error(`Incomplete ${setup.asset} Spot replay hours.`);
   const intrusions = reconstructReplicaIntrusions(payload, frames[0].t).alerts.map(alert => ({
     timestamp: alert.timestamp, direction: mapDirectionFromAlert(alert) || 'mixed'
   }));
   const history = compactIntrusionHistory({ source: payload.source, intrusionBenchmarks: { history: intrusions } },
-    now, 'BTC-USD', { includeGapHours: true });
+    now, market, { includeGapHours: true });
   const candles = frames.map((frame: any) => ({ time: frame.startedAtMs / 1000, closed: true, close: frame.close }));
-  const timeline = timelineFromPayload(payload, 'BTC-USD');
-  const signals: GreenLineSignal[] = buildGapIntrusionMarkers(candles, history, timeline, now, 'BTC-USD')
+  const timeline = timelineFromPayload(payload, market);
+  const signals: GreenLineSignal[] = buildGapIntrusionMarkers(candles, history, timeline, now, market)
     .map((row: GreenLineSignal) => ({ ...row, setup: 'green-line',
       close: frames[(row.time * 1000 - frames[0].startedAtMs) / HOUR].close }));
   const yellows = history.records.map((row: { time: number; direction: Direction }) =>
     ({ at: row.time * 1000 + HOUR, direction: row.direction }));
-  return { signals, yellows, from: frames[0].startedAtMs, through: frames.at(-1).startedAtMs + HOUR };
+  return { market, signals, yellows, from: frames[0].startedAtMs, through: frames.at(-1).startedAtMs + HOUR };
 }
 
 function fractal(stop: ReturnType<typeof buildFractalStop>): Fractal | undefined {
@@ -52,7 +52,8 @@ function fractal(stop: ReturnType<typeof buildFractalStop>): Fractal | undefined
   return Number.isFinite(at) ? { at, confirmedAt: at + (stop.fractal.window + 1) * HOUR, price: stop.fractal.price } : undefined;
 }
 
-export function simulateBtcGreenRetest(rows: DecentraderRow[], context: ReturnType<typeof btcGreenRetestSignals>) {
+export function simulateGreenRetest(rows: DecentraderRow[], context: ReturnType<typeof greenRetestSignals>) {
+  const asset = PURPLE_LINE_SETUPS[context.market].asset;
   const byHour = new Map<number, number>();
   const segmentStarts: number[] = [];
   let previousAt: number | undefined;
@@ -89,7 +90,7 @@ export function simulateBtcGreenRetest(rows: DecentraderRow[], context: ReturnTy
           try {
             const plannedSize = RISK_USD / Math.abs(entryPrice - sizing.price);
             const plan = withDydxBodyOpenStop({ direction: signal.direction, stop: sizing, sizing: { size: plannedSize } },
-              rows[priorIndex!], signal, entryPrice, 'BTC');
+              rows[priorIndex!], signal, entryPrice, asset);
             const initialStop = plan.stop.price;
             const size = Math.min(plannedSize, RISK_USD / Math.abs(entryPrice - initialStop));
             if (!Number.isFinite(size) || size <= 0) throw new Error('Invalid replay sizing.');
@@ -137,7 +138,10 @@ export function simulateBtcGreenRetest(rows: DecentraderRow[], context: ReturnTy
   return { trades, skipped, skippedWhileOpen, incompleteAt };
 }
 
-export function btcRetestFractalRows(candles: DydxRsiCandle[] | undefined, now: number) {
+export function retestFractalRows(market: PurpleLineMarket, candles: (DydxRsiCandle & { ticker?: string })[] | undefined, now: number) {
+  if (candles?.some(candle => candle.ticker !== market || candle.resolution !== '1HOUR')) {
+    throw new Error(`Unexpected dYdX candle market or interval for ${market} Green retest.`);
+  }
   return dydxHourlyCandlesToFractalRows(candles, now).filter(row => {
     const at = Date.parse(row.timestamp);
     return Number.isFinite(at) && at % HOUR === 0 && [row.openRef, row.highRef, row.lowRef, row.closeRef].every(value => Number.isFinite(value) && value > 0) &&
@@ -145,11 +149,14 @@ export function btcRetestFractalRows(candles: DydxRsiCandle[] | undefined, now: 
   });
 }
 
-export function buildBtcGreenRetestFromRows(context: ReturnType<typeof btcGreenRetestSignals>, rows: DecentraderRow[]) {
-  if (!rows.some(row => Date.parse(row.timestamp) >= context.from)) throw new Error('dYdX candles unavailable for the BTC replay period.');
-  const result = simulateBtcGreenRetest(rows, context);
+export function buildGreenRetestFromRows(context: ReturnType<typeof greenRetestSignals>, rows: DecentraderRow[]) {
+  if (!rows.some(row => Date.parse(row.timestamp) >= context.from && Date.parse(row.timestamp) < context.through)) {
+    throw new Error(`dYdX ${context.market} candles unavailable for this replay period.`);
+  }
+  const result = simulateGreenRetest(rows, context);
   const candles = rows.filter(row => Date.parse(row.timestamp) < context.through).map(row => ({
     time: Date.parse(row.timestamp) / 1000, open: row.openRef, high: row.highRef, low: row.lowRef, close: row.closeRef, closed: true
   }));
-  return { ...result, candles, from: context.from, through: context.through, candidateCount: context.signals.length, riskBudgetUsd: RISK_USD };
+  return { ...result, candles, market: context.market, from: context.from, through: context.through,
+    candidateCount: context.signals.length, riskBudgetUsd: RISK_USD };
 }

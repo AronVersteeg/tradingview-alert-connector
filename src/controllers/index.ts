@@ -14,8 +14,9 @@ import {
   decentraderGapMonitor,
   fetchDydxHourlyCandlesForMarket
 } from '../services/decentraderGapMonitor';
-import { btcGreenRetestSignals, btcRetestFractalRows } from '../research/btcGreenRetest';
-import { buildBtcGreenRetestWithHistory, readBtcGreenHistory } from '../research/btcGreenRetestHistory';
+import { greenRetestSignals, retestFractalRows } from '../research/greenRetest';
+import { buildGreenRetestWithHistory, readGreenHistory } from '../research/greenRetestHistory';
+import { purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
 import {
   coinGlassEthWhaleCollector,
   coinGlassInjWhaleCollector,
@@ -884,38 +885,52 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
   }
 });
 
-let btcGreenRetestCache: { expires: number; data: ReturnType<typeof buildBtcGreenRetestWithHistory> } | undefined;
-let btcGreenRetestPending: Promise<ReturnType<typeof buildBtcGreenRetestWithHistory>> | undefined;
-let btcGreenRetestRetryAt = 0;
-router.get('/open-liquidity/v2/btc-green-retest', async (req, res) => {
+type GreenRetestResult = ReturnType<typeof buildGreenRetestWithHistory>;
+type GreenRetestCache = { expires: number; retryAt: number; data?: GreenRetestResult; pending?: Promise<GreenRetestResult> };
+const greenRetestCaches = new Map<PurpleLineMarket, GreenRetestCache>();
+router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-retest'], async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
+  const rawMarket = req.path.endsWith('/btc-green-retest') ? 'BTC-USD' : req.query.market;
+  if (typeof rawMarket !== 'string' || !purpleLineSetupForMarket(rawMarket.toUpperCase())) {
+    return res.status(400).send({ error: 'Green retest supports BTC-USD, ETH-USD, SOL-USD and ZEC-USD.' });
+  }
+  const market = rawMarket.toUpperCase() as PurpleLineMarket;
   const id = req.query.id;
   if (id !== undefined && (typeof id !== 'string' || !/^\d{13}$/.test(id))) return res.status(400).send({ error: 'Invalid trade.' });
+  const now = Date.now();
+  for (const [key, cache] of greenRetestCaches) {
+    if (!cache.pending && Math.max(cache.expires, cache.retryAt) <= now) greenRetestCaches.delete(key);
+  }
+  let cache = greenRetestCaches.get(market);
+  if (!cache) greenRetestCaches.set(market, cache = { expires: 0, retryAt: 0 });
   try {
-    if (!btcGreenRetestCache || btcGreenRetestCache.expires < Date.now()) {
-      if (Date.now() < btcGreenRetestRetryAt) throw new Error('Replay source cooling down.');
-      btcGreenRetestPending ??= (async () => {
-        const history = readBtcGreenHistory();
+    if (!cache.data || cache.expires <= now) {
+      if (now < cache.retryAt) throw new Error('Replay source cooling down.');
+      cache.pending ??= (async () => {
+        const history = readGreenHistory(market);
         try {
-          if (!openLiquidityV2BtcCollector.getStatus().liveReplayReady) throw new Error('BTC Spot replica is warming up.');
-          const now = Date.now();
-          const context = btcGreenRetestSignals(await openLiquidityV2BtcCollector.getPayload(), now);
-          const rows = btcRetestFractalRows(await fetchDydxHourlyCandlesForMarket('BTC-USD'), now);
-          return buildBtcGreenRetestWithHistory(history, { context, rows });
+          const collector = openLiquidityV2CollectorForMarket(market);
+          if (!collector?.getStatus().liveReplayReady) throw new Error(`${market} Spot replica is warming up.`);
+          const payload = await collector.getPayload();
+          const observedAt = Date.now();
+          const context = greenRetestSignals(market, payload, observedAt);
+          const rows = retestFractalRows(market, await fetchDydxHourlyCandlesForMarket(market), observedAt);
+          return buildGreenRetestWithHistory(history, { context, rows });
         } catch (error) {
           if (!history) throw error;
-          return buildBtcGreenRetestWithHistory(history, undefined);
+          return buildGreenRetestWithHistory(history, undefined);
         }
       })().then(data => {
-        btcGreenRetestCache = { expires: Date.now() + 60_000, data };
+        cache.expires = Date.now() + 60_000;
+        cache.data = data;
         return data;
       }).catch(error => {
-        btcGreenRetestRetryAt = Date.now() + 30_000;
+        cache.retryAt = Date.now() + 30_000;
         throw error;
-      }).finally(() => { btcGreenRetestPending = undefined; });
-      await btcGreenRetestPending;
+      }).finally(() => { cache.pending = undefined; });
+      await cache.pending;
     }
-    const { candles, trades, ...coverage } = btcGreenRetestCache!.data;
+    const { candles, trades, ...coverage } = cache.data!;
     const summary = { ...coverage, tradeCount: trades.length };
     if (!id) return res.send({ trades: trades.map(({ id, direction, openedAt, status, grossPnl, markToMarket }) =>
       ({ id, direction, openedAt, status, grossPnl, markToMarket })), ...summary });
@@ -926,7 +941,7 @@ router.get('/open-liquidity/v2/btc-green-retest', async (req, res) => {
       ? summary.incompleteAt ?? summary.through : Math.min(summary.through, trade.closedAt + 9 * 3_600_000);
     return res.send({ trade, candles: candles.filter(row => row.time * 1000 >= from && row.time * 1000 < through), ...summary });
   } catch {
-    return res.status(503).send({ error: 'BTC Green-retest temporarily unavailable.' });
+    return res.status(503).send({ error: `${market} Green-retest temporarily unavailable.` });
   }
 });
 

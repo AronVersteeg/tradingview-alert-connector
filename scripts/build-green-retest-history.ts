@@ -3,16 +3,16 @@ import path from 'node:path';
 import axios from 'axios';
 import { IncrementalReplicaReplay, type SpotCandle } from '../src/services/openLiquidityV2Replica';
 import type { DydxRsiCandle } from '../src/services/decentraderGapMonitor';
-import { PURPLE_LINE_SETUPS } from '../src/services/purpleLineSetup';
-import { btcGreenRetestSignals, btcRetestFractalRows } from '../src/research/btcGreenRetest';
-import { BTC_GREEN_HISTORY_VERSION, BTC_GREEN_HISTORY_WARMUP_HOURS, decodeBtcGreenHistory,
-  type BtcGreenHistoryArchive } from '../src/research/btcGreenRetestHistory';
+import { purpleLineSetupForMarket, type PurpleLineMarket } from '../src/services/purpleLineSetup';
+import { greenRetestSignals, retestFractalRows } from '../src/research/greenRetest';
+import { GREEN_HISTORY_VERSION, GREEN_HISTORY_WARMUP_HOURS, decodeGreenHistory, greenHistoryPath,
+  type GreenHistoryArchive } from '../src/research/greenRetestHistory';
 
 const HOUR = 3_600_000;
-const from = Date.parse(process.argv[2] || '2025-01-01T00:00:00Z');
+const market = (process.argv[2] || 'BTC-USD').toUpperCase() as PurpleLineMarket;
+const from = Date.parse(process.argv[3] || '2025-01-01T00:00:00Z');
 const observedAt = Date.now();
-const through = process.argv[3] ? Date.parse(process.argv[3]) : Math.floor(observedAt / HOUR) * HOUR - HOUR;
-const setup = PURPLE_LINE_SETUPS['BTC-USD'];
+const through = process.argv[4] ? Date.parse(process.argv[4]) : Math.floor(observedAt / HOUR) * HOUR - HOUR;
 const iso = (ms: number) => new Date(ms).toISOString();
 const pause = () => new Promise(resolve => setTimeout(resolve, 250));
 
@@ -22,7 +22,7 @@ async function fetchPages<T>(start: number, page: (start: number, end: number, c
     const end = Math.min(at + 750 * HOUR, through);
     const result = await page(at, end, (end - at) / HOUR);
     rows.push(...result);
-    console.log(`${iso(at)} to ${iso(end)}: ${result.length} candles`);
+    console.log(`${market} ${iso(at)} to ${iso(end)}: ${result.length} candles`);
     at = end;
     await pause();
   }
@@ -30,12 +30,14 @@ async function fetchPages<T>(start: number, page: (start: number, end: number, c
 }
 
 async function main() {
+  const setup = purpleLineSetupForMarket(market);
+  if (!setup) throw new Error('Expected BTC-USD, ETH-USD, SOL-USD or ZEC-USD.');
   if (![from, through].every(ms => Number.isSafeInteger(ms) && ms > 0 && ms % HOUR === 0) ||
       through <= from + HOUR || through > observedAt || through - from > 25_000 * HOUR) throw new Error('Invalid archive range.');
-  const warmupFrom = from - BTC_GREEN_HISTORY_WARMUP_HOURS * HOUR;
+  const warmupFrom = from - GREEN_HISTORY_WARMUP_HOURS * HOUR;
   const spot = await fetchPages<SpotCandle>(warmupFrom, async (start, end, limit) => {
     const { data } = await axios.get<unknown[][]>('https://data-api.binance.vision/api/v3/klines', { timeout: 25_000,
-      params: { symbol: 'BTCUSDT', interval: '1h', startTime: start, endTime: end - 1, limit } });
+      params: { symbol: setup.symbol, interval: '1h', startTime: start, endTime: end - 1, limit } });
     return data.map(([t, o, h, l, c, , endTime]) => ({ timestampMs: Number(t), closeTimeMs: Number(endTime),
       open: Number(o), high: Number(h), low: Number(l), close: Number(c) }));
   });
@@ -48,44 +50,44 @@ async function main() {
   const dydxFrom = from - 1000 * HOUR;
   const sourceDydx = await fetchPages<DydxRsiCandle>(dydxFrom, async (start, end, limit) => {
     const { data } = await axios.get<{ candles: (DydxRsiCandle & { ticker: string })[] }>(
-      'https://indexer.dydx.trade/v4/candles/perpetualMarkets/BTC-USD', { timeout: 25_000,
+      `https://indexer.dydx.trade/v4/candles/perpetualMarkets/${market}`, { timeout: 25_000,
         params: { resolution: '1HOUR', fromISO: iso(start), toISO: iso(end), limit } });
-    return data.candles.filter(row => row.ticker === 'BTC-USD' && row.resolution === '1HOUR' &&
+    return data.candles.filter(row => row.ticker === market && row.resolution === '1HOUR' &&
       Date.parse(row.startedAt) >= start && Date.parse(row.startedAt) < end);
   });
-  const rows = btcRetestFractalRows(sourceDydx, through);
+  const rows = retestFractalRows(market, sourceDydx, through);
   const dydxHours = new Map(rows.map(row => [Date.parse(row.timestamp), row]));
   if (rows.length !== dydxHours.size) throw new Error('Duplicate dYdX hours.');
-  const dydx: BtcGreenHistoryArchive['dydx'] = [];
+  const dydx: GreenHistoryArchive['dydx'] = [];
   for (let at = dydxFrom; at < through; at += HOUR) {
     const row = dydxHours.get(at);
     if (!row) console.warn(`Missing dYdX hour (left blank): ${iso(at)}`);
     dydx.push(row ? [row.openRef, row.highRef, row.lowRef, row.closeRef] : null);
   }
 
-  const archive: BtcGreenHistoryArchive = { version: BTC_GREEN_HISTORY_VERSION, model: setup.modelVersion,
-    priceStepUsd: setup.priceStepUsd, cohortWindowHours: BTC_GREEN_HISTORY_WARMUP_HOURS, from, through, dydxFrom,
+  const archive: GreenHistoryArchive = { market, version: GREEN_HISTORY_VERSION, model: setup.modelVersion,
+    priceStepUsd: setup.priceStepUsd, cohortWindowHours: GREEN_HISTORY_WARMUP_HOURS, from, through, dydxFrom,
     dydx, greens: [], yellows: [] };
-  const baseline = BTC_GREEN_HISTORY_WARMUP_HOURS + 1;
+  const baseline = GREEN_HISTORY_WARMUP_HOURS + 1;
   const replica = await IncrementalReplicaReplay.create(spot.slice(0, baseline), { frameLimit: 2,
-    priceStepUsd: setup.priceStepUsd, modelVersion: setup.modelVersion, cohortWindowHours: BTC_GREEN_HISTORY_WARMUP_HOURS });
+    priceStepUsd: setup.priceStepUsd, modelVersion: setup.modelVersion, cohortWindowHours: GREEN_HISTORY_WARMUP_HOURS });
   for (let i = baseline; i < spot.length; i++) {
     const candle = spot[i];
     replica.append(candle, iso(candle.timestampMs + HOUR));
     const [previous, next] = replica.snapshots;
     const payload = { modelVersion: setup.modelVersion, quality: { causalModel: true, priceStepUsd: setup.priceStepUsd },
-      source: { market: 'BTC-USD', sourceStatuses: [{ name: 'Binance Spot BTCUSDT 1H', ok: true }] },
+      source: { market, sourceStatuses: [{ name: `Binance Spot ${setup.symbol} 1H`, ok: true }] },
       frames: [previous, next].map(row => ({ t: row.effectiveAt.slice(0, 19).replace('T', ' '),
         startedAtMs: Date.parse(row.effectiveAt), close: row.close, price: row.referencePrice })),
       gaps: [previous.gap, next.gap], zoneSeed: previous.zoneSeed, zoneDeltas: [[], next.zoneDeltas] };
-    const result = btcGreenRetestSignals(payload, candle.timestampMs + HOUR);
-    archive.greens.push(...result.signals.map((signal): BtcGreenHistoryArchive['greens'][number] =>
+    const result = greenRetestSignals(market, payload, candle.timestampMs + HOUR);
+    archive.greens.push(...result.signals.map((signal): GreenHistoryArchive['greens'][number] =>
       [signal.closedAt * 1000, signal.direction, signal.edge, signal.close]));
-    archive.yellows.push(...result.yellows.map((row): BtcGreenHistoryArchive['yellows'][number] => [row.at, row.direction]));
+    archive.yellows.push(...result.yellows.map((row): GreenHistoryArchive['yellows'][number] => [row.at, row.direction]));
     if ((i - baseline + 1) % 2000 === 0) console.log(`Replica reconstructed through ${iso(result.through)}`);
   }
-  decodeBtcGreenHistory(archive);
-  const output = path.resolve('research-data/btc-green-retest-history.json');
+  decodeGreenHistory(market, archive);
+  const output = greenHistoryPath(market);
   await fs.mkdir(path.dirname(output), { recursive: true });
   // One record per line makes the reproducible snapshot reviewable and diffable.
   const { dydx: candles, greens, yellows, ...metadata } = archive;
@@ -95,4 +97,4 @@ async function main() {
   console.log(`Wrote ${rows.length} dYdX candles, ${greens.length} Green candidates and ${yellows.length} Yellows: ${output}`);
 }
 
-main().catch(error => { console.error('BTC Green history build failed:', error.message); process.exitCode = 1; });
+main().catch(error => { console.error(`${market} Green history build failed:`, error.message); process.exitCode = 1; });

@@ -1,10 +1,15 @@
 const root = document.getElementById('btcTradeReplay');
-if (root && new URLSearchParams(location.search).get('source') === 'open-v2') init();
+const markets = new Map([['open-v2', 'BTC-USD'], ['open-v2-eth', 'ETH-USD'], ['open-v2-sol', 'SOL-USD'], ['open-v2-zec', 'ZEC-USD']]);
+const market = markets.get(new URLSearchParams(location.search).get('source'));
+if (root && market) init(market);
 
-function init() {
+function init(market) {
+  const asset = market.split('-')[0];
   root.hidden = false;
   const el = id => document.getElementById(`btcReplay${id}`);
+  el('Title').textContent = `${asset} Green Retest`;
   const load = el('Load'), select = el('Trade'), summary = el('Summary'), events = el('Events');
+  select.setAttribute('aria-label', `Gesimuleerde ${asset}-trade`);
   const picker = el('TradePicker'), totalPnl = el('TotalPnl');
   const riskControls = el('RiskControls'), baseRisk = el('BaseRisk'), testRisk = el('TestRisk');
   const riskError = el('RiskError');
@@ -13,17 +18,22 @@ function init() {
   const date = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', dateStyle: 'short', timeStyle: 'short' });
   const clock = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' });
   const day = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', month: 'short', day: 'numeric' });
-  const price = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 2 });
+  const priceDigits = asset === 'BTC' ? 2 : 4;
+  const price = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: priceDigits });
   const pnlMoney = new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', signDisplay: 'exceptZero' });
   const quantity = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 6 });
   const hourMs = 3_600_000;
   let chart, candles, entryPoint, exitPoint, stops, fractalMarkers, annotations, snapshot, timer, nonce = 0;
   let list, riskBudget, riskFactor = 1;
 
-  async function read(search = '') {
-    const response = await fetch('/open-liquidity/v2/btc-green-retest' + search, { cache: 'no-store' });
-    if (!response.ok) throw new Error('BTC Green-retest tijdelijk niet beschikbaar.');
-    return response.json();
+  async function read(id) {
+    const query = new URLSearchParams({ market });
+    if (id) query.set('id', id);
+    const response = await fetch(`/open-liquidity/v2/green-retest?${query}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`${asset} Green-retest tijdelijk niet beschikbaar.`);
+    const data = await response.json();
+    if (data.market !== market) throw new Error(`Onverwachte markt in de ${asset} Green-retest.`);
+    return data;
   }
 
   async function makeChart() {
@@ -39,12 +49,13 @@ function init() {
         tickMarkFormatter: (stamp, kind) => (kind >= lib.TickMarkType.Time ? clock : day).format(stamp * 1000) },
       localization: { timeFormatter: stamp => date.format(stamp * 1000) }
     });
+    const priceFormat = { type: 'price', precision: priceDigits, minMove: 10 ** -priceDigits };
     candles = chart.addSeries(lib.CandlestickSeries, {
       upColor: '#28b9a2', downColor: '#ec6171', wickUpColor: '#28b9a2', wickDownColor: '#ec6171',
-      borderVisible: false, lastValueVisible: false, priceLineVisible: false
+      borderVisible: false, lastValueVisible: false, priceLineVisible: false, priceFormat
     });
     const markerOptions = { lineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 5,
-      lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false };
+      lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, priceFormat };
     entryPoint = chart.addSeries(lib.LineSeries, { ...markerOptions, color: '#68e2a6' });
     exitPoint = chart.addSeries(lib.LineSeries, { ...markerOptions, color: '#eea9ce' });
     stops = chart.addSeries(lib.LineSeries, { ...markerOptions, color: '#69aaff', lineVisible: true,
@@ -162,7 +173,7 @@ function init() {
       ['Gebroken gaprand', '$' + price.format(trade.gapEdge)],
       ['Sizing-SL', '$' + price.format(trade.sizingStop)],
       ['Initiële SL', '$' + price.format(trade.initialStop)],
-      ['Positiegrootte (model)', quantity.format(trade.size * riskFactor) + ' BTC'],
+      ['Positiegrootte (model)', `${quantity.format(trade.size * riskFactor)} ${asset}`],
       ['Initieel prijsrisico', '$' + price.format(trade.riskUsd * riskFactor)],
       ['TP', 'Geen'],
       ['Exitcandle', trade.closedAt === undefined ? (trade.status === 'INCOMPLETE' ? 'Onbekend: dYdX-data ontbreekt' : 'Open in retest')
@@ -209,7 +220,7 @@ function init() {
     host.hidden = playback.hidden = legend.hidden = summary.hidden = events.hidden = true;
     status.textContent = 'dYdX-candles laden...';
     try {
-      const data = await read(`?id=${encodeURIComponent(select.value)}`);
+      const data = await read(select.value);
       if (request !== nonce) return;
       snapshot = data;
       const { trade } = data;
