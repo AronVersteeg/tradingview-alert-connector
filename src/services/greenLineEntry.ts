@@ -68,8 +68,9 @@ export async function readGreenLineSignal(market: PurpleLineMarket, payload: any
   return evaluateGreenLineSignal(market, payload, intrusions, page, now);
 }
 
-export async function readBtcPurpleTrailSignal(payload: any, intrusions: any[]): Promise<BtcPurpleTrailSignal | undefined> {
-  const market = 'BTC-USD', now = Date.now();
+export async function readPurpleGapBreakSignal(market: PurpleLineMarket, payload: any, intrusions: any[]): Promise<BtcPurpleTrailSignal | undefined> {
+  if (!purpleLineSetupForMarket(market)) throw new Error('Unsupported Purple line market.');
+  const now = Date.now();
   const page = await feeds[market].page();
   const green = evaluateGreenLineSignal(market, payload, intrusions, page, now);
   if (!green) return undefined;
@@ -77,4 +78,8 @@ export async function readBtcPurpleTrailSignal(payload: any, intrusions: any[]):
   const daily = await readSpotDailyFractals(market, now);
   const purple = evaluatePurpleLineSignal(market, payload, intrusions, page, daily, now, timeline) as Omit<BtcPurpleTrailSignal, 'setup'> | undefined;
   return purple ? { ...purple, setup: 'purple-green-trail' } : undefined;
+}
+
+export async function readBtcPurpleTrailSignal(payload: any, intrusions: any[]): Promise<BtcPurpleTrailSignal | undefined> {
+  return readPurpleGapBreakSignal('BTC-USD', payload, intrusions);
 }

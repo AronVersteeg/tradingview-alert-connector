@@ -169,25 +169,28 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
 
   describe('Spot gap intrusion + Daily entry signal', () => {
     afterEach(() => { jest.restoreAllMocks(); jest.useRealTimers(); });
-    if (asset === 'BTC') test.each(['long', 'short'] as const)('BTC Purple trail reads a fresh %s break of both levels', async direction => {
+    test.each(['long', 'short'] as const)('Purple reads a fresh %s break of both levels from its own pair', async direction => {
       jest.useFakeTimers(); jest.setSystemTime(now);
       const x = inputs(direction);
-      const candleRead = jest.spyOn(binanceSpotChartFeed, 'page').mockResolvedValue(x.page);
+      const ownFeed = { BTC: binanceSpotChartFeed, ETH: ethSpotChartFeed, SOL: solSpotChartFeed, ZEC: zecSpotChartFeed }[asset];
+      const candleRead = jest.spyOn(ownFeed, 'page').mockResolvedValue(x.page);
+      const read = (payload: any, intrusions: any[]) => asset === 'BTC' ? green.readBtcPurpleTrailSignal(payload, intrusions)
+        : green.readPurpleGapBreakSignal(market, payload, intrusions);
       const dailyRead = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockResolvedValue(x.daily as any);
       const [prev] = x.payload.gaps;
       x.payload.gaps[1] = { left: 65, right: 145, width: 80 };
-      await expect(green.readBtcPurpleTrailSignal(x.payload, x.intrusions)).resolves.toMatchObject({
+      await expect(read(x.payload, x.intrusions)).resolves.toMatchObject({
         setup: 'purple-green-trail', ...signal(direction), gap: { lower: prev.left, upper: prev.right }
       });
       expect(candleRead).toHaveBeenCalledTimes(1);
-      expect(dailyRead).toHaveBeenCalledWith('BTC-USD', false, 'Binance Spot');
-      await expect(green.readBtcPurpleTrailSignal(x.payload, [{ ...x.intrusions[0], direction: 'mixed' }])).resolves.toBeUndefined();
+      expect(dailyRead).toHaveBeenCalledWith(market, false, 'Binance Spot');
+      await expect(read(x.payload, [{ ...x.intrusions[0], direction: 'mixed' }])).resolves.toBeUndefined();
       x.daily.records[0].priceExact = direction === 'long' ? '126' : '74';
-      await expect(green.readBtcPurpleTrailSignal(x.payload, x.intrusions)).resolves.toBeUndefined();
+      await expect(read(x.payload, x.intrusions)).resolves.toBeUndefined();
       x.daily.records[0].priceExact = direction === 'long' ? '120' : '80';
       x.payload.gaps[0] = { left: 75, right: 125, width: 50 };
       dailyRead.mockClear();
-      await expect(green.readBtcPurpleTrailSignal(x.payload, x.intrusions)).resolves.toBeUndefined();
+      await expect(read(x.payload, x.intrusions)).resolves.toBeUndefined();
       expect(dailyRead).not.toHaveBeenCalled();
     });
     test('reads only its own Spot candles and Daily source', async () => {
@@ -329,10 +332,12 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       jest.useFakeTimers(); jest.setSystemTime(now);
       directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eth-gap-daily-'));
       file = path.join(directory, 'eth.json');
+      for (const pair of ['ETH', 'SOL', 'ZEC']) delete process.env[`${pair}_ENTRY_MODE`];
       Object.assign(process.env, {
         BTC_ENTRY_MODE: 'manual', DECENTRADER_AUTO_TRADE_ENABLED: 'true',
         DECENTRADER_GAP_ALERT_STATE_FILE: path.join(directory, 'btc-manual-execution.json'),
         BTC_MANUAL_TRADE_OVERRIDE_FILE: path.join(directory, 'btc-manual-plans.json'),
+        [`${asset}_MANUAL_TRADE_OVERRIDE_FILE`]: path.join(directory, `${asset}-manual-plans.json`),
         [stateEnv]: file, [entryEnv]: asset === 'BTC' ? 'green' : 'true',
         [autoEnv]: 'true', [monitorEnv]: 'true',
         DECENTRADER_DYNAMIC_SL_ENABLED: 'true', DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED: 'true',
@@ -379,6 +384,36 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       fs.rmSync(directory, { recursive: true, force: true });
     });
     const state = () => ({ gapDailyEntry: { activatedAt: iso(closeAt - HOUR) } });
+
+    test.each([['purple', 'long'], ['purple', 'short'], ['green', 'long'], ['green', 'short']] as const)(
+      'the selected %s %s scanner dispatches only its own entry route and records the correct trigger mail', async (mode, direction) => {
+        process.env[`${asset}_ENTRY_MODE`] = mode;
+        orders.supportsEntrySubmissionCheckpoint = true;
+        if (direction === 'short') (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue([125, 128, 130, 127, 124].map((high, i) => ({
+          startedAt: iso(closeAt - (5 - i) * HOUR), open: String(high - 2), close: String(high - 3), high: String(high), low: String(high - 8)
+        })));
+        const purpleSignal: entry.BtcPurpleTrailSignal = { ...signal(direction), setup: 'purple-green-trail',
+          gap: { lower: 85, upper: 115, candleTime: signal().time - 3600 } };
+        const purpleRead = jest.spyOn(green, 'readPurpleGapBreakSignal').mockResolvedValue(purpleSignal);
+        const greenRead = jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal(direction));
+        orders.placeOrder.mockImplementationOnce(async (_alert: any, execution: any) => {
+          await execution.beforeEntrySubmit();
+          position = { market, size: direction === 'long' ? .4 : -.4, entryPrice: 120 };
+        });
+        const managed: any = state(), result: any = {};
+        await monitor.checkGapDailyEntry(managed, inputs(direction).payload, result);
+        expect(result.tradePlaced).toBe(true); expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+        if (mode === 'purple') { expect(purpleRead).toHaveBeenCalledWith(market, expect.anything(), expect.any(Array)); expect(greenRead).not.toHaveBeenCalled(); }
+        else { expect(greenRead).toHaveBeenCalledWith(market, expect.anything(), expect.any(Array)); expect(purpleRead).not.toHaveBeenCalled(); }
+        expect(managed.managedPosition).toMatchObject({ direction, takeProfitMode: 'trailing-only', intrusionTrail: { entryClosedAt: signal().closedAt } });
+        expect(orders.placeOrder.mock.calls[0][0]).toMatchObject({ market, static_sl: direction === 'long' ? 118 : 122,
+          take_profits: [], decentrader: { initialStopPolicy: { mode: 'signal-body-open' } } });
+        const queued = managed.gapDailyEntry.triggerEmails[0];
+        expect(queued).toMatchObject({ outcome: 'PLACED', subject: expect.stringContaining(`${asset} ${mode.toUpperCase()} ${direction.toUpperCase()} TRIGGERED`) });
+        expect(queued.body).toContain(`Source: Binance Spot ${symbol} 1H intrusion + ${mode === 'purple' ? 'gap edge and Daily fractal' : 'gap edge'} close break`);
+        expect(queued.body).toContain('later same-direction Yellow intrusion closes');
+        expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
+      });
 
   test('sends one Green trigger email after entry and stop setup, never placing a second order', async () => {
     jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
@@ -499,7 +534,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
 
     test('reports the Green setup and respects its own independent kill switches', () => {
       expect(monitor.getStatus()).toMatchObject({ market, autoTradeEnabled: true,
-        gapDailyEntry: { setup: 'green-line', enabled: true, env: entryEnv,
+        gapDailyEntry: { setup: 'green-line', enabled: true, env: `${asset}_ENTRY_MODE`,
           source: `Binance Spot ${symbol} 1H`, executionMarket: market,
           takeProfitMode: 'trailing-only', futuresDeltaFilter: { enabled: false },
           initialStop: { mode: 'signal-body-open', bodyFraction: 0, candleSource: 'dydx-1h', tightenOnly: true } } });
@@ -602,8 +637,8 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(managed.managedPosition.currentStop).toBe(better);
       expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(better);
     });
-    if (asset === 'BTC') test.each([['purple', 'long'], ['purple', 'short'], ['purple-trail', 'long'], ['purple-trail', 'short']] as const)('%s %s stops at its dYdX candle open and trails only on later Yellows after a mode switch', async (mode, direction) => {
-      process.env.BTC_ENTRY_MODE = mode;
+    test.each([['purple', 'long'], ['purple', 'short'], ['purple-trail', 'long'], ['purple-trail', 'short']] as const)('%s %s stops at its dYdX candle open and trails only on later Yellows after a mode switch', async (mode, direction) => {
+      process.env[`${asset}_ENTRY_MODE`] = mode;
       const isLong = direction === 'long';
       const signals = { ...signal(direction), setup: 'purple-green-trail', gap: { lower: 85, upper: 115, candleTime: signal().time - 3600 } };
       const initial = isLong ? 118 : 122;
@@ -642,7 +677,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       await monitor.checkIntrusionTrail(managed, {}, {});
       expect(entryScan).not.toHaveBeenCalled();
 
-      process.env.BTC_ENTRY_MODE = 'off';
+      process.env[`${asset}_ENTRY_MODE`] = 'off';
       const newClose = closeAt + 5 * HOUR;
       jest.setSystemTime(newClose + 5000);
       const greenRead = jest.spyOn(green, 'readGreenLineSignal');
@@ -747,8 +782,8 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       const manual = { ...state(), managedPosition: { ...managed.managedPosition, entrySignature: 'manual-override-plan', intrusionTrail: undefined } };
       expect(monitor.intrusionTrail(manual)).toBeUndefined();
     });
-    if (asset === 'BTC') test.each(['wrong-hour', 'missing-open', 'nonprotective-open'])('new Purple refuses %s rather than falling back to a fractal SL', async invalid => {
-      process.env.BTC_ENTRY_MODE = 'purple';
+    test.each(['wrong-hour', 'missing-open', 'nonprotective-open'])('new Purple refuses %s rather than falling back to a fractal SL', async invalid => {
+      process.env[`${asset}_ENTRY_MODE`] = 'purple';
       orders.supportsEntrySubmissionCheckpoint = true;
       const rows = [115, 112, 110, 113, 116].map((low, i) => ({
         startedAt: iso(closeAt - (5 - i) * HOUR), open: String(low + 2), high: String(low + 5), low: String(low), close: String(low + 3)
@@ -762,8 +797,8 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(orders.placeOrder).not.toHaveBeenCalled();
       expect(orders.syncTrailingStop).not.toHaveBeenCalled();
     });
-    if (asset === 'BTC') test.each(['long', 'short'] as const)('a later real Purple %s qualifies as one Yellow trailing event without Daily reads or new entries', async direction => {
-      process.env.BTC_ENTRY_MODE = 'purple';
+    test.each(['long', 'short'] as const)('a later real Purple %s qualifies as one Yellow trailing event without Daily reads or new entries', async direction => {
+      process.env[`${asset}_ENTRY_MODE`] = 'purple';
       const nextClose = closeAt + 4 * HOUR;
       jest.setSystemTime(nextClose + 5000);
       const x = inputs(direction);
@@ -779,9 +814,9 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
         f.t = iso(f.startedAtMs).slice(0, 19).replace('T', ' ');
       });
       x.intrusions[0].timestamp = x.payload.frames[1].t;
-      jest.spyOn(binanceSpotChartFeed, 'page').mockResolvedValue(x.page);
+      jest.spyOn({ BTC: binanceSpotChartFeed, ETH: ethSpotChartFeed, SOL: solSpotChartFeed, ZEC: zecSpotChartFeed }[asset], 'page').mockResolvedValue(x.page);
       const dailyRead = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockResolvedValue(x.daily as any);
-      const actualPurple = await green.readBtcPurpleTrailSignal(x.payload, x.intrusions);
+      const actualPurple = await green.readPurpleGapBreakSignal(market, x.payload, x.intrusions);
       expect(actualPurple).toMatchObject({ setup: 'purple-green-trail', direction, closedAt: nextClose / 1000 });
       dailyRead.mockClear();
       const rawGreenRead = jest.spyOn(green, 'readGreenLineSignal');
@@ -1027,10 +1062,10 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       fs.writeFileSync(file, JSON.stringify(cleared));
       expect((await monitor.checkManagedPosition()).trailingCandle).toBeUndefined();
     });
-    if (asset === 'BTC') test.each(['manual', 'off'])('preserves purple trailing-only ownership after switching BTC to %s', async mode => {
+    test.each(['manual', 'off'])('preserves automatic trailing-only ownership after switching to %s', async mode => {
       await monitor.executeGapDailyEntry(state(), signal(), {});
       const previous = orders.syncTrailingStop.mock.calls.length;
-      process.env.BTC_ENTRY_MODE = mode;
+      process.env[`${asset}_ENTRY_MODE`] = mode;
       const restarted: any = createMonitor(); restarted.configureTradeExecutor(orders);
       const map = jest.spyOn(restarted, 'getTradePlan').mockRejectedValue(new Error('No map TP planning for purple positions'));
       const result = await restarted.checkManagedPosition();
@@ -1150,14 +1185,16 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(broadcast).not.toHaveBeenCalled();
       expect(position).toBeUndefined();
     });
-    if (asset === 'BTC') test('rechecks manual ownership at the actual purple broadcast boundary', async () => {
+    test('rechecks manual ownership at the actual automatic broadcast boundary', async () => {
+      process.env[`${asset}_ENTRY_MODE`] = 'green';
       orders.supportsEntrySubmissionCheckpoint = true;
       const broadcast = jest.fn();
       orders.placeOrder.mockImplementationOnce(async (_alert, execution) => {
-        fs.writeFileSync(process.env.DECENTRADER_GAP_ALERT_STATE_FILE!, JSON.stringify({ managedPosition: { market: 'BTC-USD' } }));
+        if (asset === 'BTC') fs.writeFileSync(process.env.DECENTRADER_GAP_ALERT_STATE_FILE!, JSON.stringify({ managedPosition: { market } }));
+        else fs.writeFileSync(process.env[`${asset}_MANUAL_TRADE_OVERRIDE_FILE`]!, JSON.stringify({ version: 3, market, overrides: [{ status: 'EXECUTING' }] }));
         await execution.beforeEntrySubmit(); broadcast();
       });
-      await expect(monitor.executeGapDailyEntry(state(), signal(), {})).rejects.toThrow(/still manages/);
+      await expect(monitor.executeGapDailyEntry(state(), signal(), {})).rejects.toThrow(/still manages|unfinished/);
       expect(broadcast).not.toHaveBeenCalled(); expect(position).toBeUndefined();
     });
     test.each(['BROADCASTING', 'legacy'])('never resends an ambiguous %s attempt after restart', async phase => {
@@ -1226,11 +1263,11 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
       expect(orders.placeOrder).toHaveBeenCalledTimes(1); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
     });
-    test('blocks only ETH old entry routes, preserving plans, and leaves the BTC observe-only setting unchanged', async () => {
-      expect((await monitor.executeFractalEntry({ market })).tradeSkipped).toMatch(/Green line setup/);
+    test('blocks competing old entry routes, preserving plans, and leaves other BTC settings unchanged', async () => {
+      expect((await monitor.executeFractalEntry({ market })).tradeSkipped).toMatch(/entry selector/);
       expect(await monitor.executeManualEntry({ market })).toMatchObject({ tradeDeferred: true });
       const result: any = {}; await monitor.executeAlertExclusive({}, {}, 'old-delay', result);
-      expect(result.tradeSkipped).toMatch(/Green line setup/);
+      expect(result.tradeSkipped).toMatch(/entry selector/);
       expect(orders.placeOrder).not.toHaveBeenCalled();
       expect(openLiquidityV2BtcIntrusionMonitor.getStatus()).toMatchObject({ market: 'BTC-USD', autoTradeEnabled: asset === 'BTC' });
     });

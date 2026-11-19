@@ -63,7 +63,10 @@ values need not change when toggling between modes. The old, previously unused
 `OPEN_LIQUIDITY_V2_<PAIR>_GAP_DAILY_ENTRY_ENABLED` and
 `OPEN_LIQUIDITY_V2_<PAIR>_AUTO_TRADE_ENABLED` flags, now selecting Green. The
 existing `OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED` switch also controls
-new Green trigger emails.
+new Green trigger emails. ETH, SOL and ZEC now also accept independent
+`ETH_ENTRY_MODE`, `SOL_ENTRY_MODE` and `ZEC_ENTRY_MODE` selectors with the same
+four choices. When absent, their old entry flags remain the compatibility path.
+See [per-pair entry modes](PAIR_ENTRY_MODES.md).
 Legacy BTC Delay and Shadow entry handlers cannot compete with these models.
 
 ## BTC Purple With Yellow Trailing

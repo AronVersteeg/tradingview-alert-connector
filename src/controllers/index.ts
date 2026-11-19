@@ -851,7 +851,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
                 : market === 'XAG-USD'
                   ? 'SILVER Public Perp V2 uses a causal Binance XAGUSDT Futures liquidation-cohort reconstruction. Filtered intrusions and SMTP Delay history use the shared candle and taker-delta rules; live execution is independently managed on dYdX XAG-USD with the shared dollar-risk, Williams-fractal SL and TP settings.'
                   : ['ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market)
-                  ? `${asset} Public V2 Green entries use causal Binance Spot intrusions and a fresh same-hour close beyond the previous gap edge, with dYdX signal-open SL, fractal sizing and later same-direction Yellow-gated fractal trailing without TPs.`
+                  ? `${asset}_ENTRY_MODE selects manual, green, purple or off. Green uses a causal Binance Spot intrusion and same-hour gap close break; purple also requires a confirmed Daily close break. Automatic entries use dYdX signal-open SL, fractal sizing and later same-direction Yellow-gated fractal trailing without TPs.`
                   : `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
           }
         : payload.source,

@@ -5,7 +5,7 @@ import { binanceGet, binanceRetryAt } from './binanceHttp';
 import { binanceHourlyCloseFeed } from './binanceHourlyCloseFeed';
 import { allocateStepSizes } from './decentraderExecutionPolicy';
 import { DYDX_BODY_STOP_FRACTION } from './dydxSignalBodyStop';
-import { btcEntryMode, btcEntryModeStatus } from './btcEntryMode';
+import { spotEntryModeStatus, spotManualEntryEnabled } from './spotEntryMode';
 
 const HOUR_MS = 60 * 60_000;
 const CLOSE_BUFFER_MS = 5_000;
@@ -253,6 +253,22 @@ export function manualTradeOverrideIsArmed(market: string): boolean {
   return readManualTradeOverrideStore(config).overrides.some((state) => (
     state.status === 'ARMED' || state.status === 'EXECUTING'
   ));
+}
+
+export function manualTradeOverrideExecutionBlockReason(market: string): string | undefined {
+  const config = manualTradeOverrideConfigForMarket(market);
+  if (!config) return undefined;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(stateFile(config), 'utf8'));
+    const rows = parsed?.version === 3 && Array.isArray(parsed.overrides) ? parsed.overrides
+      : parsed?.version === 1 && ['long', 'short'].includes(parsed.direction) ? [parsed] : undefined;
+    if (normalizedMarket(parsed?.market) !== config.market || !rows) throw new Error('Invalid manual ownership state.');
+    return rows.some((row: any) => row.status === 'EXECUTING')
+      ? `A ${config.asset} manual execution remains unfinished; no automatic entry is allowed.` : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new Error(`${config.asset} manual execution ownership cannot be verified; no automatic entry allowed.`);
+  }
 }
 
 function positiveNumber(value: unknown, label: string): number {
@@ -511,8 +527,9 @@ export class BtcManualTradeOverrideMonitor {
       market: this.config.market,
       asset: this.config.asset,
       symbol: this.config.symbol,
-      ...(this.config.market === 'BTC-USD' ? { entryMode: btcEntryModeStatus(),
-        entriesPaused: btcEntryMode() !== 'manual', candleSource: 'Binance Spot BTCUSDT 1H' } : {}),
+      ...(spotEntryModeStatus(this.config.market) ? { entryMode: spotEntryModeStatus(this.config.market),
+        entriesPaused: !spotManualEntryEnabled(this.config.market),
+        candleSource: `Binance ${this.config.market === 'BTC-USD' ? 'Spot' : 'Futures'} ${this.config.symbol} 1H` } : {}),
       initialStop: { mode: 'signal-body-quarter', bodyFraction: DYDX_BODY_STOP_FRACTION,
         candleSource: 'dydx-1h', sameSignalHour: true, bufferPct: 0,
         sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
@@ -637,7 +654,7 @@ export class BtcManualTradeOverrideMonitor {
     let readingCandles = false;
     try {
       if (!btcManualTradeOverrideEnabled()) return;
-      if (this.config.market === 'BTC-USD' && btcEntryMode() !== 'manual') return;
+      if (!spotManualEntryEnabled(this.config.market)) return;
       let store = readManualTradeOverrideStore(this.config);
       const nowMs = Date.now();
       const nowIso = new Date(nowMs).toISOString();

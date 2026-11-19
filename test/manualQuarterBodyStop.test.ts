@@ -46,7 +46,8 @@ describe('manual same-hour dYdX quarter-body SL', () => {
     for (const asset of Object.keys(templates)) Object.assign(process.env, {
       [`OPEN_LIQUIDITY_V2_${asset}_TRADE_STATE_FILE`]: path.join(directory, `${asset}.json`),
       [`OPEN_LIQUIDITY_V2_${asset}_AUTO_TRADE_ENABLED`]: 'true',
-      [`OPEN_LIQUIDITY_V2_${asset}_GAP_DAILY_ENTRY_ENABLED`]: 'false'
+      [`OPEN_LIQUIDITY_V2_${asset}_GAP_DAILY_ENTRY_ENABLED`]: ['ETH', 'SOL', 'ZEC'].includes(asset) ? 'true' : 'false',
+      ...(['ETH', 'SOL', 'ZEC'].includes(asset) ? { [`${asset}_ENTRY_MODE`]: 'manual' } : {})
     });
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});

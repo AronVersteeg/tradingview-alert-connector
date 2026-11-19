@@ -5,8 +5,10 @@
 - BTC `BTC_ENTRY_MODE=purple` (`purple-trail` remains a compatibility alias): same closed Binance Spot BTCUSDT 1H candle
   has a directional intrusion, a fresh gap-box close break and a fresh confirmed
   Daily-level close break. The historical setup id remains `purple-green-trail`.
-- ETH, SOL and ZEC: Green entries require an intrusion and a fresh gap-box close
-  break on the same closed, matching Binance Spot candle. No Daily entry gate.
+- ETH, SOL and ZEC: Green remains the legacy automatic entry choice. Each now
+  accepts `<PAIR>_ENTRY_MODE=purple|green|manual|off`. Green needs an intrusion
+  and same-hour fresh gap-box close break; Purple also needs a fresh Daily
+  close break, using only that pair's Spot data. See [pair selectors](PAIR_ENTRY_MODES.md).
 - Existing per-pair entry/auto-trading switches remain authoritative. This code
   change does not enable an explicitly disabled market or edit Render settings.
 

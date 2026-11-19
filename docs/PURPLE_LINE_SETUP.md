@@ -1,7 +1,8 @@
 # Purple Line Setup
 
 Historical reference: BTC now selects Purple or Green explicitly through
-`BTC_ENTRY_MODE`; ETH, SOL and ZEC use Green. See
+`BTC_ENTRY_MODE`; ETH, SOL and ZEC retain Green by default and now have their own
+`<PAIR>_ENTRY_MODE` selectors. See [per-pair modes](PAIR_ENTRY_MODES.md) and
 [current entry configuration](BTC_ENTRY_MODE.md) for the live signals,
 compatibility aliases and protection.
 
