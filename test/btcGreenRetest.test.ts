@@ -58,6 +58,16 @@ describe('BTC Green retest using current gates', () => {
     expect(trade.stops.map(row => row.at)).toEqual([at(5), at(10)]);
     expect(trade.yellows[1].fractal?.confirmedAt).toBe(at(10));
     expect(trade).toMatchObject({ status: 'CLOSED', closedAt: at(10), exitPrice: rows[10].openRef, exitReason: 'GAP_STOP' });
+    expect(trade.grossPnl).toBeCloseTo(-4 * trade.size, 10);
+    expect(trade.markToMarket).toBeUndefined();
+  });
+
+  test.each(['long', 'short'] as const)('marks an open %s to the final closed candle, without using later supplied prices', direction => {
+    const { rows, context } = fixtures(direction);
+    const [trade] = simulateBtcGreenRetest(rows, { ...context, through: at(10) }).trades;
+    expect(trade.status).toBe('OPEN');
+    expect(trade.grossPnl).toBeUndefined();
+    expect(trade.markToMarket).toEqual({ at: at(10), price: rows[9].closeRef, grossPnl: trade.size });
   });
 
   test('never trails for an opposite Yellow, and does not know whether the trade survived a missing candle', () => {
@@ -69,5 +79,6 @@ describe('BTC Green retest using current gates', () => {
     const gapped = simulateBtcGreenRetest(rows.filter(row => row.timestamp !== iso(8)), context);
     expect(gapped).toMatchObject({ incompleteAt: at(8), trades: [{ status: 'INCOMPLETE' }] });
     expect(gapped.trades[0].exitPrice).toBeUndefined();
+    expect(gapped.trades[0].markToMarket).toBeUndefined();
   });
 });

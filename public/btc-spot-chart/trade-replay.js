@@ -11,6 +11,7 @@ function init() {
   const clock = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' });
   const day = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', month: 'short', day: 'numeric' });
   const price = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 2 });
+  const pnlMoney = new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol', signDisplay: 'exceptZero' });
   const quantity = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 6 });
   const hourMs = 3_600_000;
   let chart, candles, entryPoint, exitPoint, stops, fractalMarkers, annotations, snapshot, timer, nonce = 0;
@@ -138,8 +139,21 @@ function init() {
     if (fit) chart.timeScale().fitContent();
   }
 
+  function pnl(trade) {
+    if (trade.status === 'CLOSED' && Number.isFinite(trade.grossPnl)) {
+      return { label: 'Geschatte bruto P&L', value: trade.grossPnl, note: 'Gesloten in de retest' };
+    }
+    if (trade.status === 'OPEN' && Number.isFinite(trade.markToMarket?.grossPnl)) {
+      return { label: 'Ongerealiseerde bruto P&L', value: trade.markToMarket.grossPnl,
+        note: `dYdX-close ${date.format(trade.markToMarket.at)} @ $${price.format(trade.markToMarket.price)}` };
+    }
+    return { label: 'Geschatte bruto P&L', note: 'Onbekend' };
+  }
+
   function details(trade) {
+    const estimate = pnl(trade);
     const entries = [
+      [estimate.label, estimate.value === undefined ? '—' : pnlMoney.format(estimate.value), estimate.note],
       ['Begin', `${trade.direction.toUpperCase()} · ${date.format(trade.openedAt)} · $${price.format(trade.entryPrice)}`],
       ['Gebroken gaprand', '$' + price.format(trade.gapEdge)],
       ['Sizing-SL', '$' + price.format(trade.sizingStop)],
@@ -148,12 +162,19 @@ function init() {
       ['Initieel prijsrisico', '$' + price.format(trade.riskUsd)],
       ['TP', 'Geen'],
       ['Exitcandle', trade.closedAt === undefined ? (trade.status === 'INCOMPLETE' ? 'Onbekend: dYdX-data ontbreekt' : 'Open in retest')
-        : `${date.format(trade.closedAt)} · $${price.format(trade.exitPrice)}`],
-      ['Bruto P&L', trade.grossPnl === undefined ? '—' : '$' + price.format(trade.grossPnl)]
+        : `${date.format(trade.closedAt)} · $${price.format(trade.exitPrice)}`]
     ];
-    summary.replaceChildren(...entries.map(([label, value]) => {
+    summary.replaceChildren(...entries.map(([label, value, note], index) => {
       const pair = document.createElement('div'), title = document.createElement('dt'), data = document.createElement('dd');
       title.textContent = label; data.textContent = value; pair.append(title, data);
+      if (index === 0) {
+        pair.className = 'btc-replay-pnl';
+        if (estimate.value > 0) data.className = 'btc-replay-gain';
+        else if (estimate.value < 0) data.className = 'btc-replay-loss';
+        const caption = document.createElement('small');
+        caption.textContent = note;
+        data.append(caption);
+      }
       return pair;
     }));
     const steps = [
@@ -219,7 +240,8 @@ function init() {
         const option = document.createElement('option');
         option.value = trade.id;
         const state = trade.status === 'OPEN' ? 'open' : trade.status === 'INCOMPLETE' ? 'onvolledig' : 'gesloten';
-        option.textContent = `${date.format(trade.openedAt)} | ${trade.direction.toUpperCase()} | ${state}`;
+        const { value } = pnl(trade);
+        option.textContent = `${value === undefined ? 'P&L —' : pnlMoney.format(value)} | ${state} | ${trade.direction.toUpperCase()} | ${date.format(trade.openedAt)}`;
         select.append(option);
       }
       if (!select.options.length) { status.textContent = `Geen gesimuleerde entries · ${data.candidateCount} Green-signalen in dit venster.`; return; }

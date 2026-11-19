@@ -908,7 +908,8 @@ router.get('/open-liquidity/v2/btc-green-retest', async (req, res) => {
       await btcGreenRetestPending;
     }
     const { candles, trades, ...summary } = btcGreenRetestCache!.data;
-    if (!id) return res.send({ trades: trades.map(({ id, direction, openedAt, status }) => ({ id, direction, openedAt, status })), ...summary });
+    if (!id) return res.send({ trades: trades.map(({ id, direction, openedAt, status, grossPnl, markToMarket }) =>
+      ({ id, direction, openedAt, status, grossPnl, markToMarket })), ...summary });
     const trade = trades.find(row => row.id === id);
     if (!trade) return res.status(404).send({ error: 'Trade not found in this retest.' });
     const from = trade.signalAt - 12 * 3_600_000;

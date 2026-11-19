@@ -184,6 +184,10 @@
 .btc-replay-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px 14px; margin: 12px 0; padding: 10px 0; border-block: 1px solid #2b3443; }
 .btc-replay-summary dt { font-size: 11px; color: #a9b6c8; }
 .btc-replay-summary dd { margin: 3px 0 0; font-size: 13px; color: #e0e6f0; overflow-wrap: anywhere; }
+.btc-replay-pnl dd { font-weight: 650; }
+.btc-replay-pnl dd.btc-replay-gain { color: #68e2a6; }
+.btc-replay-pnl dd.btc-replay-loss { color: #ff8894; }
+.btc-replay-pnl small { display: block; margin-top: 3px; color: #a9b6c8; font-size: 11px; font-weight: 400; }
 .btc-replay-events { list-style: none; margin: 0; padding: 0; color: #c2ccda; font-size: 12px; }
 .btc-replay-events li { display: grid; grid-template-columns: minmax(138px, 1fr) minmax(0, 4fr); gap: 4px 12px; padding: 5px 0; border-bottom: 1px solid #252e3c; }
 .btc-replay-events li span { overflow-wrap: anywhere; }

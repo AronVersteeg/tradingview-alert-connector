@@ -23,6 +23,10 @@ checks, pivot/confirmation, initial and updated stop, and exit candle.
 - An unresolved missing dYdX hour while a position is open ends the retest with
   an incomplete trade. Missing prices, fills and stops are not fabricated.
   Exchange stop execution can differ from the simulated OHLC stop hit.
+- Per-trade gross P&L appears in the trade picker and summary. Closed trades
+  use the simulated exit price; an open trade is marked to the last closed
+  dYdX hour in the replay. That value is explicitly unrealized. Incomplete
+  trades show no estimate; no trading fees, funding or slippage are deducted.
 
 The retest is read-only, loaded on request, and cached for 60 seconds. It has
 no dYdX account reads or writes and never invokes order placement. TypeScript,

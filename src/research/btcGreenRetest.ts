@@ -16,6 +16,7 @@ type Trade = {
   sizingStop: number; sizingFractal?: Fractal; initialStop: number; size: number; riskUsd: number;
   stops: { at: number; price: number }[]; yellows: Yellow[];
   closedAt?: number; exitPrice?: number; exitReason?: 'STOP' | 'GAP_STOP'; grossPnl?: number;
+  markToMarket?: { at: number; price: number; grossPnl: number };
   status: 'OPEN' | 'CLOSED' | 'INCOMPLETE';
 };
 
@@ -123,6 +124,12 @@ export function simulateBtcGreenRetest(rows: DecentraderRow[], context: ReturnTy
     if (improved) position.stops.push({ at: nextClose, price: next! });
     position.yellows.push({ at: nextClose, result: improved ? 'TIGHTENED' : 'UNCHANGED',
       stop: improved ? next! : current, fractal: fractal(candidate) });
+  }
+  const lastClosed = byHour.get(context.through - HOUR);
+  if (position?.status === 'OPEN' && lastClosed !== undefined) {
+    const price = rows[lastClosed].closeRef;
+    const sign = position.direction === 'long' ? 1 : -1;
+    position.markToMarket = { at: context.through, price, grossPnl: sign * (price - position.entryPrice) * position.size };
   }
   return { trades, skipped, skippedWhileOpen, incompleteAt };
 }
