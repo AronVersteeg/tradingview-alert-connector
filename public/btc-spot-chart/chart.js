@@ -377,10 +377,10 @@
       if (!intrusionHistory) throw new Error('Awaiting saved Spot intrusions');
       if (!yellowInputs || yellowInputs.history !== intrusionHistory || yellowInputs.version !== closedDataVersion || yellowInputs.hour !== hour) {
         yellowMarkers = intrusionDailyBreaks.buildYellowIntrusionMarkers(candles, intrusionHistory, Date.now(), market);
-        yellowLayer?.setData(yellowMarkers);
+        yellowLayer?.setData(yellowMarkers, candles);
         yellowInputs = { history: intrusionHistory, version: closedDataVersion, hour };
       }
-      status.textContent = `Yellows: ${yellowMarkers.length}${intrusionReadFailed ? ' | stale' : ''}`;
+      status.textContent = `Yellows: ${yellowMarkers.length} | candle close${intrusionReadFailed ? ' | stale' : ''}`;
       status.dataset.stale = String(intrusionReadFailed);
     } catch (error) {
       yellowMarkers = []; yellowLayer?.setData([]); yellowInputs = undefined;
@@ -608,7 +608,7 @@
       orderBlockLayer.setLabelAnchor(() => gapLayer?.rightEdgeCoordinate() ?? null);
       orderBlockLayer.setVisible(byId('spotChartOrderBlocks').checked);
       candlesSeries.attachPrimitive(orderBlockLayer);
-      yellowLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive('#ffeb3b');
+      yellowLayer = new intrusionDailyBreaks.YellowIntrusionPrimitive();
       yellowLayer.setVisible(byId('spotChartYellows').checked);
       candlesSeries.attachPrimitive(yellowLayer);
       yellowInputs = undefined;

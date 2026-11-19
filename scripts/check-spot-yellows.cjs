@@ -69,8 +69,9 @@ function yellowPixels(buffer, x) {
         'spotChartGapIntrusions', 'spotChartGapWeeklyBreaks', 'spotChartGapDailyBreaks', 'spotChartIntrusionDailyBreaks', 'spotChartManual']) await page.locator('#' + id).uncheck();
       await page.locator('#spotChartYellows').check();
       await page.waitForFunction(() => window.btcSpotChart.getYellowIntrusionMarkers().length === 4);
-      const expected = [3, 4, 5, 7].map(h => (day + h * HOUR) / 1000);
+      const expected = [3, 4, 5, 7].map(h => (day + (h + 1) * HOUR) / 1000);
       assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getYellowIntrusionMarkers().map(m => m.time)), expected);
+      assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getYellowIntrusionMarkers().map(m => m.candleStartedAt)), expected.map(time => time - 3600));
       await page.evaluate(d => {
         window.btcSpotChart.chart.timeScale().setVisibleRange({ from: d / 1000, to: d / 1000 + 10 * 3600 });
         window.btcSpotChart.candleSeries.priceScale().setVisibleRange({ from: 95, to: 105 });

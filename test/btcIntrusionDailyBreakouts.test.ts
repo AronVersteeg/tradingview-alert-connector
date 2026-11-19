@@ -1,6 +1,6 @@
 export {};
 const intrusionBreakouts = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
-const { compactIntrusionHistory, buildGapIntrusionMarkers, buildYellowIntrusionMarkers, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, buildPurpleLineBreakouts, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
+const { compactIntrusionHistory, buildGapIntrusionMarkers, buildYellowIntrusionMarkers, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, buildPurpleLineBreakouts, YellowIntrusionPrimitive, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
 const HOUR = 3600, start = Date.parse('2026-10-19T00:00:00Z') / 1000;
 const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
 const now = (start + 8 * HOUR) * 1000;
@@ -22,7 +22,7 @@ const model = () => ({ symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThroug
 ] });
 
 describe('Yellows: saved Spot intrusions without break conditions', () => {
-  test.each(['BTC', 'ETH', 'SOL', 'ZEC'])('%s marks long, short and mixed intrusions once, on their alert candles', asset => {
+  test.each(['BTC', 'ETH', 'SOL', 'ZEC'])('%s marks long, short and mixed intrusions once, at their candle closes', asset => {
     const market = `${asset}-USD`;
     const data = { source: { market, sourceStatuses: [{ name: `Binance Spot ${asset}USDT 1H` }] },
       intrusionBenchmarks: { history: [
@@ -32,7 +32,7 @@ describe('Yellows: saved Spot intrusions without break conditions', () => {
       ] }, delayHistory: { records: [{ intrusionTimestamp: alert(1), direction: 'short', smtpSentAt: iso(start + 6 * HOUR) }] } };
     const history = compactIntrusionHistory(data, now + 1, market, { includeGapHours: true });
     const rows = candles().map(c => ({ ...c, open: 100, high: 101, low: 99, close: 100 }));
-    const expected = [0, 1, 2, 7].map(h => ({ time: start + h * HOUR, closedAt: start + (h + 1) * HOUR }));
+    const expected = [0, 1, 2, 7].map(h => ({ time: start + (h + 1) * HOUR, candleStartedAt: start + h * HOUR, closedAt: start + (h + 1) * HOUR }));
     expect(buildYellowIntrusionMarkers(rows, history, now, market)).toEqual(expected);
     expect(buildYellowIntrusionMarkers(rows, { ...history, gapHours: [...history.gapHours, ...history.gapHours] }, now, market)).toEqual(expected);
     expect(buildYellowIntrusionMarkers(rows, history, now - 1, market)).toEqual(expected.slice(0, -1));
@@ -41,6 +41,28 @@ describe('Yellows: saved Spot intrusions without break conditions', () => {
     expect(() => buildYellowIntrusionMarkers(rows, history, now, 'OTHER-USD')).toThrow('history');
     expect(() => buildYellowIntrusionMarkers(rows, { ...history, market: 'OTHER-USD' }, now, market)).toThrow('history');
     expect(() => buildYellowIntrusionMarkers(rows, { ...history, source: 'decentrader-recorded-intrusions' }, now, market)).toThrow('history');
+  });
+  test('the 9 November 08:00 Amsterdam intrusion is anchored at 09:00, not observation or SMTP time', () => {
+    const open = Date.parse('2026-11-09T07:00:00Z') / 1000, close = open + HOUR;
+    const history = compactIntrusionHistory({ source: { market: 'BTC-USD', sourceStatuses: [{ name: 'Binance Spot BTCUSDT 1H' }] },
+      delayHistory: { records: [{ intrusionTimestamp: '2026-11-09 07:00:00', sideCounts: '1 right edge',
+        candleClosedAt: '2026-11-09T08:00:00Z', firstObservedAt: '2026-11-09T08:01:03.773Z', smtpSentAt: '2026-11-09T08:01:06.317Z' }] }
+    }, (close + 67) * 1000, 'BTC-USD', { includeGapHours: true });
+    const rows = [{ time: open, closed: true }];
+    expect(buildYellowIntrusionMarkers(rows, history, close * 1000 - 1)).toEqual([]);
+    expect(buildYellowIntrusionMarkers(rows, history, close * 1000)).toEqual([{ time: close, candleStartedAt: open, closedAt: close }]);
+    expect(history.gapHours).toEqual([open]); // Other overlays and signal identity remain on candle-open.
+  });
+  test('renders the latest close before the next candle arrives, without moving older gap markers', () => {
+    const layer = new YellowIntrusionPrimitive(), timeToCoordinate = jest.fn().mockReturnValue(null);
+    const logicalToCoordinate = jest.fn().mockReturnValue(75);
+    layer.attached({ chart: { timeScale: () => ({ timeToCoordinate, logicalToCoordinate }) }, requestUpdate: jest.fn() });
+    layer.setData([{ time: start + HOUR, candleStartedAt: start, closedAt: start + HOUR }], [{ time: start }]);
+    expect(layer.coordinateForSignal(layer.signals[0])).toBe(75);
+    expect(logicalToCoordinate).toHaveBeenCalledWith(1);
+    expect(layer.coordinateForSignal({ time: start - HOUR, candleStartedAt: start - 2 * HOUR })).toBeNull();
+    timeToCoordinate.mockReturnValue(45);
+    expect(layer.coordinateForSignal(layer.signals[0])).toBe(45);
   });
 });
 

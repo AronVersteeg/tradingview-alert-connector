@@ -257,7 +257,10 @@ requests.
 ## Yellows: Intrusions Only
 
 The default-off `Yellows` checkbox draws thin yellow (`#ffeb3b`) vertical lines
-on each loaded closed 1H candle with a saved, same-market Binance Spot intrusion.
+at the close of each loaded 1H candle with a saved, same-market Binance Spot intrusion.
+For an 08:00-09:00 candle the line is at 09:00, even if observation/SMTP are later.
+The source keeps its alert-candle-open timestamp; only Yellow geometry moves by
+one hour. The latest close is drawn even before the next candle arrives.
 It includes mixed-sided intrusions and deduplicates records by alert-candle open,
 not SMTP time. No gap box, break, Daily/Weekly/Monthly fractal or simulated-position
 condition is required. It shares the current intrusion history read and adds no

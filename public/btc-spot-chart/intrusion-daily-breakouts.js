@@ -59,7 +59,7 @@
     const closed = new Set(candles.filter(candle => candle.closed === true).map(candle => candle.time));
     return [...new Set(history.gapHours)].filter(time => Number.isSafeInteger(time) && time > 0 && time % 3600 === 0 &&
       closed.has(time) && (time + 3600) * 1000 <= nowMs).sort((a, b) => a - b)
-      .map(time => ({ time, closedAt: time + 3600 }));
+      .map(time => ({ time: time + 3600, candleStartedAt: time, closedAt: time + 3600 }));
   }
 
   function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe, timeline) {
@@ -94,6 +94,23 @@
 
   function buildIntrusionWeeklyBreakouts(candles, history, fractals, nowMs = Date.now(), market = 'BTC-USD') {
     return buildIntrusionBreakouts(candles, history, fractals, nowMs, market, 'W');
+  }
+
+  class YellowIntrusionPrimitive extends engine.GapWeeklyBreakoutPrimitive {
+    constructor() { super('#ffeb3b'); this.candleIndices = new Map(); }
+    setData(signals, candles = []) {
+      this.candleIndices = new Map(candles.map((candle, index) => [candle.time, index]));
+      this.lastIndex = candles.length - 1;
+      super.setData(signals);
+    }
+    coordinateForSignal(signal) {
+      const coordinate = super.coordinateForSignal(signal);
+      if (coordinate !== null) return coordinate;
+      const index = this.candleIndices.get(signal.candleStartedAt);
+      // The newest close is one logical bar after its candle, even before the next kline arrives.
+      return index === this.lastIndex && index !== undefined
+        ? this.chart.timeScale().logicalToCoordinate(index + 1) : null;
+    }
   }
 
   class IntrusionDailyBreakoutPrimitive extends engine.GapWeeklyBreakoutPrimitive {
@@ -155,7 +172,7 @@
   }
 
   const api = Object.freeze({ compactIntrusionHistory, buildGapIntrusionMarkers, buildYellowIntrusionMarkers, buildIntrusionDailyBreakouts,
-    buildIntrusionWeeklyBreakouts, buildPurpleLineBreakouts, IntrusionDailyBreakoutPrimitive });
+    buildIntrusionWeeklyBreakouts, buildPurpleLineBreakouts, YellowIntrusionPrimitive, IntrusionDailyBreakoutPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {
     root.BtcSpotIntrusionDailyBreakouts = api;
