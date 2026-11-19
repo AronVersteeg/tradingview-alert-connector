@@ -8,6 +8,28 @@ const HOUR = 3600;
 const feeds = { 'BTC-USD': binanceSpotChartFeed, 'ETH-USD': ethSpotChartFeed,
   'SOL-USD': solSpotChartFeed, 'ZEC-USD': zecSpotChartFeed };
 
+export function evaluateYellowIntrusionSignal(market: PurpleLineMarket, payload: any, intrusions: any[],
+  direction: 'long' | 'short', now = Date.now()): { time: number; closedAt: number; direction: 'long' | 'short' } | undefined {
+  const config = purpleLineSetupForMarket(market);
+  if (!config || payload?.source?.market !== market || payload.modelVersion !== config.modelVersion ||
+      payload.quality?.causalModel !== true || payload.quality?.priceStepUsd !== config.priceStepUsd ||
+      !payload.source.sourceStatuses?.some((source: any) => source.name === `Binance Spot ${config.symbol} 1H` && source.ok)) {
+    throw new Error(`${market} Yellow trailing requires current matching Binance Spot sources.`);
+  }
+  const closedAt = Math.floor(now / (HOUR * 1000)) * HOUR;
+  const time = closedAt - HOUR;
+  const timestamp = new Date(time * 1000).toISOString().slice(0, 19).replace('T', ' ');
+  const frames = payload.frames?.slice(-2);
+  const previousTimestamp = new Date((time - HOUR) * 1000).toISOString().slice(0, 19).replace('T', ' ');
+  if (frames?.[0]?.startedAtMs !== (time - HOUR) * 1000 || frames[0].t !== previousTimestamp ||
+      frames[1]?.startedAtMs !== time * 1000 || frames[1].t !== timestamp) {
+    throw new Error(`${market} Yellow trailing is awaiting consecutive closed Spot intrusion hours.`);
+  }
+  // Intrusion direction comes from its entrants, not a gap break or a later price move.
+  return intrusions.some(row => row.timestamp === timestamp && row.direction === direction)
+    ? { time, closedAt, direction } : undefined;
+}
+
 export function evaluateGreenLineSignal(market: PurpleLineMarket, payload: any, intrusions: any[],
   page: SpotChartPage, now = Date.now()): GreenLineSignal | undefined {
   const config = purpleLineSetupForMarket(market);

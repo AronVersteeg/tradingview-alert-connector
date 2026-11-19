@@ -89,7 +89,7 @@ describe('BTC single entry model selector and ownership interlock', () => {
     expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: true, entryMode: { mode: 'purple-trail' },
       gapDailyEntry: { setup: 'purple-green-trail', enabled: true, takeProfitMode: 'trailing-only',
         initialStop: { mode: 'signal-body-open', bodyFraction: 0, bufferPct: 0,
-          trailingGate: 'later-same-direction-green', trailingSignals: ['green', 'purple'] } } });
+          trailingGate: 'later-same-direction-intrusion', trailingSignals: ['yellow'] } } });
   });
   test.each(['purple', 'purple-trail', 'off', 'invalid'])('manual plans remain untouched and no candle/mail/order is requested in %s', async mode => {
     const monitor = new BtcManualTradeOverrideMonitor();

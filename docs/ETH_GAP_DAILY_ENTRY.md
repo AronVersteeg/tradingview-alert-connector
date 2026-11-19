@@ -77,9 +77,12 @@ dYdX 1H candle covering that exact signal hour** provides all execution-side dat
   without a percentage buffer or minimum-distance widening. Exchange tick rounding
   still applies. OHLC follows the existing dYdX chart-normalization path, including
   thin-market orderbook-mid mapping where applicable.
-- The original fractal is retained as the trailing anchor. Subsequent dYdX
-  fractal stops keep the existing confirmation, delay, wick-buffer and protective
-  stop-breach logic. The first and all later updates must strictly improve the
+- The original fractal is retained for sizing. Later same-direction Yellow
+  intrusions, not standalone fractal confirmations, gate trailing updates.
+  The entry Yellow itself is excluded. Subsequent dYdX fractal stops keep the
+  existing confirmation, wick-buffer and protective stop-breach logic. Each gate
+  uses the latest valid fractal known at that close, without a newer-pivot delay.
+  The first and all later updates must strictly improve the
   actual current stop: higher for longs, lower for shorts. Equal/worse candidates
   leave the body-open stop in place, with coverage repair if necessary.
 - Missing/malformed/stale same-hour dYdX data or a body-open stop on the wrong side of
@@ -89,6 +92,8 @@ dYdX 1H candle covering that exact signal hour** provides all execution-side dat
 This applies only to new orders after deployment. Persisted existing positions
 and uncertain legacy submissions retain their recorded stops and continue normal
 protective recovery. No migration moves a running trade to a new body SL.
+Existing automatic positions adopt the new Yellow gate while keeping their
+current stop. See [Yellow trailing](YELLOW_INTRUSION_TRAILING.md).
 The entry explicitly uses the existing `NO_TP` execution profile and an empty TP
 ladder. This also disables the exchange client's optional safety/fallback TPs.
 `takeProfitMode: trailing-only` is persisted with the position, preventing later

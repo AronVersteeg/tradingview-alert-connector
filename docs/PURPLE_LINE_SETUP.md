@@ -82,8 +82,11 @@ Historical chart coverage remains limited to actually available source data.
   downsizing remain unchanged. Existing $15 risk configuration is reused.
 - Initial purple SL is `dydx.open`: the start of the exact same-hour closed
   dYdX candle body, excluding wicks and with no added buffer. The original
-  confirmed dYdX fractal remains the sizing/trailing anchor. Later stops only
-  tighten; a worse/equal fractal does not widen the body-open stop. This policy
+  confirmed dYdX fractal remains the sizing anchor. Later same-direction Yellow
+  intrusions gate trailing; no gap or Daily break is required for the later event.
+  A new fractal alone cannot move the SL. Only data already closed at the Yellow
+  can confirm a candidate, and later stops only tighten; a worse/equal fractal
+  does not widen the body-open stop. See [Yellow trailing](YELLOW_INTRUSION_TRAILING.md). This policy
   applies only to new entries after deployment; existing positions and uncertain
   submissions retain their recorded stops. Manual entries retain their separate
   quarter-body initial SL (`open + 0.25 * (close - open)`), TP and fractal-sizing policies.

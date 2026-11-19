@@ -845,13 +845,13 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
             ...payload.source,
             note:
               market === 'BTC-USD'
-                ? 'BTC_ENTRY_MODE selects manual, green, purple-trail or off (legacy purple selects green). Green uses Spot intrusion plus gap break; purple-trail also requires a Daily break. The initial SL is at the matching dYdX signal candle open, tightened to confirmed fractals only after later same-direction Green or Purple signals. Automatic entries have no TPs.'
+                ? 'BTC_ENTRY_MODE selects manual, green, purple-trail or off (legacy purple selects green). Green uses Spot intrusion plus gap break; purple-trail also requires a Daily break. The initial SL is at the matching dYdX signal candle open, tightened to confirmed fractals only after later same-direction Yellow intrusions. Automatic entries have no TPs.'
                 : market === 'PAXG-USD'
                 ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. When explicitly enabled, filtered Gold intrusions are independently managed on dYdX PAXG-USD with the shared risk, fractal SL and TP settings.'
                 : market === 'XAG-USD'
                   ? 'SILVER Public Perp V2 uses a causal Binance XAGUSDT Futures liquidation-cohort reconstruction. Filtered intrusions and SMTP Delay history use the shared candle and taker-delta rules; live execution is independently managed on dYdX XAG-USD with the shared dollar-risk, Williams-fractal SL and TP settings.'
                   : ['ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market)
-                  ? `${asset} Public V2 Green entries use causal Binance Spot intrusions and a fresh same-hour close beyond the previous gap edge, with dYdX signal-open SL and fractal sizing/trailing without TPs.`
+                  ? `${asset} Public V2 Green entries use causal Binance Spot intrusions and a fresh same-hour close beyond the previous gap edge, with dYdX signal-open SL, fractal sizing and later same-direction Yellow-gated fractal trailing without TPs.`
                   : `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
           }
         : payload.source,

@@ -10,7 +10,7 @@ This is the single authoritative BTC entry selector:
 | --- | --- |
 | `manual` | Saved manual plans only (default when absent). |
 | `green` | Binance Spot Public V2 intrusion plus a fresh close beyond the previous gap edge on the same closed 1H candle. |
-| `purple-trail` | BTC only: Purple entry (same-hour directional intrusion, fresh gap break and fresh Daily close break), with an initial SL at the dYdX signal candle open and later Green/Purple-gated fractal trailing. |
+| `purple-trail` | BTC only: Purple entry (same-hour directional intrusion, fresh gap break and fresh Daily close break), with an initial SL at the dYdX signal candle open and later same-direction Yellow-gated fractal trailing. |
 | `purple` | Legacy alias for `green`; use `purple-trail` for the new strategy. |
 | `off` | No new BTC entries. Existing positions keep their original management. |
 
@@ -61,7 +61,7 @@ existing `OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED` switch also controls
 new Green trigger emails.
 Legacy BTC Delay and Shadow entry handlers cannot compete with these models.
 
-## BTC Purple With Green Trailing
+## BTC Purple With Yellow Trailing
 
 Set `BTC_ENTRY_MODE=purple-trail` and keep `DECENTRADER_AUTO_TRADE_ENABLED=true`
 and `DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED=true`. The entry uses the same
@@ -73,27 +73,24 @@ fractal sizing and its anchor remain unchanged; the execution risk guard applies
 the existing budget to the actual body-open stop and may downsize further.
 Missing/stale OHLC or an open on the wrong side of the current oracle blocks entry
 instead of substituting a different stop. No TP orders. Existing positions and
-already-submitted intents retain their recorded stop; they are not migrated.
+already-submitted intents retain their recorded stop; no migration moves their SL.
 
-The stop is active immediately. One later raw Green or Purple close in the same
-direction permits one evaluation of a newer, improving dYdX fractal. Purple
-includes every Green condition, so its candle is already accepted by the raw
-Green reader, even if the chart only shows the purple overlay. Each candle is
-evaluated once, not once per color. No extra Daily read is needed for trailing.
-For new body-open positions, the pivot itself must be after the entry signal
-candle; older positions retain their recorded fractal anchor. Only dYdX candles
-closed by that later Green/Purple hour may confirm the fractal. No better
-fractal means no move until another Green or Purple. Late exchange verification retries the same proposed
-price, leaving the old stop in place. The current stop and trail policy persist
-with the position and are not converted when the entry mode changes. A restart
-can reconcile persisted events, but does not replay missed historical Greens.
-The BTC Public V2 intrusion monitor must remain enabled to scan for fresh Green
-signals; the existing protective order does not depend on the scanner.
+The stop is active immediately. One later Yellow intrusion close in the same
+direction permits one evaluation of the then-valid confirmed dYdX fractal. A gap
+or Daily break is not required; a standalone fractal without a Yellow does not
+move the stop. The entry Yellow itself is excluded. Only dYdX candles closed by
+that Yellow hour can confirm its candidate, and the stop must improve the current
+SL. The pivot need not postdate entry. Pending exchange verification retries the
+same proposed price while existing protection stays active. Existing automatic
+positions adopt the new Yellow gate without resetting their stop or replaying
+old events. Manual positions retain their separate management. See
+[Yellow trailing](YELLOW_INTRUSION_TRAILING.md) for direction, persistence and
+coverage details. The BTC intrusion monitor must remain enabled for fresh events.
 
 For verification, check `execution.entryMode.mode=purple-trail` and
 `execution.gapDailyEntry.setup=purple-green-trail` on the public BTC status route.
 To roll back for new entries, set `BTC_ENTRY_MODE=green`. Other markets retain
-their existing switches and Green management.
+their existing switches and Green entries, with the same Yellow trailing policy.
 
 ## Plans, Ownership And Restart Safety
 

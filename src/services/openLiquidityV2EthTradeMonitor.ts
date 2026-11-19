@@ -5,7 +5,7 @@ import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './d
 import { btcCompanionEntryBlockReason, btcEntryModeStatus } from './btcEntryMode';
 import { SpotEntrySignal, EthEntryFuturesDelta,
   freshEthGapDailySignal, isBtcPurpleTrailSignal, withPurpleDydxBodyOpenStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
-import { readBtcPurpleTrailSignal, readGreenLineSignal } from './greenLineEntry';
+import { evaluateYellowIntrusionSignal, readBtcPurpleTrailSignal, readGreenLineSignal } from './greenLineEntry';
 import { PurpleLineMarket, automaticSpotEntryEnabled, purpleLineSetupForMarket, spotEntrySetup } from './purpleLineSetup';
 import { PurpleLineContinuity } from './purpleLineContinuity';
 import { PurpleTriggerEmail, purpleTriggerEmail } from './purpleTriggerEmail';
@@ -317,8 +317,16 @@ type BtcPurpleTrailState = {
   pending?: { greenClosedAt: number; stop: ReturnType<typeof buildFractalStop> };
 };
 
+type IntrusionTrailState = {
+  entryClosedAt: number;
+  lastScannedClosedAt?: number;
+  lastIntrusionClosedAt?: number;
+  evaluatedIntrusionClosedAt?: number;
+  pending?: { intrusionClosedAt: number; stop: ReturnType<typeof buildFractalStop> };
+};
+
 type EthMonitorState = AlertState & {
-  managedPosition?: NonNullable<AlertState['managedPosition']> & { btcPurpleTrail?: BtcPurpleTrailState };
+  managedPosition?: NonNullable<AlertState['managedPosition']> & { btcPurpleTrail?: BtcPurpleTrailState; intrusionTrail?: IntrusionTrailState };
   gapDailyEntry?: {
     activatedAt?: string;
     handledCandle?: number;
@@ -945,7 +953,8 @@ export class OpenLiquidityV2EthTradeMonitor {
         // This path shares the position lock, never the slower map/entry scan.
         const result = await this.checkManagedPosition();
         const readThrough = Date.parse(result?.trailingCandle?.closedAt || '');
-        retry = result?.ok === false || Boolean(result?.trailingCandle?.pending) || readThrough < expectedClose;
+        retry = result?.ok === false || Boolean(result?.trailingCandle?.pending) ||
+          result?.trailingCandle?.required !== false && readThrough < expectedClose;
       } catch (error) {
         retry = true;
         console.error(`${this.config.asset} V2 closed-hour protective check failed:`, error);
@@ -1034,7 +1043,7 @@ export class OpenLiquidityV2EthTradeMonitor {
           : 'Same-hour intrusion and fresh close beyond the previous gap edge.',
         executionMarket: this.config.market, takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
         initialStop: { mode: 'signal-body-open', bodyFraction: PURPLE_BODY_STOP_FRACTION, bufferPct: 0,
-          ...(purple ? { trailingGate: 'later-same-direction-green', trailingSignals: ['green', 'purple'] } : {}), candleSource: 'dydx-1h', sameSignalHour: true,
+          trailingGate: 'later-same-direction-intrusion', trailingSignals: ['yellow'], candleSource: 'dydx-1h', sameSignalHour: true,
           sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
         futuresDeltaFilter: { enabled: false, reason: 'Futures delta is observe-only, not an entry requirement.' },
         activatedAt: state.gapDailyEntry?.activatedAt, decision: state.gapDailyEntry?.decision,
@@ -1240,6 +1249,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       throw new Error(fractalPlan.stop?.reason || 'BTC Purple requires a confirmed dYdX high/low fractal stop.');
     }
     const activePlan = withPurpleDydxBodyOpenStop(fractalPlan, rows[rows.length - 1], signal, price, this.config.asset);
+    activePlan.initialStopPolicy.trailingGate = 'later-same-direction-intrusion';
     return { market: this.config.market, marketInfo, price, activePlan, fractalCandleSource: 'dydx-1h',
       timestamp: new Date(signal.time * 1000).toISOString().slice(0, 19).replace('T', ' ') };
   }
@@ -1311,29 +1321,43 @@ export class OpenLiquidityV2EthTradeMonitor {
     }));
   }
 
-  private async checkBtcPurpleTrail(state: EthMonitorState, payload: any, result: any): Promise<void> {
+  private intrusionTrail(state: EthMonitorState): IntrusionTrailState | undefined {
     const managed = state.managedPosition;
-    const trail = managed?.btcPurpleTrail;
-    if (this.config.market !== 'BTC-USD' || !trail) return;
+    if (!managed || !purpleLineSetupForMarket(this.config.market) || managed.takeProfitMode !== 'trailing-only') return;
+    if (managed.intrusionTrail) return managed.intrusionTrail;
+    const parts = managed.entrySignature?.split('|');
+    if (parts?.length !== 4 || parts[0] !== this.config.market || parts[1] !== 'GAP_DAILY' || parts[3] !== managed.direction) return;
+    const startedAt = Number(parts[2]);
+    if (!Number.isSafeInteger(startedAt) || startedAt <= 0 || startedAt % 3600) return;
+    // Adopt only our automatic position's trailing policy; never reset its live stop or size.
+    managed.intrusionTrail = { entryClosedAt: startedAt + 3600,
+      lastScannedClosedAt: managed.btcPurpleTrail?.lastScannedClosedAt };
+    delete managed.btcPurpleTrail;
+    return managed.intrusionTrail;
+  }
+
+  private async checkIntrusionTrail(state: EthMonitorState, payload: any, result: any): Promise<void> {
+    const managed = state.managedPosition;
+    const trail = this.intrusionTrail(state);
+    if (!managed || !trail) return;
     const closedAt = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
     if (closedAt / 1000 <= Math.max(trail.entryClosedAt, trail.lastScannedClosedAt ?? 0) || Date.now() - closedAt >= TRAILING_CLOSE_RETRY_WINDOW_MS) return;
     try {
       const intrusions = this.latestSpotIntrusions(payload, closedAt);
-      // Purple is Green plus a Daily break: this raw signal includes both, once per candle.
-      const signal = intrusions.length ? await readGreenLineSignal('BTC-USD', payload, intrusions) : undefined;
+      const signal = evaluateYellowIntrusionSignal(this.config.market as PurpleLineMarket, payload, intrusions, managed.direction);
       const accepted = await this.coordinator.exclusive(async () => {
         if (state.managedPosition !== managed) return false;
         trail.lastScannedClosedAt = closedAt / 1000;
         if (!signal || signal.closedAt !== trail.lastScannedClosedAt || signal.direction !== managed.direction) return false;
-        trail.lastGreenClosedAt = signal.closedAt;
+        trail.lastIntrusionClosedAt = signal.closedAt;
         writeState(state, this.config);
         return true;
       });
       if (accepted) await this.checkManagedPosition();
     } catch (error) {
       result.gapDailyEntryPending = true;
-      result.btcPurpleTrailScanError = error instanceof Error ? error.message : String(error);
-      console.warn('BTC Purple Green trail scan pending; existing SL remains active:', result.btcPurpleTrailScanError);
+      result.intrusionTrailScanError = error instanceof Error ? error.message : String(error);
+      console.warn(`${this.config.asset} Yellow trail scan pending; existing SL remains active:`, result.intrusionTrailScanError);
     }
   }
 
@@ -1456,8 +1480,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       take_profits: [], gap_daily_entry: signal });
     (orderAlert as any).decentrader = { ...(orderAlert as any).decentrader,
       sizingStop: plan.activePlan.sizingStop, initialStopPolicy: plan.activePlan.initialStopPolicy,
-      note: purple ? 'Binance Spot Purple entry; dYdX fractal sizing; initial SL at the dYdX signal candle open; tighten on subsequent Green or Purple signals only; no TPs.'
-        : 'Binance Spot Green entry; dYdX fractal sizing; initial SL at the dYdX signal candle open; dYdX fractal trailing; no TPs.' };
+      note: `Binance Spot ${label} entry; dYdX fractal sizing; initial SL at the dYdX signal candle open; tighten only on later same-direction Yellow intrusions; no TPs.` };
     await this.applyStatefulOrderCapacity(orderAlert, result);
     if (!freshEthGapDailySignal(signal, entry.activatedAt!)) return skip('Signal expired during order preparation.');
     entry.handledCandle = signal.closedAt * 1000;
@@ -1667,9 +1690,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       currentStopFractalSource: stop?.fractal?.source,
       currentStopFractalCandleSource: 'dydx-1h',
       takeProfitMode: options.takeProfitMode || 'dynamic',
-      ...(this.config.market === 'BTC-USD' && options.model === 'GAP_DAILY' && options.signal && isBtcPurpleTrailSignal(options.signal)
-        ? { btcPurpleTrail: { entryClosedAt: options.signal.closedAt,
-            ...(plan.activePlan?.initialStopPolicy?.mode === 'signal-body-open' ? { fractalAfter: options.signal.time } : {}) } } : {}),
+      ...(purpleLineSetupForMarket(this.config.market) && options.model === 'GAP_DAILY' && options.signal
+        ? { intrusionTrail: { entryClosedAt: options.signal.closedAt } } : {}),
       takeProfits
     };
     if (state.managedPosition.takeProfitMode === 'dynamic') {
@@ -2359,8 +2381,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       result.dynamicSlSync = { outcome: 'FLATTENED_AFTER_STOP_BREACH', currentPrice, stop: managed.currentStop, remainingPosition: existingPosition(after, this.config.market) || null };
       return;
     }
-    if (this.config.market === 'BTC-USD' && managed.btcPurpleTrail) {
-      await this.syncBtcPurpleStop(state, result, position, plan);
+    if (this.intrusionTrail(state)) {
+      await this.syncIntrusionStop(state, result, position, plan);
       return;
     }
     const rows = dydxHourlyCandlesToFractalRows(
@@ -2461,9 +2483,9 @@ export class OpenLiquidityV2EthTradeMonitor {
     }
   }
 
-  private async syncBtcPurpleStop(state: EthMonitorState, result: any, position: DydxOpenPosition, plan: any): Promise<void> {
+  private async syncIntrusionStop(state: EthMonitorState, result: any, position: DydxOpenPosition, plan: any): Promise<void> {
     const managed = state.managedPosition!;
-    const trail = managed.btcPurpleTrail!;
+    const trail = managed.intrusionTrail!;
     const direction = managed.direction, currentPrice = finite(plan.marketInfo?.oraclePrice) || finite(plan.price);
     const liveTrail = boolEnv('DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED', false);
     const sync = (price: number, stop?: ReturnType<typeof buildFractalStop>) => this.executor!.syncTrailingStop!(
@@ -2472,29 +2494,30 @@ export class OpenLiquidityV2EthTradeMonitor {
       ? price > finite(managed.currentStop) && price < currentPrice
       : price < finite(managed.currentStop) && price > currentPrice;
 
-    const gate = trail.lastGreenClosedAt;
-    let gateStatus = gate ? 'GREEN_EVALUATED' : 'AWAITING_FIRST_GREEN';
-    if (liveTrail && !trail.pending && gate && gate > (trail.evaluatedGreenClosedAt ?? 0)) {
-      const rows = dydxHourlyCandlesToFractalRows(await fetchDydxHourlyCandlesForMarket('BTC-USD').catch(error => {
-        result.btcPurpleTrailReadError = error instanceof Error ? error.message : String(error);
+    const gate = trail.lastIntrusionClosedAt;
+    let gateStatus = gate ? 'YELLOW_EVALUATED' : 'AWAITING_FIRST_YELLOW';
+    result.trailingCandle = { source: 'dydx-1h', required: false, pending: false, gatedBy: 'same-direction-intrusion' };
+    if (liveTrail && !trail.pending && gate && gate > trail.entryClosedAt && gate > (trail.evaluatedIntrusionClosedAt ?? 0)) {
+      const rows = dydxHourlyCandlesToFractalRows(await fetchDydxHourlyCandlesForMarket(this.config.market).catch(error => {
+        result.intrusionTrailReadError = error instanceof Error ? error.message : String(error);
         return undefined;
       }));
       const frame = rows.findIndex(row => Date.parse(row.timestamp) === (gate - 3600) * 1000);
+      const readThrough = frame >= 0 ? gate * 1000 : Date.parse(rows.at(-1)?.timestamp || '') + HOUR_MS;
+      result.trailingCandle = { source: 'dydx-1h', required: true, gatedBy: 'same-direction-intrusion',
+        observedAt: new Date().toISOString(), expectedClosedAt: new Date(gate * 1000).toISOString(),
+        closedAt: Number.isFinite(readThrough) ? new Date(readThrough).toISOString() : null, pending: frame < 0 };
       if (frame >= 0) {
-        // Confirmation may use only candles closed at the Green signal, including on retry/restart.
+        // Freeze confirmation at the intrusion close, including during retries and after restart.
         const stopRows = contiguousDydxTail(rows, frame);
-        const anchor = Math.max(Date.parse(managed.currentStopFractalTimestamp || '') || 0, (trail.fractalAfter ?? 0) * 1000);
-        const candidate = buildFractalStop(stopRows, stopRows.length - 1, direction, currentPrice, {
-          afterFractalTimestamp: anchor ? new Date(anchor).toISOString() : undefined, enforceMinDistance: false
-        });
-        trail.evaluatedGreenClosedAt = gate;
+        const candidate = buildFractalStop(stopRows, stopRows.length - 1, direction, finite(stopRows.at(-1)?.closeRef), { enforceMinDistance: false });
+        trail.evaluatedIntrusionClosedAt = gate;
         if (candidate.valid && candidate.fractal?.source === (direction === 'long' ? 'lowRef' : 'highRef') && favorable(finite(candidate.price))) {
-          trail.pending = { greenClosedAt: gate, stop: candidate };
-        } else gateStatus = 'GREEN_NO_BETTER_CONFIRMED_FRACTAL';
+          trail.pending = { intrusionClosedAt: gate, stop: candidate };
+        } else gateStatus = 'YELLOW_NO_BETTER_CONFIRMED_FRACTAL';
         writeState(state, this.config);
       } else {
-        gateStatus = 'AWAITING_GREEN_DYDX_CANDLE';
-        result.trailingCandle = { source: 'dydx-1h', expectedClosedAt: new Date(gate * 1000).toISOString(), pending: true };
+        gateStatus = 'AWAITING_YELLOW_DYDX_CANDLE';
       }
     }
 
@@ -2510,20 +2533,21 @@ export class OpenLiquidityV2EthTradeMonitor {
         managed.currentStopFractalTimestamp = candidate.fractal?.timestamp;
         managed.currentStopFractalPrice = candidate.fractal?.price;
         managed.currentStopFractalSource = candidate.fractal?.source;
+        managed.currentStopFractalCandleSource = 'dydx-1h';
         delete trail.pending;
-        gateStatus = 'GREEN_STOP_VERIFIED';
+        gateStatus = 'YELLOW_STOP_VERIFIED';
       } else if (response?.outcome === 'TIGHTER_STOP_RETAINED') {
         delete trail.pending;
         gateStatus = 'TIGHTER_STOP_RETAINED';
-      } else gateStatus = 'GREEN_STOP_PENDING';
+      } else gateStatus = 'YELLOW_STOP_PENDING';
     } else {
       if (liveTrail && candidate) {
         delete trail.pending;
-        gateStatus = 'GREEN_STOP_NO_LONGER_VALID';
+        gateStatus = 'YELLOW_STOP_NO_LONGER_VALID';
       }
       result.dynamicSlSync = await sync(finite(managed.currentStop));
     }
-    result.btcPurpleTrail = { outcome: liveTrail ? gateStatus : 'TRAIL_UPDATES_DISABLED', lastGreenClosedAt: gate, currentStop: managed.currentStop };
+    result.intrusionTrail = { outcome: liveTrail ? gateStatus : 'TRAIL_UPDATES_DISABLED', lastIntrusionClosedAt: gate, currentStop: managed.currentStop };
   }
 
   async check(): Promise<any> {
@@ -2562,7 +2586,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         result.publicV2Refreshed = await this.collector.refreshForLatestClosedHour();
       }
       const payload = await this.collector.getPayload();
-      await this.checkBtcPurpleTrail(state, payload, result);
+      await this.checkIntrusionTrail(state, payload, result);
       await this.checkGapDailyEntry(state, payload, result);
       // Notify after entry/protection, without waiting for slower research panels.
       void this.flushPurpleTriggerEmails();

@@ -2,11 +2,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { OpenLiquidityV2EthTradeMonitor, openLiquidityV2BtcIntrusionMonitor,
-  openLiquidityV2EthTradeMonitor, openLiquidityV2SolTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
+  openLiquidityV2EthTradeMonitor, openLiquidityV2SolTradeMonitor, openLiquidityV2ZecTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
 
 const hour = Date.parse('2026-11-09T14:00:00Z');
 const initial = hour - 23 * 60_000;
-const pairs = [openLiquidityV2BtcIntrusionMonitor, openLiquidityV2EthTradeMonitor, openLiquidityV2SolTradeMonitor];
+const pairs = [openLiquidityV2BtcIntrusionMonitor, openLiquidityV2EthTradeMonitor, openLiquidityV2SolTradeMonitor, openLiquidityV2ZecTradeMonitor];
 
 describe('Close-aligned V2 protective checks independent of entry/map scans', () => {
   const originalEnv = { ...process.env };
@@ -30,6 +30,7 @@ describe('Close-aligned V2 protective checks independent of entry/map scans', ()
     process.env.BTC_ENTRY_MODE = 'off';
     process.env.OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_ENABLED = 'false';
     process.env.OPEN_LIQUIDITY_V2_SOL_GAP_DAILY_ENTRY_ENABLED = 'false';
+    process.env.OPEN_LIQUIDITY_V2_ZEC_GAP_DAILY_ENTRY_ENABLED = 'false';
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
     setup();
@@ -83,6 +84,12 @@ describe('Close-aligned V2 protective checks independent of entry/map scans', ()
 
   test('does not spin when there is no owned position or stop management is disabled', async () => {
     management.mockResolvedValue({ ok: true });
+    monitor.start(0); await jest.advanceTimersByTimeAsync(30 * 60_000);
+    expect(management).toHaveBeenCalledTimes(2); expect(map).not.toHaveBeenCalled();
+  });
+
+  test('does not require or pretend to read fresh dYdX candles when the Yellow gate is closed', async () => {
+    management.mockResolvedValue({ ok: true, trailingCandle: { source: 'dydx-1h', required: false, pending: false } });
     monitor.start(0); await jest.advanceTimersByTimeAsync(30 * 60_000);
     expect(management).toHaveBeenCalledTimes(2); expect(map).not.toHaveBeenCalled();
   });
