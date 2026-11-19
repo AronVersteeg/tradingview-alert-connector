@@ -3,6 +3,7 @@ import fs from 'fs';
 import net from 'net';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
+import { EmailNotificationContext, emailNotificationAllowed, informationalEmailsEnabled } from './emailNotificationPolicy';
 import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './dydxSignalBodyStop';
 import { btcCompanionEntryBlockReason, btcEntryMode } from './btcEntryMode';
 import { GapProjectionHistory } from './decentraderGapProjectionHistory';
@@ -1747,8 +1748,10 @@ async function sendEmail(settings: SmtpSettings, subject: string, body: string):
 export async function sendEmailBestEffort(
   settings: SmtpSettings,
   subject: string,
-  body: string
-): Promise<{ sent: boolean; error?: string }> {
+  body: string,
+  context?: EmailNotificationContext
+): Promise<{ sent: boolean; suppressed?: boolean; error?: string }> {
+  if (!emailNotificationAllowed(context)) return { sent: false, suppressed: true };
   try {
     await sendEmail(settings, subject, body);
     return { sent: true };
@@ -2118,7 +2121,7 @@ function decentraderIntrusionCandleFilterEnabled(): boolean {
 }
 
 export function decentraderRegularIntrusionEmailEnabled(): boolean {
-  return parseBool(process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED, false);
+  return informationalEmailsEnabled() && parseBool(process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED, false);
 }
 
 function decentraderIntrusionCandleSource(): 'binance-futures' | 'dydx' {
@@ -5728,7 +5731,7 @@ export class DecentraderGapMonitor {
       };
 
 
-      const smtpSettings = smtpSettingsFromEnv();
+      const smtpSettings = informationalEmailsEnabled() ? smtpSettingsFromEnv() : undefined;
       await this.processDailyMasterScanner(rows, rsiStudy, previousDataTimestamp, state, result, smtpSettings);
       const liquidityBalance = latestOneHourLiquidityBalance(rows);
       if (liquidityBalance) {
@@ -8036,6 +8039,7 @@ export class DecentraderGapMonitor {
     request: BtcManualEntryRequest,
     result: any
   ): Promise<{ sent: boolean; error?: string }> {
+    if (result?.tradePlaced !== true) return { sent: false };
     const smtp = smtpSettingsFromEnv();
     if (!smtp) return { sent: false, error: 'SMTP is not configured.' };
 
@@ -8070,7 +8074,9 @@ export class DecentraderGapMonitor {
       ...tpLines
     ].filter(Boolean).join('\n');
     const subject = btcManualTriggerEmailSubject(request);
-    const email = await sendEmailBestEffort(smtp, subject, body);
+    const email = await sendEmailBestEffort(smtp, subject, body, {
+      kind: 'entry', market: request.market, signature: request.signature, outcome: 'PLACED'
+    });
     console.log('BTC manual entry trigger email result:', {
       subject,
       sent: email.sent,

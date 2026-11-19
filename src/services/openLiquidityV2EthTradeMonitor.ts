@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
+import { EMAIL_NOTIFICATION_POLICY, informationalEmailsEnabled } from './emailNotificationPolicy';
 import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './dydxSignalBodyStop';
 import { btcCompanionEntryBlockReason } from './btcEntryMode';
 import { spotEntryModeExplicit, spotEntryModeStatus, spotManualEntryEnabled } from './spotEntryMode';
@@ -1012,7 +1013,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       delayEntryModelEnabled: delayEntryModelEnabled() && !spotEntryModeExplicit(this.config.market),
       observeOnly: !this.config.tradeCapable || spotEntryModeExplicit(this.config.market) && !this.gapDailyEnabled(),
       informationalOnly: Boolean(this.config.informationalOnly),
-      informationalEmailEnabled: this.config.informationalEmailEnv
+      informationalEmailEnabled: informationalEmailsEnabled() && this.config.informationalEmailEnv
         ? boolEnv(this.config.informationalEmailEnv, false)
         : false,
       stateFile: stateFile(this.config),
@@ -1039,6 +1040,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       market: this.config.market,
       ...(spotEntryModeStatus(this.config.market) ? { entryMode: spotEntryModeStatus(this.config.market) } : {}),
       autoTradeEnabled: this.autoTradeEnabled(),
+      emailNotificationPolicy: EMAIL_NOTIFICATION_POLICY,
       gapDailyEntry: purpleLineSetupForMarket(this.config.market) ? {
         setup, enabled: this.gapDailyEnabled(), env: spotEntryModeStatus(this.config.market)!.env,
         source: `Binance Spot ${this.config.symbol} 1H`, rule: purple
@@ -1068,7 +1070,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       intrusionIqTradeFilterEnabled: intrusionIqTradeFilterEnabled(),
       observeOnly: !this.config.tradeCapable || spotEntryModeExplicit(this.config.market) && !this.gapDailyEnabled(),
       informationalOnly: Boolean(this.config.informationalOnly),
-      informationalEmailEnabled: this.config.informationalEmailEnv
+      informationalEmailEnabled: informationalEmailsEnabled() && this.config.informationalEmailEnv
         ? boolEnv(this.config.informationalEmailEnv, false)
         : false,
       hasTradeExecutor: Boolean(this.executor),
@@ -1427,7 +1429,13 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (this.purpleEmailPromise) return this.purpleEmailPromise;
     if (!this.gapDailyEnabled() || !boolEnv('OPEN_LIQUIDITY_V2_PURPLE_TRIGGER_EMAIL_ENABLED', true)) return;
     this.purpleEmailPromise = this.coordinator.withState(async state => {
-      const pending = (state.gapDailyEntry?.triggerEmails || []).filter(row => !row.sentAt && row.attempts < 5 &&
+      const intent = state.gapDailyEntry?.intent;
+      // A restart can occur after fill confirmation but before the queued signal is updated.
+      if (intent?.outcome === 'CONFIRMED' && state.gapDailyEntry?.triggerEmails?.some(message =>
+        message.signature === intent.signature && !message.sentAt && message.outcome !== 'PLACED')) {
+        this.capturePurpleTriggerEmail(state, intent.signal, {});
+      }
+      const pending = (state.gapDailyEntry?.triggerEmails || []).filter(row => row.outcome === 'PLACED' && !row.sentAt && row.attempts < 5 &&
         Date.now() - Date.parse(row.createdAt) <= 86_400_000 && (!row.retryAt || Date.parse(row.retryAt) <= Date.now()));
       for (const message of pending.slice(0, 4)) {
         message.attempts++;
@@ -1435,7 +1443,9 @@ export class OpenLiquidityV2EthTradeMonitor {
         writeState(state, this.config);
         try {
           const smtp = smtpSettingsFromEnv();
-          const response = smtp ? await sendEmailBestEffort(smtp, message.subject, message.body)
+          const response = smtp ? await sendEmailBestEffort(smtp, message.subject, message.body, {
+            kind: 'entry', market: this.config.market, signature: message.signature, outcome: message.outcome
+          })
             : { sent: false, error: 'SMTP is not configured.' };
           if (response.sent) { message.sentAt = new Date().toISOString(); delete message.error; delete message.retryAt; }
           else { message.error = response.error || 'SMTP did not accept the message.';
@@ -2034,6 +2044,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     request: BtcManualEntryRequest,
     result: any
   ): Promise<{ sent: boolean; error?: string }> {
+    if (result?.tradePlaced !== true) return { sent: false };
     const smtp = smtpSettingsFromEnv();
     if (!smtp) return { sent: false, error: 'SMTP is not configured.' };
     const decision = result?.tradeDecision || {};
@@ -2063,7 +2074,9 @@ export class OpenLiquidityV2EthTradeMonitor {
       ...tpLines
     ].filter(Boolean).join('\n');
     const subject = btcManualTriggerEmailSubject(request);
-    const email = await sendEmailBestEffort(smtp, subject, body);
+    const email = await sendEmailBestEffort(smtp, subject, body, {
+      kind: 'entry', market: request.market, signature: request.signature, outcome: 'PLACED'
+    });
     console.log(`${this.config.asset} manual entry trigger email result:`, {
       subject,
       sent: email.sent,
@@ -2629,10 +2642,10 @@ export class OpenLiquidityV2EthTradeMonitor {
       {
         const reconstructed = reconstructReplicaIntrusions(payload, state.lastDataTimestamp);
         result.alerts = reconstructed.alerts;
-        const smtp = smtpSettingsFromEnv();
+        const smtp = informationalEmailsEnabled() ? smtpSettingsFromEnv() : undefined;
         const delayModelEnabled = delayEntryModelEnabled() && !spotEntryModeExplicit(this.config.market);
         const regularIntrusionEmailEnabled = decentraderRegularIntrusionEmailEnabled();
-        const informationalEmailEnabled = this.config.informationalEmailEnv
+        const informationalEmailEnabled = informationalEmailsEnabled() && this.config.informationalEmailEnv
           ? boolEnv(this.config.informationalEmailEnv, false)
           : false;
         state.pendingAlerts = state.pendingAlerts || {};

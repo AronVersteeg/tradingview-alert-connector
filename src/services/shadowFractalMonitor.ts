@@ -12,6 +12,7 @@ import {
   confirmedWilliamsFractals
 } from './binanceDailyFractalHistory';
 import { sendEmailBestEffort, smtpSettingsFromEnv } from './decentraderGapMonitor';
+import { informationalEmailsEnabled } from './emailNotificationPolicy';
 import {
   FractalEntryHandler,
   FractalEntryRequest,
@@ -88,7 +89,7 @@ function boolValue(value: string | undefined, fallback: boolean): boolean {
 }
 
 export function shadowFractalEmailEnabled(): boolean {
-  return boolValue(process.env.SHADOW_FRACTAL_EMAIL_ENABLED, false);
+  return informationalEmailsEnabled() && boolValue(process.env.SHADOW_FRACTAL_EMAIL_ENABLED, false);
 }
 
 function stateFile(): string {

@@ -80,11 +80,14 @@ an older signal from the previous model. Restart continuity remains keyed by
 pair, model and setup; the five-minute automatic entry freshness bound is not
 extended. Pending exchange reconciliation/stop repair continues independently.
 
-Automatic Purple/Green trigger mail follows the selected automatic route and
-the existing trigger-mail switch. Manual trigger mail follows actual manual
-execution. Off/Manual do not flush queued automatic entry mail. Observational
-intrusion/Shadow mail switches remain separate; displaying a Yellow does not
-depend on the selected entry mode.
+Mail uses the global entries-only policy: only confirmed Purple/Green and manual
+entries are delivered. Skipped, detected-only, failed, uncertain or flattened
+signals are not mailed, including old queued signals after a restart. Confirmed
+automatic messages retain the existing trigger-mail switch, retry and deduplication.
+Intrusion, filtered, observational Shadow, TP-hit and scanner mail is suppressed,
+even if an old informational email env is true. This does not disable monitoring,
+stored intrusion evidence or any overlay. Off/Manual do not flush queued automatic
+entry mail. Displaying a Yellow does not depend on the selected entry mode.
 
 Inspect `execution.entryMode` and `execution.gapDailyEntry` on
 `/open-liquidity/v2/status?market=<PAIR>-USD`. Manual status also exposes

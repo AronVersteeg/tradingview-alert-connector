@@ -129,8 +129,9 @@ grant permission to blindly repeat an uncertain order.
 
 The Decentrader map's observations, chart and historical records are not converted
 or deleted. Dashed historical Purple reconstruction remains visual only.
-Switching entry mode does not change its source. Informational BTC
-intrusion emails remain controlled independently by their existing switch.
+Switching entry mode does not change its source. The global
+[entry-only notification policy](EMAIL_NOTIFICATIONS.md) suppresses informational
+BTC intrusion mail, including when its old email switch is true.
 
 ## Read-only Verification
 

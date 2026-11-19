@@ -23,13 +23,13 @@ const rows = [
 ] as any;
 
 describe('Decentrader intrusion candle filter', () => {
-  test('suppresses regular intrusion emails by default but allows an explicit opt-in', () => {
+  test('suppresses regular intrusion emails even with the legacy opt-in', () => {
     const original = process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED;
     try {
       delete process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED;
       expect(decentraderRegularIntrusionEmailEnabled()).toBe(false);
       process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED = 'true';
-      expect(decentraderRegularIntrusionEmailEnabled()).toBe(true);
+      expect(decentraderRegularIntrusionEmailEnabled()).toBe(false);
     } finally {
       if (original === undefined) {
         delete process.env.DECENTRADER_REGULAR_INTRUSION_EMAIL_ENABLED;

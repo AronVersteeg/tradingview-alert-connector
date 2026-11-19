@@ -54,7 +54,8 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
         autoTradeEnabled: false,
         observeOnly: true,
         informationalOnly: true,
-        informationalEmailEnabled: true,
+        informationalEmailEnabled: false,
+        emailNotificationPolicy: 'entries-only',
         pollMinutes: 1
       });
     } finally {
@@ -103,7 +104,16 @@ describe('ETH Public Perp V2 intrusion execution inputs', () => {
     });
     const state: any = {};
 
-    const result = await (monitor as any).checkWithState(state);
+    const previousEmail = process.env.TEST_BTC_INFO_EMAIL_ENABLED;
+    process.env.TEST_BTC_INFO_EMAIL_ENABLED = 'true';
+    let result: any;
+    try {
+      expect(monitor.getStatus().informationalEmailEnabled).toBe(false);
+      result = await (monitor as any).checkWithState(state);
+    } finally {
+      if (previousEmail === undefined) delete process.env.TEST_BTC_INFO_EMAIL_ENABLED;
+      else process.env.TEST_BTC_INFO_EMAIL_ENABLED = previousEmail;
+    }
 
     expect(result).toMatchObject({ tradePlaced: false, emailSentCount: 0 });
     expect(result.alerts).toHaveLength(1);

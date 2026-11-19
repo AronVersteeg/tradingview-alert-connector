@@ -787,11 +787,11 @@ export class BtcManualTradeOverrideMonitor {
       return;
     }
     const sendEmail = this.entryHandler?.sendManualTriggerEmail || this.entryHandler?.sendManualBtcTriggerEmail;
-    if (sendEmail) {
+    if (result?.tradePlaced && sendEmail) {
       const email = await sendEmail.call(this.entryHandler, entryRequest, result);
       state.triggerEmailSentAt = email.sent ? new Date().toISOString() : undefined;
       state.triggerEmailError = email.error;
-    } else {
+    } else if (result?.tradePlaced) {
       state.triggerEmailError = `No manual ${this.config.asset} trigger email handler is configured.`;
     }
     state.result = result;

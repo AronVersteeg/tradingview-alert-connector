@@ -76,11 +76,11 @@ describe('Shadow Williams breakout monitor', () => {
     else process.env.SHADOW_FRACTAL_EMAIL_ENABLED = originalShadowEmailEnabled;
   });
 
-  test('keeps Shadow email notifications off by default and permits explicit opt-in', () => {
+  test('keeps observational Shadow email off even with the legacy opt-in', () => {
     delete process.env.SHADOW_FRACTAL_EMAIL_ENABLED;
     expect(shadowFractalEmailEnabled()).toBe(false);
     process.env.SHADOW_FRACTAL_EMAIL_ENABLED = 'true';
-    expect(shadowFractalEmailEnabled()).toBe(true);
+    expect(shadowFractalEmailEnabled()).toBe(false);
     process.env.SHADOW_FRACTAL_EMAIL_ENABLED = 'false';
     expect(shadowFractalEmailEnabled()).toBe(false);
   });

@@ -413,6 +413,11 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
         expect(queued.body).toContain(`Source: Binance Spot ${symbol} 1H intrusion + ${mode === 'purple' ? 'gap edge and Daily fractal' : 'gap edge'} close break`);
         expect(queued.body).toContain('later same-direction Yellow intrusion closes');
         expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
+        (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
+        await monitor.flushPurpleTriggerEmails();
+        expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), queued.subject, queued.body,
+          { kind: 'entry', market, signature: queued.signature, outcome: 'PLACED' });
+        expect(gap.sendEmailBestEffort).toHaveBeenCalledTimes(1);
       });
 
   test('sends one Green trigger email after entry and stop setup, never placing a second order', async () => {
@@ -438,15 +443,41 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     expect(monitor.getStatus().gapDailyEntry.triggerEmail.recent[0]).toMatchObject({ outcome: 'PLACED', attempts: 1, smtpSentAt: iso(now) });
   });
 
-  test('short Green notifications include a skipped reason, without inventing an entry or cancelling a position', async () => {
+  test('does not email a short Green skipped because a position is already open', async () => {
     jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal('short'));
     position = { market, size: .4, entryPrice: 120 };
     (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
     await monitor.checkGapDailyEntry(state(), inputs('short').payload, {});
     await monitor.flushPurpleTriggerEmails();
-    expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`${asset} GREEN SHORT TRIGGERED`),
-      expect.stringMatching(/Order result: SKIPPED[\s\S]*Existing .* position/));
+    expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
     expect(orders.placeOrder).not.toHaveBeenCalled();
+  });
+
+  test.each(['DETECTED', 'SKIPPED', 'ERROR', 'UNCONFIRMED', 'FLATTENED', 'NOT_SUBMITTED', 'NO_POSITION_OBSERVED'])(
+    'does not deliver a queued %s signal, including records saved before deployment', async outcome => {
+      (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
+      const managed: any = state();
+      managed.gapDailyEntry.triggerEmails = [{ ...purpleTriggerEmail(market, greenSignal(), managed.gapDailyEntry, {}), outcome }];
+      fs.writeFileSync(file, JSON.stringify(managed));
+      await monitor.flushPurpleTriggerEmails();
+      expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
+      expect(monitor.getStatus().gapDailyEntry.triggerEmail.recent[0]).toMatchObject({ outcome, attempts: 0 });
+    });
+
+  test('promotes an already queued signal after confirmed recovery, without creating a new order', async () => {
+    jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
+    (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
+    const managed: any = state();
+    await monitor.checkGapDailyEntry(managed, inputs().payload, {});
+    managed.gapDailyEntry.triggerEmails[0].outcome = 'UNCONFIRMED';
+    managed.gapDailyEntry.triggerEmails[0].body = 'Previous incomplete signal';
+    fs.writeFileSync(file, JSON.stringify(managed));
+    const restarted: any = createMonitor();
+    await restarted.flushPurpleTriggerEmails();
+    expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), expect.any(String),
+      expect.stringContaining('Order result: PLACED'), { kind: 'entry', market,
+        signature: managed.gapDailyEntry.intent.signature, outcome: 'PLACED' });
+    expect(orders.placeOrder).toHaveBeenCalledTimes(1);
   });
 
   test('SMTP failure is persisted and retried after restart without repeating the trade', async () => {
@@ -1237,7 +1268,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(recovered.managedPosition).toBeUndefined();
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
     });
-    test('preserves the queued signal notification across a crash without inventing a confirmed order', async () => {
+    test('preserves an interrupted signal for diagnostics but does not mail an unconfirmed entry', async () => {
       jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
       let crashed: any;
       orders.placeOrder.mockImplementationOnce(async () => {
@@ -1249,9 +1280,8 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       (gap.smtpSettingsFromEnv as jest.Mock).mockReturnValue({ host: 'fixture.invalid' });
       const restarted: any = createMonitor(); restarted.configureTradeExecutor(orders);
       await restarted.flushPurpleTriggerEmails();
-      expect(gap.sendEmailBestEffort).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`${asset} GREEN LONG TRIGGERED`),
-        expect.stringContaining('no order or protective stop is confirmed'));
-      expect(restarted.getStatus().gapDailyEntry.triggerEmail.recent[0].smtpSentAt).toBeDefined();
+      expect(gap.sendEmailBestEffort).not.toHaveBeenCalled();
+      expect(restarted.getStatus().gapDailyEntry.triggerEmail.recent[0].smtpSentAt).toBeUndefined();
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
     });
     test('reconciles an uncertain fill after five seconds without waiting for the regular management interval', async () => {
