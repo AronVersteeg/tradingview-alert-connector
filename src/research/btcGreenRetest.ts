@@ -1,4 +1,4 @@
-import { buildFractalStop, type DecentraderRow, dydxHourlyCandlesToFractalRows, mapDirectionFromAlert } from '../services/decentraderGapMonitor';
+import { buildFractalStop, type DecentraderRow, type DydxRsiCandle, dydxHourlyCandlesToFractalRows, mapDirectionFromAlert } from '../services/decentraderGapMonitor';
 import { withDydxBodyOpenStop } from '../services/dydxSignalBodyStop';
 import { reconstructReplicaIntrusions } from '../services/openLiquidityV2EthTradeMonitor';
 import { PURPLE_LINE_SETUPS } from '../services/purpleLineSetup';
@@ -54,7 +54,14 @@ function fractal(stop: ReturnType<typeof buildFractalStop>): Fractal | undefined
 
 export function simulateBtcGreenRetest(rows: DecentraderRow[], context: ReturnType<typeof btcGreenRetestSignals>) {
   const byHour = new Map<number, number>();
-  rows.forEach((row, index) => byHour.set(Date.parse(row.timestamp), index));
+  const segmentStarts: number[] = [];
+  let previousAt: number | undefined;
+  rows.forEach((row, index) => {
+    const at = Date.parse(row.timestamp);
+    segmentStarts.push(previousAt === at - HOUR ? segmentStarts[index - 1] : index);
+    byHour.set(at, index);
+    previousAt = at;
+  });
   const entries = new Map(context.signals.map(signal => [signal.closedAt * 1000, signal]));
   const yellows = new Set(context.yellows.map(row => `${row.at}|${row.direction}`));
   const trades: Trade[] = [];
@@ -62,11 +69,7 @@ export function simulateBtcGreenRetest(rows: DecentraderRow[], context: ReturnTy
   let incompleteAt: number | undefined;
   let skipped = 0;
   let skippedWhileOpen = 0;
-  const tail = (index: number) => {
-    let start = index;
-    while (start > 0 && Date.parse(rows[start].timestamp) - Date.parse(rows[start - 1].timestamp) === HOUR) start--;
-    return rows.slice(start, index + 1);
-  };
+  const tail = (index: number) => rows.slice(Math.max(segmentStarts[index], index + 1 - 1000), index + 1);
   for (let at = context.from + HOUR; at < context.through; at += HOUR) {
     const i = byHour.get(at);
     if (i === undefined) {
@@ -134,13 +137,15 @@ export function simulateBtcGreenRetest(rows: DecentraderRow[], context: ReturnTy
   return { trades, skipped, skippedWhileOpen, incompleteAt };
 }
 
-export function buildBtcGreenRetest(payload: any, dydxCandles: Parameters<typeof dydxHourlyCandlesToFractalRows>[0], now = Date.now()) {
-  const context = btcGreenRetestSignals(payload, now);
-  const rows = dydxHourlyCandlesToFractalRows(dydxCandles, now).filter(row => {
+export function btcRetestFractalRows(candles: DydxRsiCandle[] | undefined, now: number) {
+  return dydxHourlyCandlesToFractalRows(candles, now).filter(row => {
     const at = Date.parse(row.timestamp);
     return Number.isFinite(at) && at % HOUR === 0 && [row.openRef, row.highRef, row.lowRef, row.closeRef].every(value => Number.isFinite(value) && value > 0) &&
       row.highRef >= Math.max(row.openRef, row.closeRef) && row.lowRef <= Math.min(row.openRef, row.closeRef);
   });
+}
+
+export function buildBtcGreenRetestFromRows(context: ReturnType<typeof btcGreenRetestSignals>, rows: DecentraderRow[]) {
   if (!rows.some(row => Date.parse(row.timestamp) >= context.from)) throw new Error('dYdX candles unavailable for the BTC replay period.');
   const result = simulateBtcGreenRetest(rows, context);
   const candles = rows.filter(row => Date.parse(row.timestamp) < context.through).map(row => ({

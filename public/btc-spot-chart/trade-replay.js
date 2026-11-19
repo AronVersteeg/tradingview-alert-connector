@@ -207,8 +207,9 @@ function init() {
       const { trade } = data;
       status.textContent = [
         `Binance Spot-signaal · dYdX-uurdata · $${price.format(data.riskBudgetUsd)} modelbudget · vóór kosten`,
-        Number.isFinite(data.from) && Number.isFinite(data.through)
-          ? `${date.format(data.from)} – ${date.format(data.through)}` : '',
+        coverageText(data),
+        Number.isInteger(data.tradeCount) ? `${data.tradeCount} gesimuleerde trades` : '',
+        data.missingDydxHours > 0 ? `${data.missingDydxHours} dYdX-uren ontbreken` : '',
         Number.isFinite(data.skippedWhileOpen) && data.skippedWhileOpen > 0
           ? `${data.skippedWhileOpen} signalen overgeslagen tijdens open trades` : ''
       ].filter(Boolean).join(' | ');
@@ -224,6 +225,16 @@ function init() {
       play.disabled = data.candles.length < 2;
       render(true);
     } catch (error) { if (request === nonce) status.textContent = error.message; }
+  }
+
+  function coverageText(data) {
+    if (!Number.isFinite(data.from) || !Number.isFinite(data.through)) return '';
+    const through = data.incompleteAt ?? data.through;
+    const range = `${date.format(data.from)} – ${date.format(through)}`;
+    if (data.incompleteAt !== undefined) return `${range} (gestopt bij ontbrekende dYdX-candle)`;
+    if (data.historyCoverage === 'archive-only') return `${range} (archief, geen recente aanvulling)`;
+    if (data.historyCoverage === 'archive-plus-recent') return `${range} (archief + recent)`;
+    return range;
   }
 
   async function showList() {
@@ -244,7 +255,10 @@ function init() {
         option.textContent = `${value === undefined ? 'P&L —' : pnlMoney.format(value)} | ${state} | ${trade.direction.toUpperCase()} | ${date.format(trade.openedAt)}`;
         select.append(option);
       }
-      if (!select.options.length) { status.textContent = `Geen gesimuleerde entries · ${data.candidateCount} Green-signalen in dit venster.`; return; }
+      if (!select.options.length) {
+        status.textContent = [`Geen gesimuleerde entries · ${data.candidateCount} Green-signalen`, coverageText(data)].filter(Boolean).join(' | ');
+        return;
+      }
       select.hidden = false;
       await showTrade();
     } catch (error) { if (request === nonce) status.textContent = error.message; }

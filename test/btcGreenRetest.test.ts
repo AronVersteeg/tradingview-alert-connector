@@ -1,4 +1,5 @@
 import { btcGreenRetestSignals, simulateBtcGreenRetest } from '../src/research/btcGreenRetest';
+import { buildBtcGreenRetestWithHistory, decodeBtcGreenHistory, type BtcGreenHistoryArchive } from '../src/research/btcGreenRetestHistory';
 import { PURPLE_LINE_SETUPS } from '../src/services/purpleLineSetup';
 
 const HOUR = 3_600_000;
@@ -80,5 +81,43 @@ describe('BTC Green retest using current gates', () => {
     expect(gapped).toMatchObject({ incompleteAt: at(8), trades: [{ status: 'INCOMPLETE' }] });
     expect(gapped.trades[0].exitPrice).toBeUndefined();
     expect(gapped.trades[0].markToMarket).toBeUndefined();
+  });
+
+  test('joins the archive to verified recent signals without reopening an active trade', () => {
+    const { rows, context } = fixtures('long');
+    const prefix = Array.from({ length: 30 }, (_, i) => ({ ...rows[0], timestamp: iso(i - 30) }));
+    const past = { rows: [...prefix, ...rows.slice(0, 6)], context: { ...context, from: at(-30), through: at(6), yellows: [] } };
+    const live = { rows: [...prefix.slice(3), ...rows], context: { ...context, from: at(-27) } };
+    const joined = buildBtcGreenRetestWithHistory(past, live);
+    expect(joined).toMatchObject({ historyCoverage: 'archive-plus-recent', from: at(-30), through: at(11), candidateCount: 2,
+      missingDydxHours: 0, skippedWhileOpen: 1, trades: [{ openedAt: at(5), status: 'CLOSED', closedAt: at(10) }] });
+    expect(joined.trades).toHaveLength(1);
+
+    const mismatch = { ...live, context: { ...live.context, signals: [] } };
+    const missingHour = { ...live, rows: live.rows.filter(row => row.timestamp !== iso(6)) };
+    const nonOverlapping = { ...live, context: { ...live.context, from: at(6) } };
+    for (const newer of [mismatch, missingHour, nonOverlapping, undefined]) {
+      expect(buildBtcGreenRetestWithHistory(past, newer)).toMatchObject({
+        historyCoverage: 'archive-only', through: at(6), trades: [{ openedAt: at(5), status: 'OPEN' }]
+      });
+    }
+  });
+
+  test('keeps missing dYdX candles explicit and rejects stale model versions or invalid event chronology', () => {
+    const { rows, context } = fixtures('long');
+    const setup = PURPLE_LINE_SETUPS['BTC-USD'];
+    const file: BtcGreenHistoryArchive = {
+      version: 1, model: setup.modelVersion, priceStepUsd: setup.priceStepUsd, cohortWindowHours: 8760,
+      from: at(0), through: at(11), dydxFrom: at(0),
+      dydx: rows.map((row, i) => i === 8 ? null : [row.openRef, row.highRef, row.lowRef, row.closeRef]),
+      greens: context.signals.map(signal => [signal.closedAt * 1000, signal.direction, signal.edge, signal.close]),
+      yellows: context.yellows.map(row => [row.at, row.direction])
+    };
+    const series = decodeBtcGreenHistory(file, at(11));
+    expect(buildBtcGreenRetestWithHistory(series, undefined)).toMatchObject({
+      incompleteAt: at(8), trades: [{ status: 'INCOMPLETE' }]
+    });
+    expect(() => decodeBtcGreenHistory({ ...file, model: 'other' }, at(11))).toThrow('metadata');
+    expect(() => decodeBtcGreenHistory({ ...file, greens: file.greens.slice().reverse() }, at(11))).toThrow('event history');
   });
 });

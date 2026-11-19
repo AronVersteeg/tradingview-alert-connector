@@ -3,9 +3,11 @@
 ## Dashboard: Green Retest
 
 The BTC Public V2 panel now shows a hypothetical retest, not the dYdX account
-positions. It uses the current native Binance BTCUSDT Spot Public V2 frames
-(up to 500 hours) to reconstruct Green and directional Yellow signals. No
-historical account orders, fills, or older filtered chart markers are used.
+positions. It uses an offline reconstruction from public Binance BTCUSDT
+Spot and dYdX BTC-USD 1H candles, starting in January 2025. Green and
+directional Yellow signals are computed with the same causal cohort model
+as the recent native Public V2 frames, not with older filtered chart markers.
+No historical account orders or fills are used.
 Each trade is rendered in one chart, including the signal hour, entry, Yellow
 checks, pivot/confirmation, initial and updated stop, and exit candle.
 
@@ -29,8 +31,24 @@ checks, pivot/confirmation, initial and updated stop, and exit candle.
   trades show no estimate; no trading fees, funding or slippage are deducted.
 
 The retest is read-only, loaded on request, and cached for 60 seconds. It has
-no dYdX account reads or writes and never invokes order placement. TypeScript,
-offline execution tests, and a desktop/mobile fixture cover the revised panel.
+no dYdX account reads or writes and never invokes order placement. The recent
+500-hour Spot window can extend the archive when at least 24 overlapping
+hours agree on Green and Yellow events, and dYdX has consecutive new candles.
+Both periods are simulated together, so an open position cannot reset at the
+join. Without a verified join the dashboard explicitly shows the archive cutoff.
+With no usable archive it falls back to the recent window only.
+
+To refresh the bundled `research-data/btc-green-retest-history.json`, run the
+offline job from the repository root, before the recent window no longer
+overlaps the archive. No heavy historical downloads or rebuilding run on
+Render. Pass a UTC cutoff for a reproducible build:
+
+```shell
+node -r ts-node/register scripts/build-btc-green-retest-history.ts 2025-01-01T00:00:00Z 2026-11-19T19:00:00Z
+```
+
+The builder warms up the Spot model with 8,760 consecutive candles. Missing
+dYdX source hours are left blank, never filled with Binance prices.
 
 ## Legacy Protected Account Replay API
 

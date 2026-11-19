@@ -22,6 +22,8 @@ const open = { ...trade, id: String(hour(8)), status: 'OPEN', openedAt: hour(8),
   markToMarket: { at: hour(42), price: 82000, grossPnl: -2.5 } };
 const incomplete = { ...open, id: String(hour(3)), status: 'INCOMPLETE', markToMarket: undefined };
 const trades = [incomplete, open, trade];
+const coverage = { riskBudgetUsd: 15, tradeCount: trades.length, from: Date.parse('2025-01-01T00:00:00Z'),
+  through: hour(42), historyCoverage: 'archive-plus-recent', missingDydxHours: 3 };
 const pageHtml = fs.readFileSync('public/decentrader_liquidity_timelapse.html', 'utf8')
   .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, tag => /(?:hourly-fractal-boxes|trade-replay)\.js/.test(tag) ? tag : '');
 
@@ -40,8 +42,8 @@ async function run() {
           assert.equal(route.request().method(), 'GET');
           assert.equal(route.request().headers()['x-webhook-token'], undefined);
           return route.fulfill({ json: url.searchParams.has('id')
-            ? { trade: trades.find(row => row.id === url.searchParams.get('id')), candles: capsules, riskBudgetUsd: 15 }
-            : { trades } });
+            ? { trade: trades.find(row => row.id === url.searchParams.get('id')), candles: capsules, ...coverage }
+            : { trades, ...coverage } });
         }
         if (url.pathname.startsWith('/assets/btc-spot-chart/')) {
           const file = path.join('public', url.pathname.replace('/assets/', ''));
@@ -68,6 +70,7 @@ async function run() {
       assert(green > 40 && red > 40 && blue > 40 && yellow > 15, `Candles, SL and Yellow markers not visible: ${green}/${red}/${blue}/${yellow}; ${await page.locator('#btcReplayStatus').textContent()}; ${errors.join('; ')}`);
       assert.equal(await page.locator('#btcReplayEvents li:visible').count(), 5);
       assert.match(await page.locator('#btcReplaySummary').textContent(), /Geschatte bruto P&L.*Sizing-SL.*Initieel prijsrisico/);
+      assert.match(await page.locator('#btcReplayStatus').textContent(), /archief \+ recent.*3 gesimuleerde trades.*3 dYdX-uren ontbreken/);
       assert.match(await page.locator('#btcReplayTrade option:checked').textContent(), /\$\s?\+15,00.*gesloten/);
       assert.match(await page.locator('#btcReplayTrade option').nth(1).textContent(), /\$\s?[-\u2212]2,50.*open/u);
       assert(await page.locator('#btcTradeReplay').evaluate(panel => panel.scrollWidth <= panel.clientWidth + 1));
