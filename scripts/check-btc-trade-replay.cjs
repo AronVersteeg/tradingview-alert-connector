@@ -34,12 +34,14 @@ async function run() {
       const page = await browser.newPage({ viewport });
       const errors = [];
       let listed = trades;
+      let reads = 0;
       page.on('pageerror', error => errors.push(error.message));
       await page.route('**/*', async route => {
         const url = new URL(route.request().url());
         if (url.host !== 'btc-replay.test') return route.abort();
         if (url.pathname === '/decentrader/map') return route.fulfill({ contentType: 'text/html', body: pageHtml });
         if (url.pathname === '/open-liquidity/v2/btc-green-retest') {
+          reads++;
           assert.equal(route.request().method(), 'GET');
           assert.equal(route.request().headers()['x-webhook-token'], undefined);
           return route.fulfill({ json: url.searchParams.has('id')
@@ -85,12 +87,40 @@ async function run() {
       await page.locator('#btcReplayCursor').fill('10');
       assert.equal(await page.locator('#btcReplayEvents li:visible').count(), 0);
       assert.notEqual(await page.locator('#btcReplayTime').textContent(), previous);
+      const risk = page.locator('#btcReplayTestRisk');
+      assert.equal(await page.locator('#btcReplayBaseRisk').textContent(), '$15');
+      const originalReads = reads;
+      const selectedTrade = await page.locator('#btcReplayTrade').inputValue();
+      await risk.fill('60');
+      assert.match(await total.textContent(), /\$\s?\+50,00/);
+      assert.match(await page.locator('#btcReplayTrade option:checked').textContent(), /\$\s?\+60,00/);
+      const scaledSummary = await page.locator('#btcReplaySummary').textContent();
+      assert.match(scaledSummary, /\$\s?\+60,00/);
+      assert.match(scaledSummary, /Positiegrootte \(model\)0,2 BTC.*Initieel prijsrisico\$40/);
+      assert.match(scaledSummary, /Initi.le SL\$81\.850/);
+      assert.match(await page.locator('#btcReplayStatus').textContent(), /\$60 modelbudget/);
+      assert.equal(await page.locator('#btcReplayTrade').inputValue(), selectedTrade);
+      assert.equal(await page.locator('#btcReplayCursor').inputValue(), '10');
+      assert.equal(await page.locator('#btcReplayEvents li:visible').count(), 0);
+      assert.equal(reads, originalReads);
+      await risk.fill('7,50');
+      assert.match(await total.textContent(), /\$\s?\+6,25/);
+      await risk.fill('0');
+      assert.equal(await risk.getAttribute('aria-invalid'), 'true');
+      assert.match(await total.textContent(), /\$\s?\+12,50/);
+      await risk.fill('');
+      assert.equal(await risk.getAttribute('aria-invalid'), 'false');
+      assert.match(await page.locator('#btcReplayStatus').textContent(), /\$15 modelbudget/);
+      assert(await page.locator('#btcTradeReplay').evaluate(panel => panel.scrollWidth <= panel.clientWidth + 1));
       await page.locator('#btcReplayPlay').click();
       await page.waitForFunction(() => Number(document.querySelector('#btcReplayCursor').value) > 10);
       await page.locator('#btcReplayPlay').click();
       await page.locator('#btcReplayTrade').selectOption(open.id);
       await page.locator('#btcReplaySummary').getByText('Ongerealiseerde bruto P&L').waitFor();
       assert.match(await page.locator('#btcReplaySummary .btc-replay-loss').textContent(), /\$\s?[-\u2212]2,50.*dYdX-close/u);
+      await risk.fill('30');
+      assert.match(await page.locator('#btcReplaySummary .btc-replay-loss').textContent(), /\$\s?[-\u2212]5,00.*dYdX-close/u);
+      await risk.fill('');
       await page.locator('#btcReplayTrade').selectOption(incomplete.id);
       await page.locator('#btcReplaySummary .btc-replay-pnl').getByText('Onbekend').waitFor();
       assert.match(await total.textContent(), /\$\s?\+12,50/);

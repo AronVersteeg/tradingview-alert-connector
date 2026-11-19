@@ -6,6 +6,8 @@ function init() {
   const el = id => document.getElementById(`btcReplay${id}`);
   const load = el('Load'), select = el('Trade'), summary = el('Summary'), events = el('Events');
   const picker = el('TradePicker'), totalPnl = el('TotalPnl');
+  const riskControls = el('RiskControls'), baseRisk = el('BaseRisk'), testRisk = el('TestRisk');
+  const riskError = el('RiskError');
   const status = el('Status'), host = el('Canvas'), cursor = el('Cursor'), play = el('Play');
   const playback = el('Playback'), time = el('Time'), legend = el('Legend');
   const date = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', dateStyle: 'short', timeStyle: 'short' });
@@ -16,6 +18,7 @@ function init() {
   const quantity = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 6 });
   const hourMs = 3_600_000;
   let chart, candles, entryPoint, exitPoint, stops, fractalMarkers, annotations, snapshot, timer, nonce = 0;
+  let list, riskBudget, riskFactor = 1;
 
   async function read(search = '') {
     const response = await fetch('/open-liquidity/v2/btc-green-retest' + search, { cache: 'no-store' });
@@ -142,16 +145,16 @@ function init() {
 
   function pnl(trade) {
     if (trade.status === 'CLOSED' && Number.isFinite(trade.grossPnl)) {
-      return { label: 'Geschatte bruto P&L', value: trade.grossPnl, note: 'Gesloten in de retest' };
+      return { label: 'Geschatte bruto P&L', value: trade.grossPnl * riskFactor, note: 'Gesloten in de retest' };
     }
     if (trade.status === 'OPEN' && Number.isFinite(trade.markToMarket?.grossPnl)) {
-      return { label: 'Ongerealiseerde bruto P&L', value: trade.markToMarket.grossPnl,
+      return { label: 'Ongerealiseerde bruto P&L', value: trade.markToMarket.grossPnl * riskFactor,
         note: `dYdX-close ${date.format(trade.markToMarket.at)} @ $${price.format(trade.markToMarket.price)}` };
     }
     return { label: 'Geschatte bruto P&L', note: 'Onbekend' };
   }
 
-  function details(trade) {
+  function tradeSummary(trade) {
     const estimate = pnl(trade);
     const entries = [
       [estimate.label, estimate.value === undefined ? '—' : pnlMoney.format(estimate.value), estimate.note],
@@ -159,8 +162,8 @@ function init() {
       ['Gebroken gaprand', '$' + price.format(trade.gapEdge)],
       ['Sizing-SL', '$' + price.format(trade.sizingStop)],
       ['Initiële SL', '$' + price.format(trade.initialStop)],
-      ['Positiegrootte (model)', quantity.format(trade.size) + ' BTC'],
-      ['Initieel prijsrisico', '$' + price.format(trade.riskUsd)],
+      ['Positiegrootte (model)', quantity.format(trade.size * riskFactor) + ' BTC'],
+      ['Initieel prijsrisico', '$' + price.format(trade.riskUsd * riskFactor)],
       ['TP', 'Geen'],
       ['Exitcandle', trade.closedAt === undefined ? (trade.status === 'INCOMPLETE' ? 'Onbekend: dYdX-data ontbreekt' : 'Open in retest')
         : `${date.format(trade.closedAt)} · $${price.format(trade.exitPrice)}`]
@@ -178,6 +181,10 @@ function init() {
       }
       return pair;
     }));
+  }
+
+  function details(trade) {
+    tradeSummary(trade);
     const steps = [
       [trade.openedAt, 'E', `Green-entry · initiële SL op de dYdX-open van ${date.format(trade.signalAt)}`],
       ...trade.yellows.map((row, index) => [row.at, 'Y' + (index + 1),
@@ -206,14 +213,7 @@ function init() {
       if (request !== nonce) return;
       snapshot = data;
       const { trade } = data;
-      status.textContent = [
-        `Binance Spot-signaal · dYdX-uurdata · $${price.format(data.riskBudgetUsd)} modelbudget · vóór kosten`,
-        coverageText(data),
-        Number.isInteger(data.tradeCount) ? `${data.tradeCount} gesimuleerde trades` : '',
-        data.missingDydxHours > 0 ? `${data.missingDydxHours} dYdX-uren ontbreken` : '',
-        Number.isFinite(data.skippedWhileOpen) && data.skippedWhileOpen > 0
-          ? `${data.skippedWhileOpen} signalen overgeslagen tijdens open trades` : ''
-      ].filter(Boolean).join(' | ');
+      tradeStatus(data);
       details(trade);
       summary.hidden = events.hidden = false;
       if (!data.candles.length) return;
@@ -228,6 +228,17 @@ function init() {
     } catch (error) { if (request === nonce) status.textContent = error.message; }
   }
 
+  function tradeStatus(data) {
+    status.textContent = [
+      `Binance Spot-signaal · dYdX-uurdata · $${price.format(riskBudget)} modelbudget · vóór kosten`,
+      coverageText(data),
+      Number.isInteger(data.tradeCount) ? `${data.tradeCount} gesimuleerde trades` : '',
+      data.missingDydxHours > 0 ? `${data.missingDydxHours} dYdX-uren ontbreken` : '',
+      Number.isFinite(data.skippedWhileOpen) && data.skippedWhileOpen > 0
+        ? `${data.skippedWhileOpen} signalen overgeslagen tijdens open trades` : ''
+    ].filter(Boolean).join(' | ');
+  }
+
   function coverageText(data) {
     if (!Number.isFinite(data.from) || !Number.isFinite(data.through)) return '';
     const through = data.incompleteAt ?? data.through;
@@ -238,37 +249,65 @@ function init() {
     return range;
   }
 
+  function applyRiskScenario() {
+    if (!list) return;
+    const raw = testRisk.value.trim();
+    const custom = Number(raw.replace(',', '.'));
+    const valid = /^(?:\d+(?:[.,]\d{0,2})?|[.,]\d{1,2})$/.test(raw) && custom >= 0.01 && custom <= 1_000_000;
+    const invalid = Boolean(raw) && !valid;
+    testRisk.setAttribute('aria-invalid', String(invalid));
+    if (invalid) testRisk.setAttribute('aria-describedby', riskError.id);
+    else testRisk.removeAttribute('aria-describedby');
+    riskError.hidden = !invalid;
+    riskBudget = valid ? custom : list.riskBudgetUsd;
+    // The retest has no size-dependent gates or costs, so size and P&L scale together.
+    riskFactor = riskBudget / list.riskBudgetUsd;
+
+    let total = 0, known = 0;
+    list.trades.forEach((trade, index) => {
+      const state = trade.status === 'OPEN' ? 'open' : trade.status === 'INCOMPLETE' ? 'onvolledig' : 'gesloten';
+      const { value } = pnl(trade);
+      if (value !== undefined) { total += value; known++; }
+      select.options[index].textContent = `${value === undefined ? 'P&L —' : pnlMoney.format(value)} | ${state} | ${trade.direction.toUpperCase()} | ${date.format(trade.openedAt)}`;
+    });
+    const amount = known ? pnlMoney.format(total) : '\u2014';
+    const description = 'Totaalresultaat van de retest, v\u00f3\u00f3r kosten, inclusief bekende ongerealiseerde P&L.' +
+      (known < list.trades.length ? ` ${list.trades.length - known} zonder P&L niet meegeteld.` : '');
+    totalPnl.value = amount;
+    totalPnl.dataset.result = !known || amount === pnlMoney.format(0) ? 'flat' : total > 0 ? 'gain' : 'loss';
+    totalPnl.title = description;
+    totalPnl.setAttribute('aria-label', `${description} ${amount}`);
+    if (snapshot) {
+      tradeSummary(snapshot.trade);
+      tradeStatus(snapshot);
+    }
+  }
+
   async function showList() {
     const request = ++nonce;
     pause();
-    host.hidden = playback.hidden = legend.hidden = summary.hidden = events.hidden = picker.hidden = true;
+    snapshot = list = undefined;
+    host.hidden = playback.hidden = legend.hidden = summary.hidden = events.hidden = picker.hidden = riskControls.hidden = true;
     status.textContent = 'Green-signalen en dYdX-candles laden...';
     load.disabled = true;
     try {
       const data = await read();
       if (request !== nonce) return;
-      select.replaceChildren();
-      let total = 0, known = 0;
-      for (const trade of data.trades.slice().reverse()) {
+      if (!Number.isFinite(data.riskBudgetUsd) || data.riskBudgetUsd <= 0) throw new Error('Standaardrisico van de retest ontbreekt.');
+      list = { riskBudgetUsd: data.riskBudgetUsd, trades: data.trades.slice().reverse() };
+      select.replaceChildren(...list.trades.map(trade => {
         const option = document.createElement('option');
         option.value = trade.id;
-        const state = trade.status === 'OPEN' ? 'open' : trade.status === 'INCOMPLETE' ? 'onvolledig' : 'gesloten';
-        const { value } = pnl(trade);
-        if (value !== undefined) { total += value; known++; }
-        option.textContent = `${value === undefined ? 'P&L —' : pnlMoney.format(value)} | ${state} | ${trade.direction.toUpperCase()} | ${date.format(trade.openedAt)}`;
-        select.append(option);
-      }
+        return option;
+      }));
+      baseRisk.value = '$' + price.format(list.riskBudgetUsd);
+      testRisk.placeholder = price.format(list.riskBudgetUsd);
+      applyRiskScenario();
+      riskControls.hidden = false;
       if (!select.options.length) {
         status.textContent = [`Geen gesimuleerde entries · ${data.candidateCount} Green-signalen`, coverageText(data)].filter(Boolean).join(' | ');
         return;
       }
-      const amount = known ? pnlMoney.format(total) : '\u2014';
-      const description = 'Totaalresultaat van de retest, v\u00f3\u00f3r kosten, inclusief bekende ongerealiseerde P&L.' +
-        (known < data.trades.length ? ` ${data.trades.length - known} zonder P&L niet meegeteld.` : '');
-      totalPnl.value = amount;
-      totalPnl.dataset.result = !known || amount === pnlMoney.format(0) ? 'flat' : total > 0 ? 'gain' : 'loss';
-      totalPnl.title = description;
-      totalPnl.setAttribute('aria-label', `${description} ${amount}`);
       picker.hidden = false;
       await showTrade();
     } catch (error) { if (request === nonce) status.textContent = error.message; }
@@ -277,6 +316,7 @@ function init() {
 
   load.addEventListener('click', showList);
   select.addEventListener('change', showTrade);
+  testRisk.addEventListener('input', applyRiskScenario);
   cursor.addEventListener('input', () => { pause(); render(true); });
   play.addEventListener('click', () => {
     if (timer) return pause();

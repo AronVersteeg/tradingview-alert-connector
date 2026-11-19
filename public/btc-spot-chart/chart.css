@@ -172,6 +172,12 @@
 .btc-replay-total-pnl { display: inline-flex; align-items: center; flex: none; box-sizing: border-box; min-height: 34px; padding: 4px 9px; border: 1px solid #35435a; border-radius: 4px; color: #e0e6f0; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .btc-replay-total-pnl[data-result="gain"] { color: #65deaf; border-color: #33936e; background: #142b25; }
 .btc-replay-total-pnl[data-result="loss"] { color: #ff8894; border-color: #aa4c5d; background: #322127; }
+.btc-replay-risk { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; max-width: 100%; }
+.btc-replay-risk-box { box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 3px 8px; background: #1c2531; border: 1px solid #35435a; border-radius: 4px; color: #a9b6c8; font-size: 12px; }
+.btc-replay-risk-box output, .btc-replay-risk-box input { color: #e0e6f0; font-variant-numeric: tabular-nums; }
+.btc-replay-risk-box input { box-sizing: border-box; width: 86px; min-height: 24px; padding: 1px 4px; font: inherit; font-size: 16px; background: #141a23; border: 1px solid #35435a; border-radius: 3px; }
+.btc-replay-risk-box input[aria-invalid="true"] { border-color: #e9798a; }
+.btc-replay-risk-error { flex-basis: 100%; color: #ff8894; font-size: 12px; }
 .btc-replay-canvas { width: 100%; height: clamp(255px, 42vh, 450px); background: #141a23; margin-top: 8px; }
 #btcReplayStatus, .btc-replay-legend, #btcReplayTime { color: #a9b6c8; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 #btcReplayStatus { min-height: 18px; margin: 8px 0 0; }

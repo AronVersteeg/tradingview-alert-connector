@@ -31,6 +31,10 @@ checks, pivot/confirmation, initial and updated stop, and exit candle.
   trades show no estimate; no trading fees, funding or slippage are deducted.
   The amount next to the trade picker sums all available estimates in the
   list, including unrealized P&L, before those costs. Unknown values are excluded.
+- The toolbar shows the default budget and accepts a temporary USD budget per
+  trade. Size, initial price risk and P&L scale proportionally in the browser.
+  This leaves all signal, entry, stop and exit prices unchanged and does not
+  touch the live configuration. Clearing the field restores the default.
 
 The retest is read-only, loaded on request, and cached for 60 seconds. It has
 no dYdX account reads or writes and never invokes order placement. The recent

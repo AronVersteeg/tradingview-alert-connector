@@ -1606,6 +1606,17 @@
           <select id="btcReplayTrade" aria-label="Gesimuleerde BTC-trade"></select>
           <output id="btcReplayTotalPnl" class="btc-replay-total-pnl"></output>
         </div>
+        <div id="btcReplayRiskControls" class="btc-replay-risk" hidden>
+          <div class="btc-replay-risk-box">
+            <span id="btcReplayBaseRiskLabel">Standaardrisico</span>
+            <output id="btcReplayBaseRisk" aria-labelledby="btcReplayBaseRiskLabel"></output>
+          </div>
+          <label class="btc-replay-risk-box" for="btcReplayTestRisk">
+            Testrisico $
+            <input id="btcReplayTestRisk" type="text" inputmode="decimal" autocomplete="off" maxlength="12">
+          </label>
+          <span id="btcReplayRiskError" class="btc-replay-risk-error" role="status" hidden>Ongeldig bedrag. Standaardrisico toegepast.</span>
+        </div>
       </div>
       <p id="btcReplayStatus" role="status"></p>
       <div id="btcReplayCanvas" class="btc-replay-canvas" hidden></div>
