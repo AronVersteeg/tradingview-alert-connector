@@ -881,6 +881,27 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
   }
 });
 
+router.get('/open-liquidity/v2/btc-trade-replay', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  if (!req.header('X-Webhook-Token') || !isMonitorRequestAuthorized(req)) {
+    return res.status(401).send({ error: 'Unauthorized' });
+  }
+  const id = req.query.id;
+  const window = req.query.window;
+  if ((id !== undefined && (typeof id !== 'string' || !/^[a-f0-9]{24}$/.test(id))) ||
+      (window !== undefined && window !== 'entry' && window !== 'latest')) {
+    return res.status(400).send({ error: 'Invalid replay selection.' });
+  }
+  try {
+    const client = dexRegistry.getDex('dydxv4') as any;
+    const snapshot = await client?.getBtcTradeReplay(id, window);
+    if (!snapshot) return res.status(id ? 404 : 503).send({ error: id ? 'Position not found.' : 'dYdX replay unavailable.' });
+    res.send(snapshot);
+  } catch {
+    res.status(503).send({ error: 'dYdX replay temporarily unavailable.' });
+  }
+});
+
 router.get('/decentrader/trade-plan', async (req, res) => {
   try {
     const market = String(req.query.market || 'BTC-USD').replace(/_/g, '-').toUpperCase();

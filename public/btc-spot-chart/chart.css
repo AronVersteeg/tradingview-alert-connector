@@ -107,7 +107,7 @@
 .spot-chart-body { position: relative; min-width: 0; height: 550px; }
 .spot-chart-canvas { width: 100%; height: 100%; min-width: 0; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; overscroll-behavior: contain; }
 .spot-chart-canvas.is-panning { cursor: grabbing; }
-.spot-chart-panel canvas {
+.spot-chart-panel canvas, .btc-replay-canvas canvas {
   min-height: 0;
   border: 0;
   border-radius: 0;
@@ -160,3 +160,23 @@
   .spot-chart-footer { padding: 7px 9px; }
   .spot-chart-feed { flex-basis: 100%; }
 }
+.btc-trade-replay { margin: 20px 0; border-top: 1px solid #2b3443; padding: 14px 0; min-width: 0; }
+.btc-trade-replay [hidden] { display: none !important; }
+.btc-trade-replay h2 { margin: 0 0 10px; color: #e0e6f0; font-size: 16px; font-weight: 650; letter-spacing: 0; }
+.btc-trade-replay h2 small { margin-left: 6px; color: #9ca9ba; font-size: 12px; font-weight: 500; }
+.btc-replay-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.btc-replay-controls button, .btc-replay-controls select, #btcReplayToken { min-width: 0; max-width: 100%; min-height: 34px; padding: 4px 9px; color: #e0e6f0; background: #1c2531; border: 1px solid #35435a; border-radius: 4px; font: inherit; }
+.btc-replay-controls button { cursor: pointer; }
+.btc-replay-controls button:disabled { opacity: .65; cursor: progress; }
+.btc-replay-canvas { width: 100%; height: clamp(255px, 42vh, 450px); background: #141a23; margin-top: 8px; }
+#btcReplayStatus, .btc-replay-legend, #btcReplayTime { color: #a9b6c8; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+#btcReplayStatus { min-height: 18px; margin: 8px 0 0; }
+#btcReplayPlayback { padding: 8px 0 0; }
+#btcReplayPlay { width: 36px; flex: 0 0 36px; }
+#btcReplayCursor { flex: 1 1 120px; min-width: 64px; accent-color: #77a8ff; }
+.btc-replay-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding-top: 8px; }
+.btc-replay-legend span::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 5px; background: currentColor; }
+.btc-replay-entry { color: #79a9ff; }
+.btc-replay-exit { color: #eea9ce; }
+.btc-replay-stop { color: #ffc469; }
+.btc-replay-fractal { color: #a9b6c8; }

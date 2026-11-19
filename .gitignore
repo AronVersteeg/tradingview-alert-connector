@@ -90,6 +90,8 @@ typings/
 !/scripts/start-server.cjs
 !/scripts/preview-btc-spot-chart.ts
 !/scripts/check-btc-spot-chart.cjs
+!/scripts/check-btc-trade-replay.cjs
+btc-trade-replay-*.json
 !/scripts/check-btc-manual-levels.cjs
 !/scripts/check-btc-gap-history.cjs
 !/scripts/recover-btc-gap-history.cjs

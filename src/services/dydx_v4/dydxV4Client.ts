@@ -22,6 +22,7 @@ import path from 'path';
 import { AbstractDexClient } from '../abstractDexClient';
 import { createReadResilientIndexerClient } from './indexerReadRecovery';
 import { constrainEntryPrice, entryRiskLimit, findRiskCompatibleEntry, EntryRiskLimit } from './entryRiskGuard';
+import { BtcReplayStopJournal, BtcTradeReplay } from './btcTradeReplay';
 
 type ProgressResult =
   | { kind: 'target'; currentSize: number }
@@ -613,6 +614,41 @@ export class DydxV4Client extends AbstractDexClient {
     );
   }
 
+  private btcReplay?: { address: string; journal: BtcReplayStopJournal; reader: BtcTradeReplay };
+
+  private btcReplayForAccount() {
+    const address = this.wallet?.address;
+    if (!this.initialized || !address) return undefined;
+    if (this.btcReplay?.address !== address) {
+      const accountKey = crypto.createHash('sha256').update(address).digest('hex').slice(0, 16);
+      const journal = new BtcReplayStopJournal(path.join(path.dirname(this.MANAGED_ORDERS_STATE_FILE), `btc-trade-replay-${accountKey}.json`));
+      this.btcReplay = { address, journal, reader: new BtcTradeReplay(
+        async () => (await this.indexer.account.getSubaccountPerpetualPositions(address, 0, undefined, 100)).positions,
+        async (from, through) => (await this.indexer.markets.getPerpetualMarketCandles('BTC-USD', '1HOUR',
+          new Date(from).toISOString(), new Date(through - 1).toISOString(), 168)).candles,
+        journal
+      ) };
+    }
+    return this.btcReplay;
+  }
+
+  async getBtcTradeReplay(id?: string, window?: 'entry' | 'latest') {
+    const replay = this.btcReplayForAccount();
+    if (!replay) throw new Error('BTC replay indexer is not ready.');
+    return replay.reader.snapshot(id, window);
+  }
+
+  private observeBtcReplayStop(market: string, side: OrderSide, order: any): void {
+    if (market !== 'BTC-USD') return;
+    try {
+      const price = this.getOrderTriggerPrice(order);
+      if (typeof order?.id !== 'string' || price === undefined || !this.isProtectiveStopOrder(order)) return;
+      this.btcReplayForAccount()?.journal.observe(order.id, side, price);
+    } catch {
+      // Replay evidence must never affect stop handling.
+    }
+  }
+
   private async syncTrailingStopForMarket(market: string, alert: AlertObject, strict: boolean): Promise<any> {
     const position = await this.getCurrentPosition(market);
 
@@ -709,6 +745,7 @@ export class DydxV4Client extends AbstractDexClient {
           managedStop = undefined;
         }
       } else {
+        this.observeBtcReplayStop(market, side, visible);
         managedStop = { ...pending, verificationPending: false };
         this.setManagedStop(market, managedStop);
       }
@@ -4396,6 +4433,7 @@ export class DydxV4Client extends AbstractDexClient {
           expectedClientId,
           matchedOrder: this.summarizeOrder(stopOrder)
         });
+        this.observeBtcReplayStop(market, side, stopOrder);
         return true;
       }
     }

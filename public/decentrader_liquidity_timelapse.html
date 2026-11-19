@@ -1598,6 +1598,32 @@
       <div class="spot-chart-credit" id="spotChartOrderBlockCredit">Order Block Detector &copy; <a href="https://www.luxalgo.com/library/indicator/order-block-detector/" target="_blank" rel="noopener noreferrer">LuxAlgo</a> &middot; adapted &middot; <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-NC-SA 4.0</a></div>
     </section>
 
+    <section class="btc-trade-replay" id="btcTradeReplay" hidden>
+      <h2>BTC Trade Replay <small>dYdX &middot; 1H</small></h2>
+      <div class="btc-replay-controls">
+        <button type="button" id="btcReplayLoad">Trades laden</button>
+        <input type="password" id="btcReplayToken" autocomplete="off" placeholder="Dashboardtoken" aria-label="Dashboardtoken" hidden>
+        <select id="btcReplayTrade" aria-label="BTC-positie" hidden></select>
+        <select id="btcReplayWindow" aria-label="Replayvenster" hidden>
+          <option value="entry">Rond entry</option>
+          <option value="latest">Rond exit / nu</option>
+        </select>
+      </div>
+      <p id="btcReplayStatus" role="status"></p>
+      <div id="btcReplayCanvas" class="btc-replay-canvas" hidden></div>
+      <div id="btcReplayPlayback" class="btc-replay-controls" hidden>
+        <button type="button" id="btcReplayPlay" title="Afspelen" aria-label="Afspelen">&#9654;</button>
+        <input type="range" id="btcReplayCursor" min="1" max="1" value="1" aria-label="Replay tot candle">
+        <output id="btcReplayTime"></output>
+      </div>
+      <div id="btcReplayLegend" class="btc-replay-legend" hidden>
+        <span class="btc-replay-entry">Gem. entry</span>
+        <span class="btc-replay-exit">Gem. exit</span>
+        <span class="btc-replay-stop">SL gezien op dYdX</span>
+        <span class="btc-replay-fractal">Bevestigde fractal (2/2)</span>
+      </div>
+    </section>
+
     <section class="dom-observer-panel" id="domObserverPanel" aria-live="polite">
       <div class="dom-observer-inner">
         <div class="dom-observer-head">
@@ -1789,6 +1815,7 @@
   <script defer src="/assets/btc-spot-chart/viewport.js"></script>
   <script defer src="/assets/btc-spot-chart/interactions.js"></script>
   <script defer src="/assets/btc-spot-chart/chart.js"></script>
+  <script type="module" src="/assets/btc-spot-chart/trade-replay.js"></script>
   <script>
     const queryParams = new URLSearchParams(window.location.search);
     const requestedSource = queryParams.get('source');
