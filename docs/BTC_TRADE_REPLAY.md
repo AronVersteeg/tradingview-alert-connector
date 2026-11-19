@@ -1,7 +1,37 @@
 # BTC Trade Replay
 
-On BTC Public V2, select **Trades laden** beneath the Binance Spot chart.
-The panel is read-only. It uses the existing dashboard token in the
+## Dashboard: Green Retest
+
+The BTC Public V2 panel now shows a hypothetical retest, not the dYdX account
+positions. It uses the current native Binance BTCUSDT Spot Public V2 frames
+(up to 500 hours) to reconstruct Green and directional Yellow signals. No
+historical account orders, fills, or older filtered chart markers are used.
+Each trade is rendered in one chart, including the signal hour, entry, Yellow
+checks, pivot/confirmation, initial and updated stop, and exit candle.
+
+- The model starts flat at the beginning of this window, allows one position at
+  a time, and does not trigger another entry while one is running.
+- Entry uses the next dYdX hour open as a fill proxy. Sizing uses the live fractal
+  selector and a fixed $15 simulated price-risk budget, capped by distance to
+  the body-open stop. It does not model historical collateral, exchange depth,
+  execution latency, fees, funding or tick/size rounding.
+- The initial stop is the exact dYdX signal-body open. A later same-direction
+  Yellow can tighten only to a usable dYdX fractal known at that close. Stops
+  affect following candles only. An existing stop hit inside an hour takes
+  precedence over the Yellow at its end. No TPs. An adverse opening gap exits
+  at the adverse open. The exact intrabar exit time is unknown.
+- An unresolved missing dYdX hour while a position is open ends the retest with
+  an incomplete trade. Missing prices, fills and stops are not fabricated.
+  Exchange stop execution can differ from the simulated OHLC stop hit.
+
+The retest is read-only, loaded on request, and cached for 60 seconds. It has
+no dYdX account reads or writes and never invokes order placement. TypeScript,
+offline execution tests, and a desktop/mobile fixture cover the revised panel.
+
+## Legacy Protected Account Replay API
+
+The earlier account replay API remains read-only and is not used by the Green
+retest panel. It uses the existing dashboard token in the
 `X-Webhook-Token` header, never in the URL. Account history is not public or
 included in other dashboard payloads.
 

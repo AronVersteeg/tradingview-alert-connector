@@ -1599,15 +1599,10 @@
     </section>
 
     <section class="btc-trade-replay" id="btcTradeReplay" hidden>
-      <h2>BTC Trade Replay <small>dYdX &middot; 1H</small></h2>
+      <h2>BTC Green Retest <small>Gesimuleerd &middot; dYdX 1H</small></h2>
       <div class="btc-replay-controls">
         <button type="button" id="btcReplayLoad">Trades laden</button>
-        <input type="password" id="btcReplayToken" autocomplete="off" placeholder="Dashboardtoken" aria-label="Dashboardtoken" hidden>
-        <select id="btcReplayTrade" aria-label="BTC-positie" hidden></select>
-        <select id="btcReplayWindow" aria-label="Replayvenster" hidden>
-          <option value="entry">Rond entry</option>
-          <option value="latest">Rond exit / nu</option>
-        </select>
+        <select id="btcReplayTrade" aria-label="Gesimuleerde BTC-trade" hidden></select>
       </div>
       <p id="btcReplayStatus" role="status"></p>
       <div id="btcReplayCanvas" class="btc-replay-canvas" hidden></div>
@@ -1617,11 +1612,14 @@
         <output id="btcReplayTime"></output>
       </div>
       <div id="btcReplayLegend" class="btc-replay-legend" hidden>
-        <span class="btc-replay-entry">Gem. entry</span>
-        <span class="btc-replay-exit">Gem. exit</span>
-        <span class="btc-replay-stop">SL gezien op dYdX</span>
-        <span class="btc-replay-fractal">Bevestigde fractal (2/2)</span>
+        <span class="btc-replay-entry">Green-entry</span>
+        <span class="btc-replay-exit">Stop-exit</span>
+        <span class="btc-replay-yellow">Yellow</span>
+        <span class="btc-replay-stop">Gesimuleerde SL</span>
+        <span class="btc-replay-fractal">Fractal: pivot en bevestiging</span>
       </div>
+      <dl id="btcReplaySummary" class="btc-replay-summary" hidden></dl>
+      <ol id="btcReplayEvents" class="btc-replay-events" aria-label="Tradeverloop" hidden></ol>
     </section>
 
     <section class="dom-observer-panel" id="domObserverPanel" aria-live="polite">

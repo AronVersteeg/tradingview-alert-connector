@@ -11,8 +11,10 @@ import {
 } from '../services/decentralizedDomCollector';
 import {
   btcCoinGlassWhaleSnapshot,
-  decentraderGapMonitor
+  decentraderGapMonitor,
+  fetchDydxHourlyCandlesForMarket
 } from '../services/decentraderGapMonitor';
+import { buildBtcGreenRetest } from '../research/btcGreenRetest';
 import {
   coinGlassEthWhaleCollector,
   coinGlassInjWhaleCollector,
@@ -878,6 +880,43 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
       ok: false,
       error: error instanceof Error ? error.message : String(error)
     });
+  }
+});
+
+let btcGreenRetestCache: { expires: number; data: ReturnType<typeof buildBtcGreenRetest> } | undefined;
+let btcGreenRetestPending: Promise<ReturnType<typeof buildBtcGreenRetest>> | undefined;
+let btcGreenRetestRetryAt = 0;
+router.get('/open-liquidity/v2/btc-green-retest', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const id = req.query.id;
+  if (id !== undefined && (typeof id !== 'string' || !/^\d{13}$/.test(id))) return res.status(400).send({ error: 'Invalid trade.' });
+  try {
+    if (!btcGreenRetestCache || btcGreenRetestCache.expires < Date.now()) {
+      if (Date.now() < btcGreenRetestRetryAt) throw new Error('Replay source cooling down.');
+      btcGreenRetestPending ??= (async () => {
+        if (!openLiquidityV2BtcCollector.getStatus().liveReplayReady) throw new Error('BTC Spot replica is warming up.');
+        const payload = await openLiquidityV2BtcCollector.getPayload();
+        const candles = await fetchDydxHourlyCandlesForMarket('BTC-USD');
+        return buildBtcGreenRetest(payload, candles);
+      })().then(data => {
+        btcGreenRetestCache = { expires: Date.now() + 60_000, data };
+        return data;
+      }).catch(error => {
+        btcGreenRetestRetryAt = Date.now() + 30_000;
+        throw error;
+      }).finally(() => { btcGreenRetestPending = undefined; });
+      await btcGreenRetestPending;
+    }
+    const { candles, trades, ...summary } = btcGreenRetestCache!.data;
+    if (!id) return res.send({ trades: trades.map(({ id, direction, openedAt, status }) => ({ id, direction, openedAt, status })), ...summary });
+    const trade = trades.find(row => row.id === id);
+    if (!trade) return res.status(404).send({ error: 'Trade not found in this retest.' });
+    const from = trade.signalAt - 12 * 3_600_000;
+    const through = trade.closedAt === undefined
+      ? summary.incompleteAt ?? summary.through : Math.min(summary.through, trade.closedAt + 9 * 3_600_000);
+    return res.send({ trade, candles: candles.filter(row => row.time * 1000 >= from && row.time * 1000 < through), ...summary });
+  } catch {
+    return res.status(503).send({ error: 'BTC Green-retest temporarily unavailable.' });
   }
 });
 

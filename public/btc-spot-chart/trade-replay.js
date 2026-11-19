@@ -4,30 +4,20 @@ if (root && new URLSearchParams(location.search).get('source') === 'open-v2') in
 function init() {
   root.hidden = false;
   const el = id => document.getElementById(`btcReplay${id}`);
-  const load = el('Load'), token = el('Token'), select = el('Trade'), windowSelect = el('Window');
+  const load = el('Load'), select = el('Trade'), summary = el('Summary'), events = el('Events');
   const status = el('Status'), host = el('Canvas'), cursor = el('Cursor'), play = el('Play');
   const playback = el('Playback'), time = el('Time'), legend = el('Legend');
   const date = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', dateStyle: 'short', timeStyle: 'short' });
   const clock = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' });
   const day = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', month: 'short', day: 'numeric' });
   const price = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 2 });
+  const quantity = new Intl.NumberFormat('nl-NL', { maximumFractionDigits: 6 });
   const hourMs = 3_600_000;
-  let chart, candles, entryPoint, exitPoint, stops, fractalMarkers, snapshot, timer, nonce = 0;
-
-  function dashboardToken() {
-    const entered = token.value.trim() || document.getElementById('manualOverrideToken')?.value.trim();
-    if (entered) return entered;
-    try { return sessionStorage.getItem('decentraderManualOverrideToken') || ''; } catch { return ''; }
-  }
+  let chart, candles, entryPoint, exitPoint, stops, fractalMarkers, annotations, snapshot, timer, nonce = 0;
 
   async function read(search = '') {
-    const key = dashboardToken();
-    if (!key) throw new Error('Voer het bestaande dashboardtoken in.');
-    const response = await fetch('/open-liquidity/v2/btc-trade-replay' + search, {
-      headers: { 'X-Webhook-Token': key }, cache: 'no-store'
-    });
-    if (response.status === 401) throw new Error('Dashboardtoken niet geaccepteerd.');
-    if (!response.ok) throw new Error('dYdX-replay tijdelijk niet beschikbaar.');
+    const response = await fetch('/open-liquidity/v2/btc-green-retest' + search, { cache: 'no-store' });
+    if (!response.ok) throw new Error('BTC Green-retest tijdelijk niet beschikbaar.');
     return response.json();
   }
 
@@ -50,11 +40,48 @@ function init() {
     });
     const markerOptions = { lineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 5,
       lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false };
-    entryPoint = chart.addSeries(lib.LineSeries, { ...markerOptions, color: '#79a9ff' });
+    entryPoint = chart.addSeries(lib.LineSeries, { ...markerOptions, color: '#68e2a6' });
     exitPoint = chart.addSeries(lib.LineSeries, { ...markerOptions, color: '#eea9ce' });
-    stops = chart.addSeries(lib.LineSeries, { ...markerOptions, color: '#ffc469', lineVisible: true,
-      lineWidth: 2, lineType: lib.LineType.WithSteps, lineStyle: lib.LineStyle.Dashed, pointMarkersRadius: 3 });
+    stops = chart.addSeries(lib.LineSeries, { ...markerOptions, color: '#69aaff', lineVisible: true,
+      lineWidth: 2, lineType: lib.LineType.WithSteps, pointMarkersRadius: 3 });
     fractalMarkers = lib.createSeriesMarkers(candles, []);
+    annotations = {
+      labels: [], pivots: [], sizing: null,
+      autoscaleInfo() { return this.sizing ? { priceRange: { minValue: this.sizing.price, maxValue: this.sizing.price } } : null; },
+      paneViews() { return [{ renderer: () => ({ draw: target => target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
+        const x = at => chart.timeScale().timeToCoordinate(Math.floor(at / hourMs) * 3600);
+        ctx.save(); ctx.font = '11px sans-serif';
+        if (this.sizing) {
+          const left = x(this.sizing.from), right = x(this.sizing.to), y = candles.priceToCoordinate(this.sizing.price);
+          if (left !== null && right !== null && y !== null && right > left) {
+            ctx.strokeStyle = '#a9b6c8'; ctx.setLineDash([3, 4]);
+            ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        }
+        let previousLabel = -100;
+        for (const line of this.labels) {
+          const pos = x(line.at);
+          if (pos === null || pos < 0 || pos > mediaSize.width) continue;
+          ctx.strokeStyle = line.color; ctx.globalAlpha = .6;
+          ctx.beginPath(); ctx.moveTo(pos, 20); ctx.lineTo(pos, mediaSize.height); ctx.stroke();
+          if (pos - previousLabel >= 24) {
+            ctx.globalAlpha = 1; ctx.fillStyle = line.color;
+            ctx.fillText(line.label, Math.min(pos + 3, mediaSize.width - 25), 14);
+            previousLabel = pos;
+          }
+        }
+        ctx.globalAlpha = 1; ctx.strokeStyle = '#f9a365';
+        for (const f of this.pivots) {
+          const left = x(f.at), right = x(f.confirmedAt), y = candles.priceToCoordinate(f.price);
+          if (left === null || right === null || y === null) continue;
+          ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
+          ctx.setLineDash([]); ctx.beginPath(); ctx.arc(right, y, 3.4, 0, Math.PI * 2); ctx.stroke();
+        }
+        ctx.restore();
+      }) }) }]; }
+    };
+    candles.attachPrimitive(annotations);
   }
 
   function pause() {
@@ -73,88 +100,137 @@ function init() {
     const candleTime = at => Math.floor(at / hourMs) * 3600;
     const point = (at, value) => Number.isFinite(at) && Number.isFinite(value) && at < through && times.has(candleTime(at))
       ? [{ time: candleTime(at), value }] : [];
-    candles.setData(shown);
+    candles.setData([...shown.map(row => row.time === candleTime(snapshot.trade.signalAt)
+      ? { ...row, color: '#58ce92', wickColor: '#58ce92' } : row), { time: through / 1000 }]);
     entryPoint.setData(point(snapshot.trade.openedAt, snapshot.trade.entryPrice));
     exitPoint.setData(point(snapshot.trade.closedAt, snapshot.trade.exitPrice));
-    const evidence = new Map();
-    for (const stop of snapshot.stops || []) {
-      for (const row of point(stop.at, stop.price)) evidence.set(row.time, row);
+    const trade = snapshot.trade;
+    const path = new Map();
+    for (const stop of trade.stops) {
+      for (const row of point(stop.at, stop.price)) path.set(row.time, row);
+      if (stop.at === through && stop.at > trade.openedAt) path.set(through / 1000, { time: through / 1000, value: stop.price });
     }
-    stops.setData([...evidence.values()]);
+    const endpoint = Math.min(trade.closedAt ?? Infinity, shown.at(-1).time * 1000);
+    const lastStop = trade.stops.filter(step => step.at <= endpoint).at(-1);
+    if (lastStop && times.has(candleTime(endpoint))) path.set(candleTime(endpoint), { time: candleTime(endpoint), value: lastStop.price });
+    stops.setData([...path.values()].sort((left, right) => left.time - right.time));
     const fractals = window.BtcHourlyFractalBoxes?.buildHourlyFractalBoxes(shown, through).fractals || [];
     fractalMarkers.setMarkers(fractals.map(row => ({ time: row.pivotTime,
       position: row.type === 'HIGH' ? 'aboveBar' : 'belowBar', color: '#a9b6c8',
       shape: row.type === 'HIGH' ? 'arrowDown' : 'arrowUp', size: .55 })));
+    annotations.labels = [
+      { at: trade.openedAt, label: 'E', color: '#68e2a6' },
+      ...trade.yellows.map((row, index) => ({ at: row.at, label: 'Y' + (index + 1), color: '#f3d25c' })),
+      ...(trade.closedAt === undefined ? [] : [{ at: trade.closedAt, label: 'X', color: '#eea9ce' }])
+    ].filter(row => row.at < through || row.at === through && row.label.startsWith('Y')).sort((a, b) => a.at - b.at);
+    annotations.pivots = [...new Map([trade.sizingFractal, ...trade.yellows
+      .filter(row => row.at <= through && row.result === 'TIGHTENED').map(row => row.fractal)]
+      .filter(f => f && f.confirmedAt <= through).map(f => [f.at + '|' + f.price, f])).values()];
+    annotations.sizing = trade.openedAt < through ? {
+      from: Math.max(shown[0].time * 1000, trade.sizingFractal?.at ?? trade.signalAt),
+      to: endpoint, price: trade.sizingStop
+    } : null;
+    for (const row of events.children) {
+      const at = Number(row.dataset.at);
+      row.hidden = at > through || at === through && !row.classList.contains('btc-replay-yellow-event');
+    }
     time.textContent = date.format(through);
     if (fit) chart.timeScale().fitContent();
   }
 
-  function failed(error) {
-    if (/token/i.test(error.message)) { token.hidden = false; token.focus(); }
-    status.textContent = error.message;
+  function details(trade) {
+    const entries = [
+      ['Begin', `${trade.direction.toUpperCase()} · ${date.format(trade.openedAt)} · $${price.format(trade.entryPrice)}`],
+      ['Gebroken gaprand', '$' + price.format(trade.gapEdge)],
+      ['Sizing-SL', '$' + price.format(trade.sizingStop)],
+      ['Initiële SL', '$' + price.format(trade.initialStop)],
+      ['Positiegrootte (model)', quantity.format(trade.size) + ' BTC'],
+      ['Initieel prijsrisico', '$' + price.format(trade.riskUsd)],
+      ['TP', 'Geen'],
+      ['Exitcandle', trade.closedAt === undefined ? (trade.status === 'INCOMPLETE' ? 'Onbekend: dYdX-data ontbreekt' : 'Open in retest')
+        : `${date.format(trade.closedAt)} · $${price.format(trade.exitPrice)}`],
+      ['Bruto P&L', trade.grossPnl === undefined ? '—' : '$' + price.format(trade.grossPnl)]
+    ];
+    summary.replaceChildren(...entries.map(([label, value]) => {
+      const pair = document.createElement('div'), title = document.createElement('dt'), data = document.createElement('dd');
+      title.textContent = label; data.textContent = value; pair.append(title, data);
+      return pair;
+    }));
+    const steps = [
+      [trade.openedAt, 'E', `Green-entry · initiële SL op de dYdX-open van ${date.format(trade.signalAt)}`],
+      ...trade.yellows.map((row, index) => [row.at, 'Y' + (index + 1),
+        (row.result === 'TIGHTENED' ? `SL naar $${price.format(row.stop)}` : `SL blijft $${price.format(row.stop)}`) +
+        (row.fractal ? ` · pivot ${date.format(row.fractal.at)}, bevestigd ${date.format(row.fractal.confirmedAt)}` : '')]),
+      ...(trade.closedAt === undefined ? [] : [[trade.closedAt, 'X', trade.exitReason === 'GAP_STOP'
+        ? 'Uuropen voorbij de stop' : 'Stop geraakt binnen deze candle']])
+    ];
+    events.replaceChildren(...steps.map(([at, label, description]) => {
+      const row = document.createElement('li'), badge = document.createElement('b'), text = document.createElement('span');
+      row.dataset.at = String(at); badge.textContent = `${label} · ${date.format(at)}`; text.textContent = description;
+      if (label.startsWith('Y')) row.className = 'btc-replay-yellow-event';
+      row.append(badge, text);
+      return row;
+    }));
   }
 
   async function showTrade() {
     const request = ++nonce;
     pause();
     snapshot = undefined;
-    host.hidden = playback.hidden = legend.hidden = true;
+    host.hidden = playback.hidden = legend.hidden = summary.hidden = events.hidden = true;
     status.textContent = 'dYdX-candles laden...';
     try {
-      const data = await read(`?id=${encodeURIComponent(select.value)}&window=${windowSelect.value}`);
+      const data = await read(`?id=${encodeURIComponent(select.value)}`);
       if (request !== nonce) return;
       snapshot = data;
-      const { trade, range } = data;
-      const opened = `Entry ${date.format(trade.openedAt)} @ ${price.format(trade.entryPrice)}`;
-      const closed = trade.closedAt !== null && trade.exitPrice !== null
-        ? `Exit ${date.format(trade.closedAt)} @ ${price.format(trade.exitPrice)}`
-        : trade.status === 'OPEN' ? 'Open' : 'Exitgegevens ontbreken';
-      const coverage = !data.stops?.length ? 'Geen bevestigde SL-stappen beschikbaar' : `${data.stops.length} waargenomen SL-stappen`;
-      const gaps = data.candles.length < (range.through - range.from) / hourMs ? 'Candledata onvolledig' : '';
-      status.textContent = [opened, closed, coverage, gaps, range.hasLater || range.hasEarlier ? 'Deelvenster' : ''].filter(Boolean).join(' | ');
+      const { trade } = data;
+      status.textContent = [
+        `Binance Spot-signaal · dYdX-uurdata · $${price.format(data.riskBudgetUsd)} modelbudget · vóór kosten`,
+        Number.isFinite(data.from) && Number.isFinite(data.through)
+          ? `${date.format(data.from)} – ${date.format(data.through)}` : '',
+        Number.isFinite(data.skippedWhileOpen) && data.skippedWhileOpen > 0
+          ? `${data.skippedWhileOpen} signalen overgeslagen tijdens open trades` : ''
+      ].filter(Boolean).join(' | ');
+      details(trade);
+      summary.hidden = events.hidden = false;
       if (!data.candles.length) return;
       host.hidden = false;
       await makeChart();
       if (request !== nonce) return;
       playback.hidden = legend.hidden = false;
-      windowSelect.hidden = !(range.hasLater || range.hasEarlier);
       cursor.max = String(data.candles.length);
       cursor.value = cursor.max;
       play.disabled = data.candles.length < 2;
       render(true);
-    } catch (error) { if (request === nonce) failed(error); }
+    } catch (error) { if (request === nonce) status.textContent = error.message; }
   }
 
   async function showList() {
     const request = ++nonce;
     pause();
-    host.hidden = playback.hidden = legend.hidden = windowSelect.hidden = select.hidden = true;
-    status.textContent = 'BTC-posities laden...';
+    host.hidden = playback.hidden = legend.hidden = summary.hidden = events.hidden = select.hidden = true;
+    status.textContent = 'Green-signalen en dYdX-candles laden...';
     load.disabled = true;
     try {
       const data = await read();
       if (request !== nonce) return;
-      token.hidden = true;
       select.replaceChildren();
-      for (const trade of data.trades) {
+      for (const trade of data.trades.slice().reverse()) {
         const option = document.createElement('option');
         option.value = trade.id;
-        const state = trade.status === 'OPEN' ? 'open' : trade.status === 'LIQUIDATED' ? 'liquidatie' : 'gesloten';
+        const state = trade.status === 'OPEN' ? 'open' : trade.status === 'INCOMPLETE' ? 'onvolledig' : 'gesloten';
         option.textContent = `${date.format(trade.openedAt)} | ${trade.direction.toUpperCase()} | ${state}`;
         select.append(option);
       }
-      if (!select.options.length) { status.textContent = 'Geen recente BTC-posities gevonden.'; return; }
+      if (!select.options.length) { status.textContent = `Geen gesimuleerde entries · ${data.candidateCount} Green-signalen in dit venster.`; return; }
       select.hidden = false;
-      windowSelect.value = 'entry';
       await showTrade();
-    } catch (error) { if (request === nonce) failed(error); }
+    } catch (error) { if (request === nonce) status.textContent = error.message; }
     finally { load.disabled = false; }
   }
 
   load.addEventListener('click', showList);
-  token.addEventListener('keydown', event => { if (event.key === 'Enter' && !load.disabled) void showList(); });
-  select.addEventListener('change', () => { windowSelect.value = 'entry'; void showTrade(); });
-  windowSelect.addEventListener('change', showTrade);
+  select.addEventListener('change', showTrade);
   cursor.addEventListener('input', () => { pause(); render(true); });
   play.addEventListener('click', () => {
     if (timer) return pause();

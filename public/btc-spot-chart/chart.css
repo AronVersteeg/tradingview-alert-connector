@@ -176,7 +176,15 @@
 #btcReplayCursor { flex: 1 1 120px; min-width: 64px; accent-color: #77a8ff; }
 .btc-replay-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding-top: 8px; }
 .btc-replay-legend span::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 5px; background: currentColor; }
-.btc-replay-entry { color: #79a9ff; }
+.btc-replay-entry { color: #68e2a6; }
 .btc-replay-exit { color: #eea9ce; }
-.btc-replay-stop { color: #ffc469; }
-.btc-replay-fractal { color: #a9b6c8; }
+.btc-replay-stop { color: #69aaff; }
+.btc-replay-yellow, .btc-replay-yellow-event b { color: #f3d25c; }
+.btc-replay-fractal { color: #f9a365; }
+.btc-replay-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px 14px; margin: 12px 0; padding: 10px 0; border-block: 1px solid #2b3443; }
+.btc-replay-summary dt { font-size: 11px; color: #a9b6c8; }
+.btc-replay-summary dd { margin: 3px 0 0; font-size: 13px; color: #e0e6f0; overflow-wrap: anywhere; }
+.btc-replay-events { list-style: none; margin: 0; padding: 0; color: #c2ccda; font-size: 12px; }
+.btc-replay-events li { display: grid; grid-template-columns: minmax(138px, 1fr) minmax(0, 4fr); gap: 4px 12px; padding: 5px 0; border-bottom: 1px solid #252e3c; }
+.btc-replay-events li span { overflow-wrap: anywhere; }
+@media (max-width: 500px) { .btc-replay-events li { grid-template-columns: minmax(0, 1fr); } }
