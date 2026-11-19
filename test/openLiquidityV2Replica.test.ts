@@ -107,6 +107,34 @@ describe('Public Perp V2 Binance Spot replica', () => {
     expect(comparable(live.snapshots)).toEqual(comparable(buildReplicaSnapshots(candles.slice(0, 4))));
   });
 
+  test('shadow preview matches real append across expiry and does not consume cohorts or close', async () => {
+    const candles = observations(58);
+    const live = await IncrementalReplicaReplay.create(candles.slice(0, 50), { frameLimit: 7, cohortWindowHours: 31 });
+    for (const next of candles.slice(50)) {
+      const observed = next.closeTimeMs + 2;
+      const before = JSON.stringify(live.snapshots);
+      const preview = live.previewNext(next, observed)!;
+      expect(live.previewNext(next, observed)).toEqual(preview);
+      expect(live.previewNext(next, next.closeTimeMs)).toBeUndefined();
+      expect(live.previewNext({ ...next, timestampMs: next.timestampMs + hour }, observed)).toBeUndefined();
+      expect(live.lastCandle).toBe(preview.previousCandle);
+      expect(JSON.stringify(live.snapshots)).toBe(before);
+      const appended = live.append(next, new Date(observed).toISOString());
+      expect(appended).toEqual(preview.next);
+      const real = payloadFor(live.snapshots);
+      const left = real.frames.at(-2)!;
+      const simulated = { frames: real.frames.slice(-2), gaps: real.gaps.slice(-2),
+        zoneSeed: preview.zoneSeed, zoneDeltas: [[], preview.next.zoneDeltas] };
+      const publicResult = reconstructReplicaIntrusions(real, left.t);
+      const shadowResult = reconstructReplicaIntrusions(simulated, left.t);
+      expect(shadowResult.alerts.map(({ frameIndex, ...alert }) => alert))
+        .toEqual(publicResult.alerts.map(({ frameIndex, ...alert }) => alert));
+      expect(shadowResult.latestBars.slice().sort((a, b) => a.key.localeCompare(b.key)))
+        .toEqual(publicResult.latestBars.slice().sort((a, b) => a.key.localeCompare(b.key)));
+      expect(live.previewNext(next, observed)).toBeUndefined();
+    }
+  });
+
   test('cold replay yields to timers instead of blocking manual checks', async () => {
     let yielded = false;
     const timer = setImmediate(() => { yielded = true; });

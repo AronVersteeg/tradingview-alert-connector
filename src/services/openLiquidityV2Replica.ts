@@ -593,6 +593,25 @@ export class IncrementalReplicaReplay {
 
   get lastCandle(): SpotCandle | undefined { return this.state.lastCandle; }
 
+  previewNext(candle: SpotCandle, now: number) {
+    const previousCandle = this.lastCandle;
+    const previous = this.snapshots.at(-1);
+    if (!previous || !previousCandle || candle.timestampMs !== previousCandle.timestampMs + HOUR_MS ||
+        candle.closeTimeMs !== candle.timestampMs + HOUR_MS - 1 || candle.closeTimeMs >= now) return undefined;
+    // Only the expiring birth bucket can be read by a single step; cohort rows are immutable.
+    const expired = this.state.nextIndex - this.options.cohortWindowHours!;
+    const keys = this.state.birthKeysByIndex.get(expired);
+    const fork: ReplicaReplayState = {
+      ...this.state,
+      bins: new Map([...this.state.bins].map(([key, bin]) => [key, { ...bin, cohorts: bin.cohorts.slice() }])),
+      birthKeysByIndex: new Map(keys ? [[expired, keys]] : [])
+    };
+    const zoneSeed = [...fork.previousZoneCounts.values()];
+    advanceReplicaState(fork, candle, this.options);
+    const next = replicaSnapshot(candle, fork, { ...this.options, observedAt: new Date(now).toISOString() }, false);
+    return { previousCandle, previous, next, zoneSeed };
+  }
+
   append(candle: SpotCandle, observedAt = new Date().toISOString()): ReplicaSnapshot {
     if (this.lastCandle && candle.timestampMs !== this.lastCandle.timestampMs + HOUR_MS) {
       throw new Error('Public V2 live replay requires consecutive closed 1H candles.');
@@ -796,6 +815,27 @@ export class OpenLiquidityV2ReplicaCollector {
 
   private historyFile(): string {
     return path.join(this.historyDirectory(), `${this.config.modelVersion}.json`);
+  }
+
+  previewBtcSpotClose(candle: SpotCandle, now: number) {
+    if (this.config.market !== BTC_CONFIG.market || this.config.symbol !== BTC_CONFIG.symbol ||
+        this.config.venue === 'futures' || this.sourceRows < COHORT_WINDOW_HOURS) return undefined;
+    const preview = this.liveReplay?.previewNext(candle, now);
+    if (!preview) return undefined;
+    const { previousCandle, previous, next, zoneSeed } = preview;
+    return {
+      candles: [previousCandle, candle],
+      payload: {
+        modelVersion: this.config.modelVersion,
+        quality: { causalModel: true, priceStepUsd: this.config.priceStepUsd },
+        source: { market: this.config.market, sourceStatuses: [{ name: 'Binance Spot BTCUSDT 1H', ok: true }] },
+        frames: [previous, next].map(row => ({
+          t: timestampForMs(Date.parse(row.effectiveAt)), startedAtMs: Date.parse(row.effectiveAt),
+          open: row.open, high: row.high, low: row.low, close: row.close, price: row.referencePrice
+        })),
+        gaps: [previous.gap, next.gap], zoneSeed, zoneDeltas: [[], next.zoneDeltas]
+      }
+    };
   }
 
   start(initialDelayMs = 0): void {

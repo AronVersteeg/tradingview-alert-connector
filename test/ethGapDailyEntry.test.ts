@@ -13,6 +13,7 @@ import * as dailyHistory from '../src/services/binanceDailyFractalHistory';
 import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed, zecSpotChartFeed } from '../src/services/binanceSpotChart';
 import { PurpleLineContinuity } from '../src/services/purpleLineContinuity';
 import { purpleTriggerEmail } from '../src/services/purpleTriggerEmail';
+import { BtcSpotCloseShadow } from '../src/services/btcSpotCloseShadow';
 const HOUR = 3_600_000, closeAt = Date.parse('2026-10-24T02:00:00Z'), now = closeAt + 5000;
 const iso = (ms: number) => new Date(ms).toISOString();
 const signal = (direction: 'long' | 'short' = 'long'): entry.EthGapDailySignal => ({
@@ -384,6 +385,39 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       fs.rmSync(directory, { recursive: true, force: true });
     });
     const state = () => ({ gapDailyEntry: { activatedAt: iso(closeAt - HOUR) } });
+
+    if (asset === 'BTC') {
+      test('BTC shadow uses the real Green evaluator without fetching chart data or placing any order', async () => {
+        const { payload, page } = inputs();
+        const candles = page.candles.map((row: any) => ({
+          timestampMs: row.time * 1000, closeTimeMs: row.closeTime,
+          open: row.open, high: row.high, low: row.low, close: row.close
+        }));
+        process.env.OPEN_LIQUIDITY_V2_BTC_SPOT_CLOSE_SHADOW_ENABLED = 'true';
+        jest.spyOn(BtcSpotCloseShadow.prototype, 'start').mockImplementation(function (this: BtcSpotCloseShadow) {
+          (this as any).running = true;
+        });
+        const chart = jest.spyOn(binanceSpotChartFeed, 'page').mockResolvedValue(page);
+        monitor.collector.previewBtcSpotClose = jest.fn().mockReturnValue({ payload, candles });
+        monitor.startBtcSpotCloseShadow();
+        const shadow = monitor.btcSpotCloseShadow;
+        const signalCandle = candles.at(-1);
+        shadow.receive({ e: 'kline', s: 'BTCUSDT', k: { s: 'BTCUSDT', i: '1h', x: true,
+          t: signalCandle.timestampMs, T: signalCandle.closeTimeMs, o: String(signalCandle.open),
+          h: String(signalCandle.high), l: String(signalCandle.low), c: String(signalCandle.close) } }, now);
+        expect(monitor.getStatus().btcSpotCloseShadow.recent[0].shadowDecision).toBe('GREEN');
+        expect(chart).not.toHaveBeenCalled();
+        expect(orders.getAccountSnapshot).not.toHaveBeenCalled();
+        expect(orders.placeOrder).not.toHaveBeenCalled();
+        jest.setSystemTime(closeAt + 60_000);
+        await monitor.checkGapDailyEntry(state(), payload, {});
+        expect(chart).toHaveBeenCalledTimes(1);
+        expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+        expect(monitor.getStatus().btcSpotCloseShadow.recent[0]).toMatchObject({
+          shadowDecision: 'GREEN', restDecision: 'GREEN', comparison: { result: 'MATCH', leadMs: 55_000 }
+        });
+      });
+    }
 
     test.each([['purple', 'long'], ['purple', 'short'], ['green', 'long'], ['green', 'short']] as const)(
       'the selected %s %s scanner dispatches only its own entry route and records the correct trigger mail', async (mode, direction) => {

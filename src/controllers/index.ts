@@ -245,6 +245,7 @@ initializeExchanges()
       collector.start();
     }
     openLiquidityV2BtcCollector.start();
+    openLiquidityV2BtcIntrusionMonitor.startBtcSpotCloseShadow();
     openLiquidityV2EthCollector.start(30_000);
     openLiquidityV2InjCollector.start(60_000);
     openLiquidityV2SolCollector.start(120_000);

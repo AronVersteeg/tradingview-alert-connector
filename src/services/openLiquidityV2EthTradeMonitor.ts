@@ -1,13 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 import { ManagedPositionCoordinator } from './managedPositionCoordinator';
+import { BtcSpotCloseShadow, btcGreenObservation } from './btcSpotCloseShadow';
 import { EMAIL_NOTIFICATION_POLICY, informationalEmailsEnabled } from './emailNotificationPolicy';
 import { ManualStopCandlePendingError, withManualDydxBodyQuarterPlan } from './dydxSignalBodyStop';
 import { btcCompanionEntryBlockReason } from './btcEntryMode';
 import { spotEntryModeExplicit, spotEntryModeStatus, spotManualEntryEnabled } from './spotEntryMode';
 import { SpotEntrySignal, EthEntryFuturesDelta,
   freshEthGapDailySignal, isBtcPurpleTrailSignal, withPurpleDydxBodyOpenStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
-import { evaluateYellowIntrusionSignal, readPurpleGapBreakSignal, readGreenLineSignal } from './greenLineEntry';
+import { evaluateGreenLineSignal, evaluateYellowIntrusionSignal, readPurpleGapBreakSignal, readGreenLineSignal } from './greenLineEntry';
 import { PurpleLineMarket, automaticSpotEntryEnabled, purpleLineSetupForMarket, spotEntrySetup } from './purpleLineSetup';
 import { PurpleLineContinuity } from './purpleLineContinuity';
 import { PurpleTriggerEmail, purpleTriggerEmail } from './purpleTriggerEmail';
@@ -889,6 +890,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   private readonly processStartedAt = Date.now();
   private entryContinuity?: PurpleLineContinuity;
   private purpleEmailPromise?: Promise<void>;
+  private btcSpotCloseShadow?: BtcSpotCloseShadow;
 
   constructor(
     private readonly collector: OpenLiquidityV2ReplicaCollector,
@@ -897,6 +899,34 @@ export class OpenLiquidityV2EthTradeMonitor {
 
   configureTradeExecutor(executor: DecentraderTradeExecutor): void {
     this.executor = executor;
+  }
+
+  startBtcSpotCloseShadow(): void {
+    if (this.config.market !== 'BTC-USD' || !this.enabled() ||
+        !boolEnv('OPEN_LIQUIDITY_V2_BTC_SPOT_CLOSE_SHADOW_ENABLED', true)) return;
+    this.btcSpotCloseShadow ??= new BtcSpotCloseShadow((candle, now) => {
+      const preview = this.collector.previewBtcSpotClose(candle, now);
+      if (!preview) return undefined;
+      const { payload, candles } = preview;
+      const intrusions = this.latestSpotIntrusions(payload, candle.closeTimeMs + 1);
+      const signal = intrusions.length ? evaluateGreenLineSignal('BTC-USD', payload, intrusions, {
+        symbol: 'BTCUSDT', venue: 'Binance Spot', interval: '1h', fetchedAt: new Date(now).toISOString(), hasMore: false,
+        candles: candles.map(row => ({ ...row, time: row.timestampMs / 1000, closeTime: row.closeTimeMs,
+          volume: 0, quoteVolume: 0, closed: true }))
+      }, now) : undefined;
+      return btcGreenObservation(payload, intrusions, signal);
+    });
+    this.btcSpotCloseShadow.start();
+  }
+
+  private observeBtcRestGreen(close: number, payload: any, intrusions: ReturnType<OpenLiquidityV2EthTradeMonitor['latestSpotIntrusions']>,
+    signal?: SpotEntrySignal): void {
+    if (!this.btcSpotCloseShadow) return;
+    try {
+      this.btcSpotCloseShadow.observeRest(close, btcGreenObservation(payload, intrusions, signal && 'edge' in signal ? signal : undefined));
+    } catch (error) {
+      console.warn('BTC Spot shadow comparison failed; live REST decision unchanged:', String(error));
+    }
   }
 
   private enabled(): boolean {
@@ -1046,6 +1076,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       enabled: this.enabled(),
       running: this.running,
       positionManagement: this.managementStatus,
+      btcSpotCloseShadow: this.btcSpotCloseShadow?.status(),
       stopCoverage: this.stopCoverageSignature === state.managedPosition?.entrySignature ? this.stopCoverage : undefined,
       trailingCloseCheck: { enabled: this.managementClosedHourActive, delaySeconds: TRAILING_CLOSE_DELAY_MS / 1000,
         maxRetrySeconds: TRAILING_CLOSE_RETRY_WINDOW_MS / 1000, nextCheckAt: this.nextManagementCloseCheckAt },
@@ -1455,11 +1486,13 @@ export class OpenLiquidityV2EthTradeMonitor {
     try {
       const intrusions = this.latestSpotIntrusions(payload, close);
       if (!intrusions.length) {
+        if (!purple) this.observeBtcRestGreen(close, payload, intrusions);
         entry.decision = { outcome: 'NO_INTRUSION', candleClosedAt: new Date(close).toISOString() };
         return;
       }
       signal = purple ? await readPurpleGapBreakSignal(this.config.market as PurpleLineMarket, payload, intrusions)
         : await readGreenLineSignal(this.config.market as PurpleLineMarket, payload, intrusions);
+      if (!purple) this.observeBtcRestGreen(close, payload, intrusions, signal);
       if (!signal) {
         entry.decision = { outcome: purple ? 'NO_PURPLE_CONFLUENCE' : 'NO_GAP_BREAK', candleClosedAt: new Date(close).toISOString() };
         return;
@@ -2926,6 +2959,7 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   stop(): void {
+    this.btcSpotCloseShadow?.stop();
     this.entryContinuity?.stop();
     this.gapDailyRecoveryActive = false;
     if (this.gapDailyRecoveryTimer) clearTimeout(this.gapDailyRecoveryTimer);

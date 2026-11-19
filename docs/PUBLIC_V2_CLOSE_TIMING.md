@@ -26,6 +26,27 @@ is changed by this optimization.
 
 ## Verification
 
+The BTC-only Spot WebSocket shadow trial is on by default. It accepts only the
+finalized BTCUSDT 1H close for the current hour, steps the same gap model on a
+temporary copy of the previous REST state, and runs the same Green evaluator
+without another chart request. It does not update live replay, trailing, trade
+state or orders. The existing REST collector and order route remain authoritative.
+
+`execution.btcSpotCloseShadow.recent` on the BTC status endpoint holds up to 48
+hours in process memory. For each comparable hour it shows close-to-decision
+times and `MATCH` or `MISMATCH` for the two candles, gap edges, intrusion
+signatures and Green decision. The independently timed REST result is observed
+before dispatching an order, not after a fill. Only hours evaluated by the live
+Green route can be compared; missing/reordered data or a cold start without a
+consecutive replay base is not counted as a match. A match on no-intrusion hours
+does not establish parity on actual entry signals.
+
+Render logs retain the comparison as `BTC Spot shadow close compared`.
+`OPEN_LIQUIDITY_V2_BTC_SPOT_CLOSE_SHADOW_ENABLED=false` disables only the trial.
+Promotion to live needs observed parity on meaningful signals, improved latency
+and working recovery on dropped/duplicate events. Restart checkpointing is a
+separate follow-up; this trial does not change the cold bootstrap.
+
 `GET /open-liquidity/v2/status?market=BTC-USD` exposes `liveReplayReady` and
 `lastRefreshTiming`: mode, queue/fetch/calculation/total milliseconds, number of
 processed candles, candle-open, candle-close and time elapsed after close.
