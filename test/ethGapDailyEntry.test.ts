@@ -363,7 +363,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
           expect(JSON.parse(fs.readFileSync(file, 'utf8')).gapDailyEntry.intent).toMatchObject({ outcome: 'SUBMITTING', orderAlert: { profile: 'NO_TP', take_profits: [] } });
           position = { market, size: alert.desired_position === 'LONG' ? .4 : -.4, entryPrice: 120 };
         }),
-        syncTrailingStop: jest.fn().mockResolvedValue({ outcome: 'UPDATED' }),
+        syncTrailingStop: jest.fn().mockResolvedValue({ outcome: 'UPDATED', verified: true }),
         syncTakeProfits: jest.fn().mockResolvedValue({ outcome: 'UPDATED' })
       };
       monitor = createMonitor();
@@ -1292,6 +1292,86 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       await jest.advanceTimersByTimeAsync(5000);
       expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.takeProfitMode).toBe('trailing-only');
       expect(orders.placeOrder).toHaveBeenCalledTimes(1); expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+    });
+
+    test('retries old-position stop coverage after restart and backs off until dYdX confirms full coverage', async () => {
+      const managed: any = state();
+      await monitor.executeGapDailyEntry(managed, greenSignal(), {});
+      monitor.stop();
+      process.env[`${asset}_ENTRY_MODE`] = 'off';
+      jest.setSystemTime(now + 18 * 60_000);
+      position = { market, size: .2, entryPrice: 120 };
+      orders.syncTrailingStop.mockClear();
+      orders.syncTrailingStop.mockResolvedValue({ outcome: 'PENDING_VERIFICATION', verified: false });
+      monitor = createMonitor();
+      monitor.configureTradeExecutor(orders);
+      const firstCheck = Date.now();
+      await monitor.checkManagedPosition();
+      expect(monitor.getStatus().stopCoverage).toMatchObject({
+        state: 'UNVERIFIED', unverifiedSince: iso(firstCheck), nextCheckAt: iso(firstCheck + 5000)
+      });
+      await jest.advanceTimersByTimeAsync(5 * 60_000);
+      const stalled = monitor.getStatus().stopCoverage;
+      expect(stalled).toMatchObject({ state: 'UNVERIFIED', nextCheckAt: iso(Date.now() + 30_000) });
+      expect(orders.syncTrailingStop.mock.calls.length).toBeGreaterThan(10);
+      expect(orders.syncTrailingStop.mock.calls.length).toBeLessThan(20);
+      for (const [alert, options] of orders.syncTrailingStop.mock.calls) {
+        expect(alert).toMatchObject({ market, trail_stop: 118, size: .2 });
+        expect(options).toEqual({ requireVisibleReplacement: true });
+      }
+      orders.syncTrailingStop.mockResolvedValue({ outcome: 'UNCHANGED', visibility: 'DYDX_OPEN_ORDER' });
+      await jest.advanceTimersByTimeAsync(30_000);
+      expect(monitor.getStatus().stopCoverage).toEqual({ state: 'VERIFIED', checkedAt: iso(Date.now()) });
+      const completedChecks = orders.syncTrailingStop.mock.calls.length;
+      await jest.advanceTimersByTimeAsync(120_000);
+      expect(orders.syncTrailingStop).toHaveBeenCalledTimes(completedChecks);
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+      expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+      expect(gap.fetchDydxHourlyCandlesForMarket).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).managedPosition.currentStop).toBe(118);
+    });
+
+    test('resumes coverage verification without a persisted entry intent and does not trust local stop memory', async () => {
+      const managed: any = state();
+      await monitor.executeGapDailyEntry(managed, greenSignal(), {});
+      delete managed.gapDailyEntry;
+      fs.writeFileSync(file, JSON.stringify(managed));
+      jest.setSystemTime(now + 20 * 60_000);
+      orders.getAccountSnapshot.mockRejectedValueOnce(new Error('fixture indexer unavailable'));
+      orders.syncTrailingStop
+        .mockResolvedValueOnce({ outcome: 'UNCHANGED', visibility: 'RENDER_MEMORY_UNCONFIRMED' })
+        .mockResolvedValueOnce({ outcome: 'UNCHANGED_WITH_DUPLICATES', visibility: 'DYDX_OPEN_ORDER_AGGREGATE' });
+      await monitor.checkManagedPosition();
+      expect(monitor.getStatus().stopCoverage).toMatchObject({ state: 'UNVERIFIED', reason: 'fixture indexer unavailable' });
+      await jest.advanceTimersByTimeAsync(5000);
+      expect(monitor.getStatus().stopCoverage).toMatchObject({ state: 'UNVERIFIED' });
+      await jest.advanceTimersByTimeAsync(5000);
+      expect(monitor.getStatus().stopCoverage).toMatchObject({ state: 'VERIFIED' });
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+    });
+
+    test('does not fast-retry ownership mismatches, disabled stops, or a stopped monitor', async () => {
+      const managed: any = state();
+      await monitor.executeGapDailyEntry(managed, greenSignal(), {});
+      const initialPosition = position;
+      position = { ...position, size: 2 };
+      await monitor.checkManagedPosition();
+      expect(monitor.getStatus().stopCoverage).toMatchObject({ state: 'BLOCKED' });
+      expect(monitor.getStatus().stopCoverage.nextCheckAt).toBeUndefined();
+      position = initialPosition;
+      process.env.DECENTRADER_DYNAMIC_SL_ENABLED = 'false';
+      await monitor.checkManagedPosition();
+      expect(monitor.getStatus().stopCoverage).toMatchObject({ state: 'DISABLED' });
+      expect(monitor.getStatus().stopCoverage.nextCheckAt).toBeUndefined();
+      process.env.DECENTRADER_DYNAMIC_SL_ENABLED = 'true';
+      orders.syncTrailingStop.mockResolvedValue({ outcome: 'PENDING_CAPACITY', verified: false });
+      await monitor.checkManagedPosition();
+      expect(monitor.getStatus().stopCoverage).toMatchObject({ state: 'UNVERIFIED' });
+      const checks = orders.syncTrailingStop.mock.calls.length;
+      monitor.stop();
+      await jest.advanceTimersByTimeAsync(30_000);
+      expect(orders.syncTrailingStop).toHaveBeenCalledTimes(checks);
+      expect(orders.placeOrder).toHaveBeenCalledTimes(1);
     });
     test('blocks competing old entry routes, preserving plans, and leaves other BTC settings unchanged', async () => {
       expect((await monitor.executeFractalEntry({ market })).tradeSkipped).toMatch(/entry selector/);

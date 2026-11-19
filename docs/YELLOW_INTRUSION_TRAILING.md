@@ -67,6 +67,23 @@ an unevaluated Yellow they repair the existing stop without reading dYdX candles
 Yellow awaiting its matching dYdX hour, `trailingCandle.pending=true` requests
 bounded retries. Source/exchange latency is still possible.
 
+Unverified stop coverage on an existing automatic position also gets its own
+retry, independent of the five-minute entry window and the selected entry mode.
+It retries after 5 seconds initially, backing off to 15 and then 30 seconds
+during a sustained problem. It uses the same protective order logic and position
+lock. It does not choose a new stop outside the existing Yellow rules, send new
+entries, or change the policy to preserve an old stop until replacement is visible.
+Regular checks continue after full visible coverage is confirmed. The retry also
+ends when the position is no longer managed or protection is explicitly disabled.
+After a restart, the normal position check can start the retry again from the
+stored position, even without an entry intent.
+
+The status endpoint exposes `execution.stopCoverage`: `VERIFIED`, `UNVERIFIED`,
+`BLOCKED` (the live position no longer matches the owned position), or
+`DISABLED`, with the latest check and next retry when applicable. An unverified
+stop is not proof that the exchange has no stop; an older stop may still be live.
+No extra notification emails are sent.
+
 Inspect `execution.gapDailyEntry.initialStop.trailingGate` for
 `later-same-direction-intrusion`, `trailingSignals: ["yellow"]`, and the managed
 position's `intrusionTrail`. The chart checkbox controls rendering only; hiding

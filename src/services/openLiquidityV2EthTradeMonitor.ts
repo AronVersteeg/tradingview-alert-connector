@@ -102,6 +102,14 @@ const HOUR_MS = 3_600_000;
 const TRAILING_CLOSE_DELAY_MS = 2_000;
 const TRAILING_CLOSE_RETRY_WINDOW_MS = 5 * 60_000;
 
+type StopCoverageStatus = {
+  state: 'VERIFIED' | 'UNVERIFIED' | 'BLOCKED' | 'DISABLED';
+  checkedAt: string;
+  unverifiedSince?: string;
+  nextCheckAt?: string;
+  reason?: string;
+};
+
 type WhaleSnapshotProvider = {
   snapshot(): any;
 };
@@ -862,6 +870,9 @@ export class OpenLiquidityV2EthTradeMonitor {
   private managementPromise: Promise<any> | undefined;
   private gapDailyRecoveryTimer: NodeJS.Timeout | undefined;
   private gapDailyRecoveryActive = true;
+  private stopCoverageTimer?: NodeJS.Timeout;
+  private stopCoverage?: StopCoverageStatus;
+  private stopCoverageSignature?: string;
   private takeProfitPromise: Promise<void> | undefined;
   private managementStatus: any = { running: false };
   private readonly coordinator = new ManagedPositionCoordinator<EthMonitorState>(
@@ -1035,6 +1046,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       enabled: this.enabled(),
       running: this.running,
       positionManagement: this.managementStatus,
+      stopCoverage: this.stopCoverageSignature === state.managedPosition?.entrySignature ? this.stopCoverage : undefined,
       trailingCloseCheck: { enabled: this.managementClosedHourActive, delaySeconds: TRAILING_CLOSE_DELAY_MS / 1000,
         maxRetrySeconds: TRAILING_CLOSE_RETRY_WINDOW_MS / 1000, nextCheckAt: this.nextManagementCloseCheckAt },
       market: this.config.market,
@@ -1301,18 +1313,72 @@ export class OpenLiquidityV2EthTradeMonitor {
     result.gapDailyEntryRecovery = { outcome: 'RECOVERED_AFTER_PARTIAL_EXECUTION' };
   }
 
-  private scheduleGapDailyRecovery(state: EthMonitorState, result?: any): void {
+  private scheduleGapDailyRecovery(state: EthMonitorState): void {
     const intent = state.gapDailyEntry?.intent;
     if (!this.gapDailyRecoveryActive || this.gapDailyRecoveryTimer || !intent ||
       Date.now() - Date.parse(intent.attemptedAt) >= 300_000) return;
     const unknownEntry = !state.managedPosition && ['SUBMITTING', 'UNKNOWN'].includes(intent.outcome);
-    const pendingProtection = state.managedPosition?.takeProfitMode === 'trailing-only' &&
-      (result?.dynamicSlSync?.verified === false || result?.ok === false);
-    if (!unknownEntry && !pendingProtection) return;
+    if (!unknownEntry) return;
     this.gapDailyRecoveryTimer = setTimeout(() => {
       this.gapDailyRecoveryTimer = undefined;
       void this.checkManagedPosition().catch(error => console.error(`${this.config.asset} gap/Daily reconciliation failed:`, error));
     }, 5_000);
+  }
+
+  private clearStopCoverageTimer(): void {
+    if (this.stopCoverageTimer) clearTimeout(this.stopCoverageTimer);
+    this.stopCoverageTimer = undefined;
+    if (this.stopCoverage) delete this.stopCoverage.nextCheckAt;
+  }
+
+  private checkStopCoverageRecovery(state: EthMonitorState, result: any): void {
+    if (!this.gapDailyRecoveryActive) return;
+    const managed = state.managedPosition;
+    if (managed?.takeProfitMode !== 'trailing-only' || !purpleLineSetupForMarket(this.config.market)) {
+      this.clearStopCoverageTimer();
+      this.stopCoverage = undefined;
+      this.stopCoverageSignature = undefined;
+      return;
+    }
+    if (this.stopCoverageSignature !== managed.entrySignature) {
+      this.clearStopCoverageTimer();
+      this.stopCoverage = undefined;
+      this.stopCoverageSignature = managed.entrySignature;
+    }
+    const checkedAt = nowNlIso();
+    const sync = result.dynamicSlSync;
+    const blocked = result.managedOrderSync?.outcome === 'SKIPPED';
+    const disabled = !this.executor?.syncTrailingStop || !boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true);
+    const verified = ['UPDATED', 'UNCHANGED', 'UNCHANGED_WITH_DUPLICATES', 'TIGHTER_STOP_RETAINED'].includes(sync?.outcome) &&
+      sync?.verified !== false && (sync?.verified === true || ['DYDX_OPEN_ORDER', 'DYDX_OPEN_ORDER_AGGREGATE'].includes(sync?.visibility));
+    if (disabled || blocked || verified) {
+      this.clearStopCoverageTimer();
+      this.stopCoverage = { state: disabled ? 'DISABLED' : blocked ? 'BLOCKED' : 'VERIFIED', checkedAt,
+        ...(blocked ? { reason: result.managedOrderSync.reason } : {}) };
+      return;
+    }
+
+    const unverifiedSince = this.stopCoverage?.unverifiedSince ?? checkedAt;
+    this.stopCoverage = { state: 'UNVERIFIED', checkedAt, unverifiedSince, nextCheckAt: this.stopCoverage?.nextCheckAt,
+      reason: result.error || sync?.reason || sync?.outcome || 'No exchange-visible stop coverage confirmed.' };
+    this.scheduleStopCoverageRecovery();
+  }
+
+  private scheduleStopCoverageRecovery(): void {
+    const coverage = this.stopCoverage;
+    if (!this.gapDailyRecoveryActive || this.stopCoverageTimer || coverage?.state !== 'UNVERIFIED' || !coverage.unverifiedSince) return;
+    // Open-position protection has no entry expiry. Back off during sustained exchange delays.
+    const elapsed = Date.now() - Date.parse(coverage.unverifiedSince);
+    const delay = elapsed < 30_000 ? 5_000 : elapsed < 120_000 ? 15_000 : 30_000;
+    coverage.nextCheckAt = new Date(Date.now() + delay).toISOString();
+    this.stopCoverageTimer = setTimeout(() => {
+      this.clearStopCoverageTimer();
+      void this.checkManagedPosition().catch(error => {
+        console.error(`${this.config.asset} stop coverage recovery failed:`, error);
+        this.scheduleStopCoverageRecovery();
+      });
+    }, delay);
+    this.stopCoverageTimer.unref();
   }
 
   private latestSpotIntrusions(payload: any, closedAt: number) {
@@ -1550,11 +1616,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       entry.intent.error = error instanceof Error ? error.message : String(error);
       if (entry.intent.outcome === 'SUBMITTING') entry.intent.outcome = 'UNKNOWN';
       writeState(state, this.config);
-      try {
-        await this.recoverGapDailyIntent(state, result);
-      } finally {
-        this.scheduleGapDailyRecovery(state, { ...result, ok: false });
-      }
+      await this.recoverGapDailyIntent(state, result);
       if (result.gapDailyEntryRecovery?.outcome === 'RECOVERED_AFTER_PARTIAL_EXECUTION') {
         result.tradePlaced = true;
         result.tradeRecovered = true;
@@ -1563,7 +1625,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       }
       throw error;
     } finally {
-      this.scheduleGapDailyRecovery(state, result);
+      this.scheduleGapDailyRecovery(state);
+      this.checkStopCoverageRecovery(state, { ...result, error: entry.intent?.error });
     }
   }
 
@@ -2867,6 +2930,9 @@ export class OpenLiquidityV2EthTradeMonitor {
     this.gapDailyRecoveryActive = false;
     if (this.gapDailyRecoveryTimer) clearTimeout(this.gapDailyRecoveryTimer);
     this.gapDailyRecoveryTimer = undefined;
+    this.clearStopCoverageTimer();
+    this.stopCoverage = undefined;
+    this.stopCoverageSignature = undefined;
     this.closedHourChecksActive = false;
     if (this.closedHourTimer) clearTimeout(this.closedHourTimer);
     this.closedHourTimer = undefined;
@@ -2902,7 +2968,8 @@ export class OpenLiquidityV2EthTradeMonitor {
         if (entry?.decision?.signature && entry.decision.signature === state.managedPosition?.entrySignature && result.dynamicSlSync) {
           entry.decision = { ...entry.decision, protection: result.dynamicSlSync };
         }
-        this.scheduleGapDailyRecovery(state, result);
+        this.scheduleGapDailyRecovery(state);
+        this.checkStopCoverageRecovery(state, result);
         this.managementStatus = { ...this.managementStatus, ...result, running: false, lastFinishedAt: nowNlIso() };
       }
       return this.managementStatus;
