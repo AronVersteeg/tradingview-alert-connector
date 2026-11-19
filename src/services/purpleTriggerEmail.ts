@@ -21,12 +21,12 @@ export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entr
     : ['SUBMITTING', 'UNKNOWN'].includes(intent?.outcome) ? 'UNCONFIRMED'
     : decision.outcome || (result.tradePlaced ? 'PLACED' : 'ERROR');
   const plan = intent?.plan?.activePlan;
-  const initialStopLabel = purpleTrail ? 'confirmed dYdX fractal'
-    : plan?.initialStopPolicy?.mode === 'signal-body-open'
+  const initialStopLabel = plan?.initialStopPolicy?.mode === 'signal-body-open'
     ? 'dYdX signal candle body open'
     : plan?.initialStopPolicy?.mode === 'signal-body-quarter'
     ? 'dYdX signal-body 25% from open'
-    : plan?.initialStopPolicy?.mode === 'signal-body-midpoint' ? 'dYdX signal-body midpoint' : 'dYdX initial stop';
+    : plan?.initialStopPolicy?.mode === 'signal-body-midpoint' ? 'dYdX signal-body midpoint'
+    : plan?.initialStopPolicy?.mode === 'confirmed-fractal' ? 'confirmed dYdX fractal' : 'dYdX initial stop';
   const started = new Date(signal.time * 1000).toISOString(), closed = new Date(signal.closedAt * 1000).toISOString();
   const subject = `${headline} | ${btcManualTriggerTimestampNl(started)}`;
   const body = [

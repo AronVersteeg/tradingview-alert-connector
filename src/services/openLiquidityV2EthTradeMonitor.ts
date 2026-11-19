@@ -310,6 +310,7 @@ type EthBenchmarkRecord = {
 
 type BtcPurpleTrailState = {
   entryClosedAt: number;
+  fractalAfter?: number;
   lastScannedClosedAt?: number;
   lastGreenClosedAt?: number;
   evaluatedGreenClosedAt?: number;
@@ -1032,8 +1033,8 @@ export class OpenLiquidityV2EthTradeMonitor {
           ? 'Same-hour directional intrusion, previous gap edge close break and fresh confirmed Daily fractal close break.'
           : 'Same-hour intrusion and fresh close beyond the previous gap edge.',
         executionMarket: this.config.market, takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
-        initialStop: { ...(purple ? { mode: 'confirmed-fractal', trailingGate: 'later-same-direction-green', trailingSignals: ['green', 'purple'] }
-          : { mode: 'signal-body-open', bodyFraction: PURPLE_BODY_STOP_FRACTION, bufferPct: 0 }), candleSource: 'dydx-1h', sameSignalHour: true,
+        initialStop: { mode: 'signal-body-open', bodyFraction: PURPLE_BODY_STOP_FRACTION, bufferPct: 0,
+          ...(purple ? { trailingGate: 'later-same-direction-green', trailingSignals: ['green', 'purple'] } : {}), candleSource: 'dydx-1h', sameSignalHour: true,
           sizingSource: 'dydx-fractal', trailingSource: 'dydx-fractal', tightenOnly: true },
         futuresDeltaFilter: { enabled: false, reason: 'Futures delta is observe-only, not an entry requirement.' },
         activatedAt: state.gapDailyEntry?.activatedAt, decision: state.gapDailyEntry?.decision,
@@ -1238,8 +1239,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (purple && (!fractalPlan.stop?.valid || fractalPlan.stop.fractal?.source !== (signal.direction === 'long' ? 'lowRef' : 'highRef'))) {
       throw new Error(fractalPlan.stop?.reason || 'BTC Purple requires a confirmed dYdX high/low fractal stop.');
     }
-    const activePlan = purple ? { ...fractalPlan, initialStopPolicy: { mode: 'confirmed-fractal', candleSource: 'dydx-1h' } }
-      : withPurpleDydxBodyOpenStop(fractalPlan, rows[rows.length - 1], signal, price, this.config.asset);
+    const activePlan = withPurpleDydxBodyOpenStop(fractalPlan, rows[rows.length - 1], signal, price, this.config.asset);
     return { market: this.config.market, marketInfo, price, activePlan, fractalCandleSource: 'dydx-1h',
       timestamp: new Date(signal.time * 1000).toISOString().slice(0, 19).replace('T', ' ') };
   }
@@ -1456,7 +1456,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       take_profits: [], gap_daily_entry: signal });
     (orderAlert as any).decentrader = { ...(orderAlert as any).decentrader,
       sizingStop: plan.activePlan.sizingStop, initialStopPolicy: plan.activePlan.initialStopPolicy,
-      note: purple ? 'Binance Spot Purple entry; dYdX fractal sizing and SL; tighten on subsequent Green signals only; no TPs.'
+      note: purple ? 'Binance Spot Purple entry; dYdX fractal sizing; initial SL at the dYdX signal candle open; tighten on subsequent Green or Purple signals only; no TPs.'
         : 'Binance Spot Green entry; dYdX fractal sizing; initial SL at the dYdX signal candle open; dYdX fractal trailing; no TPs.' };
     await this.applyStatefulOrderCapacity(orderAlert, result);
     if (!freshEthGapDailySignal(signal, entry.activatedAt!)) return skip('Signal expired during order preparation.');
@@ -1668,7 +1668,8 @@ export class OpenLiquidityV2EthTradeMonitor {
       currentStopFractalCandleSource: 'dydx-1h',
       takeProfitMode: options.takeProfitMode || 'dynamic',
       ...(this.config.market === 'BTC-USD' && options.model === 'GAP_DAILY' && options.signal && isBtcPurpleTrailSignal(options.signal)
-        ? { btcPurpleTrail: { entryClosedAt: options.signal.closedAt } } : {}),
+        ? { btcPurpleTrail: { entryClosedAt: options.signal.closedAt,
+            ...(plan.activePlan?.initialStopPolicy?.mode === 'signal-body-open' ? { fractalAfter: options.signal.time } : {}) } } : {}),
       takeProfits
     };
     if (state.managedPosition.takeProfitMode === 'dynamic') {
@@ -2482,8 +2483,9 @@ export class OpenLiquidityV2EthTradeMonitor {
       if (frame >= 0) {
         // Confirmation may use only candles closed at the Green signal, including on retry/restart.
         const stopRows = contiguousDydxTail(rows, frame);
+        const anchor = Math.max(Date.parse(managed.currentStopFractalTimestamp || '') || 0, (trail.fractalAfter ?? 0) * 1000);
         const candidate = buildFractalStop(stopRows, stopRows.length - 1, direction, currentPrice, {
-          afterFractalTimestamp: managed.currentStopFractalTimestamp, enforceMinDistance: false
+          afterFractalTimestamp: anchor ? new Date(anchor).toISOString() : undefined, enforceMinDistance: false
         });
         trail.evaluatedGreenClosedAt = gate;
         if (candidate.valid && candidate.fractal?.source === (direction === 'long' ? 'lowRef' : 'highRef') && favorable(finite(candidate.price))) {

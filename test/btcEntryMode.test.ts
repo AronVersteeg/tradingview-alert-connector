@@ -88,7 +88,8 @@ describe('BTC single entry model selector and ownership interlock', () => {
     const monitor = new OpenLiquidityV2EthTradeMonitor({} as any, (openLiquidityV2BtcIntrusionMonitor as any).config);
     expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: true, entryMode: { mode: 'purple-trail' },
       gapDailyEntry: { setup: 'purple-green-trail', enabled: true, takeProfitMode: 'trailing-only',
-        initialStop: { mode: 'confirmed-fractal', trailingGate: 'later-same-direction-green', trailingSignals: ['green', 'purple'] } } });
+        initialStop: { mode: 'signal-body-open', bodyFraction: 0, bufferPct: 0,
+          trailingGate: 'later-same-direction-green', trailingSignals: ['green', 'purple'] } } });
   });
   test.each(['purple', 'purple-trail', 'off', 'invalid'])('manual plans remain untouched and no candle/mail/order is requested in %s', async mode => {
     const monitor = new BtcManualTradeOverrideMonitor();

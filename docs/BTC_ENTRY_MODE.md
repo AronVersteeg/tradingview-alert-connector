@@ -10,7 +10,7 @@ This is the single authoritative BTC entry selector:
 | --- | --- |
 | `manual` | Saved manual plans only (default when absent). |
 | `green` | Binance Spot Public V2 intrusion plus a fresh close beyond the previous gap edge on the same closed 1H candle. |
-| `purple-trail` | BTC only: Purple entry (same-hour directional intrusion, fresh gap break and fresh Daily close break), with a confirmed dYdX fractal SL and later Green-gated trailing. |
+| `purple-trail` | BTC only: Purple entry (same-hour directional intrusion, fresh gap break and fresh Daily close break), with an initial SL at the dYdX signal candle open and later Green/Purple-gated fractal trailing. |
 | `purple` | Legacy alias for `green`; use `purple-trail` for the new strategy. |
 | `off` | No new BTC entries. Existing positions keep their original management. |
 
@@ -66,16 +66,23 @@ Legacy BTC Delay and Shadow entry handlers cannot compete with these models.
 Set `BTC_ENTRY_MODE=purple-trail` and keep `DECENTRADER_AUTO_TRADE_ENABLED=true`
 and `DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED=true`. The entry uses the same
 spot Purple evaluator as the chart, on current BTCUSDT Public V2 data only. The
-initial stop is the confirmed dYdX 1H high/low fractal stop (including existing
-distance checks and buffer); risk sizing and the execution check use that same
-stop. No confirmed protective fractal, no entry. No TP orders.
+initial stop is exactly the open of the closed dYdX 1H candle matching the Binance
+Purple signal hour, without a buffer or minimum-distance widening. It is not the
+next candle that opens when the entry order executes. Original confirmed dYdX
+fractal sizing and its anchor remain unchanged; the execution risk guard applies
+the existing budget to the actual body-open stop and may downsize further.
+Missing/stale OHLC or an open on the wrong side of the current oracle blocks entry
+instead of substituting a different stop. No TP orders. Existing positions and
+already-submitted intents retain their recorded stop; they are not migrated.
 
 The stop is active immediately. One later raw Green or Purple close in the same
 direction permits one evaluation of a newer, improving dYdX fractal. Purple
 includes every Green condition, so its candle is already accepted by the raw
 Green reader, even if the chart only shows the purple overlay. Each candle is
 evaluated once, not once per color. No extra Daily read is needed for trailing.
-Only dYdX candles closed by that signal hour may confirm the fractal. No better
+For new body-open positions, the pivot itself must be after the entry signal
+candle; older positions retain their recorded fractal anchor. Only dYdX candles
+closed by that later Green/Purple hour may confirm the fractal. No better
 fractal means no move until another Green or Purple. Late exchange verification retries the same proposed
 price, leaving the old stop in place. The current stop and trail policy persist
 with the position and are not converted when the entry mode changes. A restart

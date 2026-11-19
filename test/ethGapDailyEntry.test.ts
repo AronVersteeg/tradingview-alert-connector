@@ -284,7 +284,8 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     test.each([
       ['signal-body-open', 'dYdX signal candle body open'],
       ['signal-body-quarter', 'dYdX signal-body 25% from open'],
-      ['signal-body-midpoint', 'dYdX signal-body midpoint']
+      ['signal-body-midpoint', 'dYdX signal-body midpoint'],
+      ['confirmed-fractal', 'confirmed dYdX fractal']
     ])('reports the recorded %s mail policy, including older queued notifications', (mode, label) => {
       const activePlan = {stop: {price: 118}, initialStopPolicy: {mode}};
       const intent = {signature: `${market}|GAP_DAILY|${signal().time}|long`, outcome: 'CONFIRMED', plan: {activePlan}};
@@ -562,12 +563,13 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(managed.managedPosition.currentStop).toBe(better);
       expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(better);
     });
-    if (asset === 'BTC') test.each(['long', 'short'] as const)('Purple %s sizes on its initial SL and trails only on later Greens after a mode switch', async direction => {
+    if (asset === 'BTC') test.each(['long', 'short'] as const)('Purple %s stops at its dYdX candle open and trails only on later Greens after a mode switch', async direction => {
       process.env.BTC_ENTRY_MODE = 'purple-trail';
       const isLong = direction === 'long';
       const signals = { ...signal(direction), setup: 'purple-green-trail', gap: { lower: 85, upper: 115, candleTime: signal().time - 3600 } };
-      const initial = isLong ? 109.89 : 130.13;
-      const updated = isLong ? 113.886 : 126.126;
+      const initial = isLong ? 118 : 122;
+      const sizingStop = isLong ? 109.89 : 130.13;
+      const updated = isLong ? 118.3815 : 121.6215;
       const dydxRows = (lows: number[]) => lows.map((low, i) => {
         const high = 240 - low, open = isLong ? low + 2 : high - 2;
         return { startedAt: iso(closeAt + (i - 5) * HOUR), resolution: '1HOUR', open: String(open),
@@ -587,19 +589,26 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       await monitor.executeGapDailyEntry(managed, signals, {});
       const alert = orders.placeOrder.mock.calls[0][0];
       expect(alert).toMatchObject({ profile: 'NO_TP', take_profits: [], static_sl: initial,
-        decentrader: { riskBudgetUsd: 15, stop: { price: initial } } });
+        decentrader: { riskBudgetUsd: 15, stop: { price: initial }, sizingStop: { price: sizingStop },
+          initialStopPolicy: { mode: 'signal-body-open', bodyFraction: 0, open: initial, bodyStopPrice: initial } } });
       expect(alert.size * Math.abs(120 - alert.static_sl)).toBeLessThanOrEqual(15);
       expect(managed.managedPosition).toMatchObject({ takeProfitMode: 'trailing-only', currentStop: initial,
-        btcPurpleTrail: { entryClosedAt: signal().closedAt } });
+        btcPurpleTrail: { entryClosedAt: signal().closedAt, fractalAfter: signal().time } });
       expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(initial);
       expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+      const mail = purpleTriggerEmail(market, signals as entry.BtcPurpleTrailSignal, managed.gapDailyEntry, {});
+      expect(mail.body).toContain(`Planned initial SL (dYdX signal candle body open): ${initial}`);
+      expect(mail.body).not.toContain('Planned initial SL (confirmed dYdX fractal)');
+      const entryScan = jest.spyOn(monitor, 'latestSpotIntrusions');
+      await monitor.checkBtcPurpleTrail(managed, {}, {});
+      expect(entryScan).not.toHaveBeenCalled();
 
       process.env.BTC_ENTRY_MODE = 'off';
-      const newClose = closeAt + 4 * HOUR;
+      const newClose = closeAt + 5 * HOUR;
       jest.setSystemTime(newClose + 5000);
       const greenRead = jest.spyOn(green, 'readGreenLineSignal');
       const markGreen = (direction: 'long' | 'short', close: number) => ({ ...greenSignal(direction), time: close / 1000 - 3600, closedAt: close / 1000 });
-      const scanIntrusions = jest.spyOn(monitor, 'latestSpotIntrusions').mockReturnValue([{ direction: 'short' }]);
+      const scanIntrusions = entryScan.mockReturnValue([{ direction: 'short' }]);
       greenRead.mockResolvedValueOnce(markGreen(isLong ? 'short' : 'long', newClose - HOUR));
       jest.setSystemTime(newClose - HOUR + 5000);
       await monitor.checkBtcPurpleTrail(managed, {}, {});
@@ -612,7 +621,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(monitor.getStatus().managedPosition.btcPurpleTrail).toMatchObject({ lastGreenClosedAt: newClose / 1000 });
       expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(initial);
 
-      const rows = dydxRows([115, 112, 110, 113, 116, 117, 114, 118, 119, 115, 110, 115, 118]);
+      const rows = dydxRows([115, 112, 110, 113, 116, 119, 119.5, 118.5, 119, 119.5, 115, 110, 115, 118]);
       // Later dYdX candles cannot influence the Green decision even if the stop check is retried much later.
       jest.setSystemTime(newClose + 5 * HOUR);
       read.mockResolvedValue(rows);
@@ -626,12 +635,42 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       restarted.configureTradeExecutor(orders);
       await restarted.checkManagedPosition();
       expect(restarted.getStatus().managedPosition.currentStop).toBeCloseTo(updated);
+      expect(Date.parse(restarted.getStatus().managedPosition.currentStopFractalTimestamp)).toBeGreaterThan(signal().time * 1000);
       expect(restarted.getStatus().managedPosition.btcPurpleTrail.pending).toBeUndefined();
       const reads = read.mock.calls.length;
       await restarted.checkManagedPosition();
       expect(read).toHaveBeenCalledTimes(reads);
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
       expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+    });
+    if (asset === 'BTC') test('body-open Purple does not trail to a pre-entry pivot even when its price would improve the stop', async () => {
+      jest.setSystemTime(closeAt + HOUR + 5000);
+      position = { market, size: .4, entryPrice: 120 };
+      (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue([115, 112, 110, 113, 116, 117].map((low, i) => ({
+        startedAt: iso(closeAt - (5 - i) * HOUR), open: String(low + 2), high: String(low + 5), low: String(low), close: String(low + 3)
+      })));
+      const managed: any = { ...state(), managedPosition: { market, direction: 'long', initialSize: .4, entryPrice: 120,
+        currentStop: 100, currentStopFractalTimestamp: iso(closeAt - 6 * HOUR), takeProfitMode: 'trailing-only',
+        btcPurpleTrail: { entryClosedAt: closeAt / 1000, fractalAfter: signal().time, lastGreenClosedAt: (closeAt + HOUR) / 1000 } } };
+      await monitor.syncManagedStop(managed, {}, position, { marketInfo: { oraclePrice: 120 }, price: 120 });
+      expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(100);
+      expect(managed.managedPosition.currentStop).toBe(100);
+      expect(managed.managedPosition.btcPurpleTrail.pending).toBeUndefined();
+    });
+    if (asset === 'BTC') test.each(['wrong-hour', 'missing-open', 'nonprotective-open'])('new Purple refuses %s rather than falling back to a fractal SL', async invalid => {
+      process.env.BTC_ENTRY_MODE = 'purple-trail';
+      orders.supportsEntrySubmissionCheckpoint = true;
+      const rows = [115, 112, 110, 113, 116].map((low, i) => ({
+        startedAt: iso(closeAt - (5 - i) * HOUR), open: String(low + 2), high: String(low + 5), low: String(low), close: String(low + 3)
+      }));
+      if (invalid === 'wrong-hour') rows[4].startedAt = iso(closeAt - 2 * HOUR);
+      if (invalid === 'missing-open') (rows[4] as any).open = undefined;
+      if (invalid === 'nonprotective-open') rows[4].open = '120';
+      (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue(rows);
+      const purpleSignal = { ...signal(), setup: 'purple-green-trail', gap: { lower: 85, upper: 115, candleTime: signal().time - 3600 } };
+      await expect(monitor.executeGapDailyEntry(state(), purpleSignal, {})).rejects.toThrow();
+      expect(orders.placeOrder).not.toHaveBeenCalled();
+      expect(orders.syncTrailingStop).not.toHaveBeenCalled();
     });
     if (asset === 'BTC') test.each(['long', 'short'] as const)('a later real Purple %s qualifies as one Green trailing event without Daily reads or new entries', async direction => {
       process.env.BTC_ENTRY_MODE = 'purple-trail';
