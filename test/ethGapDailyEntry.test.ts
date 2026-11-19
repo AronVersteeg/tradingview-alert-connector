@@ -333,7 +333,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
         BTC_ENTRY_MODE: 'manual', DECENTRADER_AUTO_TRADE_ENABLED: 'true',
         DECENTRADER_GAP_ALERT_STATE_FILE: path.join(directory, 'btc-manual-execution.json'),
         BTC_MANUAL_TRADE_OVERRIDE_FILE: path.join(directory, 'btc-manual-plans.json'),
-        [stateEnv]: file, [entryEnv]: asset === 'BTC' ? 'purple' : 'true',
+        [stateEnv]: file, [entryEnv]: asset === 'BTC' ? 'green' : 'true',
         [autoEnv]: 'true', [monitorEnv]: 'true',
         DECENTRADER_DYNAMIC_SL_ENABLED: 'true', DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED: 'true',
         DYDX_V4_FRACTAL_TRAIL_ENABLED: 'true', DECENTRADER_DYNAMIC_TP_ENABLED: 'true',
@@ -602,8 +602,8 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(managed.managedPosition.currentStop).toBe(better);
       expect(orders.syncTrailingStop.mock.calls.at(-1)[0].static_sl).toBe(better);
     });
-    if (asset === 'BTC') test.each(['long', 'short'] as const)('Purple %s stops at its dYdX candle open and trails only on later Yellows after a mode switch', async direction => {
-      process.env.BTC_ENTRY_MODE = 'purple-trail';
+    if (asset === 'BTC') test.each([['purple', 'long'], ['purple', 'short'], ['purple-trail', 'long'], ['purple-trail', 'short']] as const)('%s %s stops at its dYdX candle open and trails only on later Yellows after a mode switch', async (mode, direction) => {
+      process.env.BTC_ENTRY_MODE = mode;
       const isLong = direction === 'long';
       const signals = { ...signal(direction), setup: 'purple-green-trail', gap: { lower: 85, upper: 115, candleTime: signal().time - 3600 } };
       const initial = isLong ? 118 : 122;
@@ -748,7 +748,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(monitor.intrusionTrail(manual)).toBeUndefined();
     });
     if (asset === 'BTC') test.each(['wrong-hour', 'missing-open', 'nonprotective-open'])('new Purple refuses %s rather than falling back to a fractal SL', async invalid => {
-      process.env.BTC_ENTRY_MODE = 'purple-trail';
+      process.env.BTC_ENTRY_MODE = 'purple';
       orders.supportsEntrySubmissionCheckpoint = true;
       const rows = [115, 112, 110, 113, 116].map((low, i) => ({
         startedAt: iso(closeAt - (5 - i) * HOUR), open: String(low + 2), high: String(low + 5), low: String(low), close: String(low + 3)
@@ -763,7 +763,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       expect(orders.syncTrailingStop).not.toHaveBeenCalled();
     });
     if (asset === 'BTC') test.each(['long', 'short'] as const)('a later real Purple %s qualifies as one Yellow trailing event without Daily reads or new entries', async direction => {
-      process.env.BTC_ENTRY_MODE = 'purple-trail';
+      process.env.BTC_ENTRY_MODE = 'purple';
       const nextClose = closeAt + 4 * HOUR;
       jest.setSystemTime(nextClose + 5000);
       const x = inputs(direction);

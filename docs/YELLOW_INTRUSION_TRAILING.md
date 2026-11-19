@@ -2,7 +2,7 @@
 
 ## Entries Stay Separate
 
-- BTC `BTC_ENTRY_MODE=purple-trail`: same closed Binance Spot BTCUSDT 1H candle
+- BTC `BTC_ENTRY_MODE=purple` (`purple-trail` remains a compatibility alias): same closed Binance Spot BTCUSDT 1H candle
   has a directional intrusion, a fresh gap-box close break and a fresh confirmed
   Daily-level close break. The historical setup id remains `purple-green-trail`.
 - ETH, SOL and ZEC: Green entries require an intrusion and a fresh gap-box close

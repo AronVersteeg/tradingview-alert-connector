@@ -10,8 +10,8 @@ This is the single authoritative BTC entry selector:
 | --- | --- |
 | `manual` | Saved manual plans only (default when absent). |
 | `green` | Binance Spot Public V2 intrusion plus a fresh close beyond the previous gap edge on the same closed 1H candle. |
-| `purple-trail` | BTC only: Purple entry (same-hour directional intrusion, fresh gap break and fresh Daily close break), with an initial SL at the dYdX signal candle open and later same-direction Yellow-gated fractal trailing. |
-| `purple` | Legacy alias for `green`; use `purple-trail` for the new strategy. |
+| `purple` | BTC only: Purple entry (same-hour directional intrusion, fresh gap break and fresh Daily close break), with an initial SL at the dYdX signal candle open and later same-direction Yellow-gated fractal trailing. |
+| `purple-trail` | Compatibility alias for `purple`; existing deployments keep the same Purple strategy. |
 | `off` | No new BTC entries. Existing positions keep their original management. |
 
 Values are case-insensitive. Unknown values fail closed as `off`; status reports
@@ -19,6 +19,11 @@ Values are case-insensitive. Unknown values fail closed as `off`; status reports
 automatic entries when the mode is absent. Change the value in Render and choose **Save and deploy**.
 The new value takes effect in the deployed process; it is not an instant
 in-process switch.
+
+`purple` no longer selects Green. Select `green` explicitly for that strategy.
+Status normalizes both `purple` and the old `purple-trail` value to `mode=purple`.
+The internal persisted setup id remains `purple-green-trail`, so renaming the env
+value does not reset activation continuity or change ownership/stop management.
 
 ## Sources And Execution
 
@@ -63,7 +68,7 @@ Legacy BTC Delay and Shadow entry handlers cannot compete with these models.
 
 ## BTC Purple With Yellow Trailing
 
-Set `BTC_ENTRY_MODE=purple-trail` and keep `DECENTRADER_AUTO_TRADE_ENABLED=true`
+Set `BTC_ENTRY_MODE=purple` and keep `DECENTRADER_AUTO_TRADE_ENABLED=true`
 and `DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED=true`. The entry uses the same
 spot Purple evaluator as the chart, on current BTCUSDT Public V2 data only. The
 initial stop is exactly the open of the closed dYdX 1H candle matching the Binance
@@ -87,7 +92,7 @@ old events. Manual positions retain their separate management. See
 [Yellow trailing](YELLOW_INTRUSION_TRAILING.md) for direction, persistence and
 coverage details. The BTC intrusion monitor must remain enabled for fresh events.
 
-For verification, check `execution.entryMode.mode=purple-trail` and
+For verification, check `execution.entryMode.mode=purple` and
 `execution.gapDailyEntry.setup=purple-green-trail` on the public BTC status route.
 To roll back for new entries, set `BTC_ENTRY_MODE=green`. Other markets retain
 their existing switches and Green entries, with the same Yellow trailing policy.

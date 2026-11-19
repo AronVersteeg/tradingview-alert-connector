@@ -36,7 +36,7 @@ describe('BTC single entry model selector and ownership interlock', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test.each([[undefined, 'manual'], ['manual', 'manual'], [' PURPLE ', 'green'], ['purple-trail', 'purple-trail'], ['green', 'green'], ['off', 'off'], ['true', 'off'], ['typo', 'off']])(
+  test.each([[undefined, 'manual'], ['manual', 'manual'], ['purple', 'purple'], [' PURPLE ', 'purple'], ['purple-trail', 'purple'], ['green', 'green'], ['off', 'off'], ['true', 'off'], ['typo', 'off']])(
     'value %s selects %s, with invalid values failing closed', (value, expected) => {
       if (value === undefined) delete process.env.BTC_ENTRY_MODE; else process.env.BTC_ENTRY_MODE = value;
       expect(btcEntryMode()).toBe(expected);
@@ -74,22 +74,24 @@ describe('BTC single entry model selector and ownership interlock', () => {
     expect(provider).toHaveBeenCalledTimes(1); expect(axios.get).not.toHaveBeenCalled();
     expect(result.dynamicTpSync.outcome).not.toBe('ERROR'); expect(orders.placeOrder).not.toHaveBeenCalled();
   });
-  test.each(['green', 'purple'])('%s arms Green while respecting the global execution kill switch', mode => {
+  test('green arms only Green while respecting the global execution kill switch', () => {
     const monitor = new OpenLiquidityV2EthTradeMonitor({} as any, (openLiquidityV2BtcIntrusionMonitor as any).config);
     expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: false, observeOnly: true, entryMode: { mode: 'manual' } });
-    process.env.BTC_ENTRY_MODE = mode;
+    process.env.BTC_ENTRY_MODE = 'green';
     expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: true, observeOnly: false, entryMode: { mode: 'green' },
       gapDailyEntry: { setup: 'green-line', enabled: true, source: 'Binance Spot BTCUSDT 1H', takeProfitMode: 'trailing-only' } });
     process.env.DECENTRADER_AUTO_TRADE_ENABLED = 'false';
     expect(monitor.getStatus().autoTradeEnabled).toBe(false);
   });
-  test('purple-trail explicitly arms the BTC-only policy', () => {
-    process.env.BTC_ENTRY_MODE = 'purple-trail';
+  test.each(['purple', 'purple-trail'])('%s arms the identical BTC Purple policy, never Green', mode => {
+    process.env.BTC_ENTRY_MODE = mode;
     const monitor = new OpenLiquidityV2EthTradeMonitor({} as any, (openLiquidityV2BtcIntrusionMonitor as any).config);
-    expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: true, entryMode: { mode: 'purple-trail' },
+    expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: true, entryMode: { mode: 'purple', valid: true },
       gapDailyEntry: { setup: 'purple-green-trail', enabled: true, takeProfitMode: 'trailing-only',
         initialStop: { mode: 'signal-body-open', bodyFraction: 0, bufferPct: 0,
           trailingGate: 'later-same-direction-intrusion', trailingSignals: ['yellow'] } } });
+    process.env.DECENTRADER_AUTO_TRADE_ENABLED = 'false';
+    expect(monitor.getStatus().autoTradeEnabled).toBe(false);
   });
   test.each(['purple', 'purple-trail', 'off', 'invalid'])('manual plans remain untouched and no candle/mail/order is requested in %s', async mode => {
     const monitor = new BtcManualTradeOverrideMonitor();
