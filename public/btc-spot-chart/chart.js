@@ -55,6 +55,7 @@
   let intrusionLayer, intrusionHistory = savedIntrusions?.market === market && savedIntrusions.source === 'binance-spot-recorded-intrusions'
     ? savedIntrusions : undefined, intrusionModel, intrusionInputs;
   let intrusionReadFailed = false;
+  let yellowLayer, yellowMarkers = [], yellowInputs;
   const replayOverlays = [{ kind: 'green', label: 'Green', toggle: 'spotChartGapIntrusions', color: gapBoxes.GAP_COLOR, markers: [] }];
   if (asset === 'btc') replayOverlays.push({ kind: 'purple', label: 'Purple', toggle: 'spotChartIntrusionDailyBreaks', color: '#ba68c8', markers: [] });
   let gapIntrusionLayer, gapIntrusionMarkers = [];
@@ -363,6 +364,30 @@
   function refreshIntrusionHistory() {
     if (!destroyed) window.dispatchEvent(new CustomEvent('btc-spot-chart:intrusion-source-ready'));
   }
+  function updateYellows() {
+    const status = byId('spotChartYellowsStatus');
+    status.hidden = !byId('spotChartYellows').checked;
+    if (status.hidden) {
+      if (yellowMarkers.length) { yellowMarkers = []; yellowLayer?.setData([]); }
+      yellowInputs = undefined;
+      return;
+    }
+    const hour = Math.floor(Date.now() / 3_600_000);
+    try {
+      if (!intrusionHistory) throw new Error('Awaiting saved Spot intrusions');
+      if (!yellowInputs || yellowInputs.history !== intrusionHistory || yellowInputs.version !== closedDataVersion || yellowInputs.hour !== hour) {
+        yellowMarkers = intrusionDailyBreaks.buildYellowIntrusionMarkers(candles, intrusionHistory, Date.now(), market);
+        yellowLayer?.setData(yellowMarkers);
+        yellowInputs = { history: intrusionHistory, version: closedDataVersion, hour };
+      }
+      status.textContent = `Yellows: ${yellowMarkers.length}${intrusionReadFailed ? ' | stale' : ''}`;
+      status.dataset.stale = String(intrusionReadFailed);
+    } catch (error) {
+      yellowMarkers = []; yellowLayer?.setData([]); yellowInputs = undefined;
+      status.textContent = `Yellows pending: ${error.message}`;
+      status.dataset.stale = 'true';
+    }
+  }
   function updateGapIntrusionMarkers() {
     if (!gapIntrusionLayer) return;
     const now = Date.now(), hour = Math.floor(now / 3_600_000), inputs = gapIntrusionInputs;
@@ -383,11 +408,13 @@
   window.addEventListener('btc-spot-chart:intrusion-history', event => {
     if (event.detail?.market !== market || event.detail.source !== 'binance-spot-recorded-intrusions') return;
     intrusionHistory = event.detail; intrusionReadFailed = false;
+    updateYellows();
     updateGapIntrusionMarkers();
     updateIntrusionDailyBreakouts();
   });
   window.addEventListener('btc-spot-chart:intrusion-error', () => {
     intrusionReadFailed = true;
+    updateYellows();
     byId('spotChartIntrusionDailyStatus').textContent = intrusionHistory
       ? `${intrusionLabel} stale | saved history retained` : `${intrusionLabel} unavailable`;
     byId('spotChartIntrusionDailyStatus').dataset.stale = 'true';
@@ -519,6 +546,7 @@
       hourlyBoxModel = hourlyBoxes.buildHourlyFractalBoxes(candles);
       hourlyBoxLayer.setData(hourlyBoxModel.boxes, candles);
       updateOrderBlocks();
+      updateYellows();
       updateGapProjection();
       updateIntrusionDailyBreakouts();
     }
@@ -580,6 +608,11 @@
       orderBlockLayer.setLabelAnchor(() => gapLayer?.rightEdgeCoordinate() ?? null);
       orderBlockLayer.setVisible(byId('spotChartOrderBlocks').checked);
       candlesSeries.attachPrimitive(orderBlockLayer);
+      yellowLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive('#ffeb3b');
+      yellowLayer.setVisible(byId('spotChartYellows').checked);
+      candlesSeries.attachPrimitive(yellowLayer);
+      yellowInputs = undefined;
+      updateYellows();
       gapIntrusionLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(gapBoxes.GAP_COLOR);
       gapIntrusionLayer.setVisible(byId('spotChartGapIntrusions').checked);
       attachHistoricalReplay(greenHistory);
@@ -651,6 +684,7 @@
         getBrokenOrderBlockRankLabels: () => orderBlockLayer?.getBrokenRankLabels() || [],
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
         getGapIntrusionMarkers: () => gapIntrusionMarkers.map(marker => ({ ...marker })),
+        getYellowIntrusionMarkers: () => yellowMarkers.map(marker => ({ ...marker })),
         getVisibleGapIntrusionMarkers: () => visibleGapIntrusionMarkers.map(marker => ({ ...marker })),
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
@@ -669,6 +703,7 @@
         if (!active) return;
         scheduleOrderBlockHistory();
         feedText();
+        updateYellows();
         updateGapProjection();
         void refreshFractals();
         void refreshIntrusionHistory();
@@ -822,6 +857,11 @@
     updateOrderBlocks();
   });
   byId('spotChartObMitigation').addEventListener('change', updateOrderBlocks);
+  byId('spotChartYellows').addEventListener('change', event => {
+    yellowLayer?.setVisible(event.target.checked);
+    updateYellows();
+    if (event.target.checked) refreshIntrusionHistory();
+  });
   byId('spotChartGapIntrusions').addEventListener('change', event => {
     gapIntrusionLayer?.setVisible(event.target.checked);
     greenHistory?.layer?.setVisible(event.target.checked);

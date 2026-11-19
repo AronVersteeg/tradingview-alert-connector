@@ -254,6 +254,17 @@ hour-close updates, pre-candle gap selection, independent toggling, actual orang
 and light-yellow canvas pixels, overlap priority, PNG export and absence of write
 requests.
 
+## Yellows: Intrusions Only
+
+The default-off `Yellows` checkbox draws thin yellow (`#ffeb3b`) vertical lines
+on each loaded closed 1H candle with a saved, same-market Binance Spot intrusion.
+It includes mixed-sided intrusions and deduplicates records by alert-candle open,
+not SMTP time. No gap box, break, Daily/Weekly/Monthly fractal or simulated-position
+condition is required. It shares the current intrusion history read and adds no
+provider requests, trading callbacks or emails. Unavailable history is not guessed;
+a read failure retains the last known markers with a stale status. BTC, ETH, SOL
+and ZEC use their own recorded Spot source. This does not change trading.
+
 ## Purple: Intrusion + Gap + D
 
 On BTC, ETH, SOL and ZEC, the default-on Purple overlay requires a saved Spot

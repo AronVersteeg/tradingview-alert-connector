@@ -52,6 +52,16 @@
     });
   }
 
+  function buildYellowIntrusionMarkers(candles, history, nowMs = Date.now(), market = 'BTC-USD') {
+    if (!['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || history?.market !== market ||
+        history.source !== 'binance-spot-recorded-intrusions' || history.timeBasis !== 'alert-candle-open-utc' ||
+        !Array.isArray(history.gapHours)) throw new Error('Unexpected Spot intrusion history');
+    const closed = new Set(candles.filter(candle => candle.closed === true).map(candle => candle.time));
+    return [...new Set(history.gapHours)].filter(time => Number.isSafeInteger(time) && time > 0 && time % 3600 === 0 &&
+      closed.has(time) && (time + 3600) * 1000 <= nowMs).sort((a, b) => a - b)
+      .map(time => ({ time, closedAt: time + 3600 }));
+  }
+
   function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe, timeline) {
     const expectedSource = history?.source;
     const validSource = expectedSource === 'binance-spot-recorded-intrusions' || market === 'BTC-USD' && expectedSource === SOURCE;
@@ -144,7 +154,7 @@
     }
   }
 
-  const api = Object.freeze({ compactIntrusionHistory, buildGapIntrusionMarkers, buildIntrusionDailyBreakouts,
+  const api = Object.freeze({ compactIntrusionHistory, buildGapIntrusionMarkers, buildYellowIntrusionMarkers, buildIntrusionDailyBreakouts,
     buildIntrusionWeeklyBreakouts, buildPurpleLineBreakouts, IntrusionDailyBreakoutPrimitive });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else {

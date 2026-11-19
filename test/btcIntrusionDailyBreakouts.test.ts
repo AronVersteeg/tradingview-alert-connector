@@ -1,6 +1,6 @@
 export {};
 const intrusionBreakouts = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
-const { compactIntrusionHistory, buildGapIntrusionMarkers, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, buildPurpleLineBreakouts, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
+const { compactIntrusionHistory, buildGapIntrusionMarkers, buildYellowIntrusionMarkers, buildIntrusionDailyBreakouts, buildIntrusionWeeklyBreakouts, buildPurpleLineBreakouts, IntrusionDailyBreakoutPrimitive } = intrusionBreakouts;
 const HOUR = 3600, start = Date.parse('2026-10-19T00:00:00Z') / 1000;
 const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
 const now = (start + 8 * HOUR) * 1000;
@@ -20,6 +20,29 @@ const model = () => ({ symbol: 'BTCUSDT', venue: 'Binance Spot', evaluatedThroug
   { id: 'D|high', timeframe: 'D', type: 'HIGH', price: 120, confirmedAt: iso(start - .001), broken: true, brokenTime: start + 2 * HOUR },
   { id: 'D|low', timeframe: 'D', type: 'LOW', price: 80, confirmedAt: iso(start - .001), broken: true, brokenTime: start + 4 * HOUR }
 ] });
+
+describe('Yellows: saved Spot intrusions without break conditions', () => {
+  test.each(['BTC', 'ETH', 'SOL', 'ZEC'])('%s marks long, short and mixed intrusions once, on their alert candles', asset => {
+    const market = `${asset}-USD`;
+    const data = { source: { market, sourceStatuses: [{ name: `Binance Spot ${asset}USDT 1H` }] },
+      intrusionBenchmarks: { history: [
+        { timestamp: alert(0), direction: 'long' }, { timestamp: alert(1), direction: 'short' },
+        { timestamp: alert(2), direction: 'mixed' }, { timestamp: alert(7), direction: 'long' },
+        { timestamp: alert(8), direction: 'long' }, { smtpSentAt: iso(start + 3 * HOUR), direction: 'long' }
+      ] }, delayHistory: { records: [{ intrusionTimestamp: alert(1), direction: 'short', smtpSentAt: iso(start + 6 * HOUR) }] } };
+    const history = compactIntrusionHistory(data, now + 1, market, { includeGapHours: true });
+    const rows = candles().map(c => ({ ...c, open: 100, high: 101, low: 99, close: 100 }));
+    const expected = [0, 1, 2, 7].map(h => ({ time: start + h * HOUR, closedAt: start + (h + 1) * HOUR }));
+    expect(buildYellowIntrusionMarkers(rows, history, now, market)).toEqual(expected);
+    expect(buildYellowIntrusionMarkers(rows, { ...history, gapHours: [...history.gapHours, ...history.gapHours] }, now, market)).toEqual(expected);
+    expect(buildYellowIntrusionMarkers(rows, history, now - 1, market)).toEqual(expected.slice(0, -1));
+    rows[2].closed = false;
+    expect(buildYellowIntrusionMarkers(rows, history, now, market)).toEqual(expected.filter((_, i) => i !== 2));
+    expect(() => buildYellowIntrusionMarkers(rows, history, now, 'OTHER-USD')).toThrow('history');
+    expect(() => buildYellowIntrusionMarkers(rows, { ...history, market: 'OTHER-USD' }, now, market)).toThrow('history');
+    expect(() => buildYellowIntrusionMarkers(rows, { ...history, source: 'decentrader-recorded-intrusions' }, now, market)).toThrow('history');
+  });
+});
 
 describe('Standalone Binance Spot gap intrusion markers', () => {
   test.each(['BTC', 'ETH', 'SOL', 'ZEC'])('%s marks a saved intrusion only on a fresh same-hour gap edge close break', asset => {
