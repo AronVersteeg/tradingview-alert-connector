@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   const source = new URLSearchParams(location.search).get('source');
-  if (!['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(source)) return;
+  if (!['open-v2', 'open-v2-eth', 'open-v2-inj', 'open-v2-sol', 'open-v2-zec'].includes(source)) return;
   const asset = source === 'open-v2' ? 'btc' : source.slice('open-v2-'.length);
   const baseAsset = asset.toUpperCase();
   const symbol = `${baseAsset}USDT`, market = `${baseAsset}-USD`;
@@ -37,7 +37,8 @@
   const byId = (id) => document.getElementById(id);
   const api = `/open-liquidity/v2/${asset}-spot-candles`;
   const streamUrls = [443, 9443].map(port => `wss://stream.binance.com:${port}/ws/${symbol.toLowerCase()}@kline_1h`);
-  const money = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const priceDigits = asset === 'inj' ? 3 : 2;
+  const money = new Intl.NumberFormat('en-US', { minimumFractionDigits: priceDigits, maximumFractionDigits: priceDigits });
   let zone = 'Europe/Amsterdam';
   let library, chart, candlesSeries, initialization;
   let candles = [], socket, reconnectTimer, watchdog;
@@ -628,7 +629,7 @@
       candlesSeries = chart.addSeries(library.CandlestickSeries, {
         upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
         wickUpColor: '#26a69a', wickDownColor: '#ef5350',
-        priceFormat: { type: 'price', precision: 2, minMove: .01 }, autoscaleInfoProvider: fractalAutoscale
+        priceFormat: { type: 'price', precision: priceDigits, minMove: 10 ** -priceDigits }, autoscaleInfoProvider: fractalAutoscale
       });
       manualLayer = new manualLevels.ManualLevelLines(candlesSeries);
       candlesSeries.attachPrimitive(manualLayer);

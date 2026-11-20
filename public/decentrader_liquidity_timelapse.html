@@ -1845,6 +1845,7 @@
     const activeSource = openV2Sources.has(requestedSource) ? requestedSource : 'decentrader';
     const isOpenStudy = activeSource !== 'decentrader';
     const isOpenV2 = openV2Sources.has(activeSource);
+    const hasNativeSpotChart = ['open-v2', 'open-v2-eth', 'open-v2-inj', 'open-v2-sol', 'open-v2-zec'].includes(activeSource);
     const openV2Asset = activeSource === 'open-v2-eth'
       ? 'ETH'
       : activeSource === 'open-v2-inj'
@@ -5773,7 +5774,7 @@
         updateManualOverrideMonitor(snapshot);
         return snapshot;
       } catch (error) {
-        if (['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(activeSource) && ['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(manualOverrideMarket)) {
+        if (hasNativeSpotChart && manualOverrideMarket === openV2Market) {
           window.dispatchEvent(new CustomEvent('btc-spot-chart:manual-error'));
         }
         throw error;
@@ -6302,10 +6303,10 @@
     }
 
     function showRefreshError(error) {
-      if (['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(activeSource)) {
+      if (hasNativeSpotChart) {
         window.dispatchEvent(new CustomEvent('btc-spot-chart:intrusion-error'));
       }
-      if (['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(activeSource) && ['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(manualOverrideMarket)) {
+      if (hasNativeSpotChart && manualOverrideMarket === openV2Market) {
         window.dispatchEvent(new CustomEvent('btc-spot-chart:manual-error'));
       }
       liveStatus.textContent = 'Refresh error';
@@ -6440,7 +6441,7 @@
 
     function publishBtcSpotGapTimeline() {
       publishSpotIntrusions();
-      if (!['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(activeSource) || !payload || !window.BtcSpotGapBoxes) return;
+      if (!hasNativeSpotChart || !payload || !window.BtcSpotGapBoxes) return;
       try {
         const live = window.BtcSpotGapBoxes.timelineFromPayload(payload, openV2Market);
         const timeline = activeSource === 'open-v2' && btcSpotGapHistory ? window.BtcSpotGapBoxes.withDecentraderHistory(live, btcSpotGapHistory) : live;
@@ -6453,7 +6454,7 @@
     }
     function publishBtcSpotManualLevels() {
       const market = openV2Market;
-      if (!['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(activeSource) || manualOverrideMarket !== market || !manualOverrideSnapshot || !window.BtcSpotManualLevels) return;
+      if (!hasNativeSpotChart || manualOverrideMarket !== market || !manualOverrideSnapshot || !window.BtcSpotManualLevels) return;
       try {
         const model = window.BtcSpotManualLevels.fromSnapshot(manualOverrideSnapshot, market);
         window.BTC_SPOT_MANUAL_LEVELS = model;
@@ -6463,7 +6464,7 @@
       }
     }
     function publishSpotIntrusions() {
-      if (!['open-v2', 'open-v2-eth', 'open-v2-sol', 'open-v2-zec'].includes(activeSource) || !payload || !window.BtcSpotIntrusionDailyBreakouts) return;
+      if (!hasNativeSpotChart || !payload || !window.BtcSpotIntrusionDailyBreakouts) return;
       try {
         const history = window.BtcSpotIntrusionDailyBreakouts.compactIntrusionHistory(payload, Date.now(), openV2Market, { includeGapHours: true });
         window.BTC_SPOT_INTRUSION_HISTORY = history;

@@ -5,7 +5,7 @@
   const SOURCE = 'decentrader-recorded-intrusions';
 
   function compactIntrusionHistory(payload, nowMs = Date.now(), market = 'BTC-USD', { includeGapHours = false } = {}) {
-    const nativeSpot = ['ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || market === 'BTC-USD' && payload?.source?.market === market &&
+    const nativeSpot = ['ETH-USD', 'INJ-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || market === 'BTC-USD' && payload?.source?.market === market &&
       payload.source.sourceStatuses?.some(source => source.name === 'Binance Spot BTCUSDT 1H');
     const symbol = market.replace('-USD', 'USDT');
     const validSource = nativeSpot ? payload?.source?.market === market &&
@@ -53,7 +53,7 @@
   }
 
   function buildYellowIntrusionMarkers(candles, history, nowMs = Date.now(), market = 'BTC-USD') {
-    if (!['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || history?.market !== market ||
+    if (!['BTC-USD', 'ETH-USD', 'INJ-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || history?.market !== market ||
         history.source !== 'binance-spot-recorded-intrusions' || history.timeBasis !== 'alert-candle-open-utc' ||
         !Array.isArray(history.gapHours)) throw new Error('Unexpected Spot intrusion history');
     const closed = new Set(candles.filter(candle => candle.closed === true).map(candle => candle.time));
@@ -65,7 +65,7 @@
   function buildIntrusionBreakouts(candles, history, fractals, nowMs, market, timeframe, timeline) {
     const expectedSource = history?.source;
     const validSource = expectedSource === 'binance-spot-recorded-intrusions' || market === 'BTC-USD' && expectedSource === SOURCE;
-    if (!['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || history?.market !== market || !validSource || history.timeBasis !== 'alert-candle-open-utc' ||
+    if (!['BTC-USD', 'ETH-USD', 'INJ-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || history?.market !== market || !validSource || history.timeBasis !== 'alert-candle-open-utc' ||
         !Array.isArray(history.records)) throw new Error('Unexpected Decentrader intrusion history');
     const records = new Map();
     for (const record of history.records) {

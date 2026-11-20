@@ -6,6 +6,7 @@
   const MODEL_VERSIONS = Object.freeze({
     BTCUSDT: 'binance-spot-liquidation-cohorts-v2.4',
     ETHUSDT: 'binance-spot-eth-liquidation-cohorts-v2.1',
+    INJUSDT: 'binance-spot-inj-liquidation-cohorts-v2.1',
     SOLUSDT: 'binance-spot-sol-liquidation-cohorts-v2.1',
     ZECUSDT: 'binance-spot-zec-liquidation-cohorts-v2.1'
   });

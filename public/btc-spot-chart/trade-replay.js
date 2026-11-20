@@ -1,5 +1,5 @@
 const root = document.getElementById('btcTradeReplay');
-const markets = new Map([['open-v2', 'BTC-USD'], ['open-v2-eth', 'ETH-USD'], ['open-v2-sol', 'SOL-USD'], ['open-v2-zec', 'ZEC-USD']]);
+const markets = new Map([['open-v2', 'BTC-USD'], ['open-v2-eth', 'ETH-USD'], ['open-v2-inj', 'INJ-USD'], ['open-v2-sol', 'SOL-USD'], ['open-v2-zec', 'ZEC-USD']]);
 const market = markets.get(new URLSearchParams(location.search).get('source'));
 if (root && market) init(market);
 

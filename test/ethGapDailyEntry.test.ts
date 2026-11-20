@@ -5,12 +5,12 @@ import * as entry from '../src/services/ethGapDailyEntry';
 import * as green from '../src/services/greenLineEntry';
 import * as gap from '../src/services/decentraderGapMonitor';
 import { ethIntrusionFuturesDeltaFeed, parseFuturesDeltaCandle } from '../src/services/intrusionFuturesDelta';
-import { OpenLiquidityV2EthTradeMonitor, openLiquidityV2BtcIntrusionMonitor, openLiquidityV2SolTradeMonitor, openLiquidityV2ZecTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
+import { OpenLiquidityV2EthTradeMonitor, openLiquidityV2BtcIntrusionMonitor, openLiquidityV2InjTradeMonitor, openLiquidityV2SolTradeMonitor, openLiquidityV2ZecTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
 const fractals = require('../public/btc-spot-chart/fractals.js');
 const purple = require('../public/btc-spot-chart/intrusion-daily-breakouts.js');
 import { PURPLE_LINE_SETUPS, purpleLineEntryEnabled } from '../src/services/purpleLineSetup';
 import * as dailyHistory from '../src/services/binanceDailyFractalHistory';
-import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed, zecSpotChartFeed } from '../src/services/binanceSpotChart';
+import { binanceSpotChartFeed, ethSpotChartFeed, injSpotChartFeed, solSpotChartFeed, zecSpotChartFeed } from '../src/services/binanceSpotChart';
 import { PurpleLineContinuity } from '../src/services/purpleLineContinuity';
 import { purpleTriggerEmail } from '../src/services/purpleTriggerEmail';
 import { BtcSpotCloseShadow } from '../src/services/btcSpotCloseShadow';
@@ -65,14 +65,14 @@ describe('ETH final-5m Futures delta measurement utility (not an entry gate)', (
   });
 });
 
-describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution parity', asset => {
+describe.each(['BTC', 'ETH', 'INJ', 'SOL', 'ZEC'] as const)('%s purple line execution parity', asset => {
   const market = `${asset}-USD` as const;
   const symbol = `${asset}USDT`;
   const setup = PURPLE_LINE_SETUPS[market];
   const stateEnv = asset === 'BTC' ? 'OPEN_LIQUIDITY_V2_BTC_INTRUSION_STATE_FILE' : `OPEN_LIQUIDITY_V2_${asset}_TRADE_STATE_FILE`;
   const entryEnv = setup.enabledEnv, autoEnv = `OPEN_LIQUIDITY_V2_${asset}_AUTO_TRADE_ENABLED`, monitorEnv = `OPEN_LIQUIDITY_V2_${asset}_INTRUSION_MONITOR_ENABLED`;
   const createMonitor = () => new OpenLiquidityV2EthTradeMonitor({} as any, ({ BTC: openLiquidityV2BtcIntrusionMonitor,
-    SOL: openLiquidityV2SolTradeMonitor, ZEC: openLiquidityV2ZecTradeMonitor, ETH: undefined }[asset] as any)?.config);
+    INJ: openLiquidityV2InjTradeMonitor, SOL: openLiquidityV2SolTradeMonitor, ZEC: openLiquidityV2ZecTradeMonitor, ETH: undefined }[asset] as any)?.config);
   const evaluateSignal = (...args: Parameters<typeof entry.evaluateEthGapDailySignal>) => entry.evaluatePurpleLineSignal(market, ...args);
   const HOUR = 3_600_000, closeAt = Date.parse('2026-10-24T02:00:00Z'), now = closeAt + 5000;
   const iso = (ms: number) => new Date(ms).toISOString();
@@ -143,7 +143,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     test('reads only the matching pair’s Spot feed, with no Daily dependency', async () => {
       jest.useFakeTimers(); jest.setSystemTime(now);
       const {payload,intrusions,page} = inputs();
-      const feeds = {BTC:binanceSpotChartFeed,ETH:ethSpotChartFeed,SOL:solSpotChartFeed,ZEC:zecSpotChartFeed};
+      const feeds = {BTC:binanceSpotChartFeed,ETH:ethSpotChartFeed,INJ:injSpotChartFeed,SOL:solSpotChartFeed,ZEC:zecSpotChartFeed};
       const read = jest.spyOn(feeds[asset],'page').mockResolvedValue(page);
       const wrong = Object.entries(feeds).filter(([other])=>other!==asset).map(([,feed])=>jest.spyOn(feed,'page').mockRejectedValue(new Error('wrong pair')));
       const daily = jest.spyOn(dailyHistory,'binanceDailyFractalHistory').mockRejectedValue(new Error('Daily must not be used'));
@@ -173,7 +173,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     test.each(['long', 'short'] as const)('Purple reads a fresh %s break of both levels from its own pair', async direction => {
       jest.useFakeTimers(); jest.setSystemTime(now);
       const x = inputs(direction);
-      const ownFeed = { BTC: binanceSpotChartFeed, ETH: ethSpotChartFeed, SOL: solSpotChartFeed, ZEC: zecSpotChartFeed }[asset];
+      const ownFeed = { BTC: binanceSpotChartFeed, ETH: ethSpotChartFeed, INJ: injSpotChartFeed, SOL: solSpotChartFeed, ZEC: zecSpotChartFeed }[asset];
       const candleRead = jest.spyOn(ownFeed, 'page').mockResolvedValue(x.page);
       const read = (payload: any, intrusions: any[]) => asset === 'BTC' ? green.readBtcPurpleTrailSignal(payload, intrusions)
         : green.readPurpleGapBreakSignal(market, payload, intrusions);
@@ -198,7 +198,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       jest.useFakeTimers(); jest.setSystemTime(now);
       const x = inputs();
       const daily = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockResolvedValue(x.daily as any);
-      const own = { BTC: binanceSpotChartFeed, ETH: ethSpotChartFeed, SOL: solSpotChartFeed, ZEC: zecSpotChartFeed }[asset];
+      const own = { BTC: binanceSpotChartFeed, ETH: ethSpotChartFeed, INJ: injSpotChartFeed, SOL: solSpotChartFeed, ZEC: zecSpotChartFeed }[asset];
       const candles = jest.spyOn(own, 'page').mockResolvedValue(x.page);
       const wrong = [binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed, zecSpotChartFeed].filter(feed => feed !== own)
         .map(feed => jest.spyOn(feed, 'page').mockRejectedValue(new Error('wrong pair read')));
@@ -333,13 +333,13 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       jest.useFakeTimers(); jest.setSystemTime(now);
       directory = fs.mkdtempSync(path.join(os.tmpdir(), 'eth-gap-daily-'));
       file = path.join(directory, 'eth.json');
-      for (const pair of ['ETH', 'SOL', 'ZEC']) delete process.env[`${pair}_ENTRY_MODE`];
+      for (const pair of ['ETH', 'INJ', 'SOL', 'ZEC']) delete process.env[`${pair}_ENTRY_MODE`];
       Object.assign(process.env, {
         BTC_ENTRY_MODE: 'manual', DECENTRADER_AUTO_TRADE_ENABLED: 'true',
         DECENTRADER_GAP_ALERT_STATE_FILE: path.join(directory, 'btc-manual-execution.json'),
         BTC_MANUAL_TRADE_OVERRIDE_FILE: path.join(directory, 'btc-manual-plans.json'),
         [`${asset}_MANUAL_TRADE_OVERRIDE_FILE`]: path.join(directory, `${asset}-manual-plans.json`),
-        [stateEnv]: file, [entryEnv]: asset === 'BTC' ? 'green' : 'true',
+        [stateEnv]: file, [entryEnv]: asset === 'BTC' || asset === 'INJ' ? 'green' : 'true',
         [autoEnv]: 'true', [monitorEnv]: 'true',
         DECENTRADER_DYNAMIC_SL_ENABLED: 'true', DECENTRADER_DYNAMIC_SL_LIVE_UPDATES_ENABLED: 'true',
         DYDX_V4_FRACTAL_TRAIL_ENABLED: 'true', DECENTRADER_DYNAMIC_TP_ENABLED: 'true',
@@ -443,7 +443,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
           high: 121, low: 120, close: 120 })),
           ...payload.frames.map((frame, i) => i === 0 ? { ...frame, high: 121, low: 120, close: 120 } : frame)];
         (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue([115, 112, 110, 113, 116].slice(0, kind === 'missing' ? 4 : 5)
-          .map((low, i) => ({ ticker: kind === 'wrong-market' ? 'INJ-USD' : market,
+          .map((low, i) => ({ ticker: kind === 'wrong-market' ? 'PAXG-USD' : market,
             startedAt: iso(closeAt - (5 - i) * HOUR), resolution: '1HOUR', open: String(low + 2), high: String(low + 5),
             low: String(low), close: String(i === 4 ? 118 + ratio : low + 3) })));
         const managed: any = state(), result: any = {};
@@ -926,7 +926,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
         f.t = iso(f.startedAtMs).slice(0, 19).replace('T', ' ');
       });
       x.intrusions[0].timestamp = x.payload.frames[1].t;
-      jest.spyOn({ BTC: binanceSpotChartFeed, ETH: ethSpotChartFeed, SOL: solSpotChartFeed, ZEC: zecSpotChartFeed }[asset], 'page').mockResolvedValue(x.page);
+      jest.spyOn({ BTC: binanceSpotChartFeed, ETH: ethSpotChartFeed, INJ: injSpotChartFeed, SOL: solSpotChartFeed, ZEC: zecSpotChartFeed }[asset], 'page').mockResolvedValue(x.page);
       const dailyRead = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockResolvedValue(x.daily as any);
       const actualPurple = await green.readPurpleGapBreakSignal(market, x.payload, x.intrusions);
       expect(actualPurple).toMatchObject({ setup: 'purple-green-trail', direction, closedAt: nextClose / 1000 });
@@ -1051,7 +1051,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     test('a mixed-side Green intrusion can place an order without a Daily break, using the real detector', async () => {
       const {payload,page} = inputs();
       payload.zoneDeltas[1].push(['S', 5, 110, 1]);
-      const feed = { BTC:binanceSpotChartFeed, ETH:ethSpotChartFeed, SOL:solSpotChartFeed, ZEC:zecSpotChartFeed }[asset];
+      const feed = { BTC:binanceSpotChartFeed, ETH:ethSpotChartFeed, INJ:injSpotChartFeed, SOL:solSpotChartFeed, ZEC:zecSpotChartFeed }[asset];
       jest.spyOn(feed, 'page').mockResolvedValue(page);
       const daily = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockRejectedValue(new Error('No Daily data'));
       const managed: any = state();
@@ -1065,7 +1065,7 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
     test('a wick-only break does not send an order', async () => {
       const {payload,page} = inputs();
       page.candles[1].close = payload.frames[1].close = 114;
-      jest.spyOn({ BTC:binanceSpotChartFeed, ETH:ethSpotChartFeed, SOL:solSpotChartFeed, ZEC:zecSpotChartFeed }[asset], 'page').mockResolvedValue(page);
+      jest.spyOn({ BTC:binanceSpotChartFeed, ETH:ethSpotChartFeed, INJ:injSpotChartFeed, SOL:solSpotChartFeed, ZEC:zecSpotChartFeed }[asset], 'page').mockResolvedValue(page);
       const managed: any = state();
       await monitor.checkGapDailyEntry(managed, payload, {});
       expect(managed.gapDailyEntry.decision.outcome).toBe('NO_GAP_BREAK');

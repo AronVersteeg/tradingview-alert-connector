@@ -26,18 +26,26 @@ async function page(symbol: string, interval: '1h' | '1d', from: number, to: num
 
 async function main() {
   const setup = purpleLineSetupForMarket(market);
-  if (!setup) throw new Error('Expected BTC-USD, ETH-USD, SOL-USD or ZEC-USD.');
+  if (!setup) throw new Error('Expected a supported Spot chart market.');
   const green = readGreenHistory(market);
   if (!green) throw new Error(`No ${market} Green archive.`);
   const { from, through } = green.context;
+  const sourceFile = process.argv[3];
+  const cache = sourceFile ? JSON.parse(await fs.readFile(sourceFile, 'utf8')) : undefined;
+  if (cache && (cache.ticker !== market || cache.symbol !== setup.symbol || cache.through < through)) throw new Error('Wrong cached market or time range.');
   const hoursFrom = from - 999 * HOUR;
-  const hours = parseSpotChartCandles(await page(setup.symbol, '1h', hoursFrom, through), through);
+  const hours: ReturnType<typeof parseSpotChartCandles> = cache ? cache.spot.filter(([at]: number[]) => at >= hoursFrom && at < through)
+    .map(([at, closeTime, open, high, low, close]: number[]) =>
+      ({ time: at / 1000, closeTime, open, high, low, close, closed: closeTime === at + HOUR - 1, volume: 0, quoteVolume: 0 }))
+    : parseSpotChartCandles(await page(setup.symbol, '1h', hoursFrom, through), through);
   if (hours.length !== (through - hoursFrom) / HOUR || hours.some((row, i) => !row.closed || row.time * 1000 !== hoursFrom + i * HOUR)) {
     throw new Error(`Incomplete ${market} closed Spot hours.`);
   }
   const daysTo = latestExpectedFractalClose('1d', through) + 1;
   const daysFrom = Math.floor(from / DAY) * DAY - 999 * DAY;
-  const days = parseBinanceDailyCandles(await page(setup.symbol, '1d', daysFrom, daysTo), through);
+  const days: ReturnType<typeof parseBinanceDailyCandles> = cache ? cache.daily.filter(([at]: number[]) => at >= daysFrom && at < daysTo)
+    .map(([openTime, closeTime, high, low]: [number, number, string, string]) => ({ openTime, closeTime, high, low }))
+    : parseBinanceDailyCandles(await page(setup.symbol, '1d', daysFrom, daysTo), through);
   if (days.length !== (daysTo - daysFrom) / DAY || days.some((row, i) => row.openTime !== daysFrom + i * DAY ||
       row.closeTime !== row.openTime + DAY - 1 || !(Number(row.low) > 0) || Number(row.high) < Number(row.low))) {
     throw new Error(`Incomplete ${market} closed Spot days.`);

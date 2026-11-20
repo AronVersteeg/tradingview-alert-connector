@@ -5,7 +5,7 @@
 
   function timelineFromPayload(payload, market = 'BTC-USD') {
     const symbol = market.replace('-USD', 'USDT');
-    if (!['BTC-USD', 'ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || payload?.source?.market !== market ||
+    if (!['BTC-USD', 'ETH-USD', 'INJ-USD', 'SOL-USD', 'ZEC-USD'].includes(market) || payload?.source?.market !== market ||
       !payload.source.sourceStatuses?.some((source) => source.name === `Binance Spot ${symbol} 1H`) ||
       !Array.isArray(payload.frames) || !payload.frames.length || !Array.isArray(payload.gaps) || payload.frames.length !== payload.gaps.length) {
       throw new Error('Unexpected Public V2 Spot gap source');
@@ -24,7 +24,7 @@
   }
 
   function buildGapBoxes(timeline, nowMs = Date.now(), symbol = 'BTCUSDT') {
-    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'ZECUSDT'].includes(symbol) || timeline?.symbol !== symbol || timeline.venue !== 'Binance Spot' || !Array.isArray(timeline.records)) throw new Error('Unexpected gap timeline');
+    if (!['BTCUSDT', 'ETHUSDT', 'INJUSDT', 'SOLUSDT', 'ZECUSDT'].includes(symbol) || timeline?.symbol !== symbol || timeline.venue !== 'Binance Spot' || !Array.isArray(timeline.records)) throw new Error('Unexpected gap timeline');
     const cutoff = Math.floor(nowMs / (HOUR * 1000)) * HOUR;
     const rows = timeline.records.filter((row) => row.availableAt <= cutoff);
     if (!rows.length) throw new Error('Awaiting closed gap frames');

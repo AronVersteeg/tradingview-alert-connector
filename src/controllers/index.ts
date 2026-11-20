@@ -164,11 +164,12 @@ function configureDecentraderTradeExecutor() {
     syncTrailingStop: (alert, options) => client.syncTrailingStop(alert, options)
   });
   openLiquidityV2InjTradeMonitor.configureTradeExecutor({
+    supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
-    placeOrder: (alert: any) => client.placeOrder(alert),
+    placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
-    syncTrailingStop: (alert: any) => client.syncTrailingStop(alert)
+    syncTrailingStop: (alert, options) => client.syncTrailingStop(alert, options)
   });
   openLiquidityV2SolTradeMonitor.configureTradeExecutor({
     supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
@@ -856,7 +857,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
                 ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. When explicitly enabled, filtered Gold intrusions are independently managed on dYdX PAXG-USD with the shared risk, fractal SL and TP settings.'
                 : market === 'XAG-USD'
                   ? 'SILVER Public Perp V2 uses a causal Binance XAGUSDT Futures liquidation-cohort reconstruction. Filtered intrusions and SMTP Delay history use the shared candle and taker-delta rules; live execution is independently managed on dYdX XAG-USD with the shared dollar-risk, Williams-fractal SL and TP settings.'
-                  : ['ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market)
+                  : purpleLineSetupForMarket(market)
                   ? `${asset}_ENTRY_MODE selects manual, green, purple, atr, atr-purple or off. Green uses a Binance Spot intrusion and same-hour gap close break; purple adds a confirmed Daily close break. atr and atr-purple add the same directional dYdX body >= 2x prior 14-hour Spot ATR filter to Green and Purple respectively. Automatic entries use dYdX signal-open SL, fractal sizing and Yellow-gated trailing without TPs.`
                   : `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
           }
@@ -894,7 +895,7 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
   const legacyBtc = req.path.endsWith('/btc-green-retest');
   const rawMarket = legacyBtc ? 'BTC-USD' : req.query.market;
   if (typeof rawMarket !== 'string' || !purpleLineSetupForMarket(rawMarket.toUpperCase())) {
-    return res.status(400).send({ error: 'Green retest supports BTC-USD, ETH-USD, SOL-USD and ZEC-USD.' });
+    return res.status(400).send({ error: 'Retest supports BTC-USD, ETH-USD, INJ-USD, SOL-USD and ZEC-USD.' });
   }
   const market = rawMarket.toUpperCase() as PurpleLineMarket;
   const strategy = legacyBtc ? 'green' : req.query.strategy ?? 'green';

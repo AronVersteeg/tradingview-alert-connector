@@ -94,6 +94,7 @@ typings/
 !/scripts/build-green-retest-history.ts
 !/scripts/build-purple-retest-history.ts
 !/scripts/build-atr-retest-history.ts
+!/scripts/build-green-spot-overlay.cjs
 btc-trade-replay-*.json
 !/scripts/check-btc-manual-levels.cjs
 !/scripts/check-btc-gap-history.cjs

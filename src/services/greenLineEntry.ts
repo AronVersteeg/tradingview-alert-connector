@@ -1,4 +1,4 @@
-import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed, zecSpotChartFeed, SpotChartPage } from './binanceSpotChart';
+import { binanceSpotChartFeed, ethSpotChartFeed, injSpotChartFeed, solSpotChartFeed, zecSpotChartFeed, SpotChartPage } from './binanceSpotChart';
 import { BtcPurpleTrailSignal, GreenLineSignal, evaluatePurpleLineSignal, readSpotDailyFractals } from './ethGapDailyEntry';
 import { PurpleLineMarket, purpleLineSetupForMarket } from './purpleLineSetup';
 
@@ -6,7 +6,7 @@ const { timelineFromPayload } = require('../../public/btc-spot-chart/gap-boxes.j
 const { compactIntrusionHistory, buildGapIntrusionMarkers } = require('../../public/btc-spot-chart/intrusion-daily-breakouts.js');
 const HOUR = 3600;
 const feeds = { 'BTC-USD': binanceSpotChartFeed, 'ETH-USD': ethSpotChartFeed,
-  'SOL-USD': solSpotChartFeed, 'ZEC-USD': zecSpotChartFeed };
+  'INJ-USD': injSpotChartFeed, 'SOL-USD': solSpotChartFeed, 'ZEC-USD': zecSpotChartFeed };
 
 export function evaluateYellowIntrusionSignal(market: PurpleLineMarket, payload: any, intrusions: any[],
   direction: 'long' | 'short', now = Date.now()): { time: number; closedAt: number; direction: 'long' | 'short' } | undefined {

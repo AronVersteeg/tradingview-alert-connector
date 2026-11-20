@@ -6,7 +6,10 @@ import { PURPLE_LINE_SETUPS, type PurpleLineMarket } from '../src/services/purpl
 
 const dir = process.argv[2];
 if (!dir) throw new Error('Provide the Binance Spot input directory.');
+const requested = process.argv[3]?.toUpperCase();
+if (requested && !Object.hasOwn(PURPLE_LINE_SETUPS, requested)) throw new Error('Expected a supported Spot chart market.');
 for (const [market, setup] of Object.entries(PURPLE_LINE_SETUPS) as [PurpleLineMarket, typeof PURPLE_LINE_SETUPS[PurpleLineMarket]][]) {
+  if (requested && market !== requested) continue;
   const green: GreenHistoryArchive = JSON.parse(fs.readFileSync(greenHistoryPath(market), 'utf8'));
   const raw = JSON.parse(fs.readFileSync(path.join(dir, `${setup.asset}.json`), 'utf8'));
   if (raw.symbol !== setup.symbol || raw.ticker !== market) throw new Error(`Wrong input for ${market}.`);

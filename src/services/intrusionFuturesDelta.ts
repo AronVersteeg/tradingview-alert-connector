@@ -12,7 +12,7 @@ export type FuturesDeltaCandle = {
 export type FuturesDeltaRead = { hour: number; status: 'ok'; candle: FuturesDeltaCandle } |
   { hour: number; status: 'pending' | 'unavailable'; retryAt: string; error?: string };
 
-type FuturesDeltaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'SOLUSDT' | 'ZECUSDT';
+type FuturesDeltaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'SOLUSDT' | 'ZECUSDT';
 
 function historyFile(symbol: FuturesDeltaSymbol): string {
   const dom = String(process.env.DECENTRALIZED_DOM_HISTORY_DIR || '').trim();
@@ -58,7 +58,7 @@ export class IntrusionFuturesDeltaFeed {
   private persistenceDisabled = false;
   private readonly file: () => string;
   constructor(readonly symbol: FuturesDeltaSymbol, file?: () => string) {
-    if (!['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'ZECUSDT'].includes(symbol)) throw new Error('Unsupported Futures delta symbol.');
+    if (!['BTCUSDT', 'ETHUSDT', 'INJUSDT', 'SOLUSDT', 'ZECUSDT'].includes(symbol)) throw new Error('Unsupported Futures delta symbol.');
     this.file = file || (() => historyFile(symbol));
   }
 
@@ -140,3 +140,4 @@ export const btcIntrusionFuturesDeltaFeed = new IntrusionFuturesDeltaFeed('BTCUS
 export const ethIntrusionFuturesDeltaFeed = new IntrusionFuturesDeltaFeed('ETHUSDT');
 export const solIntrusionFuturesDeltaFeed = new IntrusionFuturesDeltaFeed('SOLUSDT');
 export const zecIntrusionFuturesDeltaFeed = new IntrusionFuturesDeltaFeed('ZECUSDT');
+export const injIntrusionFuturesDeltaFeed = new IntrusionFuturesDeltaFeed('INJUSDT');

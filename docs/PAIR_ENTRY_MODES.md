@@ -1,11 +1,12 @@
 # Per-Pair Entry Modes
 
-BTC, ETH, SOL and ZEC each have an independent selector:
+BTC, ETH, INJ, SOL and ZEC each have an independent selector:
 
 | Pair | Environment variable |
 | --- | --- |
 | BTC | `BTC_ENTRY_MODE` |
 | ETH | `ETH_ENTRY_MODE` |
+| INJ | `INJ_ENTRY_MODE` |
 | SOL | `SOL_ENTRY_MODE` |
 | ZEC | `ZEC_ENTRY_MODE` |
 
@@ -42,9 +43,12 @@ routing keeps its pre-selector behavior while the new selector is absent.
 An explicit selector overrides that old entry boolean and excludes legacy
 Delay/Shadow entries, including in Manual and Off. BTC retains its existing
 default of Manual when its selector is absent.
+INJ defaults to `off` with no legacy entry fallback; this preserves monitoring
+and protection of existing positions. To make new entries eligible, explicitly
+select a mode and enable `OPEN_LIQUIDITY_V2_INJ_AUTO_TRADE_ENABLED`.
 
 The existing `OPEN_LIQUIDITY_V2_<PAIR>_AUTO_TRADE_ENABLED` remains the execution
-kill switch for ETH/SOL/ZEC. Selecting Purple, Green, ATR, ATR Purple or Manual never overrides
+kill switch for ETH/INJ/SOL/ZEC. Selecting Purple, Green, ATR, ATR Purple or Manual never overrides
 an explicit false auto-trade value. BTC retains
 `DECENTRADER_AUTO_TRADE_ENABLED` as its execution master. Automatic entry monitors
 and protective SL/trailing settings must also remain enabled; Manual retains

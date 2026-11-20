@@ -31,11 +31,16 @@ async function fetchPages<T>(start: number, page: (start: number, end: number, c
 
 async function main() {
   const setup = purpleLineSetupForMarket(market);
-  if (!setup) throw new Error('Expected BTC-USD, ETH-USD, SOL-USD or ZEC-USD.');
+  if (!setup) throw new Error('Expected a supported Spot chart market.');
   if (![from, through].every(ms => Number.isSafeInteger(ms) && ms > 0 && ms % HOUR === 0) ||
       through <= from + HOUR || through > observedAt || through - from > 25_000 * HOUR) throw new Error('Invalid archive range.');
   const warmupFrom = from - GREEN_HISTORY_WARMUP_HOURS * HOUR;
-  const spot = await fetchPages<SpotCandle>(warmupFrom, async (start, end, limit) => {
+  const sourceFile = process.argv[5];
+  const cache = sourceFile ? JSON.parse(await fs.readFile(sourceFile, 'utf8')) : undefined;
+  if (cache && (cache.ticker !== market || cache.symbol !== setup.symbol || cache.through < through)) throw new Error('Wrong cached market or time range.');
+  const spot: SpotCandle[] = cache ? cache.spot.filter(([at]: number[]) => at >= warmupFrom && at < through)
+    .map(([timestampMs, closeTimeMs, open, high, low, close]: number[]): SpotCandle => ({ timestampMs, closeTimeMs, open, high, low, close }))
+    : await fetchPages<SpotCandle>(warmupFrom, async (start, end, limit) => {
     const { data } = await axios.get<unknown[][]>('https://data-api.binance.vision/api/v3/klines', { timeout: 25_000,
       params: { symbol: setup.symbol, interval: '1h', startTime: start, endTime: end - 1, limit } });
     return data.map(([t, o, h, l, c, , endTime]) => ({ timestampMs: Number(t), closeTimeMs: Number(endTime),
@@ -48,7 +53,10 @@ async function main() {
     throw new Error('Binance Spot source has missing or invalid hours.');
   }
   const dydxFrom = from - 1000 * HOUR;
-  const sourceDydx = await fetchPages<DydxRsiCandle>(dydxFrom, async (start, end, limit) => {
+  const sourceDydx: (DydxRsiCandle & { ticker?: string })[] = cache ? cache.dydx.filter(([at]: string[]) => Date.parse(at) >= dydxFrom && Date.parse(at) < through)
+    .map(([startedAt, open, high, low, close, trades, orderbookMidPriceOpen, orderbookMidPriceClose]: string[]) =>
+      ({ startedAt, open, high, low, close, trades, orderbookMidPriceOpen, orderbookMidPriceClose, ticker: market, resolution: '1HOUR' }))
+    : await fetchPages<DydxRsiCandle>(dydxFrom, async (start, end, limit) => {
     const { data } = await axios.get<{ candles: (DydxRsiCandle & { ticker: string })[] }>(
       `https://indexer.dydx.trade/v4/candles/perpetualMarkets/${market}`, { timeout: 25_000,
         params: { resolution: '1HOUR', fromISO: iso(start), toISO: iso(end), limit } });

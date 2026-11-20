@@ -6,6 +6,8 @@ export const PURPLE_LINE_SETUPS = {
   'ETH-USD': { asset: 'ETH', symbol: 'ETHUSDT', priceStepUsd: 5,
     modelVersion: 'binance-spot-eth-liquidation-cohorts-v2.1',
     enabledEnv: 'OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_ENABLED' },
+  'INJ-USD': { asset: 'INJ', symbol: 'INJUSDT', priceStepUsd: 0.01,
+    modelVersion: 'binance-spot-inj-liquidation-cohorts-v2.1', enabledEnv: 'INJ_ENTRY_MODE' },
   'SOL-USD': { asset: 'SOL', symbol: 'SOLUSDT', priceStepUsd: 0.1,
     modelVersion: 'binance-spot-sol-liquidation-cohorts-v2.1',
     enabledEnv: 'OPEN_LIQUIDITY_V2_SOL_GAP_DAILY_ENTRY_ENABLED' },
