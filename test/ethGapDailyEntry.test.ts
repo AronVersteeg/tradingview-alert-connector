@@ -419,10 +419,24 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       });
     }
 
-    test.each([['pass', 2], ['weak', 1.99], ['missing', 2], ['wrong-market', 2]] as const)(
-      'ATR %s only trades with an exact dYdX body >= 2x the preceding Spot ATR', async (kind, ratio) => {
-        process.env[`${asset}_ENTRY_MODE`] = 'atr';
-        jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
+    test.each([
+      ['atr', 'pass', 2], ['atr', 'weak', 1.99], ['atr', 'missing', 2], ['atr', 'wrong-market', 2],
+      ['atr-purple', 'pass', 2], ['atr-purple', 'weak', 1.99], ['atr-purple', 'missing', 2],
+      ['atr-purple', 'wrong-market', 2], ['atr-purple', 'no-purple', 2], ['atr-purple', 'no-checkpoint', 2]
+    ] as const)('%s %s only trades with matching confluence and a dYdX body >= 2x Spot ATR', async (mode, kind, ratio) => {
+        process.env[`${asset}_ENTRY_MODE`] = mode;
+        const usePurple = mode === 'atr-purple';
+        const readGreen = jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
+        const readPurple = jest.spyOn(green, 'readPurpleGapBreakSignal').mockResolvedValue(kind === 'no-purple' ? undefined : {
+          ...signal(), setup: 'purple-green-trail', gap: { lower: 85, upper: 115, candleTime: signal().time - 3600 }
+        });
+        if (usePurple && kind !== 'no-checkpoint') {
+          orders.supportsEntrySubmissionCheckpoint = true;
+          orders.placeOrder.mockImplementationOnce(async (_alert: any, checkpoint: any) => {
+            await checkpoint.beforeEntrySubmit();
+            position = { market, size: .4, entryPrice: 120 };
+          });
+        }
         jest.spyOn(monitor, 'latestSpotIntrusions').mockReturnValue([{}]);
         const { payload } = inputs();
         payload.frames = [...Array.from({ length: 14 }, (_, i) => ({ ...payload.frames[0], startedAtMs: closeAt - (16 - i) * HOUR,
@@ -434,16 +448,21 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
             low: String(low), close: String(i === 4 ? 118 + ratio : low + 3) })));
         const managed: any = state(), result: any = {};
         await monitor.checkGapDailyEntry(managed, payload, result);
+        expect(readGreen).toHaveBeenCalledTimes(usePurple ? 0 : 1);
+        expect(readPurple).toHaveBeenCalledTimes(usePurple ? 1 : 0);
         if (kind === 'pass') {
           expect(orders.placeOrder).toHaveBeenCalledTimes(1);
           expect(orders.placeOrder.mock.calls[0][0]).toMatchObject({ market, static_sl: 118, take_profits: [],
-            gap_daily_entry: { setup: 'atr-line', atr: { spotAtr: 1, ratio: 2 } } });
-          expect(managed.gapDailyEntry.triggerEmails[0].subject).toContain(`${asset} ATR LONG TRIGGERED`);
+            gap_daily_entry: { setup: usePurple ? 'atr-purple-line' : 'atr-line', atr: { spotAtr: 1, ratio: 2 },
+              ...(usePurple && { dailyLevels: signal().dailyLevels }) } });
+          expect(managed.gapDailyEntry.triggerEmails[0].subject).toContain(`${asset} ${usePurple ? 'ATR PURPLE' : 'ATR'} LONG TRIGGERED`);
         } else {
           expect(orders.placeOrder).not.toHaveBeenCalled();
-          expect(managed.gapDailyEntry.triggerEmails).toBeUndefined();
-          expect(managed.gapDailyEntry.decision.outcome).toBe(kind === 'weak' ? 'ATR_BELOW_THRESHOLD' : 'ERROR');
-          if (kind !== 'weak') expect(result.gapDailyEntryPending).toBe(true);
+          if (kind !== 'no-checkpoint') expect(managed.gapDailyEntry.triggerEmails).toBeUndefined();
+          expect(managed.gapDailyEntry.decision.outcome).toBe(kind === 'weak' ? 'ATR_BELOW_THRESHOLD'
+            : kind === 'no-purple' ? 'NO_PURPLE_CONFLUENCE' : kind === 'no-checkpoint' ? 'SKIPPED' : 'ERROR');
+          if (kind === 'missing' || kind === 'wrong-market') expect(result.gapDailyEntryPending).toBe(true);
+          if (kind === 'no-purple') expect(gap.fetchDydxHourlyCandlesForMarket).not.toHaveBeenCalled();
         }
       });
 

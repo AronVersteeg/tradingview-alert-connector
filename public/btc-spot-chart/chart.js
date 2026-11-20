@@ -61,7 +61,10 @@
   let gapIntrusionLayer, gapIntrusionMarkers = [];
   let visibleGapIntrusionMarkers = [];
   let gapIntrusionInputs;
-  let atrLayer, atrController, atrRetryAt = 0, atrThrough = 0;
+  const atrOverlays = [
+    { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', color: '#238554', width: 3, retryAt: 0, through: 0 },
+    { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', color: '#f18ebc', width: 2, retryAt: 0, through: 0 }
+  ];
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
   const pocRecords = new Map();
@@ -407,33 +410,39 @@
     updateHistoricalReplay(greenHistory);
   }
 
-  async function refreshAtrMarkers() {
-    if (!active || !initialData || destroyed || !atrLayer || !byId('spotChartAtr').checked ||
-        atrController || Date.now() < atrRetryAt || atrThrough >= Math.floor(Date.now() / 3_600_000) * 3_600_000) return;
+  function attachAtrOverlay(overlay) {
+    overlay.layer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(overlay.color, overlay.width);
+    overlay.layer.setVisible(byId(overlay.toggle).checked);
+    candlesSeries.attachPrimitive(overlay.layer);
+  }
+
+  async function refreshAtrMarkers(overlay) {
+    if (!active || !initialData || destroyed || !overlay.layer || !byId(overlay.toggle).checked ||
+        overlay.controller || Date.now() < overlay.retryAt || overlay.through >= Math.floor(Date.now() / 3_600_000) * 3_600_000) return;
     const controller = new AbortController();
-    atrController = controller;
+    overlay.controller = controller;
     const timeout = setTimeout(() => controller.abort(), 15_000);
-    const status = byId('spotChartAtrStatus');
+    const status = byId(`${overlay.toggle}Status`);
     try {
-      const query = new URLSearchParams({ market, strategy: 'atr', view: 'markers' });
+      const query = new URLSearchParams({ market, strategy: overlay.mode, view: 'markers' });
       const response = await fetch(`/open-liquidity/v2/green-retest?${query}`, { signal: controller.signal, cache: 'no-store' });
       if (!response.ok) throw new Error('ATR temporarily unavailable');
       const result = await response.json();
-      if (result.market !== market || result.strategy !== 'atr' || !Number.isFinite(result.through) ||
+      if (result.market !== market || result.strategy !== overlay.mode || !Number.isFinite(result.through) ||
           !Array.isArray(result.markers) || result.markers.some(marker => !Number.isSafeInteger(marker.time) ||
             marker.time % 3600 !== 0 || !Number.isFinite(marker.ratio) || marker.ratio < 2)) throw new Error('Invalid ATR data');
       if (!destroyed && !controller.signal.aborted) {
-        atrThrough = result.through;
-        atrLayer.setData(result.markers);
-        status.textContent = `ATR: ${result.markers.length} | t/m ${dateText(result.through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
+        overlay.through = result.through;
+        overlay.layer.setData(result.markers);
+        status.textContent = `${overlay.label}: ${result.markers.length} | t/m ${dateText(result.through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
         status.dataset.stale = String(result.through < Math.floor(Date.now() / 3_600_000) * 3_600_000);
       }
     } catch {
-      if (!destroyed && byId('spotChartAtr').checked) { status.textContent = 'ATR: data nog niet beschikbaar'; status.dataset.stale = 'true'; }
+      if (!destroyed && byId(overlay.toggle).checked) { status.textContent = `${overlay.label}: data nog niet beschikbaar`; status.dataset.stale = 'true'; }
     } finally {
       clearTimeout(timeout);
-      atrController = undefined;
-      atrRetryAt = Date.now() + 60_000;
+      overlay.controller = undefined;
+      overlay.retryAt = Date.now() + 60_000;
     }
   }
   window.addEventListener('btc-spot-chart:intrusion-history', event => {
@@ -648,9 +657,7 @@
       gapIntrusionLayer.setVisible(byId('spotChartGapIntrusions').checked);
       attachHistoricalReplay(greenHistory);
       candlesSeries.attachPrimitive(gapIntrusionLayer);
-      atrLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive('#238554', 3);
-      atrLayer.setVisible(byId('spotChartAtr').checked);
-      candlesSeries.attachPrimitive(atrLayer);
+      attachAtrOverlay(atrOverlays[0]);
       // Draw Weekly last so orange remains visible when both mark the same candle.
       for (const state of [...breakoutStates].reverse()) {
         state.layer = new gapWeeklyBreaks[`Gap${state.name}BreakoutPrimitive`]();
@@ -665,6 +672,7 @@
       updateOrderBlockFont();
       intrusionLayer.setVisible(byId('spotChartIntrusionDailyBreaks').checked);
       candlesSeries.attachPrimitive(intrusionLayer);
+      attachAtrOverlay(atrOverlays[1]);
       updateIntrusionDailyBreakouts();
       gestures = interactions.install(chartCanvas, {
         read: () => {
@@ -743,7 +751,7 @@
         void refreshIntrusionHistory();
         void refreshIntrusionDelta();
         void refreshIntrusionPoc();
-        void refreshAtrMarkers();
+        for (const overlay of atrOverlays) void refreshAtrMarkers(overlay);
         if (!lastTickAt || Date.now() - lastTickAt > 12_000) {
           if (Date.now() - lastRestAt >= 30_000) void loadRecent();
           if (socket && Date.now() - (lastTickAt || lastRestAt) > 20_000) socket.close();
@@ -850,7 +858,11 @@
   }
   async function syncActivity() {
     active = inView && !document.hidden && navigator.onLine;
-    if (!active) { deltaController?.abort(); pocController?.abort(); atrController?.abort(); clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return; }
+    if (!active) {
+      deltaController?.abort(); pocController?.abort();
+      for (const overlay of atrOverlays) overlay.controller?.abort();
+      clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return;
+    }
     try {
       await ensureChart();
       if (!active || destroyed) return;
@@ -902,14 +914,14 @@
     greenHistory?.layer?.setVisible(event.target.checked);
     if (event.target.checked) void loadHistoricalReplay(greenHistory);
   });
-  byId('spotChartAtr').addEventListener('change', event => {
-    atrLayer?.setVisible(event.target.checked);
-    const status = byId('spotChartAtrStatus');
+  for (const overlay of atrOverlays) byId(overlay.toggle).addEventListener('change', event => {
+    overlay.layer?.setVisible(event.target.checked);
+    const status = byId(`${overlay.toggle}Status`);
     status.hidden = !event.target.checked;
     if (event.target.checked) {
-      if (!status.textContent) status.textContent = 'ATR: laden…';
-      void refreshAtrMarkers();
-    } else atrController?.abort();
+      if (!status.textContent) status.textContent = `${overlay.label}: laden\u2026`;
+      void refreshAtrMarkers(overlay);
+    } else overlay.controller?.abort();
   });
   for (const state of breakoutStates) {
     byId(`spotChartGap${state.name}Breaks`).addEventListener('change', (event) => state.layer?.setVisible(event.target.checked));
@@ -984,7 +996,7 @@
   observer.observe(panel);
   window.addEventListener('pagehide', () => {
     destroyed = true;
-    atrController?.abort();
+    for (const overlay of atrOverlays) overlay.controller?.abort();
     deltaController?.abort();
     pocController?.abort();
     desktopOrderBlockLabels.removeEventListener('change', updateOrderBlockFont);

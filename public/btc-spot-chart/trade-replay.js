@@ -26,8 +26,10 @@ function init(market) {
   let chart, candles, entryPoint, exitPoint, stops, fractalMarkers, annotations, snapshot, timer, nonce = 0;
   let list, riskBudget, riskFactor = 1;
   let strategy = 'green', listRequest = 0;
-  const strategyName = () => ({ purple: 'Purple', green: 'Green', atr: 'ATR' })[strategy];
-  const entryColor = () => ({ purple: '#d5a4fa', green: '#68e2a6', atr: '#238554' })[strategy];
+  const strategies = { green: { name: 'Green', color: '#68e2a6' }, purple: { name: 'Purple', color: '#d5a4fa' },
+    atr: { name: 'ATR', color: '#238554' }, 'atr-purple': { name: 'ATR Purple', color: '#f18ebc' } };
+  const strategyName = () => strategies[strategy].name;
+  const entryColor = () => strategies[strategy].color;
   function showStrategy() {
     root.dataset.strategy = strategy;
     title.textContent = `${asset} ${strategyName()} Retest`;
@@ -342,7 +344,7 @@ function init(market) {
 
   load.addEventListener('click', showList);
   strategySwitch.addEventListener('change', event => {
-    if (!['green', 'purple', 'atr'].includes(event.target.value) || strategy === event.target.value) return;
+    if (!Object.hasOwn(strategies, event.target.value) || strategy === event.target.value) return;
     strategy = event.target.value;
     showStrategy();
     showList();

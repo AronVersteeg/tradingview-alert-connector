@@ -1,6 +1,6 @@
 import { binanceDailyFractalHistory, latestExpectedFractalClose } from './binanceDailyFractalHistory';
 import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed, zecSpotChartFeed, SpotChartPage } from './binanceSpotChart';
-import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
+import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket, spotSetupUsesPurple } from './purpleLineSetup';
 import { ethIntrusionFuturesDeltaFeed } from './intrusionFuturesDelta';
 import type { AtrEntryReading } from './atrEntry';
 
@@ -25,10 +25,11 @@ export type EthGapDailySignal = PurpleLineSignal;
 export type GreenLineSignal = Omit<PurpleLineSignal, 'dailyLevels'> & { setup: 'green-line'; edge: number };
 export type BtcPurpleTrailSignal = PurpleLineSignal & { setup: 'purple-green-trail'; gap: { lower: number; upper: number; candleTime: number } };
 export type AtrLineSignal = Omit<GreenLineSignal, 'setup'> & { setup: 'atr-line'; atr: AtrEntryReading };
-export type SpotEntrySignal = PurpleLineSignal | GreenLineSignal | BtcPurpleTrailSignal | AtrLineSignal;
+export type AtrPurpleLineSignal = Omit<BtcPurpleTrailSignal, 'setup'> & { setup: 'atr-purple-line'; atr: AtrEntryReading };
+export type SpotEntrySignal = PurpleLineSignal | GreenLineSignal | BtcPurpleTrailSignal | AtrLineSignal | AtrPurpleLineSignal;
 
-export function isBtcPurpleTrailSignal(signal: SpotEntrySignal): signal is BtcPurpleTrailSignal {
-  return 'setup' in signal && signal.setup === 'purple-green-trail';
+export function isBtcPurpleTrailSignal(signal: SpotEntrySignal): signal is BtcPurpleTrailSignal | AtrPurpleLineSignal {
+  return 'setup' in signal && spotSetupUsesPurple(signal.setup);
 }
 
 export const PURPLE_BODY_STOP_FRACTION = 0;

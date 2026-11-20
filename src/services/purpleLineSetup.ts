@@ -15,12 +15,23 @@ export const PURPLE_LINE_SETUPS = {
 } as const;
 
 export type PurpleLineMarket = keyof typeof PURPLE_LINE_SETUPS;
-export type SpotEntrySetup = 'green-line' | 'atr-line' | 'purple-green-trail';
+const AUTOMATIC_SETUPS = { green: 'green-line', atr: 'atr-line', purple: 'purple-green-trail',
+  'atr-purple': 'atr-purple-line' } as const;
+export type SpotEntrySetup = typeof AUTOMATIC_SETUPS[keyof typeof AUTOMATIC_SETUPS];
+
+function configuredAutomaticSetup(market: string): SpotEntrySetup | undefined {
+  const mode = spotEntryModeStatus(market)?.mode;
+  return mode && mode !== 'off' && mode !== 'manual' ? AUTOMATIC_SETUPS[mode] : undefined;
+}
 
 export function spotEntrySetup(market: string): SpotEntrySetup {
-  const mode = spotEntryModeStatus(market)?.mode;
-  return mode === 'purple' ? 'purple-green-trail' : mode === 'atr' ? 'atr-line' : 'green-line';
+  return configuredAutomaticSetup(market) ?? 'green-line';
 }
+
+export const spotSetupUsesPurple = (setup: SpotEntrySetup) => setup === 'purple-green-trail' || setup === 'atr-purple-line';
+export const spotSetupUsesAtr = (setup: SpotEntrySetup) => setup === 'atr-line' || setup === 'atr-purple-line';
+export const spotSetupLabel = (setup: SpotEntrySetup) => ({ 'green-line': 'Green', 'atr-line': 'ATR',
+  'purple-green-trail': 'Purple', 'atr-purple-line': 'ATR Purple' }[setup]);
 
 export function purpleLineSetupForMarket(market: string) {
   return Object.prototype.hasOwnProperty.call(PURPLE_LINE_SETUPS, market)
@@ -28,8 +39,7 @@ export function purpleLineSetupForMarket(market: string) {
 }
 
 export function automaticSpotEntryEnabled(market: string): boolean {
-  const mode = spotEntryModeStatus(market)?.mode;
-  return mode === 'green' || mode === 'purple' || mode === 'atr';
+  return configuredAutomaticSetup(market) !== undefined;
 }
 
 // Retain the existing configuration helper for compatibility.

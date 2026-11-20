@@ -1,5 +1,6 @@
 import { btcManualTriggerTimestampNl } from './btcManualTradeOverride';
 import { isBtcPurpleTrailSignal, type SpotEntrySignal } from './ethGapDailyEntry';
+import { spotSetupLabel } from './purpleLineSetup';
 
 export type PurpleTriggerEmail = {
   signature: string; subject: string; body: string; outcome: string; createdAt: string;
@@ -11,7 +12,8 @@ export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entr
   const green = 'edge' in signal;
   const purpleTrail = isBtcPurpleTrailSignal(signal);
   const atr = 'atr' in signal ? signal.atr : undefined;
-  const headline = `${asset} ${atr ? 'ATR' : green ? 'GREEN' : 'PURPLE'} ${signal.direction.toUpperCase()} TRIGGERED`;
+  const label = 'setup' in signal ? spotSetupLabel(signal.setup).toUpperCase() : 'PURPLE';
+  const headline = `${asset} ${label} ${signal.direction.toUpperCase()} TRIGGERED`;
   const signature = `${market}|GAP_DAILY|${signal.time}|${signal.direction}`;
   const intent = entry.intent?.signature === signature ? entry.intent : undefined;
   const decision = entry.decision?.signal?.time === signal.time || entry.decision?.outcome === 'ERROR' ? entry.decision : {};

@@ -851,13 +851,13 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
             ...payload.source,
             note:
               market === 'BTC-USD'
-                ? 'BTC_ENTRY_MODE selects manual, green, purple, atr or off (purple-trail remains an alias for purple). Green uses Spot intrusion plus gap break; purple also requires a Daily break; atr requires Green and a directional dYdX body at least 2x the prior 14-hour Spot ATR. Automatic entries keep the dYdX signal-open SL, Yellow-gated trailing and no TPs.'
+                ? 'BTC_ENTRY_MODE selects manual, green, purple, atr, atr-purple or off (purple-trail remains an alias for purple). Green uses Spot intrusion plus gap break; purple adds a Daily break. atr and atr-purple add the same directional dYdX body >= 2x prior 14-hour Spot ATR filter to Green and Purple respectively. Automatic entries keep the dYdX signal-open SL, Yellow-gated trailing and no TPs.'
                 : market === 'PAXG-USD'
                 ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. When explicitly enabled, filtered Gold intrusions are independently managed on dYdX PAXG-USD with the shared risk, fractal SL and TP settings.'
                 : market === 'XAG-USD'
                   ? 'SILVER Public Perp V2 uses a causal Binance XAGUSDT Futures liquidation-cohort reconstruction. Filtered intrusions and SMTP Delay history use the shared candle and taker-delta rules; live execution is independently managed on dYdX XAG-USD with the shared dollar-risk, Williams-fractal SL and TP settings.'
                   : ['ETH-USD', 'SOL-USD', 'ZEC-USD'].includes(market)
-                  ? `${asset}_ENTRY_MODE selects manual, green, purple, atr or off. Green uses a Binance Spot intrusion and same-hour gap close break; purple also requires a confirmed Daily close break; atr requires Green and a directional dYdX body at least 2x the prior 14-hour Spot ATR. Automatic entries use dYdX signal-open SL, fractal sizing and later same-direction Yellow-gated fractal trailing without TPs.`
+                  ? `${asset}_ENTRY_MODE selects manual, green, purple, atr, atr-purple or off. Green uses a Binance Spot intrusion and same-hour gap close break; purple adds a confirmed Daily close break. atr and atr-purple add the same directional dYdX body >= 2x prior 14-hour Spot ATR filter to Green and Purple respectively. Automatic entries use dYdX signal-open SL, fractal sizing and Yellow-gated trailing without TPs.`
                   : `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
           }
         : payload.source,
@@ -898,13 +898,17 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
   }
   const market = rawMarket.toUpperCase() as PurpleLineMarket;
   const strategy = legacyBtc ? 'green' : req.query.strategy ?? 'green';
-  if (strategy !== 'green' && strategy !== 'purple' && strategy !== 'atr') return res.status(400).send({ error: 'Invalid retest strategy.' });
+  if (strategy !== 'green' && strategy !== 'purple' && strategy !== 'atr' && strategy !== 'atr-purple') {
+    return res.status(400).send({ error: 'Invalid retest strategy.' });
+  }
   const mode = strategy;
+  const usesAtr = mode === 'atr' || mode === 'atr-purple';
+  const usesPurple = mode === 'purple' || mode === 'atr-purple';
   const cacheKey = `${market}|${mode}`;
   const id = req.query.id;
   if (id !== undefined && (typeof id !== 'string' || !/^\d{13}$/.test(id))) return res.status(400).send({ error: 'Invalid trade.' });
   const view = req.query.view;
-  if (view !== undefined && (view !== 'markers' || mode !== 'atr' || id !== undefined)) {
+  if (view !== undefined && (view !== 'markers' || !usesAtr || id !== undefined)) {
     return res.status(400).send({ error: 'Invalid retest view.' });
   }
   const now = Date.now();
@@ -925,10 +929,10 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
           const observedAt = Date.now();
           const green = greenRetestSignals(market, payload, observedAt);
           if (history && green.through <= history.context.through) return buildGreenRetestWithHistory(history, undefined, mode);
-          const context = mode === 'purple' ? await recentPurpleRetest(green, observedAt) : green;
+          const context = usesPurple ? await recentPurpleRetest(green, observedAt) : green;
           const rows = retestFractalRows(market, await fetchDydxHourlyCandlesForMarket(market), observedAt);
           const recent = { context, rows };
-          return buildGreenRetestWithHistory(history, mode === 'atr' ? recentAtrRetest(recent, payload.frames) : recent, mode);
+          return buildGreenRetestWithHistory(history, usesAtr ? recentAtrRetest(recent, payload.frames) : recent, mode);
         } catch (error) {
           if (!history) throw error;
           return buildGreenRetestWithHistory(history, undefined, mode);

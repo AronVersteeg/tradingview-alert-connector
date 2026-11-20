@@ -36,6 +36,21 @@ test.each(Object.keys(PURPLE_LINE_SETUPS) as PurpleLineMarket[])('%s ATR markers
   expect(replay.trades.every(t => atr.atrMarkers!.some(mark => mark.time === t.signalAt / 1000))).toBe(true);
 });
 
+test.each(Object.keys(PURPLE_LINE_SETUPS) as PurpleLineMarket[])('%s ATR Purple requires both archived conditions and keeps the Daily levels', market => {
+  const purple = readRetestHistory(market, 'purple')!;
+  const atr = readRetestHistory(market, 'atr')!;
+  const combined = readRetestHistory(market, 'atr-purple')!;
+  const qualified = new Set(atr.atrMarkers!.map(marker => marker.time));
+  expect(combined.context.signals).toEqual(purple.context.signals.filter(signal => qualified.has(signal.time)));
+  expect(combined.context.signals.length).toBeGreaterThan(0);
+  expect(combined.context.signals.length).toBeLessThan(purple.context.signals.length);
+  expect(combined.atrMarkers).toEqual(atr.atrMarkers!.filter(marker => combined.context.signals.some(s => s.time === marker.time)));
+  const result = buildGreenRetestWithHistory(combined, undefined, 'atr-purple');
+  expect(result.strategy).toBe('atr-purple');
+  expect(result.trades.length).toBeGreaterThan(0);
+  expect(result.trades.every(t => t.dailyLevels?.length)).toBe(true);
+});
+
 test('recent ATR scores exactly the Green candle and preserves later Yellow events', () => {
   const frame = (i: number) => ({ startedAtMs: signalAt + i * HOUR, low: 99, high: 101, close: 100 });
   const frames = Array.from({ length: 19 }, (_, i) => frame(i - 16));

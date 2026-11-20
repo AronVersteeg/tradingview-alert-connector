@@ -36,7 +36,7 @@ describe('BTC single entry model selector and ownership interlock', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  test.each([[undefined, 'manual'], ['manual', 'manual'], ['purple', 'purple'], [' PURPLE ', 'purple'], ['purple-trail', 'purple'], ['green', 'green'], [' ATR ', 'atr'], ['off', 'off'], ['true', 'off'], ['typo', 'off']])(
+  test.each([[undefined, 'manual'], ['manual', 'manual'], ['purple', 'purple'], [' PURPLE ', 'purple'], ['purple-trail', 'purple'], ['green', 'green'], [' ATR ', 'atr'], [' ATR-PURPLE ', 'atr-purple'], ['off', 'off'], ['true', 'off'], ['typo', 'off']])(
     'value %s selects %s, with invalid values failing closed', (value, expected) => {
       if (value === undefined) delete process.env.BTC_ENTRY_MODE; else process.env.BTC_ENTRY_MODE = value;
       expect(btcEntryMode()).toBe(expected);

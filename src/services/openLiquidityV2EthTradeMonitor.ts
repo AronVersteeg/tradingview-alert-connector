@@ -10,7 +10,8 @@ import { SpotEntrySignal, EthEntryFuturesDelta,
   freshEthGapDailySignal, isBtcPurpleTrailSignal, withPurpleDydxBodyOpenStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
 import { evaluateGreenLineSignal, evaluateYellowIntrusionSignal, readPurpleGapBreakSignal, readGreenLineSignal } from './greenLineEntry';
 import { ATR_ENTRY_MULTIPLIER, ATR_ENTRY_PERIOD, atrEntryPasses, atrEntryReading, priorSpotAtr } from './atrEntry';
-import { PurpleLineMarket, automaticSpotEntryEnabled, purpleLineSetupForMarket, spotEntrySetup } from './purpleLineSetup';
+import { PurpleLineMarket, automaticSpotEntryEnabled, purpleLineSetupForMarket, spotEntrySetup,
+  spotSetupLabel, spotSetupUsesAtr, spotSetupUsesPurple } from './purpleLineSetup';
 import { PurpleLineContinuity } from './purpleLineContinuity';
 import { PurpleTriggerEmail, purpleTriggerEmail } from './purpleTriggerEmail';
 import { archiveIntrusionEvidence } from './liquidityObservationArchive';
@@ -1072,7 +1073,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         stateFile: stateFile(this.config), hasTradeExecutor: Boolean(this.executor) };
     }
     const setup = spotEntrySetup(this.config.market);
-    const purple = setup === 'purple-green-trail';
+    const purple = spotSetupUsesPurple(setup), usesAtr = spotSetupUsesAtr(setup);
     return {
       enabled: this.enabled(),
       running: this.running,
@@ -1087,11 +1088,11 @@ export class OpenLiquidityV2EthTradeMonitor {
       emailNotificationPolicy: EMAIL_NOTIFICATION_POLICY,
       gapDailyEntry: purpleLineSetupForMarket(this.config.market) ? {
         setup, enabled: this.gapDailyEnabled(), env: spotEntryModeStatus(this.config.market)!.env,
-        source: `Binance Spot ${this.config.symbol} 1H`, rule: purple
+        source: `Binance Spot ${this.config.symbol} 1H`, rule: (purple
           ? 'Same-hour directional intrusion, previous gap edge close break and fresh confirmed Daily fractal close break.'
-          : setup === 'atr-line' ? 'Green plus directional dYdX break body at least 2x the prior 14-hour Binance Spot ATR.'
-          : 'Same-hour intrusion and fresh close beyond the previous gap edge.',
-        atrFilter: setup === 'atr-line' ? { period: ATR_ENTRY_PERIOD, multiplier: ATR_ENTRY_MULTIPLIER,
+          : 'Same-hour intrusion and fresh close beyond the previous gap edge.') + (usesAtr
+          ? ' Also requires a directional dYdX break body at least 2x the prior 14-hour Binance Spot ATR.' : ''),
+        atrFilter: usesAtr ? { period: ATR_ENTRY_PERIOD, multiplier: ATR_ENTRY_MULTIPLIER,
           rangeSource: 'binance-spot-1h', bodySource: 'dydx-1h', excludesSignalHour: true } : undefined,
         executionMarket: this.config.market, takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
         initialStop: { mode: 'signal-body-open', bodyFraction: PURPLE_BODY_STOP_FRACTION, bufferPct: 0,
@@ -1487,8 +1488,8 @@ export class OpenLiquidityV2EthTradeMonitor {
     if (close <= Date.parse(entry.activatedAt) || Date.now() - close > 300_000 || entry.handledCandle === close) return;
     let signal: SpotEntrySignal | undefined;
     const setup = spotEntrySetup(this.config.market);
-    const purple = setup === 'purple-green-trail';
-    const label = purple ? 'Purple' : setup === 'atr-line' ? 'ATR' : 'Green';
+    const purple = spotSetupUsesPurple(setup);
+    const label = spotSetupLabel(setup);
     try {
       const intrusions = this.latestSpotIntrusions(payload, close);
       if (!intrusions.length) {
@@ -1504,7 +1505,7 @@ export class OpenLiquidityV2EthTradeMonitor {
         return;
       }
       let closedRows: ReturnType<typeof dydxHourlyCandlesToFractalRows> | undefined;
-      if (setup === 'atr-line') {
+      if (spotSetupUsesAtr(setup)) {
         const at = candidate.time * 1000;
         const spotAtr = priorSpotAtr(new Map(payload.frames.slice(-16).map((frame: any) => [frame.startedAtMs, frame])), at);
         if (spotAtr === undefined) throw new Error('ATR is awaiting 14 contiguous pre-signal Binance Spot ranges.');
@@ -1520,7 +1521,7 @@ export class OpenLiquidityV2EthTradeMonitor {
           entry.decision = result.gapDailyEntry = { outcome: 'ATR_BELOW_THRESHOLD', candleClosedAt: new Date(close).toISOString(), atr };
           return;
         }
-        signal = { ...green!, setup: 'atr-line', atr };
+        signal = 'gap' in candidate ? { ...candidate, setup: 'atr-purple-line', atr } : { ...candidate, setup: 'atr-line', atr };
       } else signal = candidate;
       entry.decision = { outcome: 'DETECTED', signal, reason: `${label} signal detected; execution is not yet confirmed.` };
       this.capturePurpleTriggerEmail(state, signal, result);
@@ -1595,7 +1596,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     const purple = isBtcPurpleTrailSignal(signal);
     const setup = 'setup' in signal ? signal.setup : 'green-line';
     const setupMatches = () => setup === spotEntrySetup(this.config.market);
-    const label = purple ? 'Purple' : setup === 'atr-line' ? 'ATR' : 'Green';
+    const label = spotSetupLabel(setup);
     if (!this.gapDailyEnabled() || !this.enabled() || !this.autoTradeEnabled()) return skip(`${this.config.asset} entry model, monitor or pair auto-trading is disabled.`);
     if (!setupMatches() || purple && this.executor?.supportsEntrySubmissionCheckpoint !== true) return skip(`Signal setup or protected execution checkpoint does not match the ${this.config.asset} entry mode.`);
     if (!this.executor?.syncTrailingStop || !boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true) ||

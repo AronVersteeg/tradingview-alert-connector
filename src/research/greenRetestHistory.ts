@@ -11,7 +11,7 @@ const MIN_OVERLAP_HOURS = 24;
 export const GREEN_HISTORY_VERSION = 1;
 export const GREEN_HISTORY_WARMUP_HOURS = 8760;
 type Context = RetestContext;
-export type RetestMode = 'green' | 'purple' | 'atr';
+export type RetestMode = 'green' | 'purple' | 'atr' | 'atr-purple';
 type AtrMarker = { time: number; ratio: number };
 type Series = { context: Context; rows: DecentraderRow[]; atrMarkers?: AtrMarker[] };
 type Direction = 'long' | 'short';
@@ -56,7 +56,7 @@ function filterAtrSeries(series: Series, atrAt: (signalAt: number) => number | u
   return { ...series, context: { ...series.context, signals }, atrMarkers };
 }
 
-export function decodeAtrHistory(green: Series, file: AtrHistory): Series {
+export function decodeAtrHistory(green: Series, file: AtrHistory, purple?: PurpleHistory): Series {
   const { context } = green;
   if (file.version !== 1 || file.market !== context.market || file.model !== PURPLE_LINE_SETUPS[context.market].modelVersion ||
       file.from !== context.from || file.through !== context.through || !Array.isArray(file.ranges) ||
@@ -65,14 +65,14 @@ export function decodeAtrHistory(green: Series, file: AtrHistory): Series {
     throw new Error(`Incompatible ${context.market} ATR archive.`);
   }
   const ranges = new Map(file.ranges);
-  return filterAtrSeries(green, at => ranges.get(at + HOUR));
+  return filterAtrSeries(purple ? decodePurpleHistory(green, purple) : green, at => ranges.get(at + HOUR));
 }
 
-export function recentAtrRetest(green: Series, frames: SpotAtrRange[]): Series {
+export function recentAtrRetest(series: Series, frames: SpotAtrRange[]): Series {
   const frameByHour = new Map(frames.map(frame => [frame.startedAtMs, frame]));
-  const from = green.context.from + (ATR_ENTRY_PERIOD + 1) * HOUR;
-  return filterAtrSeries({ ...green, context: { ...green.context, from,
-    signals: green.context.signals.filter(signal => signal.time * 1000 >= from) } }, at => priorSpotAtr(frameByHour, at));
+  const from = series.context.from + (ATR_ENTRY_PERIOD + 1) * HOUR;
+  return filterAtrSeries({ ...series, context: { ...series.context, from,
+    signals: series.context.signals.filter(signal => signal.time * 1000 >= from) } }, at => priorSpotAtr(frameByHour, at));
 }
 
 export type PurpleHistory = { version: 1; market: PurpleLineMarket; model: string; from: number; through: number;
@@ -151,8 +151,11 @@ export function readRetestHistory(market: PurpleLineMarket, strategy: RetestMode
   const green = readGreenHistory(market);
   if (strategy === 'green' || !green) return green;
   try {
-    return strategy === 'atr' ? decodeAtrHistory(green, JSON.parse(fs.readFileSync(atrHistoryPath(market), 'utf8')))
-      : decodePurpleHistory(green, JSON.parse(fs.readFileSync(purpleHistoryPath(market), 'utf8')));
+    const usesPurple = strategy === 'purple' || strategy === 'atr-purple';
+    const purple = usesPurple ? JSON.parse(fs.readFileSync(purpleHistoryPath(market), 'utf8')) as PurpleHistory : undefined;
+    if (usesPurple && !purple) throw new Error(`Missing ${market} Purple archive.`);
+    if (strategy === 'purple') return decodePurpleHistory(green, purple!);
+    return decodeAtrHistory(green, JSON.parse(fs.readFileSync(atrHistoryPath(market), 'utf8')), purple);
   } catch (error) { console.warn(`${market} ${strategy} retest archive unavailable:`, (error as Error).message); }
 }
 
