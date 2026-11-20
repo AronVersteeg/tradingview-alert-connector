@@ -8,11 +8,15 @@ const { timelineFromPayload } = require('../../public/btc-spot-chart/gap-boxes.j
 const { compactIntrusionHistory, buildGapIntrusionMarkers } = require('../../public/btc-spot-chart/intrusion-daily-breakouts.js');
 const HOUR = 3_600_000;
 const RISK_USD = 15;
+export type RetestStrategy = 'green' | 'purple';
+export type RetestSignal = GreenLineSignal & { dailyLevels?: number[] };
+export type RetestContext = Omit<ReturnType<typeof greenRetestSignals>, 'signals'> & { signals: RetestSignal[] };
 type Direction = 'long' | 'short';
 type Fractal = { at: number; confirmedAt: number; price: number };
 type Yellow = { at: number; result: 'TIGHTENED' | 'UNCHANGED'; stop: number; fractal?: Fractal };
 type Trade = {
   id: string; direction: Direction; signalAt: number; openedAt: number; entryPrice: number; gapEdge: number;
+  dailyLevels?: number[];
   sizingStop: number; sizingFractal?: Fractal; initialStop: number; size: number; riskUsd: number;
   stops: { at: number; price: number }[]; yellows: Yellow[];
   closedAt?: number; exitPrice?: number; exitReason?: 'STOP' | 'GAP_STOP'; grossPnl?: number;
@@ -52,7 +56,7 @@ function fractal(stop: ReturnType<typeof buildFractalStop>): Fractal | undefined
   return Number.isFinite(at) ? { at, confirmedAt: at + (stop.fractal.window + 1) * HOUR, price: stop.fractal.price } : undefined;
 }
 
-export function simulateGreenRetest(rows: DecentraderRow[], context: ReturnType<typeof greenRetestSignals>) {
+export function simulateGreenRetest(rows: DecentraderRow[], context: RetestContext) {
   const asset = PURPLE_LINE_SETUPS[context.market].asset;
   const byHour = new Map<number, number>();
   const segmentStarts: number[] = [];
@@ -95,7 +99,7 @@ export function simulateGreenRetest(rows: DecentraderRow[], context: ReturnType<
             const size = Math.min(plannedSize, RISK_USD / Math.abs(entryPrice - initialStop));
             if (!Number.isFinite(size) || size <= 0) throw new Error('Invalid replay sizing.');
             position = { id: String(at), direction: signal.direction, signalAt: at - HOUR, openedAt: at, entryPrice,
-              gapEdge: signal.edge, sizingStop: sizing.price, sizingFractal: fractal(sizing), initialStop, size,
+              gapEdge: signal.edge, dailyLevels: signal.dailyLevels, sizingStop: sizing.price, sizingFractal: fractal(sizing), initialStop, size,
               riskUsd: Math.abs(entryPrice - initialStop) * size, stops: [{ at, price: initialStop }], yellows: [], status: 'OPEN' };
             trades.push(position);
           } catch { /* The live body-open guard also rejects an unprotective stop. */ }
@@ -149,7 +153,7 @@ export function retestFractalRows(market: PurpleLineMarket, candles: (DydxRsiCan
   });
 }
 
-export function buildGreenRetestFromRows(context: ReturnType<typeof greenRetestSignals>, rows: DecentraderRow[]) {
+export function buildGreenRetestFromRows(context: RetestContext, rows: DecentraderRow[]) {
   if (!rows.some(row => Date.parse(row.timestamp) >= context.from && Date.parse(row.timestamp) < context.through)) {
     throw new Error(`dYdX ${context.market} candles unavailable for this replay period.`);
   }

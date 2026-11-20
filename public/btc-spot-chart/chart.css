@@ -168,6 +168,14 @@
 .btc-replay-controls button, .btc-replay-controls select, #btcReplayToken { min-width: 0; max-width: 100%; min-height: 34px; padding: 4px 9px; color: #e0e6f0; background: #1c2531; border: 1px solid #35435a; border-radius: 4px; font: inherit; }
 .btc-replay-controls button { cursor: pointer; }
 .btc-replay-controls button:disabled { opacity: .65; cursor: progress; }
+.btc-replay-strategy { display: inline-flex; align-items: stretch; margin: 0; padding: 0; min-width: 0; border: 1px solid #35435a; border-radius: 4px; background: #141a23; }
+.btc-replay-strategy label { position: relative; cursor: pointer; }
+.btc-replay-strategy input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.btc-replay-strategy span { box-sizing: border-box; display: flex; align-items: center; justify-content: center; min-width: 64px; min-height: 32px; padding: 4px 8px; color: #a9b6c8; }
+.btc-replay-strategy label + label { border-inline-start: 1px solid #35435a; }
+.btc-replay-strategy input:focus-visible + span { outline: 2px solid #c5d6f3; outline-offset: -2px; }
+.btc-replay-strategy input:checked + span { color: #86e5bd; background: #20332e; font-weight: 650; }
+.btc-replay-strategy input[value="purple"]:checked + span { color: #debdff; background: #352846; }
 .btc-replay-picker { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .btc-replay-total-pnl { display: inline-flex; align-items: center; flex: none; box-sizing: border-box; min-height: 34px; padding: 4px 9px; border: 1px solid #35435a; border-radius: 4px; color: #e0e6f0; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .btc-replay-total-pnl[data-result="gain"] { color: #65deaf; border-color: #33936e; background: #142b25; }
@@ -187,6 +195,7 @@
 .btc-replay-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding-top: 8px; }
 .btc-replay-legend span::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 5px; background: currentColor; }
 .btc-replay-entry { color: #68e2a6; }
+.btc-trade-replay[data-strategy="purple"] .btc-replay-entry { color: #d5a4fa; }
 .btc-replay-exit { color: #eea9ce; }
 .btc-replay-stop { color: #69aaff; }
 .btc-replay-yellow, .btc-replay-yellow-event b { color: #f3d25c; }

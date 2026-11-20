@@ -1,6 +1,6 @@
-# Green Retest and BTC Trade Replay
+# Strategy Retest and BTC Trade Replay
 
-## Dashboard: Green Retest
+## Dashboard: Green and Purple Retest
 
 The BTC, ETH, SOL and ZEC Public V2 panels show a hypothetical retest, not
 dYdX account positions. For each market, the archive is reconstructed from
@@ -10,6 +10,13 @@ as the recent native Public V2 frames, not with older filtered chart markers.
 No historical account orders or fills are used.
 Each trade is rendered in one chart, including the signal hour, entry, Yellow
 checks, pivot/confirmation, initial and updated stop, and exit candle.
+
+Green requires a Spot intrusion and a gap close break. Purple additionally
+requires a same-direction intrusion and the first 1H close through a previously
+confirmed Daily level on that candle. Purple reconstructs the available Daily
+history at each signal using the same Williams and close-break projection as
+the live chart. Both modes share the stop rules, but simulate positions and
+P&L separately, over the same market-specific time range.
 
 - The model starts flat at the beginning of this window, allows one position at
   a time, and does not trigger another entry while one is running.
@@ -50,17 +57,21 @@ open positions under the configured stop guards. A replay starts flat; it
 does not infer that an earlier position survived the missing candles.
 
 The public endpoint is `GET /open-liquidity/v2/green-retest?market=ETH-USD`
-with optional `id`. The older BTC-only URL remains an alias for BTC. Refresh
+with optional `strategy=green` (default) or `strategy=purple`, and optional
+`id`. The older BTC-only URL remains an alias for BTC Green. Refresh
 each `research-data/*-green-retest-history.json` from the repository root
 before the recent window no longer overlaps it. No heavy historical downloads
 or rebuilding run on Render. Pass explicit UTC bounds for a reproducible build:
 
 ```shell
 node -r ts-node/register scripts/build-green-retest-history.ts ETH-USD 2025-10-11T02:00:00Z 2026-11-19T20:00:00Z
+node -r ts-node/register scripts/build-purple-retest-history.ts ETH-USD
 ```
 
-The builder warms up the Spot model with 8,760 consecutive candles. Missing
-dYdX source hours are left blank, never filled with Binance prices.
+The Green builder warms up the Spot model with 8,760 consecutive candles.
+The Purple builder uses that archive and writes a small signal sidecar for
+the same period, without duplicating the dYdX history. Missing dYdX source
+hours are left blank, never filled with Binance prices.
 
 ## Legacy Protected Account Replay API
 

@@ -14,8 +14,9 @@ import {
   decentraderGapMonitor,
   fetchDydxHourlyCandlesForMarket
 } from '../services/decentraderGapMonitor';
-import { greenRetestSignals, retestFractalRows } from '../research/greenRetest';
-import { buildGreenRetestWithHistory, readGreenHistory } from '../research/greenRetestHistory';
+import { greenRetestSignals, retestFractalRows, type RetestStrategy } from '../research/greenRetest';
+import { buildGreenRetestWithHistory, readRetestHistory } from '../research/greenRetestHistory';
+import { recentPurpleRetest } from '../research/purpleRetest';
 import { purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
 import {
   coinGlassEthWhaleCollector,
@@ -887,38 +888,45 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
 
 type GreenRetestResult = ReturnType<typeof buildGreenRetestWithHistory>;
 type GreenRetestCache = { expires: number; retryAt: number; data?: GreenRetestResult; pending?: Promise<GreenRetestResult> };
-const greenRetestCaches = new Map<PurpleLineMarket, GreenRetestCache>();
+const greenRetestCaches = new Map<string, GreenRetestCache>();
 router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-retest'], async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  const rawMarket = req.path.endsWith('/btc-green-retest') ? 'BTC-USD' : req.query.market;
+  const legacyBtc = req.path.endsWith('/btc-green-retest');
+  const rawMarket = legacyBtc ? 'BTC-USD' : req.query.market;
   if (typeof rawMarket !== 'string' || !purpleLineSetupForMarket(rawMarket.toUpperCase())) {
     return res.status(400).send({ error: 'Green retest supports BTC-USD, ETH-USD, SOL-USD and ZEC-USD.' });
   }
   const market = rawMarket.toUpperCase() as PurpleLineMarket;
+  const strategy = legacyBtc ? 'green' : req.query.strategy ?? 'green';
+  if (strategy !== 'green' && strategy !== 'purple') return res.status(400).send({ error: 'Invalid retest strategy.' });
+  const mode: RetestStrategy = strategy;
+  const cacheKey = `${market}|${mode}`;
   const id = req.query.id;
   if (id !== undefined && (typeof id !== 'string' || !/^\d{13}$/.test(id))) return res.status(400).send({ error: 'Invalid trade.' });
   const now = Date.now();
   for (const [key, cache] of greenRetestCaches) {
     if (!cache.pending && Math.max(cache.expires, cache.retryAt) <= now) greenRetestCaches.delete(key);
   }
-  let cache = greenRetestCaches.get(market);
-  if (!cache) greenRetestCaches.set(market, cache = { expires: 0, retryAt: 0 });
+  let cache = greenRetestCaches.get(cacheKey);
+  if (!cache) greenRetestCaches.set(cacheKey, cache = { expires: 0, retryAt: 0 });
   try {
     if (!cache.data || cache.expires <= now) {
       if (now < cache.retryAt) throw new Error('Replay source cooling down.');
       cache.pending ??= (async () => {
-        const history = readGreenHistory(market);
+        const history = readRetestHistory(market, mode);
         try {
           const collector = openLiquidityV2CollectorForMarket(market);
           if (!collector?.getStatus().liveReplayReady) throw new Error(`${market} Spot replica is warming up.`);
           const payload = await collector.getPayload();
           const observedAt = Date.now();
-          const context = greenRetestSignals(market, payload, observedAt);
+          const green = greenRetestSignals(market, payload, observedAt);
+          if (history && green.through <= history.context.through) return buildGreenRetestWithHistory(history, undefined, mode);
+          const context = mode === 'purple' ? await recentPurpleRetest(green, observedAt) : green;
           const rows = retestFractalRows(market, await fetchDydxHourlyCandlesForMarket(market), observedAt);
-          return buildGreenRetestWithHistory(history, { context, rows });
+          return buildGreenRetestWithHistory(history, { context, rows }, mode);
         } catch (error) {
           if (!history) throw error;
-          return buildGreenRetestWithHistory(history, undefined);
+          return buildGreenRetestWithHistory(history, undefined, mode);
         }
       })().then(data => {
         cache.expires = Date.now() + 60_000;
@@ -941,7 +949,7 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
       ? summary.incompleteAt ?? summary.through : Math.min(summary.through, trade.closedAt + 9 * 3_600_000);
     return res.send({ trade, candles: candles.filter(row => row.time * 1000 >= from && row.time * 1000 < through), ...summary });
   } catch {
-    return res.status(503).send({ error: `${market} Green-retest temporarily unavailable.` });
+    return res.status(503).send({ error: `${market} ${mode} retest temporarily unavailable.` });
   }
 });
 

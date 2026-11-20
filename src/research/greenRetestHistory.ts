@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DecentraderRow } from '../services/decentraderGapMonitor';
 import { PURPLE_LINE_SETUPS, type PurpleLineMarket } from '../services/purpleLineSetup';
-import { greenRetestSignals, buildGreenRetestFromRows } from './greenRetest';
+import { buildGreenRetestFromRows, type RetestContext, type RetestStrategy } from './greenRetest';
 
 const HOUR = 3_600_000;
 const MAX_HOURS = 26_304;
 const MIN_OVERLAP_HOURS = 24;
 export const GREEN_HISTORY_VERSION = 1;
 export const GREEN_HISTORY_WARMUP_HOURS = 8760;
-type Context = ReturnType<typeof greenRetestSignals>;
+type Context = RetestContext;
 type Series = { context: Context; rows: DecentraderRow[] };
 type Direction = 'long' | 'short';
 type Candle = [open: number, high: number, low: number, close: number];
@@ -27,6 +27,34 @@ const isPrice = (value: number) => Number.isFinite(value) && value > 0;
 
 export function greenHistoryPath(market: PurpleLineMarket): string {
   return path.resolve(__dirname, `../../research-data/${PURPLE_LINE_SETUPS[market].asset.toLowerCase()}-green-retest-history.json`);
+}
+
+export function purpleHistoryPath(market: PurpleLineMarket): string {
+  return path.resolve(__dirname, `../../research-data/${PURPLE_LINE_SETUPS[market].asset.toLowerCase()}-purple-retest-signals.json`);
+}
+
+export type PurpleHistory = { version: 1; market: PurpleLineMarket; model: string; from: number; through: number;
+  entries: [closedAt: number, dailyLevels: number[]][] };
+
+export function decodePurpleHistory(green: Series, file: PurpleHistory): Series {
+  const { context } = green;
+  if (file.version !== 1 || file.market !== context.market || file.model !== PURPLE_LINE_SETUPS[context.market].modelVersion ||
+      file.from !== context.from || file.through !== context.through || !Array.isArray(file.entries)) {
+    throw new Error(`Incompatible ${context.market} Purple archive.`);
+  }
+  const greenEntries = new Map(context.signals.map(signal => [signal.closedAt * 1000, signal]));
+  const yellows = new Set(context.yellows.map(row => `${row.at}|${row.direction}`));
+  let previous = context.from;
+  const signals = file.entries.map(([at, dailyLevels]) => {
+    const signal = greenEntries.get(at);
+    if (at <= previous || !signal || !yellows.has(`${at}|${signal.direction}`) || !Array.isArray(dailyLevels) ||
+        !dailyLevels.length || dailyLevels.some((price, index) => !isPrice(price) || index > 0 && price <= dailyLevels[index - 1])) {
+      throw new Error(`Invalid ${context.market} Purple archive signal.`);
+    }
+    previous = at;
+    return { ...signal, dailyLevels };
+  });
+  return { rows: green.rows, context: { ...context, signals } };
 }
 
 export function decodeGreenHistory(market: PurpleLineMarket, file: GreenHistoryArchive, now = Date.now()): Series {
@@ -77,6 +105,13 @@ export function readGreenHistory(market: PurpleLineMarket): Series | undefined {
   }
 }
 
+export function readRetestHistory(market: PurpleLineMarket, strategy: RetestStrategy): Series | undefined {
+  const green = readGreenHistory(market);
+  if (strategy === 'green' || !green) return green;
+  try { return decodePurpleHistory(green, JSON.parse(fs.readFileSync(purpleHistoryPath(market), 'utf8'))); }
+  catch (error) { console.warn(`${market} Purple retest archive unavailable:`, (error as Error).message); }
+}
+
 function extendHistory(history: Series, recent: Series): Series | undefined {
   const { context: past } = history, { context: live } = recent;
   if (past.market !== live.market) throw new Error('Cannot combine Green retest history for different markets.');
@@ -86,7 +121,7 @@ function extendHistory(history: Series, recent: Series): Series | undefined {
   const agrees = (a: string[], b: string[]) => a.length === b.length && a.every((value, i) => value === b[i]);
   const inOverlap = (at: number) => at >= firstKnown && at <= past.through;
   const greenKeys = (c: Context) => c.signals.filter(s => inOverlap(s.closedAt * 1000))
-    .map(s => `${s.closedAt}|${s.direction}|${s.edge}|${s.close}`);
+    .map(s => `${s.closedAt}|${s.direction}|${s.edge}|${s.close}|${s.dailyLevels?.join(',') ?? ''}`);
   const yellowKeys = (c: Context) => c.yellows.filter(y => inOverlap(y.at)).map(y => `${y.at}|${y.direction}`);
   if (!agrees(greenKeys(past), greenKeys(live)) || !agrees(yellowKeys(past), yellowKeys(live))) return;
 
@@ -106,7 +141,7 @@ function extendHistory(history: Series, recent: Series): Series | undefined {
     yellows: [...past.yellows, ...live.yellows.filter(y => inExtension(y.at))] } };
 }
 
-export function buildGreenRetestWithHistory(history: Series | undefined, recent: Series | undefined) {
+export function buildGreenRetestWithHistory(history: Series | undefined, recent: Series | undefined, strategy: RetestStrategy = 'green') {
   if (!history && !recent) throw new Error('No Green retest data available.');
   const extended = history && recent && extendHistory(history, recent);
   const selected = extended || history || recent!;
@@ -114,7 +149,7 @@ export function buildGreenRetestWithHistory(history: Series | undefined, recent:
   const lastCheckedHour = result.incompleteAt ?? result.through;
   const covered = new Set(result.candles.map(row => row.time * 1000)
     .filter(at => at >= result.from && at < lastCheckedHour));
-  return { ...result, missingDydxHours: (lastCheckedHour - result.from) / HOUR - covered.size,
+  return { ...result, strategy, missingDydxHours: (lastCheckedHour - result.from) / HOUR - covered.size,
     historyCoverage: extended ? 'archive-plus-recent' : history ? 'archive-only' : 'recent-only',
     reconstructedThrough: history?.context.through };
 }

@@ -1,5 +1,6 @@
 import { greenRetestSignals, retestFractalRows, simulateGreenRetest } from '../src/research/greenRetest';
-import { buildGreenRetestWithHistory, decodeGreenHistory, readGreenHistory, type GreenHistoryArchive } from '../src/research/greenRetestHistory';
+import { buildGreenRetestWithHistory, decodeGreenHistory, readGreenHistory, readRetestHistory, type GreenHistoryArchive } from '../src/research/greenRetestHistory';
+import { purpleRetestContext } from '../src/research/purpleRetest';
 import { PURPLE_LINE_SETUPS, type PurpleLineMarket } from '../src/services/purpleLineSetup';
 
 const HOUR = 3_600_000;
@@ -136,5 +137,33 @@ describe('Green retest using current gates', () => {
     expect(replay.incompleteAt).toBeUndefined();
     expect(replay.through - replay.from).toBeGreaterThan(24 * 180 * HOUR);
     expect(replay.trades.length).toBeGreaterThan(1);
+    const purple = buildGreenRetestWithHistory(readRetestHistory(market, 'purple'), undefined, 'purple');
+    expect(purple).toMatchObject({ market, strategy: 'purple', from: replay.from, through: replay.through });
+    expect(purple.incompleteAt).toBeUndefined();
+    expect(purple.candidateCount).toBeLessThan(replay.candidateCount);
+    expect(purple.trades.length).toBeGreaterThan(1);
+    expect(purple.trades.every(trade => trade.dailyLevels?.length)).toBe(true);
+  });
+
+  test('Purple requires a directional intrusion and first confirmed Daily close break on the Green candle', () => {
+    const cutoff = at(10);
+    const signal = { time: at(9) / 1000, closedAt: cutoff / 1000, close: 115, direction: 'long' as const,
+      edge: 105, setup: 'green-line' as const };
+    const { context } = fixtures('long');
+    const green = { ...context, signals: [signal], yellows: [{ at: cutoff, direction: 'long' as const }], through: cutoff };
+    const hours = Array.from({ length: 999 }, (_, i) => ({ time: (cutoff - (999 - i) * HOUR) / 1000,
+      closed: true, open: 100, high: i >= 997 ? 116 : 102, low: 98, close: i === 998 ? 115 : 100 }));
+    const lastDaily = Date.UTC(2026, 9, 7) - 1;
+    const record = { id: 'BTCUSDT|HIGH|1', market: 'BTC-USD' as const, symbol: 'BTCUSDT', type: 'HIGH' as const,
+      price: 110, priceExact: '110', pivotAt: new Date(Date.UTC(2026, 9, 2)).toISOString(),
+      confirmedAt: new Date(Date.UTC(2026, 9, 5) - 1).toISOString(), isLatestForType: true };
+    const daily = { market: 'BTC-USD' as const, symbol: 'BTCUSDT', venue: 'Binance Spot' as const, interval: '1d' as const,
+      latestClosedCandleAt: new Date(lastDaily).toISOString(), records: [record] };
+    expect(purpleRetestContext(green, hours, daily).signals).toEqual([{ ...signal, dailyLevels: [110] }]);
+    expect(purpleRetestContext({ ...green, yellows: [{ at: cutoff, direction: 'short' }] }, hours, daily).signals).toEqual([]);
+    expect(purpleRetestContext(green, hours, { ...daily, records: [{ ...record, confirmedAt: iso(10) }] }).signals).toEqual([]);
+    const previouslyBroken = hours.map((row, i) => i === 994 ? { ...row, high: 114, close: 111 } : row);
+    expect(purpleRetestContext(green, previouslyBroken, daily).signals).toEqual([]);
+    expect(() => purpleRetestContext(green, hours, { ...daily, symbol: 'ETHUSDT' })).toThrow('Unverified');
   });
 });

@@ -7,7 +7,7 @@ function init(market) {
   const asset = market.split('-')[0];
   root.hidden = false;
   const el = id => document.getElementById(`btcReplay${id}`);
-  el('Title').textContent = `${asset} Green Retest`;
+  const title = el('Title'), strategySwitch = el('Strategy');
   const load = el('Load'), select = el('Trade'), summary = el('Summary'), events = el('Events');
   select.setAttribute('aria-label', `Gesimuleerde ${asset}-trade`);
   const picker = el('TradePicker'), totalPnl = el('TotalPnl');
@@ -25,14 +25,25 @@ function init(market) {
   const hourMs = 3_600_000;
   let chart, candles, entryPoint, exitPoint, stops, fractalMarkers, annotations, snapshot, timer, nonce = 0;
   let list, riskBudget, riskFactor = 1;
+  let strategy = 'green', listRequest = 0;
+  const strategyName = () => strategy === 'purple' ? 'Purple' : 'Green';
+  const entryColor = () => strategy === 'purple' ? '#d5a4fa' : '#68e2a6';
+  function showStrategy() {
+    root.dataset.strategy = strategy;
+    title.textContent = `${asset} ${strategyName()} Retest`;
+    legend.querySelector('.btc-replay-entry').textContent = `${strategyName()}-entry`;
+  }
+  showStrategy();
 
   async function read(id) {
-    const query = new URLSearchParams({ market });
+    const selectedStrategy = strategy;
+    const label = strategyName();
+    const query = new URLSearchParams({ market, strategy: selectedStrategy });
     if (id) query.set('id', id);
     const response = await fetch(`/open-liquidity/v2/green-retest?${query}`, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`${asset} Green-retest tijdelijk niet beschikbaar.`);
+    if (!response.ok) throw new Error(`${asset} ${label}-retest tijdelijk niet beschikbaar.`);
     const data = await response.json();
-    if (data.market !== market) throw new Error(`Onverwachte markt in de ${asset} Green-retest.`);
+    if (data.market !== market || data.strategy !== selectedStrategy) throw new Error(`Onverwachte markt of strategie in de ${asset} ${label}-retest.`);
     return data;
   }
 
@@ -116,8 +127,10 @@ function init(market) {
     const candleTime = at => Math.floor(at / hourMs) * 3600;
     const point = (at, value) => Number.isFinite(at) && Number.isFinite(value) && at < through && times.has(candleTime(at))
       ? [{ time: candleTime(at), value }] : [];
+    const color = strategy === 'purple' ? entryColor() : '#58ce92';
     candles.setData([...shown.map(row => row.time === candleTime(snapshot.trade.signalAt)
-      ? { ...row, color: '#58ce92', wickColor: '#58ce92' } : row), { time: through / 1000 }]);
+      ? { ...row, color, wickColor: color } : row), { time: through / 1000 }]);
+    entryPoint.applyOptions({ color: entryColor() });
     entryPoint.setData(point(snapshot.trade.openedAt, snapshot.trade.entryPrice));
     exitPoint.setData(point(snapshot.trade.closedAt, snapshot.trade.exitPrice));
     const trade = snapshot.trade;
@@ -135,7 +148,7 @@ function init(market) {
       position: row.type === 'HIGH' ? 'aboveBar' : 'belowBar', color: '#a9b6c8',
       shape: row.type === 'HIGH' ? 'arrowDown' : 'arrowUp', size: .55 })));
     annotations.labels = [
-      { at: trade.openedAt, label: 'E', color: '#68e2a6' },
+      { at: trade.openedAt, label: 'E', color: entryColor() },
       ...trade.yellows.map((row, index) => ({ at: row.at, label: 'Y' + (index + 1), color: '#f3d25c' })),
       ...(trade.closedAt === undefined ? [] : [{ at: trade.closedAt, label: 'X', color: '#eea9ce' }])
     ].filter(row => row.at < through || row.at === through && row.label.startsWith('Y')).sort((a, b) => a.at - b.at);
@@ -171,6 +184,7 @@ function init(market) {
       [estimate.label, estimate.value === undefined ? '—' : pnlMoney.format(estimate.value), estimate.note],
       ['Begin', `${trade.direction.toUpperCase()} · ${date.format(trade.openedAt)} · $${price.format(trade.entryPrice)}`],
       ['Gebroken gaprand', '$' + price.format(trade.gapEdge)],
+      ...(trade.dailyLevels?.length ? [['Gebroken Daily (Spot)', trade.dailyLevels.map(value => '$' + price.format(value)).join(' / ')]] : []),
       ['Sizing-SL', '$' + price.format(trade.sizingStop)],
       ['Initiële SL', '$' + price.format(trade.initialStop)],
       ['Positiegrootte (model)', `${quantity.format(trade.size * riskFactor)} ${asset}`],
@@ -197,7 +211,7 @@ function init(market) {
   function details(trade) {
     tradeSummary(trade);
     const steps = [
-      [trade.openedAt, 'E', `Green-entry · initiële SL op de dYdX-open van ${date.format(trade.signalAt)}`],
+      [trade.openedAt, 'E', `${strategyName()}-entry · initiële SL op de dYdX-open van ${date.format(trade.signalAt)}`],
       ...trade.yellows.map((row, index) => [row.at, 'Y' + (index + 1),
         (row.result === 'TIGHTENED' ? `SL naar $${price.format(row.stop)}` : `SL blijft $${price.format(row.stop)}`) +
         (row.fractal ? ` · pivot ${date.format(row.fractal.at)}, bevestigd ${date.format(row.fractal.confirmedAt)}` : '')]),
@@ -296,10 +310,11 @@ function init(market) {
 
   async function showList() {
     const request = ++nonce;
+    const listId = ++listRequest;
     pause();
     snapshot = list = undefined;
     host.hidden = playback.hidden = legend.hidden = summary.hidden = events.hidden = picker.hidden = riskControls.hidden = true;
-    status.textContent = 'Green-signalen en dYdX-candles laden...';
+    status.textContent = `${strategyName()}-signalen en dYdX-candles laden...`;
     load.disabled = true;
     try {
       const data = await read();
@@ -316,16 +331,22 @@ function init(market) {
       applyRiskScenario();
       riskControls.hidden = false;
       if (!select.options.length) {
-        status.textContent = [`Geen gesimuleerde entries · ${data.candidateCount} Green-signalen`, coverageText(data)].filter(Boolean).join(' | ');
+        status.textContent = [`Geen gesimuleerde entries · ${data.candidateCount} ${strategyName()}-signalen`, coverageText(data)].filter(Boolean).join(' | ');
         return;
       }
       picker.hidden = false;
       await showTrade();
     } catch (error) { if (request === nonce) status.textContent = error.message; }
-    finally { load.disabled = false; }
+    finally { if (listId === listRequest) load.disabled = false; }
   }
 
   load.addEventListener('click', showList);
+  strategySwitch.addEventListener('change', event => {
+    if (event.target.value !== 'green' && event.target.value !== 'purple' || strategy === event.target.value) return;
+    strategy = event.target.value;
+    showStrategy();
+    showList();
+  });
   select.addEventListener('change', showTrade);
   testRisk.addEventListener('input', applyRiskScenario);
   cursor.addEventListener('input', () => { pause(); render(true); });

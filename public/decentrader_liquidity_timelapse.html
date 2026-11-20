@@ -1601,6 +1601,10 @@
     <section class="btc-trade-replay" id="btcTradeReplay" hidden>
       <h2><span id="btcReplayTitle">Green Retest</span> <small>Gesimuleerd &middot; dYdX 1H</small></h2>
       <div class="btc-replay-controls">
+        <fieldset id="btcReplayStrategy" class="btc-replay-strategy" aria-label="Reteststrategie">
+          <label><input type="radio" name="retest-strategy" value="green" checked><span>Green</span></label>
+          <label><input type="radio" name="retest-strategy" value="purple"><span>Purple</span></label>
+        </fieldset>
         <button type="button" id="btcReplayLoad">Trades laden</button>
         <div id="btcReplayTradePicker" class="btc-replay-picker" hidden>
           <select id="btcReplayTrade" aria-label="Gesimuleerde trade"></select>

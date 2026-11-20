@@ -92,6 +92,7 @@ typings/
 !/scripts/check-btc-spot-chart.cjs
 !/scripts/check-btc-trade-replay.cjs
 !/scripts/build-green-retest-history.ts
+!/scripts/build-purple-retest-history.ts
 btc-trade-replay-*.json
 !/scripts/check-btc-manual-levels.cjs
 !/scripts/check-btc-gap-history.cjs
