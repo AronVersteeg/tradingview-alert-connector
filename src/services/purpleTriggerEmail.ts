@@ -10,7 +10,8 @@ export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entr
   const asset = market.replace('-USD', '');
   const green = 'edge' in signal;
   const purpleTrail = isBtcPurpleTrailSignal(signal);
-  const headline = `${asset} ${green ? 'GREEN' : 'PURPLE'} ${signal.direction.toUpperCase()} TRIGGERED`;
+  const atr = 'atr' in signal ? signal.atr : undefined;
+  const headline = `${asset} ${atr ? 'ATR' : green ? 'GREEN' : 'PURPLE'} ${signal.direction.toUpperCase()} TRIGGERED`;
   const signature = `${market}|GAP_DAILY|${signal.time}|${signal.direction}`;
   const intent = entry.intent?.signature === signature ? entry.intent : undefined;
   const decision = entry.decision?.signal?.time === signal.time || entry.decision?.outcome === 'ERROR' ? entry.decision : {};
@@ -35,6 +36,7 @@ export function purpleTriggerEmail(market: string, signal: SpotEntrySignal, entr
     `Signal candle open: ${btcManualTriggerTimestampNl(started)}`,
     `Signal candle close: ${btcManualTriggerTimestampNl(closed)}`,
     `Binance Spot signal close: ${signal.close}`,
+    atr ? `dYdX directional break body / prior Binance Spot ATR: ${atr.ratio.toFixed(2)}x` : '',
     ...(green ? [`Previous gap ${signal.direction === 'long' ? 'upper' : 'lower'} edge: ${signal.edge}`]
       : signal.dailyLevels.map(level => `Daily ${level.type}: ${level.price}`)),
     purpleTrail ? `Broken gap edge: ${signal.direction === 'long' ? signal.gap.upper : signal.gap.lower}` : '',

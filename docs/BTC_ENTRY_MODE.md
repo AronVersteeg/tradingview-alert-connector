@@ -12,6 +12,7 @@ This is the single authoritative BTC entry selector:
 | `green` | Binance Spot Public V2 intrusion plus a fresh close beyond the previous gap edge on the same closed 1H candle. |
 | `purple` | BTC only: Purple entry (same-hour directional intrusion, fresh gap break and fresh Daily close break), with an initial SL at the dYdX signal candle open and later same-direction Yellow-gated fractal trailing. |
 | `purple-trail` | Compatibility alias for `purple`; existing deployments keep the same Purple strategy. |
+| `atr` | Green plus a directional dYdX break body at least 2x the prior 14-hour Binance Spot ATR. Uses Green protection and trailing. |
 | `off` | No new BTC entries. Existing positions keep their original management. |
 
 Values are case-insensitive. Unknown values fail closed as `off`; status reports

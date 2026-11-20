@@ -26,8 +26,8 @@ function init(market) {
   let chart, candles, entryPoint, exitPoint, stops, fractalMarkers, annotations, snapshot, timer, nonce = 0;
   let list, riskBudget, riskFactor = 1;
   let strategy = 'green', listRequest = 0;
-  const strategyName = () => strategy === 'purple' ? 'Purple' : 'Green';
-  const entryColor = () => strategy === 'purple' ? '#d5a4fa' : '#68e2a6';
+  const strategyName = () => ({ purple: 'Purple', green: 'Green', atr: 'ATR' })[strategy];
+  const entryColor = () => ({ purple: '#d5a4fa', green: '#68e2a6', atr: '#238554' })[strategy];
   function showStrategy() {
     root.dataset.strategy = strategy;
     title.textContent = `${asset} ${strategyName()} Retest`;
@@ -127,7 +127,7 @@ function init(market) {
     const candleTime = at => Math.floor(at / hourMs) * 3600;
     const point = (at, value) => Number.isFinite(at) && Number.isFinite(value) && at < through && times.has(candleTime(at))
       ? [{ time: candleTime(at), value }] : [];
-    const color = strategy === 'purple' ? entryColor() : '#58ce92';
+    const color = strategy === 'green' ? '#58ce92' : entryColor();
     candles.setData([...shown.map(row => row.time === candleTime(snapshot.trade.signalAt)
       ? { ...row, color, wickColor: color } : row), { time: through / 1000 }]);
     entryPoint.applyOptions({ color: entryColor() });
@@ -342,7 +342,7 @@ function init(market) {
 
   load.addEventListener('click', showList);
   strategySwitch.addEventListener('change', event => {
-    if (event.target.value !== 'green' && event.target.value !== 'purple' || strategy === event.target.value) return;
+    if (!['green', 'purple', 'atr'].includes(event.target.value) || strategy === event.target.value) return;
     strategy = event.target.value;
     showStrategy();
     showList();

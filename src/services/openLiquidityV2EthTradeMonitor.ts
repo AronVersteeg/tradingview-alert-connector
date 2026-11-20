@@ -9,6 +9,7 @@ import { spotEntryModeExplicit, spotEntryModeStatus, spotManualEntryEnabled } fr
 import { SpotEntrySignal, EthEntryFuturesDelta,
   freshEthGapDailySignal, isBtcPurpleTrailSignal, withPurpleDydxBodyOpenStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
 import { evaluateGreenLineSignal, evaluateYellowIntrusionSignal, readPurpleGapBreakSignal, readGreenLineSignal } from './greenLineEntry';
+import { ATR_ENTRY_MULTIPLIER, ATR_ENTRY_PERIOD, atrEntryPasses, atrEntryReading, priorSpotAtr } from './atrEntry';
 import { PurpleLineMarket, automaticSpotEntryEnabled, purpleLineSetupForMarket, spotEntrySetup } from './purpleLineSetup';
 import { PurpleLineContinuity } from './purpleLineContinuity';
 import { PurpleTriggerEmail, purpleTriggerEmail } from './purpleTriggerEmail';
@@ -920,10 +921,10 @@ export class OpenLiquidityV2EthTradeMonitor {
   }
 
   private observeBtcRestGreen(close: number, payload: any, intrusions: ReturnType<OpenLiquidityV2EthTradeMonitor['latestSpotIntrusions']>,
-    signal?: SpotEntrySignal): void {
+    signal?: Awaited<ReturnType<typeof readGreenLineSignal>>): void {
     if (!this.btcSpotCloseShadow) return;
     try {
-      this.btcSpotCloseShadow.observeRest(close, btcGreenObservation(payload, intrusions, signal && 'edge' in signal ? signal : undefined));
+      this.btcSpotCloseShadow.observeRest(close, btcGreenObservation(payload, intrusions, signal));
     } catch (error) {
       console.warn('BTC Spot shadow comparison failed; live REST decision unchanged:', String(error));
     }
@@ -1088,7 +1089,10 @@ export class OpenLiquidityV2EthTradeMonitor {
         setup, enabled: this.gapDailyEnabled(), env: spotEntryModeStatus(this.config.market)!.env,
         source: `Binance Spot ${this.config.symbol} 1H`, rule: purple
           ? 'Same-hour directional intrusion, previous gap edge close break and fresh confirmed Daily fractal close break.'
+          : setup === 'atr-line' ? 'Green plus directional dYdX break body at least 2x the prior 14-hour Binance Spot ATR.'
           : 'Same-hour intrusion and fresh close beyond the previous gap edge.',
+        atrFilter: setup === 'atr-line' ? { period: ATR_ENTRY_PERIOD, multiplier: ATR_ENTRY_MULTIPLIER,
+          rangeSource: 'binance-spot-1h', bodySource: 'dydx-1h', excludesSignalHour: true } : undefined,
         executionMarket: this.config.market, takeProfitMode: 'trailing-only', maxEntryAgeSeconds: 300,
         initialStop: { mode: 'signal-body-open', bodyFraction: PURPLE_BODY_STOP_FRACTION, bufferPct: 0,
           trailingGate: 'later-same-direction-intrusion', trailingSignals: ['yellow'], candleSource: 'dydx-1h', sameSignalHour: true,
@@ -1276,14 +1280,15 @@ export class OpenLiquidityV2EthTradeMonitor {
     });
   }
 
-  private async getGapDailyStopPlan(account: DydxSizingAccountSnapshot, signal: SpotEntrySignal): Promise<any> {
+  private async getGapDailyStopPlan(account: DydxSizingAccountSnapshot, signal: SpotEntrySignal,
+    closedRows?: ReturnType<typeof dydxHourlyCandlesToFractalRows>): Promise<any> {
     const marketInfo = account.markets?.[this.config.market];
     if (!marketInfo || String(marketInfo.status).toUpperCase() !== 'ACTIVE') {
       throw new Error(`${this.config.market} must be ACTIVE with current dYdX market information.`);
     }
     const price = finite(marketInfo.oraclePrice);
     if (!(price > 0)) throw new Error(`No current ${this.config.market} oracle price for SL sizing.`);
-    const rows = dydxHourlyCandlesToFractalRows(await fetchDydxHourlyCandlesForMarket(this.config.market));
+    const rows = closedRows ?? dydxHourlyCandlesToFractalRows(await fetchDydxHourlyCandlesForMarket(this.config.market));
     if (rows.length < 5) throw new Error(`Not enough closed dYdX ${this.config.asset} 1H candles for the initial fractal stop.`);
     if (Date.parse(rows[rows.length - 1].timestamp) !== signal.time * 1000) {
       throw new Error(`Awaiting the signal hour in dYdX ${this.config.asset} candles before choosing the initial SL.`);
@@ -1481,8 +1486,9 @@ export class OpenLiquidityV2EthTradeMonitor {
     const close = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
     if (close <= Date.parse(entry.activatedAt) || Date.now() - close > 300_000 || entry.handledCandle === close) return;
     let signal: SpotEntrySignal | undefined;
-    const purple = spotEntrySetup(this.config.market) === 'purple-green-trail';
-    const label = purple ? 'Purple' : 'Green';
+    const setup = spotEntrySetup(this.config.market);
+    const purple = setup === 'purple-green-trail';
+    const label = purple ? 'Purple' : setup === 'atr-line' ? 'ATR' : 'Green';
     try {
       const intrusions = this.latestSpotIntrusions(payload, close);
       if (!intrusions.length) {
@@ -1490,16 +1496,36 @@ export class OpenLiquidityV2EthTradeMonitor {
         entry.decision = { outcome: 'NO_INTRUSION', candleClosedAt: new Date(close).toISOString() };
         return;
       }
-      signal = purple ? await readPurpleGapBreakSignal(this.config.market as PurpleLineMarket, payload, intrusions)
-        : await readGreenLineSignal(this.config.market as PurpleLineMarket, payload, intrusions);
-      if (!purple) this.observeBtcRestGreen(close, payload, intrusions, signal);
-      if (!signal) {
+      const green = !purple ? await readGreenLineSignal(this.config.market as PurpleLineMarket, payload, intrusions) : undefined;
+      if (!purple) this.observeBtcRestGreen(close, payload, intrusions, green);
+      const candidate = purple ? await readPurpleGapBreakSignal(this.config.market as PurpleLineMarket, payload, intrusions) : green;
+      if (!candidate) {
         entry.decision = { outcome: purple ? 'NO_PURPLE_CONFLUENCE' : 'NO_GAP_BREAK', candleClosedAt: new Date(close).toISOString() };
         return;
       }
+      let closedRows: ReturnType<typeof dydxHourlyCandlesToFractalRows> | undefined;
+      if (setup === 'atr-line') {
+        const at = candidate.time * 1000;
+        const spotAtr = priorSpotAtr(new Map(payload.frames.slice(-16).map((frame: any) => [frame.startedAtMs, frame])), at);
+        if (spotAtr === undefined) throw new Error('ATR is awaiting 14 contiguous pre-signal Binance Spot ranges.');
+        const candles = await fetchDydxHourlyCandlesForMarket(this.config.market);
+        if (candles?.some(c => !('ticker' in c) || c.ticker !== this.config.market || c.resolution !== '1HOUR')) {
+          throw new Error('ATR received an unexpected dYdX market or candle interval.');
+        }
+        closedRows = dydxHourlyCandlesToFractalRows(candles);
+        const atr = atrEntryReading(at, candidate.direction, spotAtr, closedRows.at(-1));
+        if (!atr) throw new Error('ATR is awaiting the matching closed dYdX signal hour.');
+        if (!atrEntryPasses(atr)) {
+          entry.handledCandle = close;
+          entry.decision = result.gapDailyEntry = { outcome: 'ATR_BELOW_THRESHOLD', candleClosedAt: new Date(close).toISOString(), atr };
+          return;
+        }
+        signal = { ...green!, setup: 'atr-line', atr };
+      } else signal = candidate;
       entry.decision = { outcome: 'DETECTED', signal, reason: `${label} signal detected; execution is not yet confirmed.` };
       this.capturePurpleTriggerEmail(state, signal, result);
-      await this.coordinator.exclusive(() => this.executeGapDailyEntry(state, signal, result));
+      const accepted = signal;
+      await this.coordinator.exclusive(() => this.executeGapDailyEntry(state, accepted, result, closedRows));
     } catch (error) {
       result.gapDailyEntryPending = true;
       entry.decision = { outcome: 'ERROR', at: nowNlIso(), reason: error instanceof Error ? error.message : String(error) };
@@ -1562,12 +1588,14 @@ export class OpenLiquidityV2EthTradeMonitor {
     return this.purpleEmailPromise;
   }
 
-  private async executeGapDailyEntry(state: EthMonitorState, signal: SpotEntrySignal, result: any): Promise<void> {
+  private async executeGapDailyEntry(state: EthMonitorState, signal: SpotEntrySignal, result: any,
+    closedRows?: ReturnType<typeof dydxHourlyCandlesToFractalRows>): Promise<void> {
     const entry = state.gapDailyEntry!;
     const skip = (reason: string) => { entry.decision = { outcome: 'SKIPPED', at: nowNlIso(), reason, signal }; };
     const purple = isBtcPurpleTrailSignal(signal);
-    const setupMatches = () => purple === (spotEntrySetup(this.config.market) === 'purple-green-trail');
-    const label = purple ? 'Purple' : 'Green';
+    const setup = 'setup' in signal ? signal.setup : 'green-line';
+    const setupMatches = () => setup === spotEntrySetup(this.config.market);
+    const label = purple ? 'Purple' : setup === 'atr-line' ? 'ATR' : 'Green';
     if (!this.gapDailyEnabled() || !this.enabled() || !this.autoTradeEnabled()) return skip(`${this.config.asset} entry model, monitor or pair auto-trading is disabled.`);
     if (!setupMatches() || purple && this.executor?.supportsEntrySubmissionCheckpoint !== true) return skip(`Signal setup or protected execution checkpoint does not match the ${this.config.asset} entry mode.`);
     if (!this.executor?.syncTrailingStop || !boolEnv('DECENTRADER_DYNAMIC_SL_ENABLED', true) ||
@@ -1588,7 +1616,7 @@ export class OpenLiquidityV2EthTradeMonitor {
       entry.handledCandle = signal.closedAt * 1000;
       return skip(`Existing ${this.config.asset} position; no addition or reversal.`);
     }
-    const plan = await this.getGapDailyStopPlan(account, signal);
+    const plan = await this.getGapDailyStopPlan(account, signal, closedRows);
     const signature = `${this.config.market}|GAP_DAILY|${signal.time}|${signal.direction}`;
     const orderAlert = buildDecentraderOrderAlert(plan, signature);
     Object.assign(orderAlert, { strategy: `${this.config.strategyPrefix}_gap_daily_entry`, profile: 'NO_TP',

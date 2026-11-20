@@ -13,10 +13,10 @@ export function spotEntryModeStatus(market: string) {
   const value = String(process.env[config.env] || '').trim().toLowerCase();
   const explicit = value !== '';
   const legacyGreen = ['1', 'true', 'yes', 'on'].includes(String(process.env[config.legacyEnv] || '').trim().toLowerCase());
-  const valid = !explicit || ['manual', 'green', 'purple', 'purple-trail', 'off'].includes(value);
+  const valid = !explicit || ['manual', 'green', 'atr', 'purple', 'purple-trail', 'off'].includes(value);
   const mode: BtcEntryMode = !explicit ? legacyGreen ? 'green' : 'manual'
     : value === 'purple' || value === 'purple-trail' ? 'purple'
-    : value === 'manual' || value === 'green' ? value : 'off';
+    : value === 'manual' || value === 'green' || value === 'atr' ? value : 'off';
   return { env: config.env, mode, valid, explicit, legacyFallback: !explicit, legacyEnv: config.legacyEnv,
     default: 'manual', positionManagement: 'existing owner continues; switching never changes a live position' };
 }

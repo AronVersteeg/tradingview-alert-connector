@@ -15,10 +15,11 @@ export const PURPLE_LINE_SETUPS = {
 } as const;
 
 export type PurpleLineMarket = keyof typeof PURPLE_LINE_SETUPS;
-export type SpotEntrySetup = 'green-line' | 'purple-green-trail';
+export type SpotEntrySetup = 'green-line' | 'atr-line' | 'purple-green-trail';
 
 export function spotEntrySetup(market: string): SpotEntrySetup {
-  return spotEntryModeStatus(market)?.mode === 'purple' ? 'purple-green-trail' : 'green-line';
+  const mode = spotEntryModeStatus(market)?.mode;
+  return mode === 'purple' ? 'purple-green-trail' : mode === 'atr' ? 'atr-line' : 'green-line';
 }
 
 export function purpleLineSetupForMarket(market: string) {
@@ -28,7 +29,7 @@ export function purpleLineSetupForMarket(market: string) {
 
 export function automaticSpotEntryEnabled(market: string): boolean {
   const mode = spotEntryModeStatus(market)?.mode;
-  return mode === 'green' || mode === 'purple';
+  return mode === 'green' || mode === 'purple' || mode === 'atr';
 }
 
 // Retain the existing configuration helper for compatibility.

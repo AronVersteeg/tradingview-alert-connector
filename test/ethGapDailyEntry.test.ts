@@ -419,6 +419,34 @@ describe.each(['BTC', 'ETH', 'SOL', 'ZEC'] as const)('%s purple line execution p
       });
     }
 
+    test.each([['pass', 2], ['weak', 1.99], ['missing', 2], ['wrong-market', 2]] as const)(
+      'ATR %s only trades with an exact dYdX body >= 2x the preceding Spot ATR', async (kind, ratio) => {
+        process.env[`${asset}_ENTRY_MODE`] = 'atr';
+        jest.spyOn(green, 'readGreenLineSignal').mockResolvedValue(greenSignal());
+        jest.spyOn(monitor, 'latestSpotIntrusions').mockReturnValue([{}]);
+        const { payload } = inputs();
+        payload.frames = [...Array.from({ length: 14 }, (_, i) => ({ ...payload.frames[0], startedAtMs: closeAt - (16 - i) * HOUR,
+          high: 121, low: 120, close: 120 })),
+          ...payload.frames.map((frame, i) => i === 0 ? { ...frame, high: 121, low: 120, close: 120 } : frame)];
+        (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue([115, 112, 110, 113, 116].slice(0, kind === 'missing' ? 4 : 5)
+          .map((low, i) => ({ ticker: kind === 'wrong-market' ? 'INJ-USD' : market,
+            startedAt: iso(closeAt - (5 - i) * HOUR), resolution: '1HOUR', open: String(low + 2), high: String(low + 5),
+            low: String(low), close: String(i === 4 ? 118 + ratio : low + 3) })));
+        const managed: any = state(), result: any = {};
+        await monitor.checkGapDailyEntry(managed, payload, result);
+        if (kind === 'pass') {
+          expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+          expect(orders.placeOrder.mock.calls[0][0]).toMatchObject({ market, static_sl: 118, take_profits: [],
+            gap_daily_entry: { setup: 'atr-line', atr: { spotAtr: 1, ratio: 2 } } });
+          expect(managed.gapDailyEntry.triggerEmails[0].subject).toContain(`${asset} ATR LONG TRIGGERED`);
+        } else {
+          expect(orders.placeOrder).not.toHaveBeenCalled();
+          expect(managed.gapDailyEntry.triggerEmails).toBeUndefined();
+          expect(managed.gapDailyEntry.decision.outcome).toBe(kind === 'weak' ? 'ATR_BELOW_THRESHOLD' : 'ERROR');
+          if (kind !== 'weak') expect(result.gapDailyEntryPending).toBe(true);
+        }
+      });
+
     test.each([['purple', 'long'], ['purple', 'short'], ['green', 'long'], ['green', 'short']] as const)(
       'the selected %s %s scanner dispatches only its own entry route and records the correct trigger mail', async (mode, direction) => {
         process.env[`${asset}_ENTRY_MODE`] = mode;

@@ -13,6 +13,7 @@ BTC, ETH, SOL and ZEC each have an independent selector:
 | --- | --- |
 | `purple` | Directional Spot intrusion + fresh gap-box close break + fresh confirmed Daily close break, on the same closed 1H candle. |
 | `green` | Spot intrusion + fresh gap-box close break on the same closed 1H candle; no Daily entry gate. |
+| `atr` | Green plus a same-hour dYdX body in the trade direction at least 2x the native Binance Spot ATR. ATR is the simple mean of the prior 14 hourly true ranges, excluding the break hour. Missing input never falls back to Green. |
 | `manual` | Existing manual entry plans only. Plans may still be edited or armed in other modes, but do not trigger there. |
 | `off` | No new automatic or manual entries for this pair. Existing positions keep their protection. |
 
@@ -27,7 +28,7 @@ SOL_ENTRY_MODE=green
 ZEC_ENTRY_MODE=green
 ```
 
-Set any one value to `purple`, `manual` or `off` without changing the other pairs.
+Set any one value to `purple`, `atr`, `manual` or `off` without changing the other pairs.
 Use Save and deploy in Render; these are process environment settings, not a
 dashboard toggle. This code change does not write production environment values.
 
@@ -42,7 +43,7 @@ Delay/Shadow entries, including in Manual and Off. BTC retains its existing
 default of Manual when its selector is absent.
 
 The existing `OPEN_LIQUIDITY_V2_<PAIR>_AUTO_TRADE_ENABLED` remains the execution
-kill switch for ETH/SOL/ZEC. Selecting Purple, Green or Manual never overrides
+kill switch for ETH/SOL/ZEC. Selecting Purple, Green, ATR or Manual never overrides
 an explicit false auto-trade value. BTC retains
 `DECENTRADER_AUTO_TRADE_ENABLED` as its execution master. Automatic entry monitors
 and protective SL/trailing settings must also remain enabled; Manual retains
@@ -50,9 +51,12 @@ and protective SL/trailing settings must also remain enabled; Manual retains
 
 ## Sources And Stops
 
-Both automatic modes use only the selected pair's native Binance Spot USDT 1H
+All automatic modes use only the selected pair's native Binance Spot USDT 1H
 intrusions/gaps. Purple additionally reads that same pair's Binance Spot Daily
-fractals. No pair may silently substitute BTC data or Futures for this signal.
+fractals. ATR uses dYdX only for the matching closed break body and does not
+substitute Spot for that measurement. The dark-green ATR chart overlay shows
+eligible signals, not fills; the ATR Retest applies the one-position rule.
+Neither dashboard control enables live entries.
 
 Automatic sizing and protection stay on the matching dYdX market: original
 confirmed fractal sizing, exact same-hour body-open initial SL, no TPs, and
@@ -75,12 +79,12 @@ temporarily appears flat. An unfinished EXECUTING manual plan blocks an explicit
 automatic route; an ARMED plan does not. Unreadable manual ownership evidence
 fails closed. Ownership and mode are checked again before automatic broadcast.
 
-Switching between Green and Purple starts a new activation instead of entering
+Switching automatic setups starts a new activation instead of entering
 an older signal from the previous model. Restart continuity remains keyed by
 pair, model and setup; the five-minute automatic entry freshness bound is not
 extended. Pending exchange reconciliation/stop repair continues independently.
 
-Mail uses the global entries-only policy: only confirmed Purple/Green and manual
+Mail uses the global entries-only policy: only confirmed Purple/Green/ATR and manual
 entries are delivered. Skipped, detected-only, failed, uncertain or flattened
 signals are not mailed, including old queued signals after a restart. Confirmed
 automatic messages retain the existing trigger-mail switch, retry and deduplication.

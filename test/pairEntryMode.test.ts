@@ -49,7 +49,7 @@ describe.each(['ETH', 'SOL', 'ZEC'] as const)('%s entry selector', asset => {
   });
   test.each([
     ['purple', 'purple', 'purple-green-trail', true], [' PURPLE ', 'purple', 'purple-green-trail', true],
-    ['purple-trail', 'purple', 'purple-green-trail', true], ['green', 'green', 'green-line', true],
+    ['purple-trail', 'purple', 'purple-green-trail', true], ['green', 'green', 'green-line', true], [' ATR ', 'atr', 'atr-line', true],
     ['manual', 'manual', 'green-line', false], ['off', 'off', 'green-line', false], ['typo', 'off', 'green-line', false]
   ])('%s selects %s without altering BTC or another pair', (value, expected, setup, automatic) => {
     process.env[env] = String(value);
@@ -65,7 +65,7 @@ describe.each(['ETH', 'SOL', 'ZEC'] as const)('%s entry selector', asset => {
     expect(spotEntryModeStatus('toString')).toBeUndefined();
     expect(spotEntryModeExplicit('INJ-USD')).toBe(false);
   });
-  test.each(['purple', 'green'])('%s overrides the old entry flag, but never the pair execution kill switch', mode => {
+  test.each(['purple', 'green', 'atr'])('%s overrides the old entry flag, but never the pair execution kill switch', mode => {
     process.env[env] = mode;
     process.env[`OPEN_LIQUIDITY_V2_${asset}_GAP_DAILY_ENTRY_ENABLED`] = 'false';
     expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: true, entryMode: { env, mode },
@@ -74,7 +74,7 @@ describe.each(['ETH', 'SOL', 'ZEC'] as const)('%s entry selector', asset => {
     process.env[config.autoTradeEnv] = 'false';
     expect(monitor.getStatus().autoTradeEnabled).toBe(false);
   });
-  test.each(['purple', 'green', 'off', 'typo'])('manual plans stay untouched and unread candles/mail/orders stay absent in %s', async mode => {
+  test.each(['purple', 'green', 'atr', 'off', 'typo'])('manual plans stay untouched and unread candles/mail/orders stay absent in %s', async mode => {
     const manual = new BtcManualTradeOverrideMonitor(manualTradeOverrideConfigForMarket(market)!);
     const execute = jest.fn(), mail = jest.fn(); manual.configureEntryHandler({ executeManualEntry: execute, sendManualTriggerEmail: mail });
     manual.arm({ direction: 'long', closeTrigger: 120, takeProfits: [{ price: 140, allocationPct: 100 }] });

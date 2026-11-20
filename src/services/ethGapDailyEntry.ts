@@ -2,6 +2,7 @@ import { binanceDailyFractalHistory, latestExpectedFractalClose } from './binanc
 import { binanceSpotChartFeed, ethSpotChartFeed, solSpotChartFeed, zecSpotChartFeed, SpotChartPage } from './binanceSpotChart';
 import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket } from './purpleLineSetup';
 import { ethIntrusionFuturesDeltaFeed } from './intrusionFuturesDelta';
+import type { AtrEntryReading } from './atrEntry';
 
 // These are the same pure evaluators used by the purple chart overlay.
 const { projectDailyFractals } = require('../../public/btc-spot-chart/fractals.js');
@@ -23,7 +24,8 @@ export type PurpleLineSignal = {
 export type EthGapDailySignal = PurpleLineSignal;
 export type GreenLineSignal = Omit<PurpleLineSignal, 'dailyLevels'> & { setup: 'green-line'; edge: number };
 export type BtcPurpleTrailSignal = PurpleLineSignal & { setup: 'purple-green-trail'; gap: { lower: number; upper: number; candleTime: number } };
-export type SpotEntrySignal = PurpleLineSignal | GreenLineSignal | BtcPurpleTrailSignal;
+export type AtrLineSignal = Omit<GreenLineSignal, 'setup'> & { setup: 'atr-line'; atr: AtrEntryReading };
+export type SpotEntrySignal = PurpleLineSignal | GreenLineSignal | BtcPurpleTrailSignal | AtrLineSignal;
 
 export function isBtcPurpleTrailSignal(signal: SpotEntrySignal): signal is BtcPurpleTrailSignal {
   return 'setup' in signal && signal.setup === 'purple-green-trail';

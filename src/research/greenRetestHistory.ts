@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DecentraderRow } from '../services/decentraderGapMonitor';
 import { PURPLE_LINE_SETUPS, type PurpleLineMarket } from '../services/purpleLineSetup';
-import { buildGreenRetestFromRows, type RetestContext, type RetestStrategy } from './greenRetest';
+import { buildGreenRetestFromRows, type RetestContext } from './greenRetest';
+import { ATR_ENTRY_PERIOD, atrEntryReading, atrEntryPasses, priorSpotAtr, type SpotAtrRange } from '../services/atrEntry';
 
 const HOUR = 3_600_000;
 const MAX_HOURS = 26_304;
@@ -10,7 +11,9 @@ const MIN_OVERLAP_HOURS = 24;
 export const GREEN_HISTORY_VERSION = 1;
 export const GREEN_HISTORY_WARMUP_HOURS = 8760;
 type Context = RetestContext;
-type Series = { context: Context; rows: DecentraderRow[] };
+export type RetestMode = 'green' | 'purple' | 'atr';
+type AtrMarker = { time: number; ratio: number };
+type Series = { context: Context; rows: DecentraderRow[]; atrMarkers?: AtrMarker[] };
 type Direction = 'long' | 'short';
 type Candle = [open: number, high: number, low: number, close: number];
 export type GreenHistoryArchive = {
@@ -31,6 +34,45 @@ export function greenHistoryPath(market: PurpleLineMarket): string {
 
 export function purpleHistoryPath(market: PurpleLineMarket): string {
   return path.resolve(__dirname, `../../research-data/${PURPLE_LINE_SETUPS[market].asset.toLowerCase()}-purple-retest-signals.json`);
+}
+
+export function atrHistoryPath(market: PurpleLineMarket): string {
+  return path.resolve(__dirname, `../../research-data/${PURPLE_LINE_SETUPS[market].asset.toLowerCase()}-atr-retest-ranges.json`);
+}
+
+type AtrHistory = { version: 1; market: PurpleLineMarket; model: string; from: number; through: number;
+  ranges: [closedAt: number, spotAtr: number][] };
+
+function filterAtrSeries(series: Series, atrAt: (signalAt: number) => number | undefined): Series {
+  const byHour = new Map(series.rows.map(row => [Date.parse(row.timestamp), row]));
+  const atrMarkers: AtrMarker[] = [];
+  const signals = series.context.signals.filter(signal => {
+    const at = signal.time * 1000;
+    const reading = atrEntryReading(at, signal.direction, atrAt(at), byHour.get(at));
+    if (!reading || !atrEntryPasses(reading)) return false;
+    atrMarkers.push({ time: signal.time, ratio: reading.ratio });
+    return true;
+  });
+  return { ...series, context: { ...series.context, signals }, atrMarkers };
+}
+
+export function decodeAtrHistory(green: Series, file: AtrHistory): Series {
+  const { context } = green;
+  if (file.version !== 1 || file.market !== context.market || file.model !== PURPLE_LINE_SETUPS[context.market].modelVersion ||
+      file.from !== context.from || file.through !== context.through || !Array.isArray(file.ranges) ||
+      file.ranges.length !== context.signals.length || file.ranges.some(([at, range], i) =>
+        at !== context.signals[i].closedAt * 1000 || !isPrice(range))) {
+    throw new Error(`Incompatible ${context.market} ATR archive.`);
+  }
+  const ranges = new Map(file.ranges);
+  return filterAtrSeries(green, at => ranges.get(at + HOUR));
+}
+
+export function recentAtrRetest(green: Series, frames: SpotAtrRange[]): Series {
+  const frameByHour = new Map(frames.map(frame => [frame.startedAtMs, frame]));
+  const from = green.context.from + (ATR_ENTRY_PERIOD + 1) * HOUR;
+  return filterAtrSeries({ ...green, context: { ...green.context, from,
+    signals: green.context.signals.filter(signal => signal.time * 1000 >= from) } }, at => priorSpotAtr(frameByHour, at));
 }
 
 export type PurpleHistory = { version: 1; market: PurpleLineMarket; model: string; from: number; through: number;
@@ -105,11 +147,13 @@ export function readGreenHistory(market: PurpleLineMarket): Series | undefined {
   }
 }
 
-export function readRetestHistory(market: PurpleLineMarket, strategy: RetestStrategy): Series | undefined {
+export function readRetestHistory(market: PurpleLineMarket, strategy: RetestMode): Series | undefined {
   const green = readGreenHistory(market);
   if (strategy === 'green' || !green) return green;
-  try { return decodePurpleHistory(green, JSON.parse(fs.readFileSync(purpleHistoryPath(market), 'utf8'))); }
-  catch (error) { console.warn(`${market} Purple retest archive unavailable:`, (error as Error).message); }
+  try {
+    return strategy === 'atr' ? decodeAtrHistory(green, JSON.parse(fs.readFileSync(atrHistoryPath(market), 'utf8')))
+      : decodePurpleHistory(green, JSON.parse(fs.readFileSync(purpleHistoryPath(market), 'utf8')));
+  } catch (error) { console.warn(`${market} ${strategy} retest archive unavailable:`, (error as Error).message); }
 }
 
 function extendHistory(history: Series, recent: Series): Series | undefined {
@@ -136,12 +180,14 @@ function extendHistory(history: Series, recent: Series): Series | undefined {
   }
   if (!newRows.length) return;
   const inExtension = (at: number) => at > past.through && at <= through;
-  return { rows: [...history.rows, ...newRows], context: { market: past.market, from: past.from, through,
+  return { rows: [...history.rows, ...newRows], ...(history.atrMarkers && { atrMarkers: [...history.atrMarkers,
+    ...(recent.atrMarkers ?? []).filter(marker => inExtension(marker.time * 1000 + HOUR))] }),
+    context: { market: past.market, from: past.from, through,
     signals: [...past.signals, ...live.signals.filter(s => inExtension(s.closedAt * 1000))],
     yellows: [...past.yellows, ...live.yellows.filter(y => inExtension(y.at))] } };
 }
 
-export function buildGreenRetestWithHistory(history: Series | undefined, recent: Series | undefined, strategy: RetestStrategy = 'green') {
+export function buildGreenRetestWithHistory(history: Series | undefined, recent: Series | undefined, strategy: RetestMode = 'green') {
   if (!history && !recent) throw new Error('No Green retest data available.');
   const extended = history && recent && extendHistory(history, recent);
   const selected = extended || history || recent!;
@@ -149,7 +195,7 @@ export function buildGreenRetestWithHistory(history: Series | undefined, recent:
   const lastCheckedHour = result.incompleteAt ?? result.through;
   const covered = new Set(result.candles.map(row => row.time * 1000)
     .filter(at => at >= result.from && at < lastCheckedHour));
-  return { ...result, strategy, missingDydxHours: (lastCheckedHour - result.from) / HOUR - covered.size,
+  return { ...result, strategy, atrMarkers: selected.atrMarkers, missingDydxHours: (lastCheckedHour - result.from) / HOUR - covered.size,
     historyCoverage: extended ? 'archive-plus-recent' : history ? 'archive-only' : 'recent-only',
     reconstructedThrough: history?.context.through };
 }

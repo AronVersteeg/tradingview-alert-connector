@@ -3,17 +3,17 @@ import path from 'path';
 
 export const BTC_ENTRY_MODE_ENV = 'BTC_ENTRY_MODE';
 export const BTC_PURPLE_MODE = 'purple';
-export type BtcEntryMode = 'manual' | 'green' | 'off' | typeof BTC_PURPLE_MODE;
+export type BtcEntryMode = 'manual' | 'green' | 'atr' | 'off' | typeof BTC_PURPLE_MODE;
 
 export function btcEntryMode(): BtcEntryMode {
   const value = String(process.env[BTC_ENTRY_MODE_ENV] || 'manual').trim().toLowerCase();
   if (value === BTC_PURPLE_MODE || value === 'purple-trail') return BTC_PURPLE_MODE;
-  return value === 'manual' || value === 'green' ? value : 'off';
+  return value === 'manual' || value === 'green' || value === 'atr' ? value : 'off';
 }
 
 export function btcEntryModeStatus() {
   const value = String(process.env[BTC_ENTRY_MODE_ENV] || 'manual').trim().toLowerCase();
-  return { env: BTC_ENTRY_MODE_ENV, mode: btcEntryMode(), valid: ['manual', 'green', BTC_PURPLE_MODE, 'off', 'purple-trail'].includes(value),
+  return { env: BTC_ENTRY_MODE_ENV, mode: btcEntryMode(), valid: ['manual', 'green', 'atr', BTC_PURPLE_MODE, 'off', 'purple-trail'].includes(value),
     default: 'manual', positionManagement: 'existing owner continues; switching never changes a live position' };
 }
 
