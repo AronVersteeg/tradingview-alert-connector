@@ -1,0 +1,383 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-22T15:19:07.728Z",
+  "riskBudgetUsd": 15,
+  "hypotheticalFeeBpsPerSide": 5,
+  "atr": {
+    "period": 14,
+    "threshold": 2,
+    "source": "dYdX signal body / prior Binance Spot mean true range"
+  },
+  "pairs": [
+    {
+      "asset": "BTC",
+      "market": "BTC-USD",
+      "from": "2023-11-16T15:00:00.000Z",
+      "through": "2026-11-22T15:00:00.000Z",
+      "missingDydxHours": 77,
+      "replayRestarts": [],
+      "best": "atr",
+      "strategies": {
+        "green": {
+          "candidates": 434,
+          "closed": 164,
+          "wins": 38,
+          "realizedGrossUsd": 252.26293125496545,
+          "realizedNetUsd": 165.7074902339285,
+          "maxDrawdownUsd": 99.19909010283283,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 0
+        },
+        "purple": {
+          "candidates": 115,
+          "closed": 89,
+          "wins": 24,
+          "realizedGrossUsd": 308.06236038349886,
+          "realizedNetUsd": 268.13227572061254,
+          "maxDrawdownUsd": 86.78200776105464,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 0
+        },
+        "atr": {
+          "candidates": 107,
+          "closed": 67,
+          "wins": 28,
+          "realizedGrossUsd": 401.96513944529806,
+          "realizedNetUsd": 370.1535804331225,
+          "maxDrawdownUsd": 42.009447878444064,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 2
+        },
+        "atr-purple": {
+          "candidates": 50,
+          "closed": 43,
+          "wins": 18,
+          "realizedGrossUsd": 290.79413218746254,
+          "realizedNetUsd": 271.5411811362938,
+          "maxDrawdownUsd": 46.61858760361717,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 1
+        }
+      }
+    },
+    {
+      "asset": "ETH",
+      "market": "ETH-USD",
+      "from": "2023-11-16T13:00:00.000Z",
+      "through": "2026-11-22T15:00:00.000Z",
+      "missingDydxHours": 70,
+      "replayRestarts": [
+        {
+          "at": "2025-10-10T22:00:00.000Z",
+          "resumedAt": "2025-10-10T23:00:00.000Z"
+        }
+      ],
+      "best": "atr-purple",
+      "strategies": {
+        "green": {
+          "candidates": 561,
+          "closed": 234,
+          "wins": 56,
+          "realizedGrossUsd": 4.816395796878407,
+          "realizedNetUsd": -84.49483216275925,
+          "maxDrawdownUsd": 166.6862565134773,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 1,
+          "unscorable": 0
+        },
+        "purple": {
+          "candidates": 146,
+          "closed": 108,
+          "wins": 32,
+          "realizedGrossUsd": 206.93919019932028,
+          "realizedNetUsd": 168.22876880223203,
+          "maxDrawdownUsd": 76.38278313834246,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 0
+        },
+        "atr": {
+          "candidates": 142,
+          "closed": 98,
+          "wins": 35,
+          "realizedGrossUsd": 172.04245613237617,
+          "realizedNetUsd": 138.05697194132,
+          "maxDrawdownUsd": 85.11748475412479,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 1,
+          "unscorable": 3
+        },
+        "atr-purple": {
+          "candidates": 69,
+          "closed": 54,
+          "wins": 23,
+          "realizedGrossUsd": 280.5901414610566,
+          "realizedNetUsd": 262.4462454894282,
+          "maxDrawdownUsd": 44.96065601907077,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 0
+        }
+      }
+    },
+    {
+      "asset": "INJ",
+      "market": "INJ-USD",
+      "from": "2024-03-07T16:00:00.000Z",
+      "through": "2026-11-22T15:00:00.000Z",
+      "missingDydxHours": 646,
+      "replayRestarts": [
+        {
+          "at": "2024-05-04T01:00:00.000Z",
+          "resumedAt": "2024-05-04T02:00:00.000Z"
+        },
+        {
+          "at": "2024-05-16T01:00:00.000Z",
+          "resumedAt": "2024-05-16T02:00:00.000Z"
+        },
+        {
+          "at": "2024-05-24T00:00:00.000Z",
+          "resumedAt": "2024-05-24T02:00:00.000Z"
+        },
+        {
+          "at": "2024-06-15T03:00:00.000Z",
+          "resumedAt": "2024-06-15T04:00:00.000Z"
+        },
+        {
+          "at": "2024-06-16T18:00:00.000Z",
+          "resumedAt": "2024-06-16T20:00:00.000Z"
+        },
+        {
+          "at": "2024-07-05T19:00:00.000Z",
+          "resumedAt": "2024-07-05T20:00:00.000Z"
+        },
+        {
+          "at": "2024-07-30T21:00:00.000Z",
+          "resumedAt": "2024-07-30T22:00:00.000Z"
+        },
+        {
+          "at": "2024-08-03T02:00:00.000Z",
+          "resumedAt": "2024-08-03T03:00:00.000Z"
+        },
+        {
+          "at": "2024-10-10T03:00:00.000Z",
+          "resumedAt": "2024-10-10T05:00:00.000Z"
+        },
+        {
+          "at": "2024-10-14T20:00:00.000Z",
+          "resumedAt": "2024-10-14T21:00:00.000Z"
+        },
+        {
+          "at": "2024-10-24T03:00:00.000Z",
+          "resumedAt": "2024-10-24T04:00:00.000Z"
+        },
+        {
+          "at": "2024-10-26T05:00:00.000Z",
+          "resumedAt": "2024-10-26T08:00:00.000Z"
+        },
+        {
+          "at": "2024-10-29T08:00:00.000Z",
+          "resumedAt": "2024-10-29T09:00:00.000Z"
+        },
+        {
+          "at": "2024-11-27T07:00:00.000Z",
+          "resumedAt": "2024-11-27T08:00:00.000Z"
+        },
+        {
+          "at": "2025-10-10T22:00:00.000Z",
+          "resumedAt": "2025-10-10T23:00:00.000Z"
+        },
+        {
+          "at": "2025-11-21T10:00:00.000Z",
+          "resumedAt": "2025-11-21T11:00:00.000Z"
+        }
+      ],
+      "best": "atr-purple",
+      "strategies": {
+        "green": {
+          "candidates": 1056,
+          "closed": 391,
+          "wins": 85,
+          "realizedGrossUsd": 65.76290733145433,
+          "realizedNetUsd": -56.555460576392605,
+          "maxDrawdownUsd": 200.66923500972555,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 16,
+          "unscorable": 0
+        },
+        "purple": {
+          "candidates": 154,
+          "closed": 114,
+          "wins": 32,
+          "realizedGrossUsd": -22.954224437325934,
+          "realizedNetUsd": -55.653893582115096,
+          "maxDrawdownUsd": 76.40117756726474,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 3,
+          "unscorable": 0
+        },
+        "atr": {
+          "candidates": 96,
+          "closed": 68,
+          "wins": 24,
+          "realizedGrossUsd": 22.32216636918036,
+          "realizedNetUsd": 6.963527605744053,
+          "maxDrawdownUsd": 69.11792952163846,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 2,
+          "unscorable": 9
+        },
+        "atr-purple": {
+          "candidates": 34,
+          "closed": 29,
+          "wins": 14,
+          "realizedGrossUsd": 92.2022352944642,
+          "realizedNetUsd": 86.71471476769801,
+          "maxDrawdownUsd": 44.802388000479105,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 2,
+          "unscorable": 0
+        }
+      }
+    },
+    {
+      "asset": "SOL",
+      "market": "SOL-USD",
+      "from": "2023-11-17T06:00:00.000Z",
+      "through": "2026-11-22T15:00:00.000Z",
+      "missingDydxHours": 189,
+      "replayRestarts": [
+        {
+          "at": "2025-10-10T22:00:00.000Z",
+          "resumedAt": "2025-10-10T23:00:00.000Z"
+        }
+      ],
+      "best": "purple",
+      "strategies": {
+        "green": {
+          "candidates": 819,
+          "closed": 333,
+          "wins": 73,
+          "realizedGrossUsd": -230.92978837841602,
+          "realizedNetUsd": -341.81772246660444,
+          "maxDrawdownUsd": 436.2958702803986,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 1,
+          "unscorable": 0
+        },
+        "purple": {
+          "candidates": 164,
+          "closed": 129,
+          "wins": 37,
+          "realizedGrossUsd": 115.27852398253319,
+          "realizedNetUsd": 73.76106463860356,
+          "maxDrawdownUsd": 133.011871576609,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 0
+        },
+        "atr": {
+          "candidates": 141,
+          "closed": 110,
+          "wins": 38,
+          "realizedGrossUsd": 65.52122251268929,
+          "realizedNetUsd": 33.774825577607984,
+          "maxDrawdownUsd": 155.12252977385367,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 1,
+          "unscorable": 1
+        },
+        "atr-purple": {
+          "candidates": 59,
+          "closed": 53,
+          "wins": 22,
+          "realizedGrossUsd": 71.21324397893714,
+          "realizedNetUsd": 55.159313838799065,
+          "maxDrawdownUsd": 85.4439933322922,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 0
+        }
+      }
+    },
+    {
+      "asset": "ZEC",
+      "market": "ZEC-USD",
+      "from": "2024-11-27T15:00:00.000Z",
+      "through": "2026-11-22T15:00:00.000Z",
+      "missingDydxHours": 118,
+      "replayRestarts": [],
+      "best": "green",
+      "strategies": {
+        "green": {
+          "candidates": 688,
+          "closed": 277,
+          "wins": 70,
+          "realizedGrossUsd": 586.061961392965,
+          "realizedNetUsd": 517.8579265837692,
+          "maxDrawdownUsd": 101.60963973768867,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 0
+        },
+        "purple": {
+          "candidates": 87,
+          "closed": 65,
+          "wins": 21,
+          "realizedGrossUsd": 425.7341348103013,
+          "realizedNetUsd": 411.2935443048408,
+          "maxDrawdownUsd": 78.14724827703057,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 0
+        },
+        "atr": {
+          "candidates": 97,
+          "closed": 71,
+          "wins": 26,
+          "realizedGrossUsd": 227.1271691381919,
+          "realizedNetUsd": 212.8763201364793,
+          "maxDrawdownUsd": 65.66138515402335,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 2
+        },
+        "atr-purple": {
+          "candidates": 32,
+          "closed": 28,
+          "wins": 11,
+          "realizedGrossUsd": 199.71673617072724,
+          "realizedNetUsd": 193.47102458399223,
+          "maxDrawdownUsd": 54.98948402328118,
+          "open": 0,
+          "openGrossUsd": 0,
+          "incomplete": 0,
+          "unscorable": 0
+        }
+      }
+    }
+  ]
+}
