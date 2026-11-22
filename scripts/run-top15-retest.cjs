@@ -122,6 +122,10 @@ function byCalendarYear(trades, from, through, rows) {
 
 function main(asset, dir, research, { includeIntrusionDaily = false } = {}) {
   const raw = JSON.parse(fs.readFileSync(path.join(dir, `${asset}.json`), 'utf8'));
+  return replaySource(asset, raw, research, { includeIntrusionDaily });
+}
+
+function replaySource(asset, raw, research, { includeIntrusionDaily = false } = {}) {
   if (raw.unavailable) return { asset, unavailable: raw.unavailable };
   const { ticker, symbol, start } = raw;
   const rows = dydxHourlyCandlesToFractalRows(raw.dydx.map(([startedAt, open, high, low, close, trades, orderbookMidPriceOpen, orderbookMidPriceClose]) =>
@@ -191,4 +195,4 @@ if (require.main === module) {
   const { signals, ...summary } = result;
   console.log(JSON.stringify(summary));
 }
-module.exports = { main, calcSignals };
+module.exports = { main, calcSignals, replaySource };

@@ -526,6 +526,39 @@ function advanceReplicaState(state: ReplicaReplayState, candle: SpotCandle, opti
   state.lastCandle = candle;
 }
 
+// Offline projection: use the same cohort state, without constructing chart zones.
+export function projectReplicaIntrusionsForResearch(candles: SpotCandle[], priceStepUsd: number, warmupHours: number) {
+  const options = { priceStepUsd, cohortWindowHours: COHORT_WINDOW_HOURS };
+  const state: ReplicaReplayState = { bins: new Map(), birthKeysByIndex: new Map(), previousZoneCounts: new Map(), nextIndex: 0 };
+  const rows: { timestampMs: number; left: number; right: number; imbalance: number }[] = [];
+  let left = -Infinity, right = Infinity;
+  for (let i = 0; i < candles.length; i++) {
+    const candle = candles[i];
+    const priorLeft = left, priorRight = right;
+    const check = i >= warmupHours && priorLeft > 0 && Number.isFinite(priorRight);
+    const old = new Map<string, number>();
+    if (check) for (const [key, bin] of state.bins) {
+      if (bin.price > priorLeft && bin.price < priorRight) old.set(key, bin.cohorts.length);
+    }
+    advanceReplicaState(state, candle, options);
+    if (i < warmupHours - 1) continue;
+    const reference = ohlc4(candle);
+    left = -Infinity; right = Infinity;
+    let count = 0, imbalance = 0;
+    for (const [key, bin] of state.bins) {
+      if (bin.price < reference && bin.price > left) left = bin.price;
+      if (bin.price > reference && bin.price < right) right = bin.price;
+      if (!check || bin.price <= priorLeft || bin.price >= priorRight) continue;
+      const increase = bin.cohorts.length - (old.get(key) || 0);
+      if (increase <= 0) continue;
+      count += increase;
+      imbalance += increase * bin.leverage * (bin.price - priorLeft <= priorRight - bin.price ? 1 : -1);
+    }
+    if (count > 0) rows.push({ timestampMs: candle.timestampMs, left: priorLeft, right: priorRight, imbalance });
+  }
+  return rows;
+}
+
 function* replayReplicaSnapshots(
   candles: SpotCandle[], options: ReplayOptions
 ): Generator<void, { snapshots: ReplicaSnapshot[]; state: ReplicaReplayState }> {

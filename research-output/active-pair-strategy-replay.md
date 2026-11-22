@@ -1,16 +1,19 @@
 # Active Pair Strategy Replay
 
-Updated: 2026-11-22T15:19:07.728Z
+Updated: 2026-11-22T15:51:27.856Z
 
 Assumptions: $15 risk per entry, 5 bps hypothetical fees per side, no funding or extra slippage. Every strategy is replayed separately with at most one open position per pair. Open P&L is excluded from the ranking.
 
-| Pair | Green | Purple | ATR | ATR Purple | Historical best |
-| --- | ---: | ---: | ---: | ---: | --- |
-| BTC | +$165.71 | +$268.13 | +$370.15 | +$271.54 | ATR |
-| ETH | -$84.49 | +$168.23 | +$138.06 | +$262.45 | ATR Purple |
-| INJ | -$56.56 | -$55.65 | +$6.96 | +$86.71 | ATR Purple |
-| SOL | -$341.82 | +$73.76 | +$33.77 | +$55.16 | Purple |
-| ZEC | +$517.86 | +$411.29 | +$212.88 | +$193.47 | Green |
+Simulated fills, stops and P&L use dYdX v4 hourly candles. Entry signals and the ATR reference use Binance Spot.
+Dates in the ranking are local to Europe/Amsterdam. Exact timestamps below are UTC.
+
+| Pair | Replay from | Replay through | Green | Purple | ATR | ATR Purple | Historical best |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| BTC | 16-11-2023 | 22-11-2026 | +$165.71 | +$268.13 | +$370.15 | +$271.54 | ATR |
+| ETH | 16-11-2023 | 22-11-2026 | -$84.49 | +$168.23 | +$138.06 | +$262.45 | ATR Purple |
+| INJ | 07-03-2024 | 22-11-2026 | -$56.56 | -$55.65 | +$6.96 | +$86.71 | ATR Purple |
+| SOL | 17-11-2023 | 22-11-2026 | -$341.82 | +$73.76 | +$33.77 | +$55.16 | Purple |
+| ZEC | 27-11-2024 | 22-11-2026 | +$517.86 | +$411.29 | +$212.88 | +$193.47 | Green |
 
 ## Coverage
 

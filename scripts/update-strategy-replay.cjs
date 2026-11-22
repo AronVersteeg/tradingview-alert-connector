@@ -7,12 +7,14 @@ const axios = require('axios');
 // Keep this historical study aligned with the established replay methodology.
 process.env.DECENTRADER_SL_MAX_DISTANCE_PCT = '0.3';
 
-const { main: loadReplay } = require('./run-top15-retest.cjs');
+const { replaySource } = require('./run-top15-retest.cjs');
 const { runWindow } = require('./study-btc-green-initial-stop.cjs');
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-const START = Date.UTC(2023, 10, 1);
+// dYdX Chain genesis: https://www.dydx.foundation/blog/dydx-token-mechanics
+const DYDX_GENESIS = Date.UTC(2023, 9, 26, 17);
+const GENESIS_DAY = Math.floor(DYDX_GENESIS / DAY) * DAY;
 const ATR_PERIOD = 14;
 const ATR_THRESHOLD = 2;
 const FEE_BPS_PER_SIDE = 5;
@@ -41,13 +43,15 @@ const targetThrough = requestedThrough
   : Math.floor(Date.now() / HOUR) * HOUR;
 
 const iso = (at) => new Date(at).toISOString();
+const replayDate = new Intl.DateTimeFormat('nl-NL', { timeZone: 'Europe/Amsterdam', dateStyle: 'short' });
+const localDate = (at) => replayDate.format(new Date(at));
 const money = (value) => `${value >= 0 ? '+$' : '-$'}${Math.abs(value).toFixed(2)}`;
 const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const queue = new Map();
 const nextRequest = new Map();
 
-if (!Number.isSafeInteger(targetThrough) || targetThrough % HOUR || targetThrough <= START) {
-  throw new Error('--through must be a valid closed-hour boundary after 2023-11-01.');
+if (!Number.isSafeInteger(targetThrough) || targetThrough % HOUR || targetThrough <= DYDX_GENESIS || targetThrough > Date.now()) {
+  throw new Error('--through must be a closed-hour boundary after dYdX Chain genesis and not in the future.');
 }
 
 async function get(url, params) {
@@ -111,7 +115,7 @@ function validateSpot(asset, rows, through) {
       `${asset}: malformed Spot timestamp at ${iso(at)}`);
     assert([open, high, low, close].every(value => Number.isFinite(value) && value > 0) &&
       high >= Math.max(open, close) && low <= Math.min(open, close), `${asset}: malformed Spot OHLC at ${iso(at)}`);
-    const maintenanceGap = at === BINANCE_MAINTENANCE + 2 * HOUR &&
+    const maintenanceGap = i > 0 && at === BINANCE_MAINTENANCE + 2 * HOUR &&
       (rows[i - 1][0] === BINANCE_MAINTENANCE || rows[i - 1][0] === BINANCE_MAINTENANCE - HOUR);
     if (i && at !== rows[i - 1][0] + HOUR && !maintenanceGap) {
       throw new Error(`${asset}: missing Spot hour before ${iso(at)}`);
@@ -137,20 +141,20 @@ const dydxTuple = row => [row.startedAt, row.open, row.high, row.low, row.close,
 async function bootstrap(asset, through) {
   const symbol = `${asset}USDT`;
   const ticker = `${asset}-USD`;
-  const first = await get(BINANCE, { symbol, interval: '1h', startTime: START - 365 * DAY, limit: 1 });
+  const first = await get(BINANCE, { symbol, interval: '1h', startTime: DYDX_GENESIS - 365 * DAY, limit: 1 });
   if (!first[0]) throw new Error(`${asset}: Binance Spot symbol unavailable`);
   const spotStart = +first[0][0];
   const dailyThrough = Math.floor(through / DAY) * DAY;
   const [spotSource, dailySource, dydxSource] = await Promise.all([
     binanceRows(symbol, '1h', spotStart, through, HOUR),
-    binanceRows(symbol, '1d', START - 1000 * DAY, dailyThrough, DAY),
-    dydxRows(ticker, Math.max(START - 1000 * HOUR, spotStart - 1000 * HOUR), through)
+    binanceRows(symbol, '1d', GENESIS_DAY - 1000 * DAY, dailyThrough, DAY),
+    dydxRows(ticker, DYDX_GENESIS, through)
   ]);
   const spot = spotSource.map(row => [+row[0], +row[6], +row[1], +row[2], +row[3], +row[4]]);
   const daily = dailySource.map(row => [+row[0], +row[6], row[2], row[3]]);
   validateSpot(asset, spot, through);
   validateDaily(asset, daily, dailyThrough);
-  return { asset, symbol, ticker, start: START, through, spot, daily,
+  return { asset, symbol, ticker, start: DYDX_GENESIS, through, spot, daily,
     dydx: uniqueSorted(dydxSource, row => Date.parse(row.startedAt)).map(dydxTuple) };
 }
 
@@ -233,10 +237,15 @@ function atrSignals(raw, data, signals) {
 }
 
 function replay(asset, raw) {
-  const data = loadReplay(asset, dataDir, value => value);
+  if (requestedThrough && targetThrough > raw.through) throw new Error(`${asset}: requested cutoff is not in the cache.`);
+  const through = requestedThrough ? targetThrough : raw.through;
+  const source = through === raw.through ? raw : { ...raw, through,
+    spot: raw.spot.filter(row => row[1] < through), daily: raw.daily.filter(row => row[1] < through),
+    dydx: raw.dydx.filter(row => Date.parse(row[0]) < through) };
+  const data = replaySource(asset, { ...source, start: DYDX_GENESIS }, value => value);
   if (data.unavailable) throw new Error(data.unavailable);
-  const greenAtr = atrSignals(raw, data, data.greens);
-  const purpleAtr = atrSignals(raw, data, data.purples);
+  const greenAtr = atrSignals(source, data, data.greens);
+  const purpleAtr = atrSignals(source, data, data.purples);
   const variants = [
     { id: 'green', signals: data.greens },
     { id: 'purple', signals: data.purples },
@@ -273,10 +282,12 @@ function markdown(report) {
     `Updated: ${report.updatedAt}`, '',
     `Assumptions: $${RISK_USD} risk per entry, ${FEE_BPS_PER_SIDE} bps hypothetical fees per side, no funding or extra slippage. ` +
       'Every strategy is replayed separately with at most one open position per pair. Open P&L is excluded from the ranking.', '',
-    '| Pair | Green | Purple | ATR | ATR Purple | Historical best |',
-    '| --- | ---: | ---: | ---: | ---: | --- |'
+    'Simulated fills, stops and P&L use dYdX v4 hourly candles. Entry signals and the ATR reference use Binance Spot.',
+    'Dates in the ranking are local to Europe/Amsterdam. Exact timestamps below are UTC.', '',
+    '| Pair | Replay from | Replay through | Green | Purple | ATR | ATR Purple | Historical best |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | --- |'
   ];
-  for (const pair of report.pairs) lines.push(`| ${pair.asset} | ${modes.map(mode => money(pair.strategies[mode].realizedNetUsd)).join(' | ')} | ${labels[pair.best]} |`);
+  for (const pair of report.pairs) lines.push(`| ${pair.asset} | ${localDate(pair.from)} | ${localDate(pair.through)} | ${modes.map(mode => money(pair.strategies[mode].realizedNetUsd)).join(' | ')} | ${labels[pair.best]} |`);
   lines.push('', '## Coverage', '', '| Pair | From | Through | Missing dYdX hours | Replay restarts |',
     '| --- | --- | --- | ---: | ---: |');
   for (const pair of report.pairs) lines.push(`| ${pair.asset} | ${pair.from} | ${pair.through} | ${pair.missingDydxHours} | ${pair.replayRestarts.length} |`);
@@ -313,7 +324,7 @@ async function main() {
   fs.writeFileSync(`${reportBase}.json`, `${JSON.stringify(report, null, 2)}\n`);
   fs.writeFileSync(`${reportBase}.md`, markdown(report));
   console.table(pairs.flatMap(pair => Object.entries(pair.strategies).map(([strategy, row]) => ({
-    pair: pair.asset, strategy, from: pair.from.slice(0, 10), through: pair.through.slice(0, 10),
+    pair: pair.asset, strategy, from: localDate(pair.from), through: localDate(pair.through),
     candidates: row.candidates, closed: row.closed, net: +row.realizedNetUsd.toFixed(2),
     drawdown: +row.maxDrawdownUsd.toFixed(2), incomplete: row.incomplete,
     best: strategy === pair.best ? 'YES' : ''
