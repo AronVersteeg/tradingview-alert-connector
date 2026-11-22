@@ -9,7 +9,7 @@ binanceMonthlyFractalsRouter.get('/research/binance-monthly-fractals', async (re
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
   if (!isDailyFractalMarket(market)) {
-    res.status(400).send({ ok: false, error: 'Monthly fractal history supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, PAXG-USD and XAG-USD.' });
+    res.status(400).send({ ok: false, error: 'Monthly fractal history supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, WLD-USD, PAXG-USD and XAG-USD.' });
     return;
   }
   try {

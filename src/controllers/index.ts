@@ -17,10 +17,11 @@ import {
 import { greenRetestSignals, retestFractalRows } from '../research/greenRetest';
 import { buildGreenRetestWithHistory, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
 import { recentPurpleRetest } from '../research/purpleRetest';
-import { purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
+import { PURPLE_LINE_SETUPS, purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
 import {
   coinGlassEthWhaleCollector,
   coinGlassInjWhaleCollector,
+  coinGlassWldWhaleCollector,
   coinGlassSolWhaleCollector,
   coinGlassZecWhaleCollector
 } from '../services/coinGlassEthWhaleCollector';
@@ -29,6 +30,7 @@ import {
   openLiquidityV2EthCollector,
   openLiquidityV2GoldCollector,
   openLiquidityV2InjCollector,
+  openLiquidityV2WldCollector,
   openLiquidityV2SolCollector,
   openLiquidityV2SilverCollector,
   openLiquidityV2ZecCollector
@@ -38,6 +40,7 @@ import {
   openLiquidityV2EthTradeMonitor,
   openLiquidityV2GoldIntrusionMonitor,
   openLiquidityV2InjTradeMonitor,
+  openLiquidityV2WldTradeMonitor,
   openLiquidityV2SolTradeMonitor,
   openLiquidityV2SilverIntrusionMonitor,
   openLiquidityV2ZecTradeMonitor
@@ -171,6 +174,14 @@ function configureDecentraderTradeExecutor() {
     syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
     syncTrailingStop: (alert, options) => client.syncTrailingStop(alert, options)
   });
+  openLiquidityV2WldTradeMonitor.configureTradeExecutor({
+    supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
+    getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
+    getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
+    placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
+    syncTakeProfits: (alert: any) => client.syncTakeProfits(alert),
+    syncTrailingStop: (alert, options) => client.syncTrailingStop(alert, options)
+  });
   openLiquidityV2SolTradeMonitor.configureTradeExecutor({
     supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
@@ -204,6 +215,7 @@ function configureDecentraderTradeExecutor() {
   shadowFractalMonitor.configureEntryHandler('BTC-USD', decentraderGapMonitor);
   shadowFractalMonitor.configureEntryHandler('ETH-USD', openLiquidityV2EthTradeMonitor);
   shadowFractalMonitor.configureEntryHandler('INJ-USD', openLiquidityV2InjTradeMonitor);
+  shadowFractalMonitor.configureEntryHandler('WLD-USD', openLiquidityV2WldTradeMonitor);
   shadowFractalMonitor.configureEntryHandler('SOL-USD', openLiquidityV2SolTradeMonitor);
   shadowFractalMonitor.configureEntryHandler('ZEC-USD', openLiquidityV2ZecTradeMonitor);
   shadowFractalMonitor.configureEntryHandler('PAXG-USD', openLiquidityV2GoldIntrusionMonitor);
@@ -211,6 +223,7 @@ function configureDecentraderTradeExecutor() {
   btcManualTradeOverrideMonitor.configureEntryHandler(decentraderGapMonitor);
   manualTradeOverrideMonitorForMarket('ETH-USD')?.configureEntryHandler(openLiquidityV2EthTradeMonitor);
   manualTradeOverrideMonitorForMarket('INJ-USD')?.configureEntryHandler(openLiquidityV2InjTradeMonitor);
+  manualTradeOverrideMonitorForMarket('WLD-USD')?.configureEntryHandler(openLiquidityV2WldTradeMonitor);
   manualTradeOverrideMonitorForMarket('SOL-USD')?.configureEntryHandler(openLiquidityV2SolTradeMonitor);
   manualTradeOverrideMonitorForMarket('ZEC-USD')?.configureEntryHandler(openLiquidityV2ZecTradeMonitor);
   manualTradeOverrideMonitorForMarket('PAXG-USD')?.configureEntryHandler(openLiquidityV2GoldIntrusionMonitor);
@@ -258,6 +271,7 @@ initializeExchanges()
     openLiquidityV2GoldCollector.start(135_000);
     openLiquidityV2SilverCollector.start(195_000);
     openLiquidityV2ZecCollector.start(285_000);
+    openLiquidityV2WldCollector.start(420_000);
     coinGlassEthWhaleCollector.configureObservationProvider(async () => {
       const payload = await openLiquidityV2EthCollector.getPayload();
       const frame = payload.frames?.[payload.frames.length - 1];
@@ -298,6 +312,12 @@ initializeExchanges()
       };
     });
     coinGlassZecWhaleCollector.start(315_000);
+    coinGlassWldWhaleCollector.configureObservationProvider(async () => {
+      const payload = await openLiquidityV2WldCollector.getPayload();
+      const frame = payload.frames?.[payload.frames.length - 1];
+      return { frameTimestamp: frame?.t, currentPrice: Number(frame?.price), gap: payload.gaps?.[payload.gaps.length - 1] };
+    });
+    coinGlassWldWhaleCollector.start(450_000);
     openLiquidityV2BtcIntrusionMonitor.start(15_000);
     openLiquidityV2EthTradeMonitor.start(75_000);
     openLiquidityV2InjTradeMonitor.start(105_000);
@@ -305,6 +325,7 @@ initializeExchanges()
     openLiquidityV2SilverIntrusionMonitor.start(225_000);
     openLiquidityV2SolTradeMonitor.start(255_000);
     openLiquidityV2ZecTradeMonitor.start(345_000);
+    openLiquidityV2WldTradeMonitor.start(465_000);
     binanceHourlyCloseFeed.start();
     [...manualTradeOverrideMonitors.values()].forEach((monitor, index) => monitor.start(30_000 + index * 5_000));
     shadowFractalMonitor.start(390_000);
@@ -610,7 +631,7 @@ router.get('/research/binance-daily-fractals', async (req, res) => {
     if (!isDailyFractalMarket(market)) {
       return res.status(400).send({
         ok: false,
-        error: 'Daily fractal history supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, PAXG-USD and XAG-USD.'
+        error: 'Daily fractal history supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, WLD-USD, PAXG-USD and XAG-USD.'
       });
     }
     res.setHeader('Cache-Control', 'no-store');
@@ -636,7 +657,7 @@ router.get('/research/binance-weekly-fractals', async (req, res) => {
     if (!isDailyFractalMarket(market)) {
       return res.status(400).send({
         ok: false,
-        error: 'Weekly fractal history supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, PAXG-USD and XAG-USD.'
+        error: 'Weekly fractal history supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, WLD-USD, PAXG-USD and XAG-USD.'
       });
     }
     res.setHeader('Cache-Control', 'no-store');
@@ -733,6 +754,7 @@ function openLiquidityV2CollectorForMarket(market: string) {
   if (market === 'BTC-USD') return openLiquidityV2BtcCollector;
   if (market === 'ETH-USD') return openLiquidityV2EthCollector;
   if (market === 'INJ-USD') return openLiquidityV2InjCollector;
+  if (market === 'WLD-USD') return openLiquidityV2WldCollector;
   if (market === 'SOL-USD') return openLiquidityV2SolCollector;
   if (market === 'ZEC-USD') return openLiquidityV2ZecCollector;
   if (market === 'PAXG-USD') return openLiquidityV2GoldCollector;
@@ -744,6 +766,7 @@ function openLiquidityV2MonitorForMarket(market: string) {
   if (market === 'BTC-USD') return openLiquidityV2BtcIntrusionMonitor;
   if (market === 'ETH-USD') return openLiquidityV2EthTradeMonitor;
   if (market === 'INJ-USD') return openLiquidityV2InjTradeMonitor;
+  if (market === 'WLD-USD') return openLiquidityV2WldTradeMonitor;
   if (market === 'SOL-USD') return openLiquidityV2SolTradeMonitor;
   if (market === 'ZEC-USD') return openLiquidityV2ZecTradeMonitor;
   if (market === 'PAXG-USD') return openLiquidityV2GoldIntrusionMonitor;
@@ -754,6 +777,7 @@ function openLiquidityV2MonitorForMarket(market: string) {
 function openLiquidityV2CoinGlassForMarket(market: string) {
   if (market === 'ETH-USD') return coinGlassEthWhaleCollector;
   if (market === 'INJ-USD') return coinGlassInjWhaleCollector;
+  if (market === 'WLD-USD') return coinGlassWldWhaleCollector;
   if (market === 'SOL-USD') return coinGlassSolWhaleCollector;
   if (market === 'ZEC-USD') return coinGlassZecWhaleCollector;
   return undefined;
@@ -785,7 +809,7 @@ router.get('/open-liquidity/v2/status', async (req, res) => {
   if (!collector) {
     return res.status(400).send({
       ok: false,
-      error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, PAXG-USD and XAG-USD.'
+      error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, WLD-USD, PAXG-USD and XAG-USD.'
     });
   }
   const monitor = openLiquidityV2MonitorForMarket(market);
@@ -814,7 +838,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
     if (!collector) {
       return res.status(400).send({
         ok: false,
-        error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, PAXG-USD and XAG-USD.'
+        error: 'Open Liquidity V2 supports BTC-USD, ETH-USD, INJ-USD, SOL-USD, ZEC-USD, WLD-USD, PAXG-USD and XAG-USD.'
       });
     }
     const payload = await collector.getPayload();
@@ -872,7 +896,7 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
           : coinGlassWhaleLevels.minUsd,
         maxDistanceUsd: Number.isFinite(configuredMaxDistanceUsd) && configuredMaxDistanceUsd > 0
           ? configuredMaxDistanceUsd
-          : market === 'ETH-USD' ? 15 : market === 'INJ-USD' ? 0.05 : market === 'SOL-USD' ? 1 : market === 'ZEC-USD' ? 5 : market === 'XAG-USD' ? 0.5 : 200,
+          : market === 'ETH-USD' ? 15 : market === 'INJ-USD' ? 0.05 : market === 'SOL-USD' ? 1 : market === 'ZEC-USD' ? 5 : market === 'WLD-USD' ? 0.025 : market === 'XAG-USD' ? 0.5 : 200,
         longDurationHours: Number.isFinite(configuredLongDurationHours) && configuredLongDurationHours > 0
           ? configuredLongDurationHours
           : 14 * 24
@@ -895,7 +919,7 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
   const legacyBtc = req.path.endsWith('/btc-green-retest');
   const rawMarket = legacyBtc ? 'BTC-USD' : req.query.market;
   if (typeof rawMarket !== 'string' || !purpleLineSetupForMarket(rawMarket.toUpperCase())) {
-    return res.status(400).send({ error: 'Retest supports BTC-USD, ETH-USD, INJ-USD, SOL-USD and ZEC-USD.' });
+    return res.status(400).send({ error: 'Retest supports ' + Object.keys(PURPLE_LINE_SETUPS).join(', ') + '.' });
   }
   const market = rawMarket.toUpperCase() as PurpleLineMarket;
   const strategy = legacyBtc ? 'green' : req.query.strategy ?? 'green';

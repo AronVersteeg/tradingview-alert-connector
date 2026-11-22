@@ -14,6 +14,7 @@ export const BINANCE_DAILY_FRACTAL_MARKETS = {
   'BTC-USD': { symbol: 'BTCUSDT', venue: 'Binance Spot' },
   'ETH-USD': { symbol: 'ETHUSDT', venue: 'Binance Spot' },
   'INJ-USD': { symbol: 'INJUSDT', venue: 'Binance Spot' },
+  'WLD-USD': { symbol: 'WLDUSDT', venue: 'Binance Spot' },
   'SOL-USD': { symbol: 'SOLUSDT', venue: 'Binance Spot' },
   'ZEC-USD': { symbol: 'ZECUSDT', venue: 'Binance Spot' },
   // Binance has no XAUUSDT/XAGUSDT Spot market. Do not substitute a proxy.

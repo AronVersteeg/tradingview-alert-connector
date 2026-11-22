@@ -9,7 +9,7 @@ import { withManualDydxBodyQuarterPlan } from '../src/services/dydxSignalBodySto
 const started = '2026-11-04T09:00:00.000Z', closed = '2026-11-04T10:00:00.000Z';
 const now = Date.parse(closed) + 5000;
 const templates: Record<string, any> = { ETH: v2.openLiquidityV2EthTradeMonitor, SOL: v2.openLiquidityV2SolTradeMonitor,
-  INJ: v2.openLiquidityV2InjTradeMonitor, ZEC: v2.openLiquidityV2ZecTradeMonitor,
+  INJ: v2.openLiquidityV2InjTradeMonitor, WLD: v2.openLiquidityV2WldTradeMonitor, ZEC: v2.openLiquidityV2ZecTradeMonitor,
   GOLD: v2.openLiquidityV2GoldIntrusionMonitor, SILVER: v2.openLiquidityV2SilverIntrusionMonitor };
 const marketFor = (asset: string) => templates[asset]?.config.market || 'BTC-USD';
 
@@ -47,7 +47,7 @@ describe('manual same-hour dYdX quarter-body SL', () => {
       [`OPEN_LIQUIDITY_V2_${asset}_TRADE_STATE_FILE`]: path.join(directory, `${asset}.json`),
       [`OPEN_LIQUIDITY_V2_${asset}_AUTO_TRADE_ENABLED`]: 'true',
       [`OPEN_LIQUIDITY_V2_${asset}_GAP_DAILY_ENTRY_ENABLED`]: ['ETH', 'SOL', 'ZEC'].includes(asset) ? 'true' : 'false',
-      ...(['ETH', 'SOL', 'ZEC'].includes(asset) ? { [`${asset}_ENTRY_MODE`]: 'manual' } : {})
+      ...(['ETH', 'INJ', 'SOL', 'WLD', 'ZEC'].includes(asset) ? { [`${asset}_ENTRY_MODE`]: 'manual' } : {})
     });
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});

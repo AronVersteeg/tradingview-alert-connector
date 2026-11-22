@@ -105,7 +105,7 @@ export function btcManualTriggerTimestampNl(signalCandleStartedAt: string): stri
 
 export type ManualTradeOverrideConfig = {
   market: string;
-  asset: 'BTC' | 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'GOLD' | 'SILVER';
+  asset: 'BTC' | 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'WLD' | 'GOLD' | 'SILVER';
   symbol: string;
   stateFileEnv: string;
   stateFileName: string;
@@ -115,6 +115,7 @@ const MANUAL_OVERRIDE_CONFIGS: ManualTradeOverrideConfig[] = [
   { market: 'BTC-USD', asset: 'BTC', symbol: 'BTCUSDT', stateFileEnv: 'BTC_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'btc-manual-trade-override.json' },
   { market: 'ETH-USD', asset: 'ETH', symbol: 'ETHUSDT', stateFileEnv: 'ETH_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'eth-manual-trade-override.json' },
   { market: 'INJ-USD', asset: 'INJ', symbol: 'INJUSDT', stateFileEnv: 'INJ_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'inj-manual-trade-override.json' },
+  { market: 'WLD-USD', asset: 'WLD', symbol: 'WLDUSDT', stateFileEnv: 'WLD_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'wld-manual-trade-override.json' },
   { market: 'SOL-USD', asset: 'SOL', symbol: 'SOLUSDT', stateFileEnv: 'SOL_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'sol-manual-trade-override.json' },
   { market: 'ZEC-USD', asset: 'ZEC', symbol: 'ZECUSDT', stateFileEnv: 'ZEC_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'zec-manual-trade-override.json' },
   { market: 'PAXG-USD', asset: 'GOLD', symbol: 'XAUUSDT', stateFileEnv: 'GOLD_MANUAL_TRADE_OVERRIDE_FILE', stateFileName: 'gold-manual-trade-override.json' },

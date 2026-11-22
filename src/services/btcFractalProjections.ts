@@ -80,3 +80,4 @@ export const ethFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, 
 export const solFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'SOL-USD');
 export const zecFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'ZEC-USD');
 export const injFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'INJ-USD');
+export const wldFractalProjectionFeed = new BtcFractalProjectionFeed(undefined, undefined, undefined, 'WLD-USD');

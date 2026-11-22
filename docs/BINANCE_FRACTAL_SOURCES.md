@@ -9,6 +9,7 @@ use these explicit sources:
 | ETH-USD | ETHUSDT | Spot |
 | INJ-USD | INJUSDT | Spot |
 | SOL-USD | SOLUSDT | Spot |
+| WLD-USD | WLDUSDT | Spot |
 | ZEC-USD | ZECUSDT | Spot |
 | PAXG-USD (GOLD) | XAUUSDT | Futures |
 | XAG-USD (SILVER) | XAGUSDT | Futures |

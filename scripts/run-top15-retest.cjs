@@ -7,7 +7,7 @@ const { simulateGreenRetest } = require('../src/research/greenRetest');
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const WARM = 8760, MAX_DAILY_DAYS = 999, MAX_HOURLY = 999;
-const PRODUCTION_STEPS = { BTC: 100, ETH: 5, SOL: 0.1, INJ: 0.01, ZEC: 1 };
+const PRODUCTION_STEPS = { BTC: 100, ETH: 5, SOL: 0.1, INJ: 0.01, ZEC: 1, WLD: 0.005 };
 const VERIFIED_LISTING = { TAO: Date.UTC(2024, 3, 11, 12), HYPE: Date.UTC(2026, 8, 24, 11), WLD: Date.UTC(2023, 6, 24, 9) };
 const MAINTENANCE = Date.UTC(2023, 2, 24, 12);
 const iso = at => new Date(at).toISOString();
@@ -43,8 +43,8 @@ function dailySignal(records, hourByTime, timestamp, close, direction, priorClos
 
 function calcSignals(raw, candles, step, first, through, warm = WARM, includeIntrusionDaily = false) {
   const { ticker, symbol } = raw;
-  // The replica expects a step of at least $0.01; choose equivalent price units for lower-priced research markets.
-  const scale = Math.max(1, 10 ** Math.ceil(Math.log10(0.01 / step)));
+  // Keep earlier research runs comparable; configured dashboard markets use native prices.
+  const scale = PRODUCTION_STEPS[asset] ? 1 : Math.max(1, 10 ** Math.ceil(Math.log10(0.01 / step)));
   const input = scale === 1 ? candles : candles.map(c => ({ ...c, open: c.open * scale, high: c.high * scale,
     low: c.low * scale, close: c.close * scale }));
   const spotByHour = new Map(candles.map(row => [row.timestampMs, row]));

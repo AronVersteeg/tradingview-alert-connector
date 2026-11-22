@@ -8,7 +8,8 @@
     ETHUSDT: 'binance-spot-eth-liquidation-cohorts-v2.1',
     INJUSDT: 'binance-spot-inj-liquidation-cohorts-v2.1',
     SOLUSDT: 'binance-spot-sol-liquidation-cohorts-v2.1',
-    ZECUSDT: 'binance-spot-zec-liquidation-cohorts-v2.1'
+    ZECUSDT: 'binance-spot-zec-liquidation-cohorts-v2.1',
+    WLDUSDT: 'binance-spot-wld-liquidation-cohorts-v2.1'
   });
 
   function readReplay(payload, kind = 'purple', symbol = 'BTCUSDT') {

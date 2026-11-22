@@ -1,5 +1,5 @@
 import { latestExpectedFractalClose, type DailyFractalHistorySnapshot } from '../services/binanceDailyFractalHistory';
-import { binanceSpotChartFeed, ethSpotChartFeed, injSpotChartFeed, solSpotChartFeed, zecSpotChartFeed } from '../services/binanceSpotChart';
+import { binanceSpotChartFeed, ethSpotChartFeed, injSpotChartFeed, solSpotChartFeed, wldSpotChartFeed, zecSpotChartFeed } from '../services/binanceSpotChart';
 import { readSpotDailyFractals } from '../services/ethGapDailyEntry';
 import { PURPLE_LINE_SETUPS } from '../services/purpleLineSetup';
 import type { RetestContext } from './greenRetest';
@@ -11,7 +11,7 @@ const DAY_MS = 86_400_000;
 const SPOT_CLOSED_HOURS = 999;
 const DAILY_CLOSED_DAYS = 999;
 const feeds = { 'BTC-USD': binanceSpotChartFeed, 'ETH-USD': ethSpotChartFeed,
-  'INJ-USD': injSpotChartFeed, 'SOL-USD': solSpotChartFeed, 'ZEC-USD': zecSpotChartFeed };
+  'INJ-USD': injSpotChartFeed, 'SOL-USD': solSpotChartFeed, 'ZEC-USD': zecSpotChartFeed, 'WLD-USD': wldSpotChartFeed };
 
 type Hour = { time: number; closed: boolean; open: number; high: number; low: number; close: number };
 type Daily = Pick<DailyFractalHistorySnapshot, 'symbol' | 'venue' | 'market' | 'interval' | 'stale' | 'latestClosedCandleAt' | 'records'>;

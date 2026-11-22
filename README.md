@@ -101,6 +101,8 @@ For BTC Public V2, `BTC_ENTRY_MODE=manual|purple|green|off` selects new entries 
 
 ETH, INJ, SOL and ZEC have independent `ETH_ENTRY_MODE`, `INJ_ENTRY_MODE`, `SOL_ENTRY_MODE` and `ZEC_ENTRY_MODE` selectors accepting `green`, `purple`, `atr`, `atr-purple`, `manual` or `off`. ETH, SOL and ZEC keep their legacy fallback when unset; INJ stays off for new entries until explicitly selected. Selectors never bypass the pair's auto-trade kill switch. Automatic modes share the dYdX body-open SL and Yellow-gated trailing; Manual keeps its existing stop/TP policy. See [per-pair selectors](docs/PAIR_ENTRY_MODES.md).
 
+WLD uses the same selectors via `WLD_ENTRY_MODE` and defaults to `off`. Its `/decentrader/map?source=open-v2-wld` tab uses Binance Spot `WLDUSDT` and a $0.005 gap grid; execution and replay use dYdX `WLD-USD`. Live entries also require `OPEN_LIQUIDITY_V2_WLD_AUTO_TRADE_ENABLED=true`.
+
 When auto-trading is enabled, TP prices come from the latest qualifying liquidity-map zones. TP1 front-runs the opposite gap edge; TP2+ is selected from active Decentrader histogram clusters by historical liquidity peak strength, overlap across leverage bands, 10x participation, freshness, and CoinGlass orderbook confluence before the final levels are ordered along the trade path. The selector does not use fixed max-distance staging for TP1/TP2/TP3; it applies a minimum spacing between selected analytical zones so nearby ladder noise does not crowd out stronger historical/CG levels. While a BTC position opened by this monitor is active, every monitor poll can replace only the dYdX take-profit ladder when the map changes. Unknown/manual positions, position size, direction, and stop orders are not changed by this TP-only sync.
 
 ```text
@@ -166,6 +168,7 @@ OPEN_LIQUIDITY_V2_BTC_INTRUSION_STATE_FILE=/app/data/open-liquidity-v2-btc-intru
 OPEN_LIQUIDITY_V2_ETH_ENABLED=true
 OPEN_LIQUIDITY_V2_INJ_ENABLED=true
 OPEN_LIQUIDITY_V2_SOL_ENABLED=true
+OPEN_LIQUIDITY_V2_WLD_ENABLED=true
 OPEN_LIQUIDITY_V2_ZEC_ENABLED=true
 OPEN_LIQUIDITY_V2_GOLD_ENABLED=true
 OPEN_LIQUIDITY_V2_SILVER_ENABLED=true
@@ -174,6 +177,7 @@ OPEN_LIQUIDITY_V2_HISTORY_DIR=/app/data/open-liquidity-v2
 OPEN_LIQUIDITY_V2_ETH_HISTORY_DIR=/app/data/open-liquidity-v2-eth
 OPEN_LIQUIDITY_V2_INJ_HISTORY_DIR=/app/data/open-liquidity-v2-inj
 OPEN_LIQUIDITY_V2_SOL_HISTORY_DIR=/app/data/open-liquidity-v2-sol
+OPEN_LIQUIDITY_V2_WLD_HISTORY_DIR=/app/data/open-liquidity-v2-wld
 OPEN_LIQUIDITY_V2_ZEC_HISTORY_DIR=/app/data/open-liquidity-v2-zec
 OPEN_LIQUIDITY_V2_GOLD_HISTORY_DIR=/app/data/open-liquidity-v2-gold
 OPEN_LIQUIDITY_V2_SILVER_HISTORY_DIR=/app/data/open-liquidity-v2-silver

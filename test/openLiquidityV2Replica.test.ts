@@ -81,7 +81,23 @@ describe('Public Perp V2 Binance Spot replica', () => {
     zoneDeltas: snapshots.map((snapshot) => snapshot.zoneDeltas)
   });
 
-  test.each([100, 5, 0.01, 0.1, 1])('incremental replay matches full replay at bin size %s, including expiry and rolling seeds', async (priceStepUsd) => {
+  test('preserves the WLD half-cent gap grid end to end', async () => {
+    const priceStepUsd = 0.005;
+    const candles = observations(3, .245);
+    const full = buildReplicaSnapshots(candles, { priceStepUsd });
+    const live = await IncrementalReplicaReplay.create(candles.slice(0, 2), { priceStepUsd });
+    live.append(candles[2]);
+    expect(comparable(live.snapshots)).toEqual(comparable(full));
+    const zones = full[2].zones;
+    expect(zones.length).toBeGreaterThan(0);
+    expect(zones.some(zone => Math.round(zone.price * 1000) % 10 === 5)).toBe(true);
+    for (const zone of zones) {
+      expect(zone.price / priceStepUsd).toBeCloseTo(Math.round(zone.price / priceStepUsd));
+      expect(zone.uncertaintyUsd).toBe(priceStepUsd / 2);
+    }
+  });
+
+  test.each([100, 5, 0.01, 0.005, 0.1, 1])('incremental replay matches full replay at bin size %s, including expiry and rolling seeds', async (priceStepUsd) => {
     const candles = observations(130, priceStepUsd * 600);
     const options = { frameLimit: 17, cohortWindowHours: 47, priceStepUsd };
     const live = await IncrementalReplicaReplay.create(candles.slice(0, 60), options);

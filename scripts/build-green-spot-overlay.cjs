@@ -6,7 +6,7 @@ const { replayGreenPositions } = require('../public/btc-spot-chart/green-positio
 const { readReplay } = require('../public/btc-spot-chart/historical-replay.js');
 
 const [asset, sourceFile] = process.argv.slice(2);
-assert(/^(eth|inj|sol|zec)$/.test(asset), 'Expected a supported alternative Spot asset.');
+assert(/^(eth|inj|sol|zec|wld)$/.test(asset), 'Expected a supported alternative Spot asset.');
 const root = path.join(__dirname, '..'), startAsset = asset.toUpperCase();
 const raw = JSON.parse(fs.readFileSync(sourceFile, 'utf8'));
 const archive = JSON.parse(fs.readFileSync(path.join(root, `research-data/${asset}-green-retest-history.json`), 'utf8'));

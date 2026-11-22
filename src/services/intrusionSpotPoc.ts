@@ -7,7 +7,7 @@ const BASE = 'https://api.binance.com/api/v3/';
 const HOUR = 3600, LIMIT = 1000, MAX_RECORDS = 5000;
 const METHOD = 'exact-price-base-volume';
 const ZERO = BigInt(0);
-type Symbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'SOLUSDT' | 'ZECUSDT';
+type Symbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'SOLUSDT' | 'ZECUSDT' | 'WLDUSDT';
 export type SpotPoc = {
   hour: number; startedAt: number; closedAt: number; price: number;
   volumeBase: string; priceVolumeBase: string; tradeCount: number;
@@ -84,7 +84,7 @@ export class IntrusionSpotPocFeed {
   private readonly file: () => string;
   constructor(readonly symbol: Symbol, file?: () => string,
     private readonly options: { background?: boolean; seedFile?: () => string } = {}) {
-    if (!['BTCUSDT', 'ETHUSDT', 'INJUSDT', 'SOLUSDT', 'ZECUSDT'].includes(symbol)) throw new Error('Unsupported Spot POC symbol.');
+    if (!['BTCUSDT', 'ETHUSDT', 'INJUSDT', 'SOLUSDT', 'ZECUSDT', 'WLDUSDT'].includes(symbol)) throw new Error('Unsupported Spot POC symbol.');
     this.file = file || (() => {
       const dom = String(process.env.DECENTRALIZED_DOM_HISTORY_DIR || '').trim();
       return path.join(dom ? path.dirname(dom) : path.join(process.cwd(), 'data'), `${symbol.toLowerCase()}-intrusion-spot-poc.json`);
@@ -350,3 +350,4 @@ export const ethIntrusionSpotPocFeed = new IntrusionSpotPocFeed('ETHUSDT', undef
 export const solIntrusionSpotPocFeed = new IntrusionSpotPocFeed('SOLUSDT', undefined, { background: true });
 export const zecIntrusionSpotPocFeed = new IntrusionSpotPocFeed('ZECUSDT', undefined, { background: true });
 export const injIntrusionSpotPocFeed = new IntrusionSpotPocFeed('INJUSDT', undefined, { background: true });
+export const wldIntrusionSpotPocFeed = new IntrusionSpotPocFeed('WLDUSDT', undefined, { background: true });

@@ -42,7 +42,8 @@ async function main() {
     throw new Error(`Incomplete ${market} closed Spot hours.`);
   }
   const daysTo = latestExpectedFractalClose('1d', through) + 1;
-  const daysFrom = Math.floor(from / DAY) * DAY - 999 * DAY;
+  const daysFrom = Math.max(Math.floor(from / DAY) * DAY - 999 * DAY,
+    market === 'WLD-USD' ? Date.UTC(2023, 6, 24) : 0);
   const days: ReturnType<typeof parseBinanceDailyCandles> = cache ? cache.daily.filter(([at]: number[]) => at >= daysFrom && at < daysTo)
     .map(([openTime, closeTime, high, low]: [number, number, string, string]) => ({ openTime, closeTime, high, low }))
     : parseBinanceDailyCandles(await page(setup.symbol, '1d', daysFrom, daysTo), through);

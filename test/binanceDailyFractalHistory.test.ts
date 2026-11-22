@@ -134,6 +134,7 @@ describe('Binance daily Williams fractal history', () => {
       'ETH-USD': { symbol: 'ETHUSDT', venue: 'Binance Spot' },
       'INJ-USD': { symbol: 'INJUSDT', venue: 'Binance Spot' },
       'SOL-USD': { symbol: 'SOLUSDT', venue: 'Binance Spot' },
+      'WLD-USD': { symbol: 'WLDUSDT', venue: 'Binance Spot' },
       'ZEC-USD': { symbol: 'ZECUSDT', venue: 'Binance Spot' },
       'PAXG-USD': { symbol: 'XAUUSDT', venue: 'Binance Futures' },
       'XAG-USD': { symbol: 'XAGUSDT', venue: 'Binance Futures' }
@@ -244,7 +245,7 @@ describe('Binance daily Williams fractal history', () => {
     expect(snapshot.records.length).toBeGreaterThan(0);
   });
 
-  test.each(['BTC-USD', 'ETH-USD', 'INJ-USD', 'SOL-USD', 'ZEC-USD', 'PAXG-USD', 'XAG-USD'] as const)(
+  test.each(['BTC-USD', 'ETH-USD', 'INJ-USD', 'SOL-USD', 'WLD-USD', 'ZEC-USD', 'PAXG-USD', 'XAG-USD'] as const)(
     '%s routes all three timeframes to its configured venue without changing the Williams rules', async (market) => {
       const config = BINANCE_DAILY_FRACTAL_MARKETS[market];
       const expectedUrl = config.venue === 'Binance Spot'

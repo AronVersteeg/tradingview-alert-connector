@@ -4,7 +4,7 @@ import path from 'path';
 import { LiquidityObservationArchive, archiveSourceCandles, archiveIntrusionEvidence } from '../src/services/liquidityObservationArchive';
 import { ReplicaGapArchive, readGapArchiveMonth } from '../src/services/replicaGapArchive';
 import { openLiquidityV2BtcCollector, openLiquidityV2EthCollector, openLiquidityV2InjCollector, openLiquidityV2SolCollector,
-  openLiquidityV2ZecCollector, openLiquidityV2GoldCollector, openLiquidityV2SilverCollector, buildReplicaSnapshots } from '../src/services/openLiquidityV2Replica';
+  openLiquidityV2ZecCollector, openLiquidityV2WldCollector, openLiquidityV2GoldCollector, openLiquidityV2SilverCollector, buildReplicaSnapshots } from '../src/services/openLiquidityV2Replica';
 
 const base = Date.parse('2026-08-19T00:00:00Z'), hour = 3_600_000;
 const identity = { market: 'BTC-USD', symbol: 'BTCUSDT', source: 'binance-spot', modelVersion: 'archive-test' };
@@ -162,10 +162,10 @@ describe('Durable, independent liquidity evidence archive', () => {
 
   test('every pair has its own source identity, model parameters and archive regardless of auto trading', () => {
     const collectors = [openLiquidityV2BtcCollector, openLiquidityV2EthCollector, openLiquidityV2InjCollector,
-      openLiquidityV2SolCollector, openLiquidityV2ZecCollector, openLiquidityV2GoldCollector, openLiquidityV2SilverCollector];
+      openLiquidityV2SolCollector, openLiquidityV2ZecCollector, openLiquidityV2WldCollector, openLiquidityV2GoldCollector, openLiquidityV2SilverCollector];
     const locations = collectors.map(collector => collector.observationArchive());
-    expect(new Set(locations.map(location => location.directory)).size).toBe(7);
-    expect(locations.map(location => location.identity.market)).toEqual(['BTC-USD', 'ETH-USD', 'INJ-USD', 'SOL-USD', 'ZEC-USD', 'PAXG-USD', 'XAG-USD']);
+    expect(new Set(locations.map(location => location.directory)).size).toBe(collectors.length);
+    expect(locations.map(location => location.identity.market)).toEqual(['BTC-USD', 'ETH-USD', 'INJ-USD', 'SOL-USD', 'ZEC-USD', 'WLD-USD', 'PAXG-USD', 'XAG-USD']);
     expect(locations.every(location => location.identity.cohortWindowHours === 8760 && location.identity.priceStepUsd! > 0)).toBe(true);
     expect(locations.slice(-2).every(location => location.identity.source === 'binance-futures')).toBe(true);
   });

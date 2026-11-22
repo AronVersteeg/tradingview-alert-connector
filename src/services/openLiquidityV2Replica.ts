@@ -37,14 +37,14 @@ function memoryUsageMb(): { rss: number; heapUsed: number; heapTotal: number } {
   };
 }
 
-type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD' | 'SOL-USD' | 'ZEC-USD' | 'PAXG-USD' | 'XAG-USD';
-type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'SOLUSDT' | 'ZECUSDT' | 'XAUUSDT' | 'PAXGUSDT' | 'XAGUSDT';
+type ReplicaMarket = 'BTC-USD' | 'ETH-USD' | 'INJ-USD' | 'SOL-USD' | 'ZEC-USD' | 'WLD-USD' | 'PAXG-USD' | 'XAG-USD';
+type ReplicaSymbol = 'BTCUSDT' | 'ETHUSDT' | 'INJUSDT' | 'SOLUSDT' | 'ZECUSDT' | 'WLDUSDT' | 'XAUUSDT' | 'PAXGUSDT' | 'XAGUSDT';
 type ReplicaVenue = 'spot' | 'futures';
 
 type ReplicaMarketConfig = {
   market: ReplicaMarket;
   symbol: ReplicaSymbol;
-  asset: 'BTC' | 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'GOLD' | 'SILVER';
+  asset: 'BTC' | 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'WLD' | 'GOLD' | 'SILVER';
   modelVersion: string;
   priceStepUsd: number;
   historyDirectoryName: string;
@@ -86,6 +86,17 @@ const INJ_CONFIG: ReplicaMarketConfig = {
   historyDirectoryName: 'open-liquidity-v2-inj',
   historyEnv: 'OPEN_LIQUIDITY_V2_INJ_HISTORY_DIR',
   enabledEnv: 'OPEN_LIQUIDITY_V2_INJ_ENABLED'
+};
+
+const WLD_CONFIG: ReplicaMarketConfig = {
+  market: 'WLD-USD',
+  symbol: 'WLDUSDT',
+  asset: 'WLD',
+  modelVersion: 'binance-spot-wld-liquidation-cohorts-v2.1',
+  priceStepUsd: 0.005,
+  historyDirectoryName: 'open-liquidity-v2-wld',
+  historyEnv: 'OPEN_LIQUIDITY_V2_WLD_HISTORY_DIR',
+  enabledEnv: 'OPEN_LIQUIDITY_V2_WLD_ENABLED'
 };
 
 const SOL_CONFIG: ReplicaMarketConfig = {
@@ -477,7 +488,7 @@ function replicaSnapshot(
   options: ReplayOptions,
   first: boolean
 ): ReplicaSnapshot {
-  const priceStepUsd = Math.max(0.01, finite(options.priceStepUsd) || BTC_CONFIG.priceStepUsd);
+  const priceStepUsd = Math.max(0.0001, finite(options.priceStepUsd) || BTC_CONFIG.priceStepUsd);
   const sourceLabel = options.sourceLabel || 'binance-spot';
   const allZones = [...state.bins.values()].map((bin) => zoneFromBin(bin, priceStepUsd, sourceLabel));
   const referencePrice = ohlc4(candle);
@@ -518,7 +529,7 @@ function replicaSnapshot(
 }
 
 function advanceReplicaState(state: ReplicaReplayState, candle: SpotCandle, options: ReplayOptions): void {
-  const step = Math.max(0.01, finite(options.priceStepUsd) || BTC_CONFIG.priceStepUsd);
+  const step = Math.max(0.0001, finite(options.priceStepUsd) || BTC_CONFIG.priceStepUsd);
   sweepBins(state.bins, candle, step);
   expireBirths(state.bins, state.birthKeysByIndex, state.nextIndex - options.cohortWindowHours!);
   addCandleCohorts(state.bins, state.birthKeysByIndex, candle, state.nextIndex, step);
@@ -1320,6 +1331,7 @@ export class OpenLiquidityV2ReplicaCollector {
 export const openLiquidityV2BtcCollector = new OpenLiquidityV2ReplicaCollector(BTC_CONFIG);
 export const openLiquidityV2EthCollector = new OpenLiquidityV2ReplicaCollector(ETH_CONFIG);
 export const openLiquidityV2InjCollector = new OpenLiquidityV2ReplicaCollector(INJ_CONFIG);
+export const openLiquidityV2WldCollector = new OpenLiquidityV2ReplicaCollector(WLD_CONFIG);
 export const openLiquidityV2SolCollector = new OpenLiquidityV2ReplicaCollector(SOL_CONFIG);
 export const openLiquidityV2ZecCollector = new OpenLiquidityV2ReplicaCollector(ZEC_CONFIG);
 export const openLiquidityV2GoldCollector = new OpenLiquidityV2ReplicaCollector(GOLD_CONFIG);

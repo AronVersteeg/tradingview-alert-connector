@@ -6,13 +6,13 @@ import { spotEntryModeStatus, spotEntryModeExplicit, spotManualEntryEnabled } fr
 import { automaticSpotEntryEnabled, spotEntrySetup } from '../src/services/purpleLineSetup';
 import { BtcManualTradeOverrideMonitor, manualTradeOverrideConfigForMarket } from '../src/services/btcManualTradeOverride';
 import { OpenLiquidityV2EthTradeMonitor, openLiquidityV2EthTradeMonitor, openLiquidityV2InjTradeMonitor,
-  openLiquidityV2SolTradeMonitor, openLiquidityV2ZecTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
+  openLiquidityV2SolTradeMonitor, openLiquidityV2WldTradeMonitor, openLiquidityV2ZecTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
 import * as gap from '../src/services/decentraderGapMonitor';
 
-describe.each(['ETH', 'INJ', 'SOL', 'ZEC'] as const)('%s entry selector', asset => {
+describe.each(['ETH', 'INJ', 'SOL', 'WLD', 'ZEC'] as const)('%s entry selector', asset => {
   const originalEnv = { ...process.env }, market = `${asset}-USD`, env = `${asset}_ENTRY_MODE`;
   const configured = { ETH: openLiquidityV2EthTradeMonitor, INJ: openLiquidityV2InjTradeMonitor,
-    SOL: openLiquidityV2SolTradeMonitor, ZEC: openLiquidityV2ZecTradeMonitor }[asset] as any;
+    SOL: openLiquidityV2SolTradeMonitor, WLD: openLiquidityV2WldTradeMonitor, ZEC: openLiquidityV2ZecTradeMonitor }[asset] as any;
   const config = configured.config;
   const hour = Date.parse('2026-11-19T12:00:00Z');
   let directory: string, file: string, plans: string, monitor: any, orders: any;
@@ -20,7 +20,7 @@ describe.each(['ETH', 'INJ', 'SOL', 'ZEC'] as const)('%s entry selector', asset 
     jest.useFakeTimers(); jest.setSystemTime(hour + 5000);
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pair-entry-mode-'));
     file = path.join(directory, 'position.json'); plans = path.join(directory, 'plans.json');
-    for (const pair of ['ETH', 'INJ', 'SOL', 'ZEC']) delete process.env[`${pair}_ENTRY_MODE`];
+    for (const pair of ['ETH', 'INJ', 'SOL', 'WLD', 'ZEC']) delete process.env[`${pair}_ENTRY_MODE`];
     Object.assign(process.env, { BTC_ENTRY_MODE: 'green', [config.stateFileEnv]: file,
       [`${asset}_MANUAL_TRADE_OVERRIDE_FILE`]: plans, [config.enabledEnv]: 'true', [config.autoTradeEnv]: 'true',
       [`OPEN_LIQUIDITY_V2_${asset}_GAP_DAILY_ENTRY_ENABLED`]: 'true', MANUAL_ENTRY_TP_OVERRIDE_ENABLED: 'true',
@@ -42,7 +42,7 @@ describe.each(['ETH', 'INJ', 'SOL', 'ZEC'] as const)('%s entry selector', asset 
 
   test.each(['true', 'yes', '1', 'on'])('unset selector preserves the existing Green flag %s', value => {
     process.env[`OPEN_LIQUIDITY_V2_${asset}_GAP_DAILY_ENTRY_ENABLED`] = value;
-    if (asset === 'INJ') {
+    if (asset === 'INJ' || asset === 'WLD') {
       expect(monitor.getStatus()).toMatchObject({ autoTradeEnabled: false, delayEntryModelEnabled: false,
         entryMode: { env, mode: 'off', explicit: false, legacyFallback: false }, gapDailyEntry: { enabled: false } });
       expect(spotManualEntryEnabled(market)).toBe(false);

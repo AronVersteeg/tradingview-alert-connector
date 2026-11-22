@@ -3,6 +3,7 @@ import { BtcEntryMode, btcEntryModeStatus } from './btcEntryMode';
 const PAIR_MODES = {
   'ETH-USD': { env: 'ETH_ENTRY_MODE', legacyEnv: 'OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_ENABLED' },
   'INJ-USD': { env: 'INJ_ENTRY_MODE', legacyEnv: undefined },
+  'WLD-USD': { env: 'WLD_ENTRY_MODE', legacyEnv: undefined },
   'SOL-USD': { env: 'SOL_ENTRY_MODE', legacyEnv: 'OPEN_LIQUIDITY_V2_SOL_GAP_DAILY_ENTRY_ENABLED' },
   'ZEC-USD': { env: 'ZEC_ENTRY_MODE', legacyEnv: 'OPEN_LIQUIDITY_V2_ZEC_GAP_DAILY_ENTRY_ENABLED' }
 } as const;
@@ -29,6 +30,6 @@ export function spotManualEntryEnabled(market: string): boolean {
 }
 
 export function spotEntryModeExplicit(market: string): boolean {
-  // INJ has no legacy fallback: an unset selector still owns entries, in Off mode.
+  // Without a legacy fallback, an unset selector still owns entries in Off mode.
   return spotEntryModeStatus(market)?.legacyFallback === false;
 }

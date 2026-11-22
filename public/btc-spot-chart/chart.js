@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   const source = new URLSearchParams(location.search).get('source');
-  if (!['open-v2', 'open-v2-eth', 'open-v2-inj', 'open-v2-sol', 'open-v2-zec'].includes(source)) return;
+  if (!['open-v2', 'open-v2-eth', 'open-v2-inj', 'open-v2-sol', 'open-v2-zec', 'open-v2-wld'].includes(source)) return;
   const asset = source === 'open-v2' ? 'btc' : source.slice('open-v2-'.length);
   const baseAsset = asset.toUpperCase();
   const symbol = `${baseAsset}USDT`, market = `${baseAsset}-USD`;
@@ -37,7 +37,7 @@
   const byId = (id) => document.getElementById(id);
   const api = `/open-liquidity/v2/${asset}-spot-candles`;
   const streamUrls = [443, 9443].map(port => `wss://stream.binance.com:${port}/ws/${symbol.toLowerCase()}@kline_1h`);
-  const priceDigits = asset === 'inj' ? 3 : 2;
+  const priceDigits = asset === 'wld' ? 4 : asset === 'inj' ? 3 : 2;
   const money = new Intl.NumberFormat('en-US', { minimumFractionDigits: priceDigits, maximumFractionDigits: priceDigits });
   let zone = 'Europe/Amsterdam';
   let library, chart, candlesSeries, initialization;

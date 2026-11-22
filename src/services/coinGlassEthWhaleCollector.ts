@@ -13,7 +13,7 @@ import {
 } from './decentraderGapMonitor';
 
 type CoinGlassWhaleCollectorConfig = {
-  asset: 'ETH' | 'INJ' | 'SOL' | 'ZEC';
+  asset: 'ETH' | 'INJ' | 'SOL' | 'ZEC' | 'WLD';
   defaultSymbol: string;
   defaultMinUsd: number;
   defaultStrongUsd: number;
@@ -34,6 +34,14 @@ const INJ_CONFIG: CoinGlassWhaleCollectorConfig = {
   defaultMinUsd: 250_000,
   defaultStrongUsd: 1_000_000,
   historySuffix: 'inj'
+};
+
+const WLD_CONFIG: CoinGlassWhaleCollectorConfig = {
+  asset: 'WLD',
+  defaultSymbol: 'Binance_WLDUSDT',
+  defaultMinUsd: 250_000,
+  defaultStrongUsd: 1_000_000,
+  historySuffix: 'wld'
 };
 
 const SOL_CONFIG: CoinGlassWhaleCollectorConfig = {
@@ -426,5 +434,6 @@ export class CoinGlassEthWhaleCollector {
 
 export const coinGlassEthWhaleCollector = new CoinGlassEthWhaleCollector();
 export const coinGlassInjWhaleCollector = new CoinGlassEthWhaleCollector(INJ_CONFIG);
+export const coinGlassWldWhaleCollector = new CoinGlassEthWhaleCollector(WLD_CONFIG);
 export const coinGlassSolWhaleCollector = new CoinGlassEthWhaleCollector(SOL_CONFIG);
 export const coinGlassZecWhaleCollector = new CoinGlassEthWhaleCollector(ZEC_CONFIG);

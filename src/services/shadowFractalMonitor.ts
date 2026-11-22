@@ -30,6 +30,7 @@ const SHADOW_MARKETS: Array<{ market: DailyFractalMarket; asset: string; symbol:
   { market: 'INJ-USD', asset: 'INJ', symbol: 'INJUSDT' },
   { market: 'SOL-USD', asset: 'SOL', symbol: 'SOLUSDT' },
   { market: 'ZEC-USD', asset: 'ZEC', symbol: 'ZECUSDT' },
+  { market: 'WLD-USD', asset: 'WLD', symbol: 'WLDUSDT' },
   { market: 'PAXG-USD', asset: 'GOLD', symbol: 'XAUUSDT' },
   { market: 'XAG-USD', asset: 'SILVER', symbol: 'XAGUSDT' }
 ];

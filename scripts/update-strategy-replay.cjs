@@ -19,7 +19,7 @@ const ATR_PERIOD = 14;
 const ATR_THRESHOLD = 2;
 const FEE_BPS_PER_SIDE = 5;
 const RISK_USD = 15;
-const ASSETS = ['BTC', 'ETH', 'INJ', 'SOL', 'ZEC'];
+const ACTIVE_ASSETS = ['BTC', 'ETH', 'INJ', 'SOL', 'ZEC', 'WLD'];
 const BINANCE_MAINTENANCE = Date.UTC(2023, 2, 24, 12);
 const LEGACY_CACHE = path.join(os.tmpdir(), 'codex-top15-retest-20261120');
 const DEFAULT_CACHE = fs.existsSync(path.join(LEGACY_CACHE, 'BTC.json'))
@@ -35,6 +35,9 @@ const option = (name) => {
   return index >= 0 ? args[index + 1] : undefined;
 };
 const offline = args.includes('--offline');
+const requestedAsset = option('--asset')?.toUpperCase();
+if (args.includes('--asset') && !ACTIVE_ASSETS.includes(requestedAsset)) throw new Error('Unknown active --asset.');
+const ASSETS = requestedAsset ? [requestedAsset] : ACTIVE_ASSETS;
 const dataDir = path.resolve(option('--data-dir') || process.env.STRATEGY_REPLAY_DATA_DIR || DEFAULT_CACHE);
 const reportBase = path.resolve(option('--report') || DEFAULT_REPORT);
 const requestedThrough = option('--through');

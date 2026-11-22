@@ -1,5 +1,5 @@
 import { binanceDailyFractalHistory, latestExpectedFractalClose } from './binanceDailyFractalHistory';
-import { binanceSpotChartFeed, ethSpotChartFeed, injSpotChartFeed, solSpotChartFeed, zecSpotChartFeed, SpotChartPage } from './binanceSpotChart';
+import { binanceSpotChartFeed, ethSpotChartFeed, injSpotChartFeed, solSpotChartFeed, wldSpotChartFeed, zecSpotChartFeed, SpotChartPage } from './binanceSpotChart';
 import { PurpleLineMarket, purpleLineEntryEnabled, purpleLineSetupForMarket, spotSetupUsesPurple } from './purpleLineSetup';
 import { ethIntrusionFuturesDeltaFeed } from './intrusionFuturesDelta';
 import type { AtrEntryReading } from './atrEntry';
@@ -110,7 +110,7 @@ export async function readPurpleLineSignal(market: PurpleLineMarket, payload: an
   const now = Date.now();
   const daily = await readSpotDailyFractals(market, now);
   const feed = { 'BTC-USD': binanceSpotChartFeed, 'ETH-USD': ethSpotChartFeed,
-    'INJ-USD': injSpotChartFeed, 'SOL-USD': solSpotChartFeed, 'ZEC-USD': zecSpotChartFeed }[market];
+    'INJ-USD': injSpotChartFeed, 'SOL-USD': solSpotChartFeed, 'ZEC-USD': zecSpotChartFeed, 'WLD-USD': wldSpotChartFeed }[market];
   const page = await feed.page();
   return evaluatePurpleLineSignal(market, payload, intrusions, page, daily, now);
 }
