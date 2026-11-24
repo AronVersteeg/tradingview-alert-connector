@@ -54,10 +54,13 @@ export function purpleRetestContext(green: RetestContext, hours: Hour[], daily: 
 }
 
 export async function recentPurpleRetest(green: RetestContext, now: number) {
+  if (!green.signals.length) return green;
   const feed = feeds[green.market];
-  const latest = await feed.page();
-  if (!latest.candles.length) throw new Error('Spot chart history is empty.');
-  const previous = await feed.page(latest.candles[0].time * 1000);
-  const daily = await readSpotDailyFractals(green.market, now);
-  return purpleRetestContext(green, [...previous.candles, ...latest.candles], daily);
+  const [hours, daily] = await Promise.all([(async () => {
+    const latest = await feed.page();
+    if (!latest.candles.length) throw new Error('Spot chart history is empty.');
+    const previous = await feed.page(latest.candles[0].time * 1000);
+    return [...previous.candles, ...latest.candles];
+  })(), readSpotDailyFractals(green.market, now)]);
+  return purpleRetestContext(green, hours, daily);
 }

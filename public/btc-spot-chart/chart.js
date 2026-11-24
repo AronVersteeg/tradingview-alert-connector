@@ -62,6 +62,7 @@
   let gapIntrusionLayer, gapIntrusionMarkers = [];
   let visibleGapIntrusionMarkers = [];
   let gapIntrusionInputs;
+  let greenDirections, greenDirectionsRequest, greenRetryAt = 0;
   const atrOverlays = [
     { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', color: '#238554', width: 3, retryAt: 0, through: 0 },
     { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', color: '#f18ebc', width: 2, retryAt: 0, through: 0 }
@@ -93,7 +94,7 @@
   };
   desktopOrderBlockLabels.addEventListener('change', updateOrderBlockFont);
   byId('spotChartGapIntrusions').parentElement.title =
-    `Same-hour intrusion and gap close break. At most one simulated ${symbol} Spot position, with a signal-open stop and fractal trailing.`;
+    `Same-hour intrusion and gap close break in the direction of the latest earlier Purple. At most one simulated ${symbol} Spot position.`;
   byId('spotChartOrderBlocks').parentElement.title = `LuxAlgo order blocks. PV = summed unique origin-candle Spot volume in ${baseAsset}, not volume inside the price zone or resting orders. #1 = largest active cluster by PV.`;
 
   function updateOrderBlocks() {
@@ -237,10 +238,7 @@
       const payload = await response.json();
       if (destroyed) return;
       overlay.data = historicalReplay.readReplay(payload, overlay.kind, symbol);
-      if (overlay.kind === 'green') {
-        gapIntrusionInputs = undefined;
-        updateGapIntrusionMarkers();
-      } else updateHistoricalReplay(overlay);
+      updateHistoricalReplay(overlay);
     } catch {
       if (!destroyed) {
         overlay.requested = false;
@@ -258,7 +256,8 @@
     candlesSeries.attachPrimitive(overlay.layer);
   }
   function loadEnabledHistoricalReplays() {
-    for (const overlay of replayOverlays) if (byId(overlay.toggle).checked) void loadHistoricalReplay(overlay);
+    if (purpleHistory && byId(purpleHistory.toggle).checked) void loadHistoricalReplay(purpleHistory);
+    void refreshGreenDirections();
   }
 
   function updateIntrusionDailyBreakouts() {
@@ -395,20 +394,63 @@
   }
   function updateGapIntrusionMarkers() {
     if (!gapIntrusionLayer) return;
-    const now = Date.now(), hour = Math.floor(now / 3_600_000), inputs = gapIntrusionInputs;
-    if (inputs && inputs.gap === gapTimeline && inputs.history === intrusionHistory && inputs.version === closedDataVersion && inputs.hour === hour) return;
-    try {
-      gapIntrusionMarkers = intrusionDailyBreaks.buildGapIntrusionMarkers(candles, intrusionHistory, gapTimeline, now, market);
-    } catch {
-      gapIntrusionMarkers = [];
-    }
-    gapIntrusionInputs = { gap: gapTimeline, history: intrusionHistory, version: closedDataVersion, hour };
-    const cutoff = greenHistory?.data?.before;
-    // The prefiltered archive ends flat, so the recorded simulation can start there without an overlapping position.
-    visibleGapIntrusionMarkers = greenReplay.filterGreenPositions(candles,
-      cutoff ? gapIntrusionMarkers.filter(marker => marker.time >= cutoff) : gapIntrusionMarkers, hourlyBoxModel?.fractals || []);
+    const fractals = hourlyBoxModel?.fractals;
+    const last = candles.at(-1)?.time;
+    const input = gapIntrusionInputs;
+    if (input?.directions === greenDirections && input?.version === closedDataVersion && input?.last === last && input?.fractals === fractals) return;
+    gapIntrusionInputs = { directions: greenDirections, version: closedDataVersion, last, fractals };
+    const closes = new Map(candles.filter(row => row.closed).map(row => [row.time, row.close]));
+    gapIntrusionMarkers = (greenDirections?.markers || []).filter(row => closes.get(row.time) === row.close);
+    const selected = greenReplay.filterGreenPositions(candles, gapIntrusionMarkers, fractals || []);
+    const cutoff = (greenDirections?.archivedThrough ?? 0) / 1000;
+    const archived = selected.filter(row => row.closedAt <= cutoff);
+    visibleGapIntrusionMarkers = selected.filter(row => row.closedAt > cutoff);
+    greenHistory.markers = archived;
+    greenHistory.layer?.setData(archived);
     gapIntrusionLayer.setData(visibleGapIntrusionMarkers);
-    updateHistoricalReplay(greenHistory);
+    if (greenDirections) {
+      const status = byId('spotChartGreenReplayStatus');
+      const stale = greenDirections.through < Math.floor(Date.now() / 3_600_000) * 3_600_000;
+      status.textContent = `Green: ${selected.length} | t/m ${dateText(greenDirections.through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
+      status.dataset.stale = String(stale);
+    }
+  }
+
+  async function refreshGreenDirections() {
+    const toggle = byId('spotChartGapIntrusions');
+    const close = Math.floor(Date.now() / 3_600_000) * 3_600_000;
+    if (!active || !initialData || destroyed || !toggle.checked || greenDirectionsRequest || Date.now() < greenRetryAt ||
+      greenDirections?.through >= close) return;
+    const status = byId('spotChartGreenReplayStatus');
+    status.hidden = false;
+    if (greenDirections) status.dataset.stale = 'true';
+    const controller = new AbortController();
+    greenDirectionsRequest = controller;
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetch(`/open-liquidity/v2/green-continuation?market=${encodeURIComponent(market)}`,
+        { signal: controller.signal, cache: 'no-store' });
+      if (!response.ok) throw new Error('Green direction unavailable');
+      const result = await response.json();
+      if (result.market !== market || !Number.isSafeInteger(result.from) || !Number.isSafeInteger(result.through) ||
+        result.from >= result.through || !Array.isArray(result.markers) || result.markers.some(row =>
+          !Number.isSafeInteger(row.time) || row.time % 3600 !== 0 || row.closedAt !== row.time + 3600 ||
+          row.closedAt * 1000 > result.through || !['long', 'short'].includes(row.direction) ||
+          !Number.isFinite(row.close) || row.close <= 0)) throw new Error('Invalid Green direction data');
+      if (destroyed || controller.signal.aborted) return;
+      greenDirections = result;
+      greenHistory.data = { first: result.from / 1000 };
+      updateGapIntrusionMarkers();
+    } catch {
+      if (!destroyed && toggle.checked && !greenDirections) {
+        status.textContent = 'Green: richtingdata nog niet beschikbaar';
+        status.dataset.stale = 'true';
+      }
+    } finally {
+      clearTimeout(timeout);
+      greenDirectionsRequest = undefined;
+      greenRetryAt = Date.now() + 30_000;
+    }
   }
 
   function attachAtrOverlay(overlay) {
@@ -752,6 +794,7 @@
         void refreshIntrusionHistory();
         void refreshIntrusionDelta();
         void refreshIntrusionPoc();
+        void refreshGreenDirections();
         for (const overlay of atrOverlays) void refreshAtrMarkers(overlay);
         if (!lastTickAt || Date.now() - lastTickAt > 12_000) {
           if (Date.now() - lastRestAt >= 30_000) void loadRecent();
@@ -861,6 +904,7 @@
     active = inView && !document.hidden && navigator.onLine;
     if (!active) {
       deltaController?.abort(); pocController?.abort();
+      greenDirectionsRequest?.abort();
       for (const overlay of atrOverlays) overlay.controller?.abort();
       clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return;
     }
@@ -913,7 +957,9 @@
   byId('spotChartGapIntrusions').addEventListener('change', event => {
     gapIntrusionLayer?.setVisible(event.target.checked);
     greenHistory?.layer?.setVisible(event.target.checked);
-    if (event.target.checked) void loadHistoricalReplay(greenHistory);
+    byId('spotChartGreenReplayStatus').hidden = !event.target.checked;
+    if (event.target.checked) void refreshGreenDirections();
+    else greenDirectionsRequest?.abort();
   });
   for (const overlay of atrOverlays) byId(overlay.toggle).addEventListener('change', event => {
     overlay.layer?.setVisible(event.target.checked);
@@ -997,6 +1043,7 @@
   observer.observe(panel);
   window.addEventListener('pagehide', () => {
     destroyed = true;
+    greenDirectionsRequest?.abort();
     for (const overlay of atrOverlays) overlay.controller?.abort();
     deltaController?.abort();
     pocController?.abort();

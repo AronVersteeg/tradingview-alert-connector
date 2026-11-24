@@ -1,6 +1,7 @@
 import { binanceSpotChartFeed, ethSpotChartFeed, injSpotChartFeed, solSpotChartFeed, wldSpotChartFeed, zecSpotChartFeed, SpotChartPage } from './binanceSpotChart';
 import { BtcPurpleTrailSignal, GreenLineSignal, evaluatePurpleLineSignal, readSpotDailyFractals } from './ethGapDailyEntry';
 import { PurpleLineMarket, purpleLineSetupForMarket } from './purpleLineSetup';
+import { hasGreenContinuation } from '../research/greenContinuation';
 
 const { timelineFromPayload } = require('../../public/btc-spot-chart/gap-boxes.js');
 const { compactIntrusionHistory, buildGapIntrusionMarkers } = require('../../public/btc-spot-chart/intrusion-daily-breakouts.js');
@@ -61,11 +62,14 @@ export function evaluateGreenLineSignal(market: PurpleLineMarket, payload: any, 
   return marker ? { ...marker, setup: 'green-line', close: candles[1].close } : undefined;
 }
 
-export async function readGreenLineSignal(market: PurpleLineMarket, payload: any, intrusions: any[]): Promise<GreenLineSignal | undefined> {
+export async function readGreenLineSignal(market: PurpleLineMarket, payload: any, intrusions: any[],
+  observeCandidate?: (candidate?: GreenLineSignal) => void): Promise<GreenLineSignal | undefined> {
   if (!purpleLineSetupForMarket(market)) throw new Error('Unsupported Green line market.');
   const now = Date.now();
   const page = await feeds[market].page();
-  return evaluateGreenLineSignal(market, payload, intrusions, page, now);
+  const candidate = evaluateGreenLineSignal(market, payload, intrusions, page, now);
+  observeCandidate?.(candidate);
+  return candidate && await hasGreenContinuation(market, payload, candidate, now) ? candidate : undefined;
 }
 
 export async function readPurpleGapBreakSignal(market: PurpleLineMarket, payload: any, intrusions: any[]): Promise<BtcPurpleTrailSignal | undefined> {

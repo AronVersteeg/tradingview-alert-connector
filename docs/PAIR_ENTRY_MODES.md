@@ -14,7 +14,7 @@ BTC, ETH, INJ, SOL, WLD and ZEC each have an independent selector:
 | Value | New entries |
 | --- | --- |
 | `purple` | Directional Spot intrusion + fresh gap-box close break + fresh confirmed Daily close break, on the same closed 1H candle. |
-| `green` | Spot intrusion + fresh gap-box close break on the same closed 1H candle; no Daily entry gate. |
+| `green` | Spot intrusion + fresh gap-box close break on the same closed 1H candle, in the direction of the most recent Purple on an earlier candle. |
 | `atr` | Green plus a same-hour dYdX body in the trade direction at least 2x the native Binance Spot ATR. ATR is the simple mean of the prior 14 hourly true ranges, excluding the break hour. Missing input never falls back to Green. |
 | `atr-purple` | Purple plus the same 2x ATR filter. A qualifying Green or a qualifying ATR candle without a confirmed same-hour Daily break is not enough. |
 | `manual` | Existing manual entry plans only. Plans may still be edited or armed in other modes, but do not trigger there. |
@@ -56,6 +56,14 @@ and protective SL/trailing settings must also remain enabled; Manual retains
 `MANUAL_ENTRY_TP_OVERRIDE_ENABLED`.
 
 ## Sources And Stops
+
+Green and ATR are continuation modes. The latest earlier Purple sets the direction
+for that pair until an opposite Purple closes. ATR Purple also counts because it
+meets the same Purple conditions. The current candle cannot establish its own
+direction for Green. This does not depend on whether the Purple mode was selected
+or whether a trade filled. With no verified earlier Purple direction, Green and
+ATR do not signal; an unverified history gap is not bridged. The Purple, ATR Purple
+and Yellow rules, existing positions and all stop management are unchanged.
 
 All automatic modes use only the selected pair's native Binance Spot USDT 1H
 intrusions/gaps. Purple additionally reads that same pair's Binance Spot Daily

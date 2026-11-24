@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import * as entry from '../src/services/ethGapDailyEntry';
 import * as green from '../src/services/greenLineEntry';
+import * as greenContinuation from '../src/research/greenContinuation';
 import * as gap from '../src/services/decentraderGapMonitor';
 import { ethIntrusionFuturesDeltaFeed, parseFuturesDeltaCandle } from '../src/services/intrusionFuturesDelta';
 import { OpenLiquidityV2EthTradeMonitor, openLiquidityV2BtcIntrusionMonitor, openLiquidityV2InjTradeMonitor, openLiquidityV2SolTradeMonitor, openLiquidityV2WldTradeMonitor, openLiquidityV2ZecTradeMonitor } from '../src/services/openLiquidityV2EthTradeMonitor';
@@ -140,16 +141,17 @@ describe.each(['BTC', 'ETH', 'INJ', 'SOL', 'WLD', 'ZEC'] as const)('%s purple li
       expect(() => green.evaluateGreenLineSignal(market,payload,intrusions,page,now)).toThrow('consecutive');
     });
 
-    test('reads only the matching pair’s Spot feed, with no Daily dependency', async () => {
+    test('reads only the matching Spot pair and requires a prior Purple direction', async () => {
       jest.useFakeTimers(); jest.setSystemTime(now);
       const {payload,intrusions,page} = inputs();
       const feeds = {BTC:binanceSpotChartFeed,ETH:ethSpotChartFeed,INJ:injSpotChartFeed,SOL:solSpotChartFeed,WLD:wldSpotChartFeed,ZEC:zecSpotChartFeed};
       const read = jest.spyOn(feeds[asset],'page').mockResolvedValue(page);
       const wrong = Object.entries(feeds).filter(([other])=>other!==asset).map(([,feed])=>jest.spyOn(feed,'page').mockRejectedValue(new Error('wrong pair')));
-      const daily = jest.spyOn(dailyHistory,'binanceDailyFractalHistory').mockRejectedValue(new Error('Daily must not be used'));
+      const gate = jest.spyOn(greenContinuation,'hasGreenContinuation').mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      await expect(green.readGreenLineSignal(market,payload,intrusions)).resolves.toBeUndefined();
       await expect(green.readGreenLineSignal(market,payload,intrusions)).resolves.toEqual(greenSignal());
-      expect(read).toHaveBeenCalledTimes(1);
-      expect(daily).not.toHaveBeenCalled();
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(gate).toHaveBeenCalledWith(market, payload, expect.objectContaining(greenSignal()), now);
       for(const spy of wrong) expect(spy).not.toHaveBeenCalled();
     });
 
@@ -398,6 +400,7 @@ describe.each(['BTC', 'ETH', 'INJ', 'SOL', 'WLD', 'ZEC'] as const)('%s purple li
           (this as any).running = true;
         });
         const chart = jest.spyOn(binanceSpotChartFeed, 'page').mockResolvedValue(page);
+        jest.spyOn(greenContinuation, 'hasGreenContinuation').mockResolvedValue(false);
         monitor.collector.previewBtcSpotClose = jest.fn().mockReturnValue({ payload, candles });
         monitor.startBtcSpotCloseShadow();
         const shadow = monitor.btcSpotCloseShadow;
@@ -410,9 +413,11 @@ describe.each(['BTC', 'ETH', 'INJ', 'SOL', 'WLD', 'ZEC'] as const)('%s purple li
         expect(orders.getAccountSnapshot).not.toHaveBeenCalled();
         expect(orders.placeOrder).not.toHaveBeenCalled();
         jest.setSystemTime(closeAt + 60_000);
-        await monitor.checkGapDailyEntry(state(), payload, {});
+        const managed: any = state();
+        await monitor.checkGapDailyEntry(managed, payload, {});
         expect(chart).toHaveBeenCalledTimes(1);
-        expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+        expect(orders.placeOrder).not.toHaveBeenCalled();
+        expect(managed.gapDailyEntry.decision.outcome).toBe('NO_GREEN_CONTINUATION');
         expect(monitor.getStatus().btcSpotCloseShadow.recent[0]).toMatchObject({
           shadowDecision: 'GREEN', restDecision: 'GREEN', comparison: { result: 'MATCH', leadMs: 55_000 }
         });
@@ -485,7 +490,7 @@ describe.each(['BTC', 'ETH', 'INJ', 'SOL', 'WLD', 'ZEC'] as const)('%s purple li
         await monitor.checkGapDailyEntry(managed, inputs(direction).payload, result);
         expect(result.tradePlaced).toBe(true); expect(orders.placeOrder).toHaveBeenCalledTimes(1);
         if (mode === 'purple') { expect(purpleRead).toHaveBeenCalledWith(market, expect.anything(), expect.any(Array)); expect(greenRead).not.toHaveBeenCalled(); }
-        else { expect(greenRead).toHaveBeenCalledWith(market, expect.anything(), expect.any(Array)); expect(purpleRead).not.toHaveBeenCalled(); }
+        else { expect(greenRead).toHaveBeenCalledWith(market, expect.anything(), expect.any(Array), expect.any(Function)); expect(purpleRead).not.toHaveBeenCalled(); }
         expect(managed.managedPosition).toMatchObject({ direction, takeProfitMode: 'trailing-only', intrusionTrail: { entryClosedAt: signal().closedAt } });
         expect(orders.placeOrder.mock.calls[0][0]).toMatchObject({ market, static_sl: direction === 'long' ? 118 : 122,
           take_profits: [], decentrader: { initialStopPolicy: { mode: 'signal-body-open' } } });
@@ -1048,19 +1053,21 @@ describe.each(['BTC', 'ETH', 'INJ', 'SOL', 'WLD', 'ZEC'] as const)('%s purple li
       await monitor.checkGapDailyEntry(managed, inputs().payload, second);
       expect(read).toHaveBeenCalledTimes(2); expect(second.tradePlaced).toBe(true);
     });
-    test('a mixed-side Green intrusion can place an order without a Daily break, using the real detector', async () => {
+    test('a mixed-side Green intrusion needs an earlier Purple, not a same-hour Daily break', async () => {
       const {payload,page} = inputs();
       payload.zoneDeltas[1].push(['S', 5, 110, 1]);
       const feed = { BTC:binanceSpotChartFeed, ETH:ethSpotChartFeed, INJ:injSpotChartFeed, SOL:solSpotChartFeed, WLD:wldSpotChartFeed, ZEC:zecSpotChartFeed }[asset];
       jest.spyOn(feed, 'page').mockResolvedValue(page);
-      const daily = jest.spyOn(dailyHistory, 'binanceDailyFractalHistory').mockRejectedValue(new Error('No Daily data'));
+      jest.spyOn(greenContinuation, 'hasGreenContinuation').mockResolvedValueOnce(false).mockResolvedValueOnce(true);
       const managed: any = state();
+      await monitor.checkGapDailyEntry(managed, payload, {});
+      expect(managed.gapDailyEntry.decision.outcome).toBe('NO_GREEN_CONTINUATION');
+      expect(orders.placeOrder).not.toHaveBeenCalled();
       await monitor.checkGapDailyEntry(managed, payload, {});
       expect(managed.gapDailyEntry.intent.signal).toEqual(greenSignal());
       expect(orders.placeOrder).toHaveBeenCalledTimes(1);
       expect(orders.syncTrailingStop).toHaveBeenCalled();
       expect(orders.syncTakeProfits).not.toHaveBeenCalled();
-      expect(daily).not.toHaveBeenCalled();
     });
     test('a wick-only break does not send an order', async () => {
       const {payload,page} = inputs();

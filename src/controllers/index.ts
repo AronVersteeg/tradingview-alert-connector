@@ -17,6 +17,7 @@ import {
 import { greenRetestSignals, retestFractalRows } from '../research/greenRetest';
 import { buildGreenRetestWithHistory, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
 import { recentPurpleRetest } from '../research/purpleRetest';
+import { archivedContinuation, canBridgeContinuation, greenContinuationMarkers, readRecentContinuation } from '../research/greenContinuation';
 import { PURPLE_LINE_SETUPS, purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
 import {
   coinGlassEthWhaleCollector,
@@ -914,6 +915,26 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
 type GreenRetestResult = ReturnType<typeof buildGreenRetestWithHistory>;
 type GreenRetestCache = { expires: number; retryAt: number; data?: GreenRetestResult; pending?: Promise<GreenRetestResult> };
 const greenRetestCaches = new Map<string, GreenRetestCache>();
+router.get('/open-liquidity/v2/green-continuation', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const market = String(req.query.market ?? '').toUpperCase() as PurpleLineMarket;
+  if (!purpleLineSetupForMarket(market)) return res.status(400).send({ error: 'Unknown Spot market.' });
+  try {
+    const archive = archivedContinuation(market);
+    const collector = openLiquidityV2CollectorForMarket(market);
+    const live = await (async () => {
+      if (!collector?.getStatus().liveReplayReady) return;
+      const payload = await collector.getPayload();
+      return readRecentContinuation(market, payload, Date.now());
+    })().catch(() => undefined);
+    const { signals, ...coverage } = greenContinuationMarkers(archive, live);
+    return res.send({ market, ...coverage, markers: signals.map(({ time, closedAt, direction, close, edge }) =>
+      ({ time, closedAt, direction, close, edge })) });
+  } catch {
+    return res.status(503).send({ error: `${market} Green direction history temporarily unavailable.` });
+  }
+});
+
 router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-retest'], async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const legacyBtc = req.path.endsWith('/btc-green-retest');
@@ -947,20 +968,25 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
       if (now < cache.retryAt) throw new Error('Replay source cooling down.');
       cache.pending ??= (async () => {
         const history = readRetestHistory(market, mode);
+        const archive = usesPurple ? undefined : archivedContinuation(market)?.purple;
+        const historyOnly = () => buildGreenRetestWithHistory(history, undefined, mode, { archive });
         try {
           const collector = openLiquidityV2CollectorForMarket(market);
           if (!collector?.getStatus().liveReplayReady) throw new Error(`${market} Spot replica is warming up.`);
           const payload = await collector.getPayload();
           const observedAt = Date.now();
           const green = greenRetestSignals(market, payload, observedAt);
-          if (history && green.through <= history.context.through) return buildGreenRetestWithHistory(history, undefined, mode);
-          const context = usesPurple ? await recentPurpleRetest(green, observedAt) : green;
+          if (history && green.through <= history.context.through) return historyOnly();
+          const purple = usesPurple ? await recentPurpleRetest(green, observedAt)
+            : (await readRecentContinuation(market, payload, observedAt)).purple;
+          const context = usesPurple ? purple : green;
           const rows = retestFractalRows(market, await fetchDydxHourlyCandlesForMarket(market), observedAt);
           const recent = { context, rows };
-          return buildGreenRetestWithHistory(history, usesAtr ? recentAtrRetest(recent, payload.frames) : recent, mode);
+          return buildGreenRetestWithHistory(history, usesAtr ? recentAtrRetest(recent, payload.frames) : recent, mode,
+            { archive, recent: purple, bridge: Boolean(archive && canBridgeContinuation(archive, purple)) });
         } catch (error) {
           if (!history) throw error;
-          return buildGreenRetestWithHistory(history, undefined, mode);
+          return historyOnly();
         }
       })().then(data => {
         cache.expires = Date.now() + 60_000;

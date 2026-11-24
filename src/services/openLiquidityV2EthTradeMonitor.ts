@@ -1519,11 +1519,16 @@ export class OpenLiquidityV2EthTradeMonitor {
         entry.decision = { outcome: 'NO_INTRUSION', candleClosedAt: new Date(close).toISOString() };
         return;
       }
-      const green = !purple ? await readGreenLineSignal(this.config.market as PurpleLineMarket, payload, intrusions) : undefined;
-      if (!purple) this.observeBtcRestGreen(close, payload, intrusions, green);
+      let hadGreenCandidate = false;
+      const green = !purple ? await readGreenLineSignal(this.config.market as PurpleLineMarket, payload, intrusions, raw => {
+        hadGreenCandidate = Boolean(raw);
+        this.observeBtcRestGreen(close, payload, intrusions, raw);
+      }) : undefined;
       const candidate = purple ? await readPurpleGapBreakSignal(this.config.market as PurpleLineMarket, payload, intrusions) : green;
       if (!candidate) {
-        entry.decision = { outcome: purple ? 'NO_PURPLE_CONFLUENCE' : 'NO_GAP_BREAK', candleClosedAt: new Date(close).toISOString() };
+        entry.decision = { outcome: purple ? 'NO_PURPLE_CONFLUENCE' : hadGreenCandidate ? 'NO_GREEN_CONTINUATION' : 'NO_GAP_BREAK',
+          candleClosedAt: new Date(close).toISOString(),
+          reason: hadGreenCandidate ? 'No earlier matching Purple direction was verified.' : undefined };
         return;
       }
       let closedRows: ReturnType<typeof dydxHourlyCandlesToFractalRows> | undefined;

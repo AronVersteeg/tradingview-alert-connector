@@ -4,6 +4,7 @@ import type { DecentraderRow } from '../services/decentraderGapMonitor';
 import { PURPLE_LINE_SETUPS, type PurpleLineMarket } from '../services/purpleLineSetup';
 import { buildGreenRetestFromRows, type RetestContext } from './greenRetest';
 import { ATR_ENTRY_PERIOD, atrEntryReading, atrEntryPasses, priorSpotAtr, type SpotAtrRange } from '../services/atrEntry';
+import { filterGreenContinuation } from '../services/greenContinuationRule';
 
 const HOUR = 3_600_000;
 const MAX_HOURS = 26_304;
@@ -190,15 +191,30 @@ function extendHistory(history: Series, recent: Series): Series | undefined {
     yellows: [...past.yellows, ...live.yellows.filter(y => inExtension(y.at))] } };
 }
 
-export function buildGreenRetestWithHistory(history: Series | undefined, recent: Series | undefined, strategy: RetestMode = 'green') {
+export function buildGreenRetestWithHistory(history: Series | undefined, recent: Series | undefined, strategy: RetestMode = 'green',
+  continuation?: { archive?: Context; recent?: Context; bridge?: boolean }) {
   if (!history && !recent) throw new Error('No Green retest data available.');
   const extended = history && recent && extendHistory(history, recent);
   const selected = extended || history || recent!;
-  const result = buildGreenRetestFromRows(selected.context, selected.rows);
+  let { context, atrMarkers } = selected;
+  if (continuation && (strategy === 'green' || strategy === 'atr')) {
+    const archived = continuation.archive?.signals ?? [];
+    const latest = continuation.recent?.signals ?? [];
+    const cutoff = history ? history.context.through / 1000 : 0;
+    const signals = extended
+      ? [...filterGreenContinuation(context.signals.filter(row => row.closedAt <= cutoff), archived),
+        ...filterGreenContinuation(context.signals.filter(row => row.closedAt > cutoff),
+          continuation.bridge ? [...archived, ...latest.filter(row => row.closedAt > cutoff)] : latest)]
+      : filterGreenContinuation(context.signals, history ? archived : latest);
+    const hours = new Set(signals.map(signal => signal.time));
+    context = { ...context, signals };
+    atrMarkers = atrMarkers?.filter(marker => hours.has(marker.time));
+  }
+  const result = buildGreenRetestFromRows(context, selected.rows);
   const lastCheckedHour = result.incompleteAt ?? result.through;
   const covered = new Set(result.candles.map(row => row.time * 1000)
     .filter(at => at >= result.from && at < lastCheckedHour));
-  return { ...result, strategy, atrMarkers: selected.atrMarkers, missingDydxHours: (lastCheckedHour - result.from) / HOUR - covered.size,
+  return { ...result, strategy, atrMarkers, missingDydxHours: (lastCheckedHour - result.from) / HOUR - covered.size,
     historyCoverage: extended ? 'archive-plus-recent' : history ? 'archive-only' : 'recent-only',
     reconstructedThrough: history?.context.through };
 }
