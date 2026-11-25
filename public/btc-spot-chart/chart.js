@@ -65,7 +65,9 @@
   let greenDirections, greenDirectionsRequest, greenRetryAt = 0;
   const atrOverlays = [
     { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', color: '#238554', width: 3, retryAt: 0, through: 0 },
-    { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', color: '#f18ebc', width: 2, retryAt: 0, through: 0 }
+    { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', color: '#f18ebc', width: 2, retryAt: 0, through: 0 },
+    { mode: 'atr-purple', view: 'initial-stop-markers', label: 'ATR Purple SL', toggle: 'spotChartAtrPurpleInitialStops',
+      color: '#ff5252', width: 2, dash: [3, 4], retryAt: 0, through: 0 }
   ];
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
@@ -454,7 +456,7 @@
   }
 
   function attachAtrOverlay(overlay) {
-    overlay.layer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(overlay.color, overlay.width);
+    overlay.layer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(overlay.color, overlay.width, overlay.dash);
     overlay.layer.setVisible(byId(overlay.toggle).checked);
     candlesSeries.attachPrimitive(overlay.layer);
   }
@@ -467,13 +469,16 @@
     const timeout = setTimeout(() => controller.abort(), 15_000);
     const status = byId(`${overlay.toggle}Status`);
     try {
-      const query = new URLSearchParams({ market, strategy: overlay.mode, view: 'markers' });
+      const view = overlay.view ?? 'markers';
+      const query = new URLSearchParams({ market, strategy: overlay.mode, view });
       const response = await fetch(`/open-liquidity/v2/green-retest?${query}`, { signal: controller.signal, cache: 'no-store' });
       if (!response.ok) throw new Error('ATR temporarily unavailable');
       const result = await response.json();
       if (result.market !== market || result.strategy !== overlay.mode || !Number.isFinite(result.through) ||
           !Array.isArray(result.markers) || result.markers.some(marker => !Number.isSafeInteger(marker.time) ||
-            marker.time % 3600 !== 0 || !Number.isFinite(marker.ratio) || marker.ratio < 2)) throw new Error('Invalid ATR data');
+            marker.time % 3600 !== 0 || (view === 'initial-stop-markers'
+              ? marker.time * 1000 >= result.through || !['long', 'short'].includes(marker.direction)
+              : !Number.isFinite(marker.ratio) || marker.ratio < 2))) throw new Error('Invalid ATR data');
       if (!destroyed && !controller.signal.aborted) {
         overlay.through = result.through;
         overlay.layer.setData(result.markers);
@@ -715,7 +720,7 @@
       updateOrderBlockFont();
       intrusionLayer.setVisible(byId('spotChartIntrusionDailyBreaks').checked);
       candlesSeries.attachPrimitive(intrusionLayer);
-      attachAtrOverlay(atrOverlays[1]);
+      for (const overlay of atrOverlays.slice(1)) attachAtrOverlay(overlay);
       updateIntrusionDailyBreakouts();
       gestures = interactions.install(chartCanvas, {
         read: () => {

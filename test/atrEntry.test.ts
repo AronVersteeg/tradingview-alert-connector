@@ -1,5 +1,5 @@
 import { atrEntryPasses, atrEntryReading, priorSpotAtr } from '../src/services/atrEntry';
-import { buildGreenRetestWithHistory, readRetestHistory, recentAtrRetest } from '../src/research/greenRetestHistory';
+import { atrPurpleInitialStopMarkers, buildGreenRetestWithHistory, readRetestHistory, recentAtrRetest } from '../src/research/greenRetestHistory';
 import { PURPLE_LINE_SETUPS, type PurpleLineMarket } from '../src/services/purpleLineSetup';
 
 const HOUR = 3_600_000, signalAt = Date.UTC(2026, 10, 20, 6);
@@ -12,6 +12,19 @@ test('pre-signal ATR uses 14 complete ranges, previous closes and no signal wick
   expect(priorSpotAtr(rows, signalAt)).toBe(29 / 14);
   rows.delete(signalAt - 6 * HOUR);
   expect(priorSpotAtr(rows, signalAt)).toBeUndefined();
+});
+
+test('marks the stop-out candle even hours later, only while the initial stop is unchanged', () => {
+  const initial = { at: signalAt + HOUR, price: 95 };
+  const stops = [initial];
+  const first = { closedAt: signalAt + HOUR, direction: 'long', status: 'CLOSED', exitReason: 'STOP', stops } as const;
+  const late = { ...first, closedAt: signalAt + 8 * HOUR, direction: 'short', exitReason: 'GAP_STOP' } as const;
+  expect(atrPurpleInitialStopMarkers([
+    first, late, { ...late, stops: [initial, { at: signalAt + 3 * HOUR, price: 93 }] },
+    { ...late, status: 'OPEN', closedAt: undefined, exitReason: undefined },
+    { ...late, status: 'INCOMPLETE', closedAt: undefined, exitReason: undefined },
+    { ...late, exitReason: undefined }
+  ])).toEqual([{ time: first.closedAt / 1000, direction: 'long' }, { time: late.closedAt / 1000, direction: 'short' }]);
 });
 
 test.each([['long', 100, 110], ['short', 110, 100]] as const)('2x is inclusive, directional and exact-hour for %s', (direction, openRef, closeRef) => {
@@ -49,6 +62,10 @@ test.each(Object.keys(PURPLE_LINE_SETUPS) as PurpleLineMarket[])('%s ATR Purple 
   expect(result.strategy).toBe('atr-purple');
   expect(result.trades.length).toBeGreaterThan(0);
   expect(result.trades.every(t => t.dailyLevels?.length)).toBe(true);
+  const stopMarkers = atrPurpleInitialStopMarkers(result.trades);
+  expect(stopMarkers.every(marker => result.trades.some(trade =>
+    trade.status === 'CLOSED' && trade.closedAt === marker.time * 1000 && trade.stops.length === 1))).toBe(true);
+  expect(stopMarkers.length).toBe(result.trades.filter(trade => trade.status === 'CLOSED' && trade.stops.length === 1).length);
 });
 
 test('recent ATR scores exactly the Green candle and preserves later Yellow events', () => {

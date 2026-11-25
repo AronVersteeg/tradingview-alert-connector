@@ -34,6 +34,7 @@
 .spot-fractal-swatch.gap-intrusion { width: 1px; height: 12px; background: #00ff00; margin: 0 5px; }
 .spot-fractal-swatch.atr-entry { width: 3px; height: 12px; background: #238554; margin: 0 4px; }
 .spot-fractal-swatch.atr-purple-entry { width: 2px; height: 12px; background: #f18ebc; margin: 0 4px; }
+.spot-fractal-swatch.atr-purple-initial-stop { width: 0; height: 12px; border-left: 2px dashed #ff5252; margin: 0 4px; }
 .spot-fractal-swatch.yellows { width: 1px; height: 12px; background: #ffeb3b; margin: 0 5px; }
 .spot-fractal-swatch.gap-daily-break { width: 1px; height: 12px; background: #fff59d; margin: 0 5px; }
 .spot-fractal-swatch.intrusion-daily-break { width: 1px; height: 12px; background: #ba68c8; margin: 0 5px; }
