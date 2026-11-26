@@ -218,13 +218,3 @@ export function buildGreenRetestWithHistory(history: Series | undefined, recent:
     historyCoverage: extended ? 'archive-plus-recent' : history ? 'archive-only' : 'recent-only',
     reconstructedThrough: history?.context.through };
 }
-
-type RetestTrade = ReturnType<typeof buildGreenRetestWithHistory>['trades'][number];
-export function atrPurpleInitialStopMarkers(trades: readonly Pick<RetestTrade, 'status' | 'closedAt' | 'direction' | 'stops' | 'exitReason'>[]) {
-  return trades.flatMap(trade => {
-    if (trade.status !== 'CLOSED' || trade.closedAt === undefined || trade.stops.length !== 1 ||
-        (trade.exitReason !== 'STOP' && trade.exitReason !== 'GAP_STOP')) return [];
-    // Retest records the open timestamp of the dYdX candle in which the stop was hit.
-    return [{ time: trade.closedAt / 1000, direction: trade.direction }];
-  });
-}

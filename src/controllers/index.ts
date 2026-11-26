@@ -15,7 +15,7 @@ import {
   fetchDydxHourlyCandlesForMarket
 } from '../services/decentraderGapMonitor';
 import { greenRetestSignals, retestFractalRows } from '../research/greenRetest';
-import { atrPurpleInitialStopMarkers, buildGreenRetestWithHistory, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
+import { buildGreenRetestWithHistory, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
 import { recentPurpleRetest } from '../research/purpleRetest';
 import { archivedContinuation, canBridgeContinuation, greenContinuationMarkers, readRecentContinuation } from '../research/greenContinuation';
 import { PURPLE_LINE_SETUPS, purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
@@ -954,8 +954,7 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
   const id = req.query.id;
   if (id !== undefined && (typeof id !== 'string' || !/^\d{13}$/.test(id))) return res.status(400).send({ error: 'Invalid trade.' });
   const view = req.query.view;
-  if (view !== undefined && (id !== undefined ||
-      !(view === 'markers' && usesAtr || view === 'initial-stop-markers' && mode === 'atr-purple'))) {
+  if (view !== undefined && (view !== 'markers' || !usesAtr || id !== undefined)) {
     return res.status(400).send({ error: 'Invalid retest view.' });
   }
   const now = Date.now();
@@ -1002,9 +1001,6 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
     const { candles, trades, atrMarkers, ...coverage } = cache.data!;
     if (view === 'markers') return res.send({ market, strategy: mode, from: coverage.from, through: coverage.through,
       historyCoverage: coverage.historyCoverage, markers: atrMarkers ?? [] });
-    if (view === 'initial-stop-markers') return res.send({ market, strategy: mode, from: coverage.from,
-      through: coverage.incompleteAt ?? coverage.through, historyCoverage: coverage.historyCoverage,
-      markers: atrPurpleInitialStopMarkers(trades) });
     const summary = { ...coverage, tradeCount: trades.length };
     if (!id) return res.send({ trades: trades.map(({ id, direction, openedAt, status, grossPnl, markToMarket }) =>
       ({ id, direction, openedAt, status, grossPnl, markToMarket })), ...summary });
