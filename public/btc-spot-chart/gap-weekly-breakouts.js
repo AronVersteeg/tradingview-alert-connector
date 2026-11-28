@@ -134,8 +134,49 @@
     constructor() { super('#fff59d'); }
   }
 
+  class RetestCandleTimeLabels extends GapWeeklyBreakoutPrimitive {
+    constructor(timeZone) {
+      super();
+      this.labels = [];
+      this.setTimeZone(timeZone);
+    }
+    setTimeZone(timeZone) {
+      this.format = new Intl.DateTimeFormat('nl-NL', { timeZone, day: '2-digit', month: '2-digit',
+        year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+      this.requestUpdate?.();
+    }
+    getLabels() { return this.labels.map(label => ({ ...label })); }
+    draw(target) {
+      this.labels = [];
+      if (!this.visible || !this.chart || !this.signals.length) return;
+      target.useMediaCoordinateSpace(({ context: ctx, mediaSize: { width, height } }) => {
+        const h = 17, gap = 4, inset = 3, bottom = height - 6;
+        const laneEnds = Array(Math.max(0, Math.floor((bottom - 28) / (h + gap)))).fill(-gap);
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();
+        ctx.font = '10px Arial'; ctx.textBaseline = 'middle'; ctx.setLineDash([]);
+        for (const signal of this.signals) {
+          const anchor = this.coordinateForSignal(signal);
+          if (!Number.isFinite(anchor) || anchor < 0 || anchor > width) continue;
+          const text = this.format.format(signal.time * 1000);
+          const w = Math.ceil(ctx.measureText(text).width) + 10;
+          if (w + 2 * inset > width) continue;
+          const x = Math.max(inset, Math.min(width - w - inset, Math.round(anchor - w / 2)));
+          const lane = laneEnds.findIndex(end => x >= end + gap);
+          if (lane < 0) continue;
+          laneEnds[lane] = x + w;
+          const y = bottom - h - lane * (h + gap);
+          ctx.fillStyle = '#161a25'; ctx.fillRect(x, y, w, h);
+          ctx.strokeStyle = signal.color; ctx.lineWidth = 1; ctx.strokeRect(x + .5, y + .5, w - 1, h - 1);
+          ctx.fillStyle = '#e7ecf1'; ctx.fillText(text, x + 5, y + h / 2);
+          this.labels.push({ time: signal.time, text, x, y, width: w, height: h });
+        }
+        ctx.restore();
+      });
+    }
+  }
+
   const api = Object.freeze({ indexGapEdges, closeBreaksGap, buildGapWeeklyBreakouts, buildGapDailyBreakouts, buildDailyFractalBreakouts, buildWeeklyFractalBreakouts,
-    GapWeeklyBreakoutPrimitive, GapDailyBreakoutPrimitive });
+    GapWeeklyBreakoutPrimitive, GapDailyBreakoutPrimitive, RetestCandleTimeLabels });
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.BtcSpotGapWeeklyBreakouts = api;
 })(typeof globalThis === 'object' ? globalThis : this);

@@ -270,6 +270,14 @@ function pocPixels(buffer, cross) {
       const purple = await page.locator('#spotChartCanvas').screenshot();
       const purplePixels = purpleXs.map(x => purpleColumn(purple, x));
       assert(purplePixels.every(n => n > 200), `Actual purple lines on the alert candles: ${purplePixels}`);
+      await page.waitForFunction(() => window.btcSpotChart.getRetestTimeLabels().length === 2);
+      const timeLabels = await page.evaluate(() => window.btcSpotChart.getRetestTimeLabels());
+      assert.deepEqual(timeLabels.map(label => label.time), intrusionState.signals.map(signal => signal.time));
+      assert.match(timeLabels[0].text, /19-10-2026.*05:00$/);
+      await page.locator('#spotChartTimezone').selectOption('UTC');
+      await page.waitForFunction(() => /03:00$/.test(window.btcSpotChart.getRetestTimeLabels()[0]?.text));
+      await page.locator('#spotChartTimezone').selectOption('Europe/Amsterdam');
+      await page.waitForFunction(() => /05:00$/.test(window.btcSpotChart.getRetestTimeLabels()[0]?.text));
       assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionPocCrosses()), [], 'Partial volume profiles draw no guessed crossbar');
       const pendingRead = page.waitForResponse(response => response.url().includes(`/${asset}-intrusion-spot-poc`));
       now += 6000;
@@ -344,6 +352,7 @@ function pocPixels(buffer, cross) {
       assert.equal(pocReads, pocReadsWhenOff, 'Disabled overlay stops POC reads');
       assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionPocCrosses()), []);
       assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionDeltaLabels()), []);
+      await page.waitForFunction(() => window.btcSpotChart.getRetestTimeLabels().length === 0);
       const noPurple = await page.locator('#spotChartCanvas').screenshot();
       assert(purpleXs.every(x => purpleColumn(noPurple, x) < 20), 'Checkbox removes the actual purple lines');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);

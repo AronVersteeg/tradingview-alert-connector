@@ -62,6 +62,7 @@
     { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', status: 'spotChartAtrStatus', color: '#238554', width: 3 },
     { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', status: 'spotChartAtrPurpleStatus', color: '#f18ebc', width: 2 }
   ];
+  let retestTimeLabels;
   let retestCandleCloses = new Map();
   for (const overlay of retestLineOverlays) { overlay.retryAt = 0; overlay.through = 0; }
   const deltaRecords = new Map();
@@ -338,6 +339,16 @@
     for (const overlay of retestLineOverlays) void refreshRetestMarkers(overlay);
   }
 
+  function syncRetestTimeLabels() {
+    if (!retestTimeLabels) return;
+    const byTime = new Map();
+    for (const overlay of retestLineOverlays) {
+      if (!byId(overlay.toggle).checked) continue;
+      for (const marker of overlay.markers || []) byTime.set(marker.time, { time: marker.time, color: overlay.layer.color });
+    }
+    retestTimeLabels.setData([...byTime.values()].sort((a, b) => a.time - b.time));
+  }
+
   function projectRetestMarkers(overlay) {
     if (!overlay.spotMarkers) return;
     const markers = overlay.spotMarkers.filter(marker => retestCandleCloses.get(marker.time) === marker.close);
@@ -346,6 +357,7 @@
     overlay.layer.setOmittedLineTimes(new Set(losses.map(marker => marker.time)));
     overlay.layer.setData(markers);
     overlay.lossLayer.setData(losses);
+    syncRetestTimeLabels();
     const through = overlay.verifiedThrough;
     if (overlay === purpleRetestLines) {
       intrusionModel = { symbol, market, venue: 'Binance Spot', intrusionSource: 'binance-spot', visibilityFilter: 'retest-trades',
@@ -614,6 +626,8 @@
       intrusionLayer.setPocEnabled(true);
       updateOrderBlockFont();
       for (const overlay of retestLineOverlays) attachRetestOverlay(overlay);
+      retestTimeLabels = new gapWeeklyBreaks.RetestCandleTimeLabels(zone);
+      candlesSeries.attachPrimitive(retestTimeLabels);
       gestures = interactions.install(chartCanvas, {
         read: () => {
           if (!initialData || destroyed) return null;
@@ -672,6 +686,7 @@
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
         getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({ ...signal })) } : null,
         getRetestMarkers: (mode) => (retestLineOverlays.find(overlay => overlay.mode === mode)?.markers || []).map(marker => ({ ...marker })),
+        getRetestTimeLabels: () => retestTimeLabels?.getLabels() || [],
         getIntrusionDeltaLabels: () => intrusionLayer?.getDeltaLabels() || [],
         getIntrusionPocCrosses: () => intrusionLayer?.getPocCrosses() || [],
         getIntrusionSpotPoc: () => [...pocRecords.values()].map(record => ({ ...record, ...(record.poc ? { poc: { ...record.poc } } : {}) })),
@@ -851,6 +866,7 @@
   for (const overlay of retestLineOverlays) byId(overlay.toggle).addEventListener('change', event => {
     overlay.layer?.setVisible(event.target.checked);
     overlay.lossLayer?.setVisible(event.target.checked);
+    syncRetestTimeLabels();
     const status = byId(overlay.status);
     status.hidden = !event.target.checked;
     if (event.target.checked) {
@@ -891,6 +907,7 @@
   panel.querySelectorAll('[data-spot-range]').forEach((button) => button.addEventListener('click', () => selectRange(button.dataset.spotRange)));
   byId('spotChartTimezone').addEventListener('change', (event) => {
     zone = event.target.value;
+    retestTimeLabels?.setTimeZone(zone);
     if (chart) chart.applyOptions({ localization: { locale: 'en-US' } });
     if (!hovering) legend(candles[candles.length - 1]);
     projectLoadedCandles();

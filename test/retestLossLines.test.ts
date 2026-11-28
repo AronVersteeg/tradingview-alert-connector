@@ -2,7 +2,7 @@ import { archivedContinuation } from '../src/research/greenContinuation';
 import { buildGreenRetestWithHistory, closedRetestLossSignalTimes, readRetestHistory, retestTradeMarkers, type RetestMode } from '../src/research/greenRetestHistory';
 import { PURPLE_LINE_SETUPS, type PurpleLineMarket } from '../src/services/purpleLineSetup';
 
-const { GapWeeklyBreakoutPrimitive } = require('../public/btc-spot-chart/gap-weekly-breakouts.js');
+const { GapWeeklyBreakoutPrimitive, RetestCandleTimeLabels } = require('../public/btc-spot-chart/gap-weekly-breakouts.js');
 const hour = 3600;
 const start = Date.UTC(2026, 10, 19) / 1000;
 
@@ -74,4 +74,31 @@ test.each(['#00ff00', '#ba68c8', '#238554', '#f18ebc'])('%s replaces only the lo
   ctx.stroke.mockClear();
   losses.draw(target);
   expect(ctx.stroke).not.toHaveBeenCalled();
+});
+
+test('shows full candle-open dates in the chart timezone and stacks neighboring labels inside the pane', () => {
+  const labels = new RetestCandleTimeLabels('Europe/Amsterdam');
+  const open = Date.UTC(2026, 10, 8, 21) / 1000;
+  const coordinates = new Map([[open, 1], [open + hour, 16], [open + 2 * hour, 149], [open + 3 * hour, -50]]);
+  const ctx: any = { measureText: () => ({ width: 89 }) };
+  for (const name of ['save', 'restore', 'beginPath', 'rect', 'clip', 'setLineDash', 'fillRect', 'strokeRect', 'fillText']) ctx[name] = jest.fn();
+  const requestUpdate = jest.fn();
+  labels.attached({ chart: { timeScale: () => ({ timeToCoordinate: (time: number) => coordinates.get(time) }) }, requestUpdate });
+  labels.setData([...coordinates.keys()].map(time => ({ time, color: '#f18ebc' })));
+  const draw = () => labels.draw({ useMediaCoordinateSpace: (render: (scope: any) => void) =>
+    render({ context: ctx, mediaSize: { width: 150, height: 180 } }) });
+  draw();
+  const visible = labels.getLabels();
+  expect(visible).toHaveLength(3);
+  expect(visible[0].text).toMatch(/08-11-2026.*22:00$/);
+  expect(visible[1].y).toBeLessThan(visible[0].y);
+  expect(visible.every((label: any) => label.x >= 0 && label.x + label.width <= 150)).toBe(true);
+  labels.setTimeZone('UTC');
+  draw();
+  expect(labels.getLabels()[0].text).toMatch(/08-11-2026.*21:00$/);
+  expect(ctx.fillText).toHaveBeenCalledTimes(6);
+  labels.setData([]);
+  draw();
+  expect(labels.getLabels()).toEqual([]);
+  expect(requestUpdate).toHaveBeenCalledTimes(3);
 });
