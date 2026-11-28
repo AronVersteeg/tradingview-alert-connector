@@ -245,7 +245,7 @@ export function buildGreenRetestWithHistory(history: Series | undefined, recent:
 type AtrPurpleLoss = LossCandidate & { direction: Direction; closedAt?: number };
 
 export function atrPurplePlusSignals<T extends Pick<SpotSignal, 'closedAt' | 'direction'>>(
-  purples: readonly T[], atrPurpleTrades: readonly AtrPurpleLoss[]
+  purples: readonly T[], atrPurpleTrades: readonly AtrPurpleLoss[], atrPurpleCloses: ReadonlySet<number>
 ): T[] {
   const losses = atrPurpleTrades.flatMap(trade => closedRetestLoss(trade) && trade.closedAt !== undefined
     ? [{ knownAt: trade.closedAt + HOUR, direction: trade.direction }] : []).sort((a, b) => a.knownAt - b.knownAt);
@@ -254,7 +254,7 @@ export function atrPurplePlusSignals<T extends Pick<SpotSignal, 'closedAt' | 'di
   // closedAt on a retest trade is the open of the exit candle; its loss is known by that candle's close.
   return [...purples].sort((a, b) => a.closedAt - b.closedAt).filter(signal => {
     while (next < losses.length && losses[next].knownAt <= signal.closedAt * 1000) pending.add(losses[next++].direction);
-    return pending.delete(signal.direction);
+    return !atrPurpleCloses.has(signal.closedAt) && pending.delete(signal.direction);
   });
 }
 
@@ -275,7 +275,8 @@ export function buildAtrPurplePlusWithHistory(purpleHistory?: Series, atrPurpleH
   const verifiedThrough = baseline.incompleteAt ?? through;
   if (verifiedThrough <= from + HOUR) throw new Error('ATR Purple + needs verified ATR Purple replay coverage.');
   const purples = purple.context.signals.filter(signal => signal.closedAt * 1000 > from && signal.closedAt * 1000 < verifiedThrough);
-  const signals = atrPurplePlusSignals(purples, baseline.trades);
+  const atrPurpleCloses = new Set(parent.context.signals.map(signal => signal.closedAt));
+  const signals = atrPurplePlusSignals(purples, baseline.trades, atrPurpleCloses);
   const result = buildGreenRetestWithHistory(undefined, { rows: purple.rows,
     context: { ...purple.context, from, through: verifiedThrough, signals } }, 'atr-purple-plus');
   return { ...result, historyCoverage: extended ? 'archive-plus-recent' : archive ? 'archive-only' : 'recent-only',

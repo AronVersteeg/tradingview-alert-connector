@@ -67,9 +67,10 @@ and Yellow rules, existing positions and all stop management are unchanged.
 
 `ATR Purple +` is a retest and overlay only, not an entry mode. A closed
 ATR Purple loss qualifies the first subsequent ordinary Purple in the same
-direction after the loss is known at the exit candle close. The follow-up
-does not need to pass the ATR threshold. It uses the existing one-position
-rule and the same simulated stops as the other retests.
+direction after the loss is known at the exit candle close. A Purple that
+passes the ATR threshold is skipped and does not consume the pending follow-up,
+even if the ATR Purple replay did not open a trade on that signal. The follow-up
+uses the existing one-position rule and simulated stops.
 
 All automatic modes use only the selected pair's native Binance Spot USDT 1H
 intrusions/gaps. Purple additionally reads that same pair's Binance Spot Daily

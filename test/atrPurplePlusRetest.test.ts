@@ -12,8 +12,9 @@ test('takes the first Purple of the same direction only when the losing exit can
     signal(10, 'long'), signal(11, 'short'), signal(12, 'short'), signal(13, 'long')];
   const baseline = [loss(6, 'long'), loss(8, 'short'), loss(9, 'short'),
     { ...loss(9, 'long'), status: 'OPEN' }, { ...loss(11, 'long'), grossPnl: 2 }];
-  expect(atrPurplePlusSignals(purples, baseline)).toEqual([signal(7, 'long'), signal(11, 'short')]);
-  expect(atrPurplePlusSignals(purples.slice(0, 3), baseline)).toEqual([]);
+  const atrQualified = new Set([at(7) / 1000, at(11) / 1000]);
+  expect(atrPurplePlusSignals(purples, baseline, atrQualified)).toEqual([signal(8, 'long'), signal(12, 'short')]);
+  expect(atrPurplePlusSignals(purples.slice(0, 3), baseline, atrQualified)).toEqual([]);
 });
 
 test.each(Object.keys(PURPLE_LINE_SETUPS) as PurpleLineMarket[])('%s ATR Purple + selects from Binance Purple only and keeps the usual trade controls', market => {
@@ -21,7 +22,8 @@ test.each(Object.keys(PURPLE_LINE_SETUPS) as PurpleLineMarket[])('%s ATR Purple 
   const atrPurple = readRetestHistory(market, 'atr-purple')!;
   const parent = buildGreenRetestWithHistory(atrPurple, undefined, 'atr-purple');
   const result = buildAtrPurplePlusWithHistory(purple, atrPurple);
-  const candidates = atrPurplePlusSignals(purple.context.signals.filter(signal => signal.closedAt * 1000 < result.through), parent.trades);
+  const atrQualified = new Set(atrPurple.context.signals.map(signal => signal.closedAt));
+  const candidates = atrPurplePlusSignals(purple.context.signals.filter(signal => signal.closedAt * 1000 < result.through), parent.trades, atrQualified);
   const eligible = new Map(candidates.map(signal => [signal.time * 1000, signal]));
   expect(result).toMatchObject({ market, strategy: 'atr-purple-plus', historyCoverage: 'archive-only', from: parent.from,
     through: parent.incompleteAt ?? parent.through, candidateCount: eligible.size, riskBudgetUsd: 15 });
@@ -39,6 +41,19 @@ test.each(Object.keys(PURPLE_LINE_SETUPS) as PurpleLineMarket[])('%s ATR Purple 
   })).toBe(true);
   expect(result.spotMarkers).toHaveLength(result.trades.length);
   expect(result.spotMarkers.every(marker => eligible.get(marker.time * 1000)?.close === marker.close)).toBe(true);
+  expect(result.spotMarkers.some(marker => atrQualified.has(marker.closedAt))).toBe(false);
+});
+
+test('keeps the May 23 and May 28 BTC losses exclusively in the ATR Purple replay', () => {
+  const entries = [Date.UTC(2026, 4, 23, 8), Date.UTC(2026, 4, 28, 4)];
+  const parent = readRetestHistory('BTC-USD', 'atr-purple')!;
+  const atrReplay = buildGreenRetestWithHistory(parent, undefined, 'atr-purple');
+  const plus = buildAtrPurplePlusWithHistory(readRetestHistory('BTC-USD', 'purple'), parent);
+  for (const at of entries) {
+    expect(atrReplay.trades.find(trade => trade.openedAt === at)?.grossPnl).toBeLessThan(0);
+    expect(plus.trades.some(trade => trade.openedAt === at)).toBe(false);
+    expect(plus.spotMarkers.some(marker => marker.closedAt * 1000 === at)).toBe(false);
+  }
 });
 
 test('extends both source replays together without resetting their previous losses or open positions', () => {
