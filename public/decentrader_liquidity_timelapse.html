@@ -1547,7 +1547,7 @@
         <div class="spot-chart-actions">
           <label class="spot-chart-toggle" title="Confirmed 1H Williams fractal ranges"><input type="checkbox" id="spotChartHourlyBoxes" checked><i class="spot-fractal-swatch hourly-boxes"></i>1H boxes</label>
           <span id="spotChartOrderBlockControls" class="spot-order-block-controls">
-            <label class="spot-chart-toggle"><input type="checkbox" id="spotChartOrderBlocks" checked><i class="spot-fractal-swatch order-blocks"></i>Order blocks</label>
+            <label class="spot-chart-toggle"><input type="checkbox" id="spotChartOrderBlocks"><i class="spot-fractal-swatch order-blocks"></i>Order blocks</label>
             <label class="spot-ob-pivot" title="Volume pivot confirmation length">Pivot <input type="number" id="spotChartObLength" value="5" min="1" max="100" step="1" aria-label="Order block volume pivot length"></label>
             <select class="spot-chart-select" id="spotChartObMitigation" aria-label="Order block mitigation method"><option value="Wick">Wick</option><option value="Close">Close</option></select>
           </span>
@@ -1556,14 +1556,14 @@
           <label class="spot-gap-lead" title="Gap right edge: hours beyond the latest candle">+<input type="number" id="spotChartGapLead" value="10" min="1" max="72" step="1" aria-label="Gap right offset in 1H candles">h</label>
           <label class="spot-chart-toggle" title="Daily fractals"><input type="checkbox" id="spotChartDaily" checked><i class="spot-fractal-swatch daily"></i>Daily</label>
           <label class="spot-chart-toggle" title="Weekly fractals"><input type="checkbox" id="spotChartWeekly" checked><i class="spot-fractal-swatch weekly"></i>Weekly</label>
-          <label class="spot-chart-toggle" title="Recorded intrusion and a fresh gap edge close break on the same Binance Spot 1H candle"><input type="checkbox" id="spotChartGapIntrusions" checked><i class="spot-fractal-swatch gap-intrusion"></i>Intrusion / gap break</label>
+          <label class="spot-chart-toggle" title="Recorded intrusion and a fresh gap edge close break on the same Binance Spot 1H candle"><input type="checkbox" id="spotChartGapIntrusions"><i class="spot-fractal-swatch gap-intrusion"></i>Intrusion / gap break</label>
           <label class="spot-chart-toggle" title="Green plus dYdX break body at least 2x the prior 14-hour Binance Spot ATR"><input type="checkbox" id="spotChartAtr"><i class="spot-fractal-swatch atr-entry"></i>ATR</label>
-          <label class="spot-chart-toggle" title="Purple plus dYdX break body at least 2x the prior 14-hour Binance Spot ATR"><input type="checkbox" id="spotChartAtrPurple"><i class="spot-fractal-swatch atr-purple-entry"></i>ATR Purple</label>
-          <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Weekly fractal"><input type="checkbox" id="spotChartGapWeeklyBreaks" checked><i class="spot-fractal-swatch gap-weekly-break"></i>Gap / W break</label>
-          <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Daily fractal"><input type="checkbox" id="spotChartGapDailyBreaks" checked><i class="spot-fractal-swatch gap-daily-break"></i>Gap / D break</label>
-          <label class="spot-chart-toggle" title="Binance Spot: intrusion, gap box break and Daily fractal break on the same closed candle."><input type="checkbox" id="spotChartIntrusionDailyBreaks" checked><i class="spot-fractal-swatch intrusion-daily-break"></i>Purple: intrusion + gap + D</label>
+          <label class="spot-chart-toggle" title="Purple plus dYdX break body at least 2x the prior 14-hour Binance Spot ATR"><input type="checkbox" id="spotChartAtrPurple" checked><i class="spot-fractal-swatch atr-purple-entry"></i>ATR Purple</label>
+          <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Weekly fractal"><input type="checkbox" id="spotChartGapWeeklyBreaks"><i class="spot-fractal-swatch gap-weekly-break"></i>Gap / W break</label>
+          <label class="spot-chart-toggle" title="Same closed 1H candle newly breaks a gap edge and an intact confirmed Daily fractal"><input type="checkbox" id="spotChartGapDailyBreaks"><i class="spot-fractal-swatch gap-daily-break"></i>Gap / D break</label>
+          <label class="spot-chart-toggle" title="Binance Spot: intrusion, gap box break and Daily fractal break on the same closed candle."><input type="checkbox" id="spotChartIntrusionDailyBreaks"><i class="spot-fractal-swatch intrusion-daily-break"></i>Purple: intrusion + gap + D</label>
           <label class="spot-chart-toggle" title="Monthly fractals"><input type="checkbox" id="spotChartMonthly" checked><i class="spot-fractal-swatch monthly"></i>Monthly</label>
-          <label class="spot-chart-toggle" title="Planned manual entries and their take profits"><input type="checkbox" id="spotChartManual" checked><i class="spot-fractal-swatch manual"></i>Manual / TP</label>
+          <label class="spot-chart-toggle" title="Planned manual entries and their take profits"><input type="checkbox" id="spotChartManual"><i class="spot-fractal-swatch manual"></i>Manual / TP</label>
           <label class="spot-chart-toggle" title="Broken fractal segments"><input type="checkbox" id="spotChartBroken" checked>Broken</label>
           <button class="spot-chart-range" id="spotChartFitFractals" title="Include current fractal, gap and manual levels in price scale" aria-pressed="false">Fit levels</button>
         </div>
@@ -1577,7 +1577,7 @@
         <span id="spotChartPurpleReplayStatus" role="status" hidden></span>
         <span id="spotChartGreenReplayStatus" role="status" hidden></span>
         <span id="spotChartAtrStatus" role="status" hidden></span>
-        <span id="spotChartAtrPurpleStatus" role="status" hidden></span>
+        <span id="spotChartAtrPurpleStatus" role="status">ATR Purple pending</span>
         <span id="spotChartOrderBlockStatus" role="status">Order blocks pending</span>
       </div>
       <div class="spot-chart-ohlc" id="spotChartOhlc">
