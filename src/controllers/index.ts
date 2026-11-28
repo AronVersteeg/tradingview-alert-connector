@@ -150,6 +150,7 @@ function configureDecentraderTradeExecutor() {
   });
   openLiquidityV2BtcIntrusionMonitor.configureTradeExecutor({
     supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
+    getClosedPositionResult: (market, direction, identity) => client.getClosedPositionResult(market, direction, identity),
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
@@ -160,6 +161,7 @@ function configureDecentraderTradeExecutor() {
     openLiquidityV2BtcIntrusionMonitor.getTradePlan(account, undefined, direction));
   openLiquidityV2EthTradeMonitor.configureTradeExecutor({
     supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
+    getClosedPositionResult: (market, direction, identity) => client.getClosedPositionResult(market, direction, identity),
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
@@ -168,6 +170,7 @@ function configureDecentraderTradeExecutor() {
   });
   openLiquidityV2InjTradeMonitor.configureTradeExecutor({
     supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
+    getClosedPositionResult: (market, direction, identity) => client.getClosedPositionResult(market, direction, identity),
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
@@ -176,6 +179,7 @@ function configureDecentraderTradeExecutor() {
   });
   openLiquidityV2WldTradeMonitor.configureTradeExecutor({
     supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
+    getClosedPositionResult: (market, direction, identity) => client.getClosedPositionResult(market, direction, identity),
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
@@ -184,6 +188,7 @@ function configureDecentraderTradeExecutor() {
   });
   openLiquidityV2SolTradeMonitor.configureTradeExecutor({
     supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
+    getClosedPositionResult: (market, direction, identity) => client.getClosedPositionResult(market, direction, identity),
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
@@ -192,6 +197,7 @@ function configureDecentraderTradeExecutor() {
   });
   openLiquidityV2ZecTradeMonitor.configureTradeExecutor({
     supportsEntrySubmissionCheckpoint: client.supportsEntrySubmissionCheckpoint === true,
+    getClosedPositionResult: (market, direction, identity) => client.getClosedPositionResult(market, direction, identity),
     getAccountSnapshot: (markets: string[]) => client.getAccountSnapshot(markets),
     getStatefulOrderCapacity: (market: string) => client.getStatefulOrderCapacity(market),
     placeOrder: (alert: any, execution?: any) => client.placeOrder(alert, execution),
@@ -876,13 +882,13 @@ router.get('/open-liquidity/v2/liquidity-timelapse', async (req, res) => {
             ...payload.source,
             note:
               market === 'BTC-USD'
-                ? 'BTC_ENTRY_MODE selects manual, green, purple, atr, atr-purple or off (purple-trail remains an alias for purple). Green uses Spot intrusion plus gap break; purple adds a Daily break. atr and atr-purple add the same directional dYdX body >= 2x prior 14-hour Spot ATR filter to Green and Purple respectively. Automatic entries keep the dYdX signal-open SL, Yellow-gated trailing and no TPs.'
+                ? 'BTC_ENTRY_MODE accepts a comma-separated list of automatic modes (e.g. atr-purple,atr-purple-plus); manual and off are standalone. Green uses a Spot intrusion and gap break; Purple adds a Daily break. ATR requires a directional dYdX body >= 2x prior 14-hour Spot ATR. ATR Purple+ requires the first regular Purple after a confirmed same-direction ATR Purple loss. Automatic entries keep the dYdX signal-open SL, Yellow-gated trailing and no TPs.'
                 : market === 'PAXG-USD'
                 ? 'GOLD Public Perp V2 uses a causal Binance XAUUSDT Futures liquidation-cohort reconstruction with PAXG confirmation. Visual intrusions, filtered confirmations and SMTP Delay history are monitored identically to the crypto pairs. When explicitly enabled, filtered Gold intrusions are independently managed on dYdX PAXG-USD with the shared risk, fractal SL and TP settings.'
                 : market === 'XAG-USD'
                   ? 'SILVER Public Perp V2 uses a causal Binance XAGUSDT Futures liquidation-cohort reconstruction. Filtered intrusions and SMTP Delay history use the shared candle and taker-delta rules; live execution is independently managed on dYdX XAG-USD with the shared dollar-risk, Williams-fractal SL and TP settings.'
                   : purpleLineSetupForMarket(market)
-                  ? `${asset}_ENTRY_MODE selects manual, green, purple, atr, atr-purple or off. Green uses a Binance Spot intrusion and same-hour gap close break; purple adds a confirmed Daily close break. atr and atr-purple add the same directional dYdX body >= 2x prior 14-hour Spot ATR filter to Green and Purple respectively. Automatic entries use dYdX signal-open SL, fractal sizing and Yellow-gated trailing without TPs.`
+                  ? `${asset}_ENTRY_MODE accepts a comma-separated list of automatic modes (e.g. atr-purple,atr-purple-plus); manual and off are standalone. The first matching mode wins. Automatic entries use dYdX signal-open SL, fractal sizing and Yellow-gated trailing without TPs.`
                   : `${asset} Public Perp V2 uses a causal Binance Spot liquidation-cohort reconstruction. Visual intrusions are monitored with the shared Delay filter and, when enabled, managed independently on dYdX ${market} with the shared risk, fractal SL and TP environment settings.`
           }
         : payload.source,

@@ -1,10 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import { PurpleLineMarket, PURPLE_LINE_SETUPS, SpotEntrySetup } from './purpleLineSetup';
+import { PurpleLineMarket, PURPLE_LINE_SETUPS } from './purpleLineSetup';
 
 const MAX_GAP_MS = 5 * 60_000;
 type Lease = { version: 1; market: string; modelVersion: string; active: boolean;
-  activatedAt: string; observedAt: string; entrySetup?: SpotEntrySetup };
+  activatedAt: string; observedAt: string; entrySetup?: string };
 
 // A small durable heartbeat, separate from large chart/research state. It proves
 // that the model was already armed before a short interruption, not a new entry.
@@ -14,7 +14,7 @@ export class PurpleLineContinuity {
   private lastSeen?: number;
   private status: any = { ready: false };
   constructor(private market: PurpleLineMarket, private file: string, private enabled: () => boolean,
-    private entrySetup?: SpotEntrySetup) {}
+    private entrySetup?: string) {}
 
   start() {
     if (this.timer) return;

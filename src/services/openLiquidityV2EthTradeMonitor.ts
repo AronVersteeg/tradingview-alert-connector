@@ -10,8 +10,10 @@ import { SpotEntrySignal, EthEntryFuturesDelta,
   freshEthGapDailySignal, isBtcPurpleTrailSignal, withPurpleDydxBodyOpenStop, PURPLE_BODY_STOP_FRACTION } from './ethGapDailyEntry';
 import { evaluateGreenLineSignal, evaluateYellowIntrusionSignal, readPurpleGapBreakSignal, readGreenLineSignal } from './greenLineEntry';
 import { ATR_ENTRY_MULTIPLIER, ATR_ENTRY_PERIOD, atrEntryPasses, atrEntryReading, priorSpotAtr } from './atrEntry';
-import { PurpleLineMarket, automaticSpotEntryEnabled, purpleLineSetupForMarket, spotEntrySetup,
+import { PurpleLineMarket, automaticSpotEntryEnabled, purpleLineSetupForMarket, spotEntrySetups,
   spotSetupLabel, spotSetupUsesAtr, spotSetupUsesPurple } from './purpleLineSetup';
+import { atrPurpleParentLostBy, atrPurpleParentMatches, dydxPositionIdentity, noteUnverifiedAtrPurpleCandidate,
+  priorUnverifiedAtrPurpleCandidate, type AtrPurpleParent } from './atrPurplePlusLive';
 import { PurpleLineContinuity } from './purpleLineContinuity';
 import { PurpleTriggerEmail, purpleTriggerEmail } from './purpleTriggerEmail';
 import { archiveIntrusionEvidence } from './liquidityObservationArchive';
@@ -366,6 +368,7 @@ type EthMonitorState = AlertState & {
   gapDailyEntry?: {
     activatedAt?: string;
     handledCandle?: number;
+    atrPurpleParent?: AtrPurpleParent;
     futuresDelta?: EthEntryFuturesDelta;
     decision?: any;
     decisionHistory?: any[];
@@ -867,7 +870,8 @@ function writeState(state: EthMonitorState, config: OpenLiquidityV2TradeMonitorC
     const record = { outcome: decision.outcome, at: decision.at, reason: decision.reason,
       candleStartedAt: signal ? new Date(signal.time * 1000).toISOString() : undefined,
       candleClosedAt: signal ? new Date(signal.closedAt * 1000).toISOString() : decision.candleClosedAt,
-      direction: signal?.direction, executionOutcome: entry.intent?.outcome, executionPhase: entry.intent?.phase,
+      direction: signal?.direction, setup: signal?.setup ?? decision.setup,
+      executionOutcome: entry.intent?.outcome, executionPhase: entry.intent?.phase,
       protectionOutcome: decision.protection?.outcome };
     const records = entry.decisionHistory ||= [];
     if (JSON.stringify(records.at(-1)?.decision) !== JSON.stringify(record)) {
@@ -1042,7 +1046,7 @@ export class OpenLiquidityV2EthTradeMonitor {
     const continuityFile = `${stateFile(this.config)}.entry-lease.json`;
     if (purpleLineSetupForMarket(this.config.market) && (this.gapDailyEnabled() || fs.existsSync(continuityFile))) {
       this.entryContinuity = new PurpleLineContinuity(this.config.market as PurpleLineMarket, continuityFile,
-        () => this.gapDailyEnabled() && this.enabled() && this.autoTradeEnabled(), spotEntrySetup(this.config.market));
+        () => this.gapDailyEnabled() && this.enabled() && this.autoTradeEnabled(), spotEntrySetups(this.config.market).join(','));
       this.entryContinuity.start();
     }
     const begin = () => {
@@ -1094,8 +1098,9 @@ export class OpenLiquidityV2EthTradeMonitor {
         operational: false, tradeBlocked: 'STATE_UNREADABLE', error: error instanceof Error ? error.message : String(error),
         stateFile: stateFile(this.config), hasTradeExecutor: Boolean(this.executor) };
     }
-    const setup = spotEntrySetup(this.config.market);
-    const purple = spotSetupUsesPurple(setup), usesAtr = spotSetupUsesAtr(setup);
+    const setups = spotEntrySetups(this.config.market);
+    const setup = setups[0] ?? 'green-line';
+    const purple = spotSetupUsesPurple(setup), usesAtr = setups.some(spotSetupUsesAtr);
     return {
       enabled: this.enabled(),
       running: this.running,
@@ -1109,8 +1114,11 @@ export class OpenLiquidityV2EthTradeMonitor {
       autoTradeEnabled: this.autoTradeEnabled(),
       emailNotificationPolicy: EMAIL_NOTIFICATION_POLICY,
       gapDailyEntry: purpleLineSetupForMarket(this.config.market) ? {
-        setup, enabled: this.gapDailyEnabled(), env: spotEntryModeStatus(this.config.market)!.env,
-        source: `Binance Spot ${this.config.symbol} 1H`, rule: (purple
+        setup, setups, enabled: this.gapDailyEnabled(), env: spotEntryModeStatus(this.config.market)!.env,
+        source: `Binance Spot ${this.config.symbol} 1H`, rule: setups.length > 1
+          ? 'First matching configured mode wins; at most one entry per candle.' + (setups.includes('atr-purple-plus-line')
+            ? ' ATR Purple+ requires a confirmed loss of the latest ATR Purple position.' : '')
+          : (purple
           ? 'Same-hour directional intrusion, previous gap edge close break and fresh confirmed Daily fractal close break.'
           : 'Same-hour intrusion and fresh close beyond the previous gap edge.') + (usesAtr
           ? ' Also requires a directional dYdX break body at least 2x the prior 14-hour Binance Spot ATR.' : ''),
@@ -1509,48 +1517,111 @@ export class OpenLiquidityV2EthTradeMonitor {
     const close = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
     if (close <= Date.parse(entry.activatedAt) || Date.now() - close > 300_000 || entry.handledCandle === close) return;
     let signal: SpotEntrySignal | undefined;
-    const setup = spotEntrySetup(this.config.market);
-    const purple = spotSetupUsesPurple(setup);
-    const label = spotSetupLabel(setup);
+    const setups = spotEntrySetups(this.config.market);
+    const label = setups.map(spotSetupLabel).join(' / ');
     try {
       const intrusions = this.latestSpotIntrusions(payload, close);
       if (!intrusions.length) {
-        if (!purple) this.observeBtcRestGreen(close, payload, intrusions);
+        if (setups.some(setup => !spotSetupUsesPurple(setup))) this.observeBtcRestGreen(close, payload, intrusions);
         entry.decision = { outcome: 'NO_INTRUSION', candleClosedAt: new Date(close).toISOString() };
         return;
       }
+      const market = this.config.market as PurpleLineMarket;
       let hadGreenCandidate = false;
-      const green = !purple ? await readGreenLineSignal(this.config.market as PurpleLineMarket, payload, intrusions, raw => {
-        hadGreenCandidate = Boolean(raw);
-        this.observeBtcRestGreen(close, payload, intrusions, raw);
-      }) : undefined;
-      const candidate = purple ? await readPurpleGapBreakSignal(this.config.market as PurpleLineMarket, payload, intrusions) : green;
-      if (!candidate) {
-        entry.decision = { outcome: purple ? 'NO_PURPLE_CONFLUENCE' : hadGreenCandidate ? 'NO_GREEN_CONTINUATION' : 'NO_GAP_BREAK',
-          candleClosedAt: new Date(close).toISOString(),
-          reason: hadGreenCandidate ? 'No earlier matching Purple direction was verified.' : undefined };
-        return;
-      }
-      let closedRows: ReturnType<typeof dydxHourlyCandlesToFractalRows> | undefined;
-      if (spotSetupUsesAtr(setup)) {
-        const at = candidate.time * 1000;
-        const spotAtr = priorSpotAtr(new Map(payload.frames.slice(-16).map((frame: any) => [frame.startedAtMs, frame])), at);
-        if (spotAtr === undefined) throw new Error('ATR is awaiting 14 contiguous pre-signal Binance Spot ranges.');
+      let green: ReturnType<typeof readGreenLineSignal> | undefined;
+      let purple: ReturnType<typeof readPurpleGapBreakSignal> | undefined;
+      let rows: Promise<ReturnType<typeof dydxHourlyCandlesToFractalRows>> | undefined;
+      const loadRows = async () => {
         const candles = await fetchDydxHourlyCandlesForMarket(this.config.market);
         if (candles?.some(c => !('ticker' in c) || c.ticker !== this.config.market || c.resolution !== '1HOUR')) {
           throw new Error('ATR received an unexpected dYdX market or candle interval.');
         }
-        closedRows = dydxHourlyCandlesToFractalRows(candles);
-        const atr = atrEntryReading(at, candidate.direction, spotAtr, closedRows.at(-1));
-        if (!atr) throw new Error('ATR is awaiting the matching closed dYdX signal hour.');
-        if (!atrEntryPasses(atr)) {
-          entry.handledCandle = close;
-          entry.decision = result.gapDailyEntry = { outcome: 'ATR_BELOW_THRESHOLD', candleClosedAt: new Date(close).toISOString(), atr };
-          return;
+        return dydxHourlyCandlesToFractalRows(candles);
+      };
+      let closedRows: ReturnType<typeof dydxHourlyCandlesToFractalRows> | undefined;
+      let retryError: unknown;
+      let rejection: { outcome: string; reason?: string; atr?: ReturnType<typeof atrEntryReading>; setup?: string } | undefined;
+      for (const setup of setups) {
+        try {
+          const usesPurple = spotSetupUsesPurple(setup);
+          const candidate = usesPurple ? await (purple ||= readPurpleGapBreakSignal(market, payload, intrusions))
+            : await (green ||= readGreenLineSignal(market, payload, intrusions, raw => {
+              hadGreenCandidate = Boolean(raw);
+              this.observeBtcRestGreen(close, payload, intrusions, raw);
+            }));
+          if (!candidate) {
+            rejection ||= { outcome: usesPurple ? 'NO_PURPLE_CONFLUENCE' : hadGreenCandidate ? 'NO_GREEN_CONTINUATION' : 'NO_GAP_BREAK',
+              reason: !usesPurple && hadGreenCandidate ? 'No earlier matching Purple direction was verified.' : undefined };
+            continue;
+          }
+          const plus = setup === 'atr-purple-plus-line';
+          if (!plus && !spotSetupUsesAtr(setup)) { signal = candidate; break; }
+          const parent = entry.atrPurpleParent;
+          if (plus && !atrPurpleParentMatches(parent, candidate.direction, close)) {
+            rejection = { outcome: 'NO_ATR_PURPLE_PLUS_PARENT', setup };
+            continue;
+          }
+          const at = candidate.time * 1000;
+          const spotAtr = priorSpotAtr(new Map(payload.frames.slice(-16).map((frame: any) => [frame.startedAtMs, frame])), at);
+          if (spotAtr === undefined) throw new Error('ATR is awaiting 14 contiguous pre-signal Binance Spot ranges.');
+          closedRows = await (rows ||= loadRows());
+          const atr = atrEntryReading(at, candidate.direction, spotAtr, closedRows.at(-1));
+          if (!atr) throw new Error('ATR is awaiting the matching closed dYdX signal hour.');
+          const passes = atrEntryPasses(atr);
+          if (plus ? passes : !passes) {
+            rejection = { outcome: plus ? 'ATR_PURPLE_PLUS_REQUIRES_REGULAR_PURPLE' : 'ATR_BELOW_THRESHOLD', atr, setup };
+            continue;
+          }
+          if (plus) {
+            if (!('gap' in candidate) || !atrPurpleParentMatches(parent, candidate.direction, close)) continue;
+            if (!freshEthGapDailySignal(candidate, entry.activatedAt)) continue;
+            if (!parent.result) {
+              try {
+                if (entry.intent && state.managedPosition?.entrySignature === entry.intent.signature &&
+                    entry.intent.signal.closedAt * 1000 === parent.signalClosedAt) {
+                  throw new Error('ATR Purple+ is awaiting reconciliation of the managed ATR Purple parent.');
+                }
+                if (!this.executor?.getClosedPositionResult) throw new Error('ATR Purple+ cannot verify dYdX closed-position P&L.');
+                parent.result = await this.executor.getClosedPositionResult(market, parent.direction, parent.position);
+                if (!parent.result) throw new Error('ATR Purple+ is awaiting a verified dYdX parent close and P&L.');
+              } catch (error) {
+                if (noteUnverifiedAtrPurpleCandidate(parent, close)) writeState(state, this.config);
+                throw error;
+              }
+            }
+            const missed = priorUnverifiedAtrPurpleCandidate(parent, close);
+            if (missed !== undefined) {
+              parent.consumedAt = missed;
+              writeState(state, this.config);
+              rejection = { outcome: 'ATR_PURPLE_PLUS_FIRST_CANDLE_EXPIRED', setup };
+              continue;
+            }
+            if (!atrPurpleParentLostBy(parent, close)) {
+              rejection = { outcome: 'ATR_PURPLE_PARENT_NOT_CLOSED_AT_A_LOSS_BEFORE_SIGNAL', setup };
+              continue;
+            }
+            parent.consumedAt = close;
+            writeState(state, this.config);
+            if (!freshEthGapDailySignal(candidate, entry.activatedAt)) continue;
+            signal = { ...candidate, setup: 'atr-purple-plus-line', atr };
+          } else {
+            signal = 'gap' in candidate ? { ...candidate, setup: 'atr-purple-line', atr } : { ...candidate, setup: 'atr-line', atr };
+          }
+          break;
+        } catch (error) {
+          retryError ??= error;
         }
-        signal = 'gap' in candidate ? { ...candidate, setup: 'atr-purple-line', atr } : { ...candidate, setup: 'atr-line', atr };
-      } else signal = candidate;
-      entry.decision = { outcome: 'DETECTED', signal, reason: `${label} signal detected; execution is not yet confirmed.` };
+      }
+      if (!signal) {
+        if (retryError) throw retryError;
+        if (rejection?.outcome === 'ATR_BELOW_THRESHOLD') {
+          entry.handledCandle = close;
+        }
+        entry.decision = result.gapDailyEntry = { ...rejection, candleClosedAt: new Date(close).toISOString() };
+        return;
+      }
+      entry.decision = { outcome: 'DETECTED', signal,
+        reason: `${'setup' in signal ? spotSetupLabel(signal.setup) : label} signal detected; execution is not yet confirmed.` };
       this.capturePurpleTriggerEmail(state, signal, result);
       const accepted = signal;
       await this.coordinator.exclusive(() => this.executeGapDailyEntry(state, accepted, result, closedRows));
@@ -1622,7 +1693,12 @@ export class OpenLiquidityV2EthTradeMonitor {
     const skip = (reason: string) => { entry.decision = { outcome: 'SKIPPED', at: nowNlIso(), reason, signal }; };
     const purple = isBtcPurpleTrailSignal(signal);
     const setup = 'setup' in signal ? signal.setup : 'green-line';
-    const setupMatches = () => setup === spotEntrySetup(this.config.market);
+    const setupMatches = () => {
+      if (!spotEntrySetups(this.config.market).includes(setup)) return false;
+      if (setup !== 'atr-purple-plus-line') return true;
+      const close = signal.closedAt * 1000, parent = entry.atrPurpleParent;
+      return atrPurpleParentMatches(parent, signal.direction, close) && parent.consumedAt === close && atrPurpleParentLostBy(parent, close);
+    };
     const label = spotSetupLabel(setup);
     if (!this.gapDailyEnabled() || !this.enabled() || !this.autoTradeEnabled()) return skip(`${this.config.asset} entry model, monitor or pair auto-trading is disabled.`);
     if (!setupMatches() || purple && this.executor?.supportsEntrySubmissionCheckpoint !== true) return skip(`Signal setup or protected execution checkpoint does not match the ${this.config.asset} entry mode.`);
@@ -1846,6 +1922,14 @@ export class OpenLiquidityV2EthTradeMonitor {
     state.lastTradeExecutedAt = registeredAt;
     state.lastTradeAttemptedSignature = signature;
     state.lastTradeAttemptedAt = registeredAt;
+    if (options.model === 'GAP_DAILY' && options.signal?.setup === 'atr-purple-line') {
+      const signalClosedAt = options.signal.closedAt * 1000;
+      const identity = dydxPositionIdentity(position);
+      const created = identity ? Date.parse(identity.createdAt) : NaN;
+      const entry = state.gapDailyEntry ||= {};
+      entry.atrPurpleParent = { direction, signalClosedAt,
+        position: created >= signalClosedAt && created <= Date.now() ? identity : undefined };
+    }
     state.managedPosition = {
       market: this.config.market,
       direction,

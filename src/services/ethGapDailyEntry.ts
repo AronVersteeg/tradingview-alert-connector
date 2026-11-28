@@ -26,9 +26,10 @@ export type GreenLineSignal = Omit<PurpleLineSignal, 'dailyLevels'> & { setup: '
 export type BtcPurpleTrailSignal = PurpleLineSignal & { setup: 'purple-green-trail'; gap: { lower: number; upper: number; candleTime: number } };
 export type AtrLineSignal = Omit<GreenLineSignal, 'setup'> & { setup: 'atr-line'; atr: AtrEntryReading };
 export type AtrPurpleLineSignal = Omit<BtcPurpleTrailSignal, 'setup'> & { setup: 'atr-purple-line'; atr: AtrEntryReading };
-export type SpotEntrySignal = PurpleLineSignal | GreenLineSignal | BtcPurpleTrailSignal | AtrLineSignal | AtrPurpleLineSignal;
+export type AtrPurplePlusSignal = Omit<BtcPurpleTrailSignal, 'setup'> & { setup: 'atr-purple-plus-line'; atr: AtrEntryReading };
+export type SpotEntrySignal = PurpleLineSignal | GreenLineSignal | BtcPurpleTrailSignal | AtrLineSignal | AtrPurpleLineSignal | AtrPurplePlusSignal;
 
-export function isBtcPurpleTrailSignal(signal: SpotEntrySignal): signal is BtcPurpleTrailSignal | AtrPurpleLineSignal {
+export function isBtcPurpleTrailSignal(signal: SpotEntrySignal): signal is BtcPurpleTrailSignal | AtrPurpleLineSignal | AtrPurplePlusSignal {
   return 'setup' in signal && spotSetupUsesPurple(signal.setup);
 }
 

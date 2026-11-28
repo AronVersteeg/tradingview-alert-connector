@@ -389,6 +389,59 @@ describe.each(['BTC', 'ETH', 'INJ', 'SOL', 'WLD', 'ZEC'] as const)('%s purple li
     const state = () => ({ gapDailyEntry: { activatedAt: iso(closeAt - HOUR) } });
 
     if (asset === 'BTC') {
+      test.each(['loss', 'pending', 'winner', 'opposite', 'consumed', 'strong', 'priority', 'fallback'] as const)(
+        'combined BTC ATR Purple and Plus routes with a %s parent/signal', async scenario => {
+          process.env.BTC_ENTRY_MODE = scenario === 'priority' || scenario === 'fallback' ? 'atr-purple,purple' : 'atr-purple,atr-purple-plus';
+          const { payload } = inputs();
+          payload.frames = [...Array.from({ length: 14 }, (_, i) => ({ ...payload.frames[0], startedAtMs: closeAt - (16 - i) * HOUR,
+            high: 121, low: 120, close: 120 })),
+            ...payload.frames.map((frame, i) => i === 0 ? { ...frame, high: 121, low: 120, close: 120 } : frame)];
+          jest.spyOn(monitor, 'latestSpotIntrusions').mockReturnValue([{}]);
+          const readPurple = jest.spyOn(green, 'readPurpleGapBreakSignal').mockResolvedValue({
+            ...signal(), setup: 'purple-green-trail', gap: { lower: 85, upper: 115, candleTime: signal().time - 3600 }
+          });
+          (gap.fetchDydxHourlyCandlesForMarket as jest.Mock).mockResolvedValue([115, 112, 110, 113, 116].map((low, i) => ({
+            ticker: market, startedAt: iso(closeAt - (5 - i) * HOUR), resolution: '1HOUR', open: String(low + 2), high: String(low + 5),
+            low: String(low), close: String(low + (i === 4 && (scenario === 'strong' || scenario === 'priority') ? 4 : 3))
+          })));
+          orders.supportsEntrySubmissionCheckpoint = true;
+          orders.getClosedPositionResult = jest.fn().mockResolvedValue(scenario === 'pending' ? undefined : {
+            closedAt: closeAt - 5000, realizedPnl: scenario === 'winner' ? 1 : -1
+          });
+          orders.placeOrder.mockImplementationOnce(async (_alert: any, execution: any) => {
+            expect(execution.requireFlat).toBe(true);
+            await execution.beforeEntrySubmit();
+            position = { market, size: .4, entryPrice: 120, createdAt: iso(closeAt + 1000), createdAtHeight: '12346' };
+          });
+          const managed: any = state(), result: any = {};
+          const parentIdentity = { createdAt: iso(closeAt - 2 * HOUR + 1000), createdAtHeight: '12345' };
+          managed.gapDailyEntry.atrPurpleParent = { direction: scenario === 'opposite' ? 'short' : 'long',
+            signalClosedAt: closeAt - 2 * HOUR, position: parentIdentity, consumedAt: scenario === 'consumed' ? closeAt - HOUR : undefined };
+          await monitor.checkGapDailyEntry(managed, payload, result);
+          expect(readPurple).toHaveBeenCalledTimes(1);
+          const executes = ['loss', 'strong', 'priority', 'fallback'].includes(scenario);
+          expect(orders.placeOrder).toHaveBeenCalledTimes(executes ? 1 : 0);
+          if (scenario === 'loss') {
+            expect(orders.getClosedPositionResult).toHaveBeenCalledWith(market, 'long', parentIdentity);
+            expect(orders.placeOrder.mock.calls[0][0]).toMatchObject({ static_sl: 118, take_profits: [],
+              gap_daily_entry: { setup: 'atr-purple-plus-line' } });
+            const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
+            expect(persisted.gapDailyEntry.atrPurpleParent.consumedAt).toBe(closeAt);
+            expect(persisted.gapDailyEntry.triggerEmails[0].subject).toContain('BTC ATR PURPLE+ LONG TRIGGERED');
+            await monitor.checkGapDailyEntry(persisted, payload, {});
+            expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+          } else if (scenario === 'strong' || scenario === 'priority') {
+            expect(orders.placeOrder.mock.calls[0][0].gap_daily_entry.setup).toBe('atr-purple-line');
+            expect(managed.gapDailyEntry.atrPurpleParent).toMatchObject({ signalClosedAt: closeAt,
+              position: { createdAt: iso(closeAt + 1000), createdAtHeight: '12346' } });
+            expect(orders.getClosedPositionResult).not.toHaveBeenCalled();
+          } else if (scenario === 'fallback') {
+            expect(orders.placeOrder.mock.calls[0][0].gap_daily_entry.setup).toBe('purple-green-trail');
+            expect(orders.getClosedPositionResult).not.toHaveBeenCalled();
+          } else if (scenario === 'pending') expect(result.gapDailyEntryPending).toBe(true);
+          expect(orders.syncTakeProfits).not.toHaveBeenCalled();
+        });
+
       test('BTC shadow uses the real Green evaluator without fetching chart data or placing any order', async () => {
         const { payload, page } = inputs();
         const candles = page.candles.map((row: any) => ({

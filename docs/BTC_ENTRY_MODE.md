@@ -9,11 +9,12 @@ This is the single authoritative BTC entry selector:
 | Value | New BTC entries |
 | --- | --- |
 | `manual` | Saved manual plans only (default when absent). |
-| `green` | Binance Spot Public V2 intrusion plus a fresh close beyond the previous gap edge on the same closed 1H candle. |
+| `green` | Binance Spot Public V2 intrusion plus a fresh close beyond the previous gap edge on the same closed 1H candle, after a Purple in the same direction. |
 | `purple` | BTC only: Purple entry (same-hour directional intrusion, fresh gap break and fresh Daily close break), with an initial SL at the dYdX signal candle open and later same-direction Yellow-gated fractal trailing. |
 | `purple-trail` | Compatibility alias for `purple`; existing deployments keep the same Purple strategy. |
 | `atr` | Green plus a directional dYdX break body at least 2x the prior 14-hour Binance Spot ATR. Uses Green protection and trailing. |
 | `atr-purple` | Purple plus the same 2x ATR threshold. Uses Purple protection and trailing. |
+| `atr-purple,atr-purple-plus` | Either ATR Purple or the first regular Purple in the same direction after the latest live ATR Purple position closes with a verified dYdX loss. |
 | `off` | No new BTC entries. Existing positions keep their original management. |
 
 Values are case-insensitive. Unknown values fail closed as `off`; status reports
@@ -21,6 +22,17 @@ Values are case-insensitive. Unknown values fail closed as `off`; status reports
 automatic entries when the mode is absent. Change the value in Render and choose **Save and deploy**.
 The new value takes effect in the deployed process; it is not an instant
 in-process switch.
+
+Automatic modes can be listed with commas. The first matching mode in the list
+gets the candle; there is never more than one entry per pair and candle, and
+an open position is never replaced or increased. `manual` and `off` must stand
+alone. `atr-purple-plus` requires `atr-purple` in the same list. The Plus gate
+uses the persisted identity of a confirmed ATR Purple entry and the realized
+P&L of that exact dYdX position. An open, unverified, profitable or breakeven
+parent cannot arm Plus. Late verification never submits an expired signal or
+promotes a subsequent candle over a known earlier eligible candle. Paper replays and pre-deployment trades without a
+tracked identity never arm it. These lists also work on the other existing
+Public V2 spot pair selectors (`ETH`, `SOL`, `ZEC`, `INJ`, `WLD`).
 
 `purple` no longer selects Green. Select `green` explicitly for that strategy.
 Status normalizes both `purple` and the old `purple-trail` value to `mode=purple`.
@@ -48,7 +60,7 @@ only tightens. Existing positions and already-submitted intents retain their
 recorded stops. The existing fixed-USD risk, collateral, depth, step/tick and
 dynamic-downsizing checks still apply.
 
-Green uses NO_TP / trailing-only. There is no Daily, FD or OI entry gate. Only the latest
+Green uses NO_TP / trailing-only. There is no same-hour Daily break, FD or OI entry gate. Only the latest
 closed hour within five minutes and closing after activation is eligible. No
 historical signal is dispatched when enabling Green or migrating from Purple.
 Spot candles and replica OHLC must agree for both hours, and the close must

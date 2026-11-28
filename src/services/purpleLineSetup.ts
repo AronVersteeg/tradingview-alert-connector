@@ -20,22 +20,22 @@ export const PURPLE_LINE_SETUPS = {
 
 export type PurpleLineMarket = keyof typeof PURPLE_LINE_SETUPS;
 const AUTOMATIC_SETUPS = { green: 'green-line', atr: 'atr-line', purple: 'purple-green-trail',
-  'atr-purple': 'atr-purple-line' } as const;
+  'atr-purple': 'atr-purple-line', 'atr-purple-plus': 'atr-purple-plus-line' } as const;
 export type SpotEntrySetup = typeof AUTOMATIC_SETUPS[keyof typeof AUTOMATIC_SETUPS];
 
-function configuredAutomaticSetup(market: string): SpotEntrySetup | undefined {
-  const mode = spotEntryModeStatus(market)?.mode;
-  return mode && mode !== 'off' && mode !== 'manual' ? AUTOMATIC_SETUPS[mode] : undefined;
+export function spotEntrySetups(market: string): SpotEntrySetup[] {
+  return (spotEntryModeStatus(market)?.modes || []).map(mode => AUTOMATIC_SETUPS[mode]);
 }
 
 export function spotEntrySetup(market: string): SpotEntrySetup {
-  return configuredAutomaticSetup(market) ?? 'green-line';
+  return spotEntrySetups(market)[0] ?? 'green-line';
 }
 
-export const spotSetupUsesPurple = (setup: SpotEntrySetup) => setup === 'purple-green-trail' || setup === 'atr-purple-line';
+export const spotSetupUsesPurple = (setup: SpotEntrySetup) => setup === 'purple-green-trail' ||
+  setup === 'atr-purple-line' || setup === 'atr-purple-plus-line';
 export const spotSetupUsesAtr = (setup: SpotEntrySetup) => setup === 'atr-line' || setup === 'atr-purple-line';
 export const spotSetupLabel = (setup: SpotEntrySetup) => ({ 'green-line': 'Green', 'atr-line': 'ATR',
-  'purple-green-trail': 'Purple', 'atr-purple-line': 'ATR Purple' }[setup]);
+  'purple-green-trail': 'Purple', 'atr-purple-line': 'ATR Purple', 'atr-purple-plus-line': 'ATR Purple+' }[setup]);
 
 export function purpleLineSetupForMarket(market: string) {
   return Object.prototype.hasOwnProperty.call(PURPLE_LINE_SETUPS, market)
@@ -43,7 +43,7 @@ export function purpleLineSetupForMarket(market: string) {
 }
 
 export function automaticSpotEntryEnabled(market: string): boolean {
-  return configuredAutomaticSetup(market) !== undefined;
+  return spotEntrySetups(market).length > 0;
 }
 
 // Retain the existing configuration helper for compatibility.

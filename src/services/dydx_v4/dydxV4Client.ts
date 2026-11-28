@@ -10,7 +10,8 @@ import {
   OrderTimeInForce,
   OrderType,
   OrderExecution,
-  IndexerConfig
+  IndexerConfig,
+  PositionStatus
 } from '@dydxprotocol/v4-client-js';
 
 import { AlertObject, EntryExecutionOptions, TrailingStopOptions } from '../../types';
@@ -23,6 +24,7 @@ import { AbstractDexClient } from '../abstractDexClient';
 import { createReadResilientIndexerClient } from './indexerReadRecovery';
 import { constrainEntryPrice, entryRiskLimit, findRiskCompatibleEntry, EntryRiskLimit } from './entryRiskGuard';
 import { BtcReplayStopJournal, BtcTradeReplay } from './btcTradeReplay';
+import { dydxPositionIdentity, matchDydxClosedPosition, type DydxPositionIdentity } from '../atrPurplePlusLive';
 
 type ProgressResult =
   | { kind: 'target'; currentSize: number }
@@ -241,6 +243,8 @@ export type DydxV4AccountSnapshot = {
     side: string;
     size: number;
     entryPrice?: number;
+    createdAt?: string;
+    createdAtHeight?: string;
     realizedPnl?: number;
     unrealizedPnl?: number;
   }>;
@@ -3556,6 +3560,15 @@ export class DydxV4Client extends AbstractDexClient {
     });
   }
 
+  async getClosedPositionResult(market: string, direction: 'long' | 'short', identity: DydxPositionIdentity) {
+    const height = Number(identity.createdAtHeight);
+    if (!Number.isSafeInteger(height) || height <= 0) return undefined;
+    const result = await this.indexer.account.getSubaccountPerpetualPositions(this.wallet.address, 0,
+      PositionStatus.CLOSED, 100, height);
+    if (!Array.isArray(result?.positions)) throw new Error('dYdX closed-position response is unavailable.');
+    return matchDydxClosedPosition(result.positions, market, direction, identity);
+  }
+
   private async getSubaccountSnapshotBestEffort(): Promise<any> {
     const accountApi = this.indexer.account as any;
 
@@ -5675,6 +5688,7 @@ export class DydxV4Client extends AbstractDexClient {
         side: String(position?.side ?? ''),
         size: this.parseNumberOrZero(position?.size),
         entryPrice: this.parsePositiveNumber(position?.entryPrice ?? position?.entry_price),
+        ...(position && dydxPositionIdentity(position)),
         realizedPnl: this.parseSignedNumber(position?.realizedPnl ?? position?.realized_pnl),
         unrealizedPnl: this.parseSignedNumber(position?.unrealizedPnl ?? position?.unrealized_pnl)
       }))

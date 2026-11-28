@@ -1,4 +1,5 @@
-import { BtcEntryMode, btcEntryModeStatus } from './btcEntryMode';
+import { btcEntryModeStatus } from './btcEntryMode';
+import { parseEntryModes } from './entryModeSelection';
 
 const PAIR_MODES = {
   'ETH-USD': { env: 'ETH_ENTRY_MODE', legacyEnv: 'OPEN_LIQUIDITY_V2_ETH_GAP_DAILY_ENTRY_ENABLED' },
@@ -16,11 +17,8 @@ export function spotEntryModeStatus(market: string) {
   const explicit = value !== '';
   const legacyGreen = config.legacyEnv !== undefined && ['1', 'true', 'yes', 'on'].includes(String(process.env[config.legacyEnv] || '').trim().toLowerCase());
   const fallback = config.legacyEnv === undefined ? 'off' : 'manual';
-  const valid = !explicit || ['manual', 'green', 'atr', 'atr-purple', 'purple', 'purple-trail', 'off'].includes(value);
-  const mode: BtcEntryMode = !explicit ? legacyGreen ? 'green' : fallback
-    : value === 'purple' || value === 'purple-trail' ? 'purple'
-    : value === 'manual' || value === 'green' || value === 'atr' || value === 'atr-purple' ? value : 'off';
-  return { env: config.env, mode, valid, explicit, legacyFallback: !explicit && config.legacyEnv !== undefined, legacyEnv: config.legacyEnv,
+  return { env: config.env, ...parseEntryModes(explicit ? value : legacyGreen ? 'green' : fallback),
+    explicit, legacyFallback: !explicit && config.legacyEnv !== undefined, legacyEnv: config.legacyEnv,
     default: fallback, positionManagement: 'existing owner continues; switching never changes a live position' };
 }
 

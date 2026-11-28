@@ -1,19 +1,17 @@
 import fs from 'fs';
 import path from 'path';
+import { parseEntryModes } from './entryModeSelection';
 
 export const BTC_ENTRY_MODE_ENV = 'BTC_ENTRY_MODE';
 export const BTC_PURPLE_MODE = 'purple';
-export type BtcEntryMode = 'manual' | 'green' | 'atr' | 'atr-purple' | 'off' | typeof BTC_PURPLE_MODE;
+export type BtcEntryMode = ReturnType<typeof parseEntryModes>['mode'];
 
 export function btcEntryMode(): BtcEntryMode {
-  const value = String(process.env[BTC_ENTRY_MODE_ENV] || 'manual').trim().toLowerCase();
-  if (value === BTC_PURPLE_MODE || value === 'purple-trail') return BTC_PURPLE_MODE;
-  return value === 'manual' || value === 'green' || value === 'atr' || value === 'atr-purple' ? value : 'off';
+  return btcEntryModeStatus().mode;
 }
 
 export function btcEntryModeStatus() {
-  const value = String(process.env[BTC_ENTRY_MODE_ENV] || 'manual').trim().toLowerCase();
-  return { env: BTC_ENTRY_MODE_ENV, mode: btcEntryMode(), valid: ['manual', 'green', 'atr', 'atr-purple', BTC_PURPLE_MODE, 'off', 'purple-trail'].includes(value),
+  return { env: BTC_ENTRY_MODE_ENV, ...parseEntryModes(process.env[BTC_ENTRY_MODE_ENV] || 'manual'),
     default: 'manual', positionManagement: 'existing owner continues; switching never changes a live position' };
 }
 

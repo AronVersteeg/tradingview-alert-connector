@@ -381,6 +381,8 @@ export type DydxOpenPosition = {
   side?: string;
   size: number;
   entryPrice?: number;
+  createdAt?: string;
+  createdAtHeight?: string;
 };
 
 export type DydxSizingAccountSnapshot = {
@@ -454,6 +456,8 @@ export type FractalStopOptions = {
 
 export type DecentraderTradeExecutor = {
   getAccountSnapshot: (markets: string[]) => Promise<DydxSizingAccountSnapshot>;
+  getClosedPositionResult?: (market: string, direction: 'long' | 'short', identity: import('./atrPurplePlusLive').DydxPositionIdentity) =>
+    Promise<import('./atrPurplePlusLive').ClosedPositionResult | undefined>;
   getStatefulOrderCapacity?: (market: string) => Promise<{
     limit: number;
     openOrders: number;
