@@ -23,6 +23,7 @@ const open = { ...trade, id: String(hour(8)), status: 'OPEN', openedAt: hour(8),
 const incomplete = { ...open, id: String(hour(3)), status: 'INCOMPLETE', markToMarket: undefined };
 const trades = [incomplete, open, trade];
 const purpleTrade = { ...trade, id: String(hour(12)), openedAt: hour(12), grossPnl: -7.5, dailyLevels: [82000] };
+const purplePlusTrade = { ...purpleTrade, grossPnl: 4.5 };
 const coverage = { riskBudgetUsd: 15, tradeCount: trades.length, from: Date.parse('2025-01-01T00:00:00Z'),
   through: hour(42), historyCoverage: 'archive-plus-recent', missingDydxHours: 3 };
 const pageHtml = fs.readFileSync('public/decentrader_liquidity_timelapse.html', 'utf8')
@@ -50,8 +51,8 @@ async function run() {
           assert.equal(route.request().headers()['x-webhook-token'], undefined);
           assert.equal(url.searchParams.get('market'), market);
           const strategy = url.searchParams.get('strategy');
-          assert(['green', 'purple'].includes(strategy));
-          const sourceTrades = strategy === 'purple' ? [purpleTrade] : listed;
+          assert(['green', 'purple', 'atr-purple-plus'].includes(strategy));
+          const sourceTrades = strategy === 'atr-purple-plus' ? [purplePlusTrade] : strategy === 'purple' ? [purpleTrade] : listed;
           return route.fulfill({ json: url.searchParams.has('id')
             ? { trade: sourceTrades.find(row => row.id === url.searchParams.get('id')), candles: capsules, ...coverage, market: replyMarket, strategy }
             : { trades: sourceTrades, ...coverage, market: replyMarket, strategy } });
@@ -143,7 +144,7 @@ async function run() {
       await page.locator('#btcReplayTotalPnl[data-result="flat"]').waitFor();
       assert.match(await total.textContent(), /\$\s?0,00/);
       await risk.fill('30');
-      await page.locator('#btcReplayStrategy label').filter({ hasText: 'Purple' }).click();
+      await page.locator('#btcReplayStrategy label').filter({ has: page.locator('input[value="purple"]') }).click();
       await page.locator('#btcReplaySummary').getByText('Gebroken Daily (Spot)').waitFor();
       assert.equal(await page.locator('#btcReplayTitle').textContent(), `${asset} Purple Retest`);
       assert.equal(await page.locator('#btcReplayTrade').inputValue(), purpleTrade.id);
@@ -152,6 +153,13 @@ async function run() {
       assert.equal(await risk.inputValue(), '30');
       assert.equal(await page.locator('.btc-replay-entry').textContent(), 'Purple-entry');
       assert(await page.locator('#btcTradeReplay').evaluate(panel => panel.scrollWidth <= panel.clientWidth + 1));
+      await page.locator('#btcReplayStrategy label').filter({ has: page.locator('input[value="atr-purple-plus"]') }).click();
+      await page.locator('#btcReplayTotalPnl[data-result="gain"]').waitFor();
+      await page.locator('#btcReplaySummary').getByText('Gebroken Daily (Spot)').waitFor();
+      assert.equal(await page.locator('#btcReplayTitle').textContent(), `${asset} ATR Purple + Retest`);
+      assert.equal(await page.locator('#btcReplayTrade').inputValue(), purplePlusTrade.id);
+      assert.match(await total.textContent(), /\$\s?\+9,00/);
+      assert(await page.locator('#btcReplayStrategy').evaluate(picker => picker.scrollWidth <= picker.clientWidth + 1));
       await page.locator('#btcReplayStrategy label').filter({ hasText: 'Green' }).click();
       await page.locator('#btcReplayTotalPnl[data-result="flat"]').waitFor();
       assert.equal(await page.locator('#btcReplayTrade option').count(), 2);
@@ -164,7 +172,7 @@ async function run() {
       }
       assert.deepEqual(errors, []);
       console.log(`${asset} Green retest ${viewport.width}px: chart, P&L, risk, market identity and scrub/play passed.`);
-      await page.goto('https://btc-replay.test/decentrader/map?source=open-v2-inj');
+      await page.goto('https://btc-replay.test/decentrader/map?source=open-v2-gold');
       assert(await page.locator('#btcTradeReplay').isHidden());
       await page.close();
     }

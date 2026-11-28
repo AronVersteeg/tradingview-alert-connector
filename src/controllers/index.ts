@@ -15,7 +15,7 @@ import {
   fetchDydxHourlyCandlesForMarket
 } from '../services/decentraderGapMonitor';
 import { retestFractalRows } from '../research/greenRetest';
-import { buildGreenRetestWithHistory, closedRetestLossSignalTimes, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
+import { buildAtrPurplePlusWithHistory, buildGreenRetestWithHistory, closedRetestLossSignalTimes, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
 import { archivedContinuation, canBridgeContinuation, greenContinuationMarkers, readRecentContinuation } from '../research/greenContinuation';
 import { PURPLE_LINE_SETUPS, purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
 import {
@@ -943,12 +943,13 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
   }
   const market = rawMarket.toUpperCase() as PurpleLineMarket;
   const strategy = legacyBtc ? 'green' : req.query.strategy ?? 'green';
-  if (strategy !== 'green' && strategy !== 'purple' && strategy !== 'atr' && strategy !== 'atr-purple') {
+  if (strategy !== 'green' && strategy !== 'purple' && strategy !== 'atr' && strategy !== 'atr-purple' && strategy !== 'atr-purple-plus') {
     return res.status(400).send({ error: 'Invalid retest strategy.' });
   }
   const mode = strategy;
+  const plus = mode === 'atr-purple-plus';
   const usesAtr = mode === 'atr' || mode === 'atr-purple';
-  const usesPurple = mode === 'purple' || mode === 'atr-purple';
+  const usesPurple = mode === 'purple' || mode === 'atr-purple' || plus;
   const cacheKey = `${market}|${mode}`;
   const id = req.query.id;
   if (id !== undefined && (typeof id !== 'string' || !/^\d{13}$/.test(id))) return res.status(400).send({ error: 'Invalid trade.' });
@@ -966,24 +967,28 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
     if (!cache.data || cache.expires <= now) {
       if (now < cache.retryAt) throw new Error('Replay source cooling down.');
       cache.pending ??= (async () => {
-        const history = readRetestHistory(market, mode);
+        const history = readRetestHistory(market, plus ? 'purple' : mode);
+        const parentHistory = plus ? readRetestHistory(market, 'atr-purple') : undefined;
         const archive = usesPurple ? undefined : archivedContinuation(market)?.purple;
-        const historyOnly = () => buildGreenRetestWithHistory(history, undefined, mode, { archive });
+        const archiveReady = Boolean(history && (!plus || parentHistory));
+        const historyOnly = () => plus ? buildAtrPurplePlusWithHistory(history, parentHistory)
+          : buildGreenRetestWithHistory(history, undefined, mode, { archive });
         try {
           const collector = openLiquidityV2CollectorForMarket(market);
           if (!collector?.getStatus().liveReplayReady) throw new Error(`${market} Spot replica is warming up.`);
           const payload = await collector.getPayload();
           const observedAt = Date.now();
           const replicaThrough = Number(payload.frames?.at(-1)?.startedAtMs) + 3_600_000;
-          if (history && replicaThrough <= history.context.through) return historyOnly();
+          if (archiveReady && history && replicaThrough <= history.context.through) return historyOnly();
           const { green, purple } = await readRecentContinuation(market, payload, observedAt);
           const context = usesPurple ? purple : green;
           const rows = retestFractalRows(market, await fetchDydxHourlyCandlesForMarket(market), observedAt);
           const recent = { context, rows };
+          if (plus) return buildAtrPurplePlusWithHistory(history, parentHistory, recent, recentAtrRetest(recent, payload.frames));
           return buildGreenRetestWithHistory(history, usesAtr ? recentAtrRetest(recent, payload.frames) : recent, mode,
             { archive, recent: purple, bridge: Boolean(archive && canBridgeContinuation(archive, purple)) });
         } catch (error) {
-          if (!history) throw error;
+          if (!archiveReady) throw error;
           return historyOnly();
         }
       })().then(data => {

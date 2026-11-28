@@ -65,6 +65,12 @@ or whether a trade filled. With no verified earlier Purple direction, Green and
 ATR do not signal; an unverified history gap is not bridged. The Purple, ATR Purple
 and Yellow rules, existing positions and all stop management are unchanged.
 
+`ATR Purple +` is a retest and overlay only, not an entry mode. A closed
+ATR Purple loss qualifies the first subsequent ordinary Purple in the same
+direction after the loss is known at the exit candle close. The follow-up
+does not need to pass the ATR threshold. It uses the existing one-position
+rule and the same simulated stops as the other retests.
+
 All automatic modes use only the selected pair's native Binance Spot USDT 1H
 intrusions/gaps. Purple additionally reads that same pair's Binance Spot Daily
 fractals. Both ATR modes use dYdX for the matching closed break body and do not

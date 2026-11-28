@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DecentraderRow } from '../services/decentraderGapMonitor';
 import { PURPLE_LINE_SETUPS, type PurpleLineMarket } from '../services/purpleLineSetup';
-import { buildGreenRetestFromRows, type RetestContext } from './greenRetest';
+import { buildGreenRetestFromRows, simulateGreenRetest, type RetestContext } from './greenRetest';
 import { ATR_ENTRY_PERIOD, atrEntryReading, atrEntryPasses, priorSpotAtr, type SpotAtrRange } from '../services/atrEntry';
 import { filterGreenContinuation } from '../services/greenContinuationRule';
 
@@ -13,6 +13,7 @@ export const GREEN_HISTORY_VERSION = 1;
 export const GREEN_HISTORY_WARMUP_HOURS = 8760;
 type Context = RetestContext;
 export type RetestMode = 'green' | 'purple' | 'atr' | 'atr-purple';
+type RetestStrategy = RetestMode | 'atr-purple-plus';
 type LossCandidate = { signalAt: number; status: string; grossPnl?: number };
 
 const closedRetestLoss = (trade: LossCandidate) => trade.status === 'CLOSED' && typeof trade.grossPnl === 'number' &&
@@ -212,7 +213,7 @@ function extendHistory(history: Series, recent: Series): Series | undefined {
     yellows: [...past.yellows, ...live.yellows.filter(y => inExtension(y.at))] } };
 }
 
-export function buildGreenRetestWithHistory(history: Series | undefined, recent: Series | undefined, strategy: RetestMode = 'green',
+export function buildGreenRetestWithHistory(history: Series | undefined, recent: Series | undefined, strategy: RetestStrategy = 'green',
   continuation?: { archive?: Context; recent?: Context; bridge?: boolean }) {
   if (!history && !recent) throw new Error('No Green retest data available.');
   const extended = history && recent && extendHistory(history, recent);
@@ -239,4 +240,44 @@ export function buildGreenRetestWithHistory(history: Series | undefined, recent:
     missingDydxHours: (lastCheckedHour - result.from) / HOUR - covered.size,
     historyCoverage: extended ? 'archive-plus-recent' : history ? 'archive-only' : 'recent-only',
     reconstructedThrough: history?.context.through };
+}
+
+type AtrPurpleLoss = LossCandidate & { direction: Direction; closedAt?: number };
+
+export function atrPurplePlusSignals<T extends Pick<SpotSignal, 'closedAt' | 'direction'>>(
+  purples: readonly T[], atrPurpleTrades: readonly AtrPurpleLoss[]
+): T[] {
+  const losses = atrPurpleTrades.flatMap(trade => closedRetestLoss(trade) && trade.closedAt !== undefined
+    ? [{ knownAt: trade.closedAt + HOUR, direction: trade.direction }] : []).sort((a, b) => a.knownAt - b.knownAt);
+  const pending = new Set<Direction>();
+  let next = 0;
+  // closedAt on a retest trade is the open of the exit candle; its loss is known by that candle's close.
+  return [...purples].sort((a, b) => a.closedAt - b.closedAt).filter(signal => {
+    while (next < losses.length && losses[next].knownAt <= signal.closedAt * 1000) pending.add(losses[next++].direction);
+    return pending.delete(signal.direction);
+  });
+}
+
+export function buildAtrPurplePlusWithHistory(purpleHistory?: Series, atrPurpleHistory?: Series,
+  recentPurple?: Series, recentAtrPurple?: Series) {
+  const archive = purpleHistory && atrPurpleHistory;
+  const extendedPurple = archive && recentPurple && extendHistory(purpleHistory, recentPurple);
+  const extendedAtrPurple = archive && recentAtrPurple && extendHistory(atrPurpleHistory, recentAtrPurple);
+  const extended = extendedPurple && extendedAtrPurple;
+  const purple = extended ? extendedPurple : archive ? purpleHistory : recentPurple;
+  const parent = extended ? extendedAtrPurple : archive ? atrPurpleHistory : recentAtrPurple;
+  if (!purple || !parent || purple.context.market !== parent.context.market) {
+    throw new Error('ATR Purple + requires matching Purple and ATR Purple history.');
+  }
+  const from = Math.max(purple.context.from, parent.context.from);
+  const through = Math.min(purple.context.through, parent.context.through);
+  const baseline = simulateGreenRetest(parent.rows, { ...parent.context, from, through });
+  const verifiedThrough = baseline.incompleteAt ?? through;
+  if (verifiedThrough <= from + HOUR) throw new Error('ATR Purple + needs verified ATR Purple replay coverage.');
+  const purples = purple.context.signals.filter(signal => signal.closedAt * 1000 > from && signal.closedAt * 1000 < verifiedThrough);
+  const signals = atrPurplePlusSignals(purples, baseline.trades);
+  const result = buildGreenRetestWithHistory(undefined, { rows: purple.rows,
+    context: { ...purple.context, from, through: verifiedThrough, signals } }, 'atr-purple-plus');
+  return { ...result, historyCoverage: extended ? 'archive-plus-recent' : archive ? 'archive-only' : 'recent-only',
+    reconstructedThrough: archive ? Math.min(purpleHistory.context.through, atrPurpleHistory.context.through) : undefined };
 }

@@ -118,11 +118,11 @@ function pocPixels(buffer, cross) {
           if (strategy === 'purple') retestReads++;
           if (strategy === 'purple' && retestFailure) return route.fulfill({ status: 503 });
           const through = Math.floor(now / HOUR) * HOUR;
-          return route.fulfill({ json: { market, symbol, venue: 'Binance Spot', interval: '1h', strategy, from: start, through, markers: strategy === 'purple'
-            ? [3, 4, 5].filter(offset => day + (offset + 1) * HOUR < through)
+          const offsets = strategy === 'purple' ? [3, 4, 5] : strategy === 'atr-purple-plus' ? [5] : [];
+          return route.fulfill({ json: { market, symbol, venue: 'Binance Spot', interval: '1h', strategy, from: start, through, markers:
+            offsets.filter(offset => day + (offset + 1) * HOUR < through)
               .map(offset => ({ time: (day + offset * HOUR) / 1000, closedAt: (day + (offset + 1) * HOUR) / 1000,
-                direction: offset === 5 ? 'short' : 'long', close: offset === 4 ? 9000 : special[offset][3], loss: false }))
-            : [] } });
+                direction: offset === 5 ? 'short' : 'long', close: offset === 4 ? 9000 : special[offset][3], loss: false })) } });
         }
         if (target.pathname.endsWith(`/${asset}-intrusion-spot-poc`)) {
           pocReads++;
@@ -355,6 +355,25 @@ function pocPixels(buffer, cross) {
       await page.waitForFunction(() => window.btcSpotChart.getRetestTimeLabels().length === 0);
       const noPurple = await page.locator('#spotChartCanvas').screenshot();
       assert(purpleXs.every(x => purpleColumn(noPurple, x) < 20), 'Checkbox removes the actual purple lines');
+      const plus = page.locator('#spotChartAtrPurplePlus');
+      assert.equal(await plus.isChecked(), false);
+      await plus.check();
+      await page.waitForFunction(() => window.btcSpotChart.getRetestMarkers('atr-purple-plus').length === 1);
+      await page.evaluate(time => {
+        window.btcSpotChart.chart.timeScale().setVisibleRange({ from: time / 1000 - 6 * 3600, to: time / 1000 + 10 * 3600 });
+      }, day);
+      await page.waitForFunction(() => window.btcSpotChart.getRetestTimeLabels().length === 1);
+      const plusTime = await page.evaluate(() => window.btcSpotChart.getRetestTimeLabels()[0].time);
+      assert.equal(plusTime, (day + 5 * HOUR) / 1000);
+      const plusX = await page.evaluate(time => window.btcSpotChart.chart.timeScale().timeToCoordinate(time), plusTime);
+      const plusShot = PNG.sync.read(await page.locator('#spotChartCanvas').screenshot());
+      let bluePixels = 0;
+      for (let y = 5; y < plusShot.height - 40; y++) for (let x = Math.floor(plusX) - 2; x <= Math.ceil(plusX) + 2; x++) {
+        const [r, g, b] = plusShot.data.subarray((y * plusShot.width + x) * 4, (y * plusShot.width + x) * 4 + 3);
+        if (r < 85 && g > 75 && g < 135 && b > 155) bluePixels++;
+      }
+      assert(bluePixels > 100, `Expected the dark-blue ATR Purple + line: ${bluePixels} pixels`);
+      await plus.uncheck();
       assert.deepEqual(errors, []); assert.deepEqual(writes, []);
       assert.deepEqual(wrongMarketReads, []);
       results.push({ mobile, symbol, layerPixels, wrongMarketReads, automaticClosedHourUpdate: true, longAndShort: true, previousBoxUsed: true,

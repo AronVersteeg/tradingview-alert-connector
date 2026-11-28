@@ -27,7 +27,8 @@ function init(market) {
   let list, riskBudget, riskFactor = 1;
   let strategy = 'green', listRequest = 0;
   const strategies = { green: { name: 'Green', color: '#68e2a6' }, purple: { name: 'Purple', color: '#d5a4fa' },
-    atr: { name: 'ATR', color: '#238554' }, 'atr-purple': { name: 'ATR Purple', color: '#f18ebc' } };
+    atr: { name: 'ATR', color: '#238554' }, 'atr-purple': { name: 'ATR Purple', color: '#f18ebc' },
+    'atr-purple-plus': { name: 'ATR Purple +', color: '#376cce' } };
   const strategyName = () => strategies[strategy].name;
   const entryColor = () => strategies[strategy].color;
   function showStrategy() {

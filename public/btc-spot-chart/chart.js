@@ -60,7 +60,8 @@
   const retestLineOverlays = [
     greenRetestLines, purpleRetestLines,
     { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', status: 'spotChartAtrStatus', color: '#238554', width: 3 },
-    { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', status: 'spotChartAtrPurpleStatus', color: '#f18ebc', width: 2 }
+    { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', status: 'spotChartAtrPurpleStatus', color: '#f18ebc', width: 2 },
+    { mode: 'atr-purple-plus', label: 'ATR Purple +', toggle: 'spotChartAtrPurplePlus', status: 'spotChartAtrPurplePlusStatus', color: '#376cce', width: 2 }
   ];
   let retestTimeLabels;
   let retestCandleCloses = new Map();
