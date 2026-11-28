@@ -62,6 +62,7 @@
     { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', status: 'spotChartAtrStatus', color: '#238554', width: 3 },
     { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', status: 'spotChartAtrPurpleStatus', color: '#f18ebc', width: 2 }
   ];
+  let retestCandleCloses = new Map();
   for (const overlay of retestLineOverlays) { overlay.retryAt = 0; overlay.through = 0; }
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
@@ -80,7 +81,7 @@
   const standardHistoryLimit = 12000;
   const chartHistoryLimit = () => candles.length
     ? Math.max(standardHistoryLimit,
-      ...retestLineOverlays.map(overlay => overlay.markers?.[0]?.time)
+      ...retestLineOverlays.map(overlay => overlay.spotMarkers?.[0]?.time)
         .filter(Number.isFinite).map(first => Math.ceil((candles.at(-1).time - first) / 3600) + 1000))
     : standardHistoryLimit;
   const mergeChartCandles = incoming => data.mergeCandles(candles, incoming, chartHistoryLimit());
@@ -337,6 +338,26 @@
     for (const overlay of retestLineOverlays) void refreshRetestMarkers(overlay);
   }
 
+  function projectRetestMarkers(overlay) {
+    if (!overlay.spotMarkers) return;
+    const markers = overlay.spotMarkers.filter(marker => retestCandleCloses.get(marker.time) === marker.close);
+    overlay.markers = markers;
+    const losses = markers.filter(marker => marker.loss);
+    overlay.layer.setOmittedLineTimes(new Set(losses.map(marker => marker.time)));
+    overlay.layer.setData(markers);
+    overlay.lossLayer.setData(losses);
+    const through = overlay.verifiedThrough;
+    if (overlay === purpleRetestLines) {
+      intrusionModel = { symbol, market, venue: 'Binance Spot', intrusionSource: 'binance-spot', visibilityFilter: 'retest-trades',
+        evaluatedThrough: new Date(through).toISOString(), signals: markers };
+      updatePurpleAnnotations();
+    } else {
+      const status = byId(overlay.status);
+      status.textContent = `${overlay.label}: ${markers.length} | t/m ${dateText(through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
+      status.dataset.stale = String(through < Math.floor(Date.now() / 3_600_000) * 3_600_000);
+    }
+  }
+
   async function refreshRetestMarkers(overlay) {
     if (!active || !initialData || destroyed || !overlay.lossLayer || !byId(overlay.toggle).checked ||
         overlay.controller || Date.now() < overlay.retryAt || overlay.through >= Math.floor(Date.now() / 3_600_000) * 3_600_000) return;
@@ -350,28 +371,19 @@
       if (!response.ok) throw new Error('Retest markers temporarily unavailable');
       const result = await response.json();
       const through = result.incompleteAt ?? result.through;
-      if (result.market !== market || result.strategy !== overlay.mode || !Number.isSafeInteger(result.from) ||
+      if (result.market !== market || result.strategy !== overlay.mode || result.symbol !== symbol ||
+          result.venue !== 'Binance Spot' || result.interval !== '1h' || !Number.isSafeInteger(result.from) ||
           !Number.isSafeInteger(result.through) || !Number.isSafeInteger(through) || result.from >= through || through > result.through ||
           !Array.isArray(result.markers) || result.markers.some((marker, i) => !Number.isSafeInteger(marker.time) ||
             marker.time % 3600 !== 0 || marker.time * 1000 < result.from || marker.closedAt !== marker.time + 3600 ||
             marker.closedAt * 1000 >= through ||
-            (i > 0 && result.markers[i - 1].time >= marker.time) ||
+            (i > 0 && result.markers[i - 1].time >= marker.time) || !Number.isFinite(marker.close) || marker.close <= 0 ||
             !['long', 'short'].includes(marker.direction) || typeof marker.loss !== 'boolean')) throw new Error('Invalid retest markers');
       if (!destroyed && !controller.signal.aborted) {
         overlay.through = result.through;
-        overlay.markers = result.markers;
-        const losses = result.markers.filter(marker => marker.loss);
-        overlay.layer.setOmittedLineTimes(new Set(losses.map(marker => marker.time)));
-        overlay.layer.setData(result.markers);
-        overlay.lossLayer.setData(losses);
-        if (overlay === purpleRetestLines) {
-          intrusionModel = { symbol, market, venue: 'Binance Spot', intrusionSource: 'retest-trades',
-            evaluatedThrough: new Date(through).toISOString(), signals: result.markers };
-          updatePurpleAnnotations();
-        } else {
-          status.textContent = `${overlay.label}: ${result.markers.length} | t/m ${dateText(through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
-          status.dataset.stale = String(through < Math.floor(Date.now() / 3_600_000) * 3_600_000);
-        }
+        overlay.verifiedThrough = through;
+        overlay.spotMarkers = result.markers;
+        projectRetestMarkers(overlay);
       }
     } catch {
       if (!destroyed && active && byId(overlay.toggle).checked) {
@@ -521,6 +533,10 @@
       updateOrderBlocks();
       updateYellows();
       updateGapProjection();
+    }
+    if (key !== fractalKey || !singleUpdate || singleUpdate.closed) {
+      retestCandleCloses = new Map(candles.filter(candle => candle.closed).map(candle => [candle.time, candle.close]));
+      for (const overlay of retestLineOverlays) projectRetestMarkers(overlay);
     }
     if (key !== fractalKey || !singleUpdate) { fractalKey = key; projectLoadedCandles(); }
     if (gestureActive && oldFirst !== candles[0]?.time) gestures?.rebase();

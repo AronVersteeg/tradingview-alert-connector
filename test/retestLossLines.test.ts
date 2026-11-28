@@ -17,25 +17,33 @@ test('returns the entry signal candle only for closed losses, not open losses, b
 
 test('the BTC ATR Purple example sends the November 8 trade only, not its November 20 and 21 candidates', () => {
   const stamp = (day: number, hour: number) => Date.UTC(2026, 10, day, hour);
-  const trade = { signalAt: stamp(8, 21), direction: 'short' as const, status: 'CLOSED', grossPnl: 104.35 };
-  const markers = retestTradeMarkers([trade]);
-  expect(markers).toEqual([{ time: stamp(8, 21) / 1000, closedAt: stamp(8, 22) / 1000, direction: 'short', loss: false }]);
+  const signal = (day: number, hour: number, close: number, direction: 'long' | 'short' = 'short') =>
+    ({ time: stamp(day, hour) / 1000, closedAt: stamp(day, hour + 1) / 1000, close, direction });
+  const original = signal(8, 21, 74900);
+  const candidates = [original, signal(20, 15, 61500), signal(21, 3, 60000)];
+  const trade = { signalAt: stamp(8, 21), openedAt: stamp(8, 22), direction: 'short' as const, status: 'CLOSED', grossPnl: 104.35 };
+  const markers = retestTradeMarkers(candidates, [trade]);
+  expect(markers).toEqual([{ ...original, loss: false }]);
   expect(markers.some(marker => [stamp(20, 15), stamp(21, 3)].includes(marker.time * 1000))).toBe(false);
+  expect(retestTradeMarkers(candidates.slice(1), [trade])).toEqual([]);
+  expect(retestTradeMarkers(candidates, [{ ...trade, openedAt: stamp(8, 23) }])).toEqual([]);
+  expect(retestTradeMarkers([signal(8, 21, 74900, 'long')], [trade])).toEqual([]);
 });
 
 test.each(Object.keys(PURPLE_LINE_SETUPS) as PurpleLineMarket[])('%s emits exactly one marker per retest trade in all four strategies', market => {
   for (const mode of ['green', 'purple', 'atr', 'atr-purple'] as RetestMode[]) {
     const series = readRetestHistory(market, mode)!;
     const archive = mode === 'green' || mode === 'atr' ? archivedContinuation(market)?.purple : undefined;
-    const { trades } = buildGreenRetestWithHistory(series, undefined, mode, { archive });
+    const { trades, spotMarkers } = buildGreenRetestWithHistory(series, undefined, mode, { archive });
     const marked = new Set(closedRetestLossSignalTimes(trades));
     expect(trades.length).toBeGreaterThan(0);
     for (const trade of trades) {
       expect(marked.has(trade.signalAt / 1000)).toBe(trade.status === 'CLOSED' && trade.grossPnl! < 0);
     }
-    expect(retestTradeMarkers(trades)).toEqual(trades.map(trade => ({
+    expect(spotMarkers).toEqual(trades.map(trade => ({
       time: trade.signalAt / 1000, closedAt: trade.openedAt / 1000,
-      direction: trade.direction, loss: marked.has(trade.signalAt / 1000)
+      direction: trade.direction, close: series.context.signals.find(signal => signal.time === trade.signalAt / 1000)?.close,
+      loss: marked.has(trade.signalAt / 1000)
     })));
   }
 });

@@ -22,10 +22,16 @@ export function closedRetestLossSignalTimes(trades: readonly LossCandidate[]): n
   return trades.filter(closedRetestLoss).map(trade => trade.signalAt / 1000);
 }
 
-export function retestTradeMarkers(trades: readonly (LossCandidate & { direction: 'long' | 'short' })[]) {
-  // Marker closedAt is the signal candle's close (entry boundary), not the trade exit.
-  return trades.map(trade => ({ time: trade.signalAt / 1000, closedAt: (trade.signalAt + HOUR) / 1000,
-    direction: trade.direction, loss: closedRetestLoss(trade) }));
+type SpotSignal = Pick<Context['signals'][number], 'time' | 'closedAt' | 'direction' | 'close'>;
+
+export function retestTradeMarkers(spotSignals: readonly SpotSignal[],
+  trades: readonly (LossCandidate & { openedAt: number; direction: Direction })[]) {
+  const bySignalTime = new Map(trades.map(trade => [trade.signalAt, trade]));
+  return spotSignals.flatMap(({ time, closedAt, direction, close }) => {
+    const trade = bySignalTime.get(time * 1000);
+    return trade && trade.direction === direction && trade.openedAt === closedAt * 1000
+      ? [{ time, closedAt, direction, close, loss: closedRetestLoss(trade) }] : [];
+  });
 }
 
 type AtrMarker = { time: number; ratio: number };
@@ -229,7 +235,8 @@ export function buildGreenRetestWithHistory(history: Series | undefined, recent:
   const lastCheckedHour = result.incompleteAt ?? result.through;
   const covered = new Set(result.candles.map(row => row.time * 1000)
     .filter(at => at >= result.from && at < lastCheckedHour));
-  return { ...result, strategy, atrMarkers, missingDydxHours: (lastCheckedHour - result.from) / HOUR - covered.size,
+  return { ...result, strategy, atrMarkers, spotMarkers: retestTradeMarkers(context.signals, result.trades),
+    missingDydxHours: (lastCheckedHour - result.from) / HOUR - covered.size,
     historyCoverage: extended ? 'archive-plus-recent' : history ? 'archive-only' : 'recent-only',
     reconstructedThrough: history?.context.through };
 }

@@ -118,10 +118,10 @@ function pocPixels(buffer, cross) {
           if (strategy === 'purple') retestReads++;
           if (strategy === 'purple' && retestFailure) return route.fulfill({ status: 503 });
           const through = Math.floor(now / HOUR) * HOUR;
-          return route.fulfill({ json: { market, strategy, from: start, through, markers: strategy === 'purple'
-            ? [3, 5].filter(offset => day + (offset + 1) * HOUR < through)
+          return route.fulfill({ json: { market, symbol, venue: 'Binance Spot', interval: '1h', strategy, from: start, through, markers: strategy === 'purple'
+            ? [3, 4, 5].filter(offset => day + (offset + 1) * HOUR < through)
               .map(offset => ({ time: (day + offset * HOUR) / 1000, closedAt: (day + (offset + 1) * HOUR) / 1000,
-                direction: offset === 3 ? 'long' : 'short', loss: false }))
+                direction: offset === 5 ? 'short' : 'long', close: offset === 4 ? 9000 : special[offset][3], loss: false }))
             : [] } });
         }
         if (target.pathname.endsWith(`/${asset}-intrusion-spot-poc`)) {
@@ -183,8 +183,9 @@ function pocPixels(buffer, cross) {
       await page.waitForFunction(() => window.btcSpotChart?.getIntrusionDailyBreakouts()?.signals.length === 2);
       const intrusionState = await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts());
       assert.deepEqual(intrusionState.signals.map(s => [s.time, s.direction]), state.signals.map(s => [s.time, s.direction]));
-      assert.equal(intrusionState.intrusionSource, 'retest-trades');
-      assert(!intrusionState.signals.some(s => s.time === (day + 4 * HOUR) / 1000), 'A raw intrusion absent from the retest has no Purple line');
+      assert.equal(intrusionState.intrusionSource, 'binance-spot');
+      assert.equal(intrusionState.visibilityFilter, 'retest-trades');
+      assert(!intrusionState.signals.some(s => s.time === (day + 4 * HOUR) / 1000), 'A mismatched Binance close cannot produce a Purple line');
       await page.locator('#spotChartGapIntrusions').uncheck();
       const reverted = await page.evaluate(time => {
         const original = window.BTC_SPOT_GAP_TIMELINE;

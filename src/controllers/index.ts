@@ -15,7 +15,7 @@ import {
   fetchDydxHourlyCandlesForMarket
 } from '../services/decentraderGapMonitor';
 import { retestFractalRows } from '../research/greenRetest';
-import { buildGreenRetestWithHistory, closedRetestLossSignalTimes, readRetestHistory, recentAtrRetest, retestTradeMarkers } from '../research/greenRetestHistory';
+import { buildGreenRetestWithHistory, closedRetestLossSignalTimes, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
 import { archivedContinuation, canBridgeContinuation, greenContinuationMarkers, readRecentContinuation } from '../research/greenContinuation';
 import { PURPLE_LINE_SETUPS, purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
 import {
@@ -996,9 +996,10 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
       }).finally(() => { cache.pending = undefined; });
       await cache.pending;
     }
-    const { candles, trades, atrMarkers, ...coverage } = cache.data!;
+    const { candles, trades, atrMarkers, spotMarkers, ...coverage } = cache.data!;
     if (view === 'trade-markers') return res.send({ market, strategy: mode, from: coverage.from,
-      through: coverage.through, incompleteAt: coverage.incompleteAt, markers: retestTradeMarkers(trades) });
+      through: coverage.through, incompleteAt: coverage.incompleteAt, symbol: PURPLE_LINE_SETUPS[market].symbol,
+      venue: 'Binance Spot', interval: '1h', markers: spotMarkers });
     if (view === 'markers' || view === 'loss-markers') return res.send({ market, strategy: mode,
       from: coverage.from, through: coverage.through, historyCoverage: coverage.historyCoverage,
       lossTimes: closedRetestLossSignalTimes(trades), ...(view === 'markers' && { markers: atrMarkers ?? [] }) });
