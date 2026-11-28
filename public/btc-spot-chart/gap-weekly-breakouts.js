@@ -110,6 +110,7 @@
     updateAllViews() {}
     paneViews() { return [this.view]; }
     setData(signals) { this.signals = signals; this.requestUpdate?.(); }
+    setOmittedLineTimes(times) { this.omittedLineTimes = times; this.requestUpdate?.(); }
     setVisible(visible) { this.visible = Boolean(visible); this.requestUpdate?.(); }
     coordinateForSignal(signal) { return this.chart.timeScale().timeToCoordinate(signal.time); }
     draw(target) {
@@ -118,6 +119,7 @@
         ctx.save(); ctx.beginPath(); ctx.rect(0, 0, width, height); ctx.clip();
         ctx.strokeStyle = this.color; ctx.lineWidth = this.lineWidth; ctx.globalAlpha = .9; ctx.setLineDash(this.dash);
         for (const signal of this.signals) {
+          if (this.omittedLineTimes?.has(signal.time)) continue;
           const x = this.coordinateForSignal(signal);
           if (x === null || x < 0 || x > width) continue;
           const crisp = Math.floor(x) + .5;

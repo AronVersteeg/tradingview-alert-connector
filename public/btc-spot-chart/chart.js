@@ -64,9 +64,13 @@
   let gapIntrusionInputs;
   let greenDirections, greenDirectionsRequest, greenRetryAt = 0;
   const atrOverlays = [
-    { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', color: '#238554', width: 3, retryAt: 0, through: 0 },
-    { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', color: '#f18ebc', width: 2, retryAt: 0, through: 0 }
+    { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', color: '#238554', width: 3, entryMarkers: true },
+    { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', color: '#f18ebc', width: 2, entryMarkers: true }
   ];
+  const greenRetestLines = { mode: 'green', toggle: 'spotChartGapIntrusions', baseLayers: () => [gapIntrusionLayer, greenHistory.layer] };
+  const purpleRetestLines = { mode: 'purple', toggle: 'spotChartIntrusionDailyBreaks', baseLayers: () => [intrusionLayer, purpleHistory?.layer] };
+  const retestLineOverlays = [greenRetestLines, purpleRetestLines, ...atrOverlays];
+  for (const overlay of retestLineOverlays) { overlay.retryAt = 0; overlay.through = 0; }
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
   const pocRecords = new Map();
@@ -83,7 +87,9 @@
   const chartCanvas = byId('spotChartCanvas');
   const standardHistoryLimit = 12000;
   const chartHistoryLimit = () => candles.length
-    ? Math.max(standardHistoryLimit, ...replayOverlays.filter(o => o.data).map(o => Math.ceil((candles.at(-1).time - o.data.first) / 3600) + 1000))
+    ? Math.max(standardHistoryLimit,
+      ...[...replayOverlays.map(overlay => overlay.data?.first), ...retestLineOverlays.map(overlay => overlay.firstLoss)]
+        .filter(Number.isFinite).map(first => Math.ceil((candles.at(-1).time - first) / 3600) + 1000))
     : standardHistoryLimit;
   const mergeChartCandles = incoming => data.mergeCandles(candles, incoming, chartHistoryLimit());
   const analysisCandles = () => candles.length > standardHistoryLimit ? candles.slice(-standardHistoryLimit) : candles;
@@ -258,6 +264,7 @@
   function loadEnabledHistoricalReplays() {
     if (purpleHistory && byId(purpleHistory.toggle).checked) void loadHistoricalReplay(purpleHistory);
     void refreshGreenDirections();
+    refreshRetestOverlays();
   }
 
   function updateIntrusionDailyBreakouts() {
@@ -459,29 +466,53 @@
     candlesSeries.attachPrimitive(overlay.layer);
   }
 
-  async function refreshAtrMarkers(overlay) {
-    if (!active || !initialData || destroyed || !overlay.layer || !byId(overlay.toggle).checked ||
+  const baseRetestLineLayers = overlay => (overlay.baseLayers?.() ?? [overlay.layer]).filter(Boolean);
+
+  function attachRetestLossOverlay(overlay) {
+    const [base] = baseRetestLineLayers(overlay);
+    overlay.lossLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(base.color, base.lineWidth, [7, 4, 1, 4]);
+    overlay.lossLayer.setVisible(byId(overlay.toggle).checked);
+    candlesSeries.attachPrimitive(overlay.lossLayer);
+  }
+
+  function refreshRetestOverlays() {
+    for (const overlay of retestLineOverlays) void refreshRetestMarkers(overlay);
+  }
+
+  async function refreshRetestMarkers(overlay) {
+    if (!active || !initialData || destroyed || !overlay.lossLayer || !byId(overlay.toggle).checked ||
         overlay.controller || Date.now() < overlay.retryAt || overlay.through >= Math.floor(Date.now() / 3_600_000) * 3_600_000) return;
     const controller = new AbortController();
     overlay.controller = controller;
     const timeout = setTimeout(() => controller.abort(), 15_000);
-    const status = byId(`${overlay.toggle}Status`);
+    const status = overlay.entryMarkers ? byId(`${overlay.toggle}Status`) : null;
     try {
-      const query = new URLSearchParams({ market, strategy: overlay.mode, view: 'markers' });
+      const query = new URLSearchParams({ market, strategy: overlay.mode, view: overlay.entryMarkers ? 'markers' : 'loss-markers' });
       const response = await fetch(`/open-liquidity/v2/green-retest?${query}`, { signal: controller.signal, cache: 'no-store' });
-      if (!response.ok) throw new Error('ATR temporarily unavailable');
+      if (!response.ok) throw new Error('Retest markers temporarily unavailable');
       const result = await response.json();
       if (result.market !== market || result.strategy !== overlay.mode || !Number.isFinite(result.through) ||
-          !Array.isArray(result.markers) || result.markers.some(marker => !Number.isSafeInteger(marker.time) ||
-            marker.time % 3600 !== 0 || !Number.isFinite(marker.ratio) || marker.ratio < 2)) throw new Error('Invalid ATR data');
+          !Array.isArray(result.lossTimes) || result.lossTimes.some(time => !Number.isSafeInteger(time) ||
+            time <= 0 || time % 3600 !== 0 || time * 1000 >= result.through) ||
+          overlay.entryMarkers && (!Array.isArray(result.markers) || result.markers.some(marker => !Number.isSafeInteger(marker.time) ||
+            marker.time % 3600 !== 0 || !Number.isFinite(marker.ratio) || marker.ratio < 2))) throw new Error('Invalid retest markers');
       if (!destroyed && !controller.signal.aborted) {
         overlay.through = result.through;
-        overlay.layer.setData(result.markers);
-        status.textContent = `${overlay.label}: ${result.markers.length} | t/m ${dateText(result.through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
-        status.dataset.stale = String(result.through < Math.floor(Date.now() / 3_600_000) * 3_600_000);
+        const times = new Set(result.lossTimes);
+        overlay.firstLoss = times.size ? Math.min(...times) : undefined;
+        // Replace only the vertical stroke; the existing Purple POC and delta labels still use the original signals.
+        for (const layer of baseRetestLineLayers(overlay)) layer.setOmittedLineTimes(times);
+        overlay.lossLayer.setData([...times].map(time => ({ time })));
+        if (status) {
+          overlay.layer.setData(result.markers);
+          status.textContent = `${overlay.label}: ${result.markers.length} | t/m ${dateText(result.through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
+          status.dataset.stale = String(result.through < Math.floor(Date.now() / 3_600_000) * 3_600_000);
+        }
       }
     } catch {
-      if (!destroyed && byId(overlay.toggle).checked) { status.textContent = `${overlay.label}: data nog niet beschikbaar`; status.dataset.stale = 'true'; }
+      if (status && !destroyed && byId(overlay.toggle).checked) {
+        status.textContent = `${overlay.label}: data nog niet beschikbaar`; status.dataset.stale = 'true';
+      }
     } finally {
       clearTimeout(timeout);
       overlay.controller = undefined;
@@ -716,6 +747,7 @@
       intrusionLayer.setVisible(byId('spotChartIntrusionDailyBreaks').checked);
       candlesSeries.attachPrimitive(intrusionLayer);
       attachAtrOverlay(atrOverlays[1]);
+      for (const overlay of retestLineOverlays) attachRetestLossOverlay(overlay);
       updateIntrusionDailyBreakouts();
       gestures = interactions.install(chartCanvas, {
         read: () => {
@@ -795,7 +827,7 @@
         void refreshIntrusionDelta();
         void refreshIntrusionPoc();
         void refreshGreenDirections();
-        for (const overlay of atrOverlays) void refreshAtrMarkers(overlay);
+        refreshRetestOverlays();
         if (!lastTickAt || Date.now() - lastTickAt > 12_000) {
           if (Date.now() - lastRestAt >= 30_000) void loadRecent();
           if (socket && Date.now() - (lastTickAt || lastRestAt) > 20_000) socket.close();
@@ -839,6 +871,7 @@
         hasMore = hasMore && page.hasMore;
         lastSourceTime = Math.max(lastSourceTime, Date.parse(page.fetchedAt));
         applyCandles(next);
+        refreshRetestOverlays();
       } catch (error) {
         if (!initialData) message(`${symbol} candles are unavailable. Use refresh to retry.`, true);
         setFeed('retry', error.name === 'AbortError' ? 'Binance request timed out' : error.message);
@@ -905,7 +938,7 @@
     if (!active) {
       deltaController?.abort(); pocController?.abort();
       greenDirectionsRequest?.abort();
-      for (const overlay of atrOverlays) overlay.controller?.abort();
+      for (const overlay of retestLineOverlays) overlay.controller?.abort();
       clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return;
     }
     try {
@@ -967,8 +1000,12 @@
     status.hidden = !event.target.checked;
     if (event.target.checked) {
       if (!status.textContent) status.textContent = `${overlay.label}: laden\u2026`;
-      void refreshAtrMarkers(overlay);
-    } else overlay.controller?.abort();
+    }
+  });
+  for (const overlay of retestLineOverlays) byId(overlay.toggle).addEventListener('change', event => {
+    overlay.lossLayer?.setVisible(event.target.checked);
+    if (event.target.checked) void refreshRetestMarkers(overlay);
+    else overlay.controller?.abort();
   });
   for (const state of breakoutStates) {
     byId(`spotChartGap${state.name}Breaks`).addEventListener('change', (event) => state.layer?.setVisible(event.target.checked));
@@ -1044,7 +1081,7 @@
   window.addEventListener('pagehide', () => {
     destroyed = true;
     greenDirectionsRequest?.abort();
-    for (const overlay of atrOverlays) overlay.controller?.abort();
+    for (const overlay of retestLineOverlays) overlay.controller?.abort();
     deltaController?.abort();
     pocController?.abort();
     desktopOrderBlockLabels.removeEventListener('change', updateOrderBlockFont);

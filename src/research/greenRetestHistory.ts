@@ -13,6 +13,14 @@ export const GREEN_HISTORY_VERSION = 1;
 export const GREEN_HISTORY_WARMUP_HOURS = 8760;
 type Context = RetestContext;
 export type RetestMode = 'green' | 'purple' | 'atr' | 'atr-purple';
+type LossCandidate = { signalAt: number; status: string; grossPnl?: number };
+
+export function closedRetestLossSignalTimes(trades: readonly LossCandidate[]): number[] {
+  return trades.flatMap(trade => trade.status === 'CLOSED' && typeof trade.grossPnl === 'number' &&
+    Number.isFinite(trade.grossPnl) && trade.grossPnl < 0
+    ? [trade.signalAt / 1000] : []);
+}
+
 type AtrMarker = { time: number; ratio: number };
 type Series = { context: Context; rows: DecentraderRow[]; atrMarkers?: AtrMarker[] };
 type Direction = 'long' | 'short';

@@ -14,9 +14,8 @@ import {
   decentraderGapMonitor,
   fetchDydxHourlyCandlesForMarket
 } from '../services/decentraderGapMonitor';
-import { greenRetestSignals, retestFractalRows } from '../research/greenRetest';
-import { buildGreenRetestWithHistory, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
-import { recentPurpleRetest } from '../research/purpleRetest';
+import { retestFractalRows } from '../research/greenRetest';
+import { buildGreenRetestWithHistory, closedRetestLossSignalTimes, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
 import { archivedContinuation, canBridgeContinuation, greenContinuationMarkers, readRecentContinuation } from '../research/greenContinuation';
 import { PURPLE_LINE_SETUPS, purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
 import {
@@ -954,7 +953,7 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
   const id = req.query.id;
   if (id !== undefined && (typeof id !== 'string' || !/^\d{13}$/.test(id))) return res.status(400).send({ error: 'Invalid trade.' });
   const view = req.query.view;
-  if (view !== undefined && (view !== 'markers' || !usesAtr || id !== undefined)) {
+  if (view !== undefined && (id !== undefined || !(view === 'loss-markers' || view === 'markers' && usesAtr))) {
     return res.status(400).send({ error: 'Invalid retest view.' });
   }
   const now = Date.now();
@@ -975,10 +974,9 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
           if (!collector?.getStatus().liveReplayReady) throw new Error(`${market} Spot replica is warming up.`);
           const payload = await collector.getPayload();
           const observedAt = Date.now();
-          const green = greenRetestSignals(market, payload, observedAt);
-          if (history && green.through <= history.context.through) return historyOnly();
-          const purple = usesPurple ? await recentPurpleRetest(green, observedAt)
-            : (await readRecentContinuation(market, payload, observedAt)).purple;
+          const replicaThrough = Number(payload.frames?.at(-1)?.startedAtMs) + 3_600_000;
+          if (history && replicaThrough <= history.context.through) return historyOnly();
+          const { green, purple } = await readRecentContinuation(market, payload, observedAt);
           const context = usesPurple ? purple : green;
           const rows = retestFractalRows(market, await fetchDydxHourlyCandlesForMarket(market), observedAt);
           const recent = { context, rows };
@@ -999,8 +997,9 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
       await cache.pending;
     }
     const { candles, trades, atrMarkers, ...coverage } = cache.data!;
-    if (view === 'markers') return res.send({ market, strategy: mode, from: coverage.from, through: coverage.through,
-      historyCoverage: coverage.historyCoverage, markers: atrMarkers ?? [] });
+    if (view === 'markers' || view === 'loss-markers') return res.send({ market, strategy: mode,
+      from: coverage.from, through: coverage.through, historyCoverage: coverage.historyCoverage,
+      lossTimes: closedRetestLossSignalTimes(trades), ...(view === 'markers' && { markers: atrMarkers ?? [] }) });
     const summary = { ...coverage, tradeCount: trades.length };
     if (!id) return res.send({ trades: trades.map(({ id, direction, openedAt, status, grossPnl, markToMarket }) =>
       ({ id, direction, openedAt, status, grossPnl, markToMarket })), ...summary });
