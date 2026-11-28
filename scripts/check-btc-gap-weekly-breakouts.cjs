@@ -96,8 +96,8 @@ function pocPixels(buffer, cross) {
     for (const mobile of [false, true]) {
       const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 },
         isMobile: mobile, hasTouch: mobile, acceptDownloads: true });
-      let now = day + 4 * HOUR + 5000;
-      const errors = [], writes = [], wrongMarketReads = []; let intrusionFailure = false, intrusionReads = 0, deltaReads = 0, pocReads = 0, pocReady = false;
+      let now = day + 5 * HOUR + 5000;
+      const errors = [], writes = [], wrongMarketReads = []; let retestFailure = false, retestReads = 0, deltaReads = 0, pocReads = 0, pocReady = false;
       let releaseCandles;
       const candlesReady = new Promise(resolve => { releaseCandles = resolve; });
       await context.addInitScript(value => { window.__weeklyNow = value; Date.now = () => window.__weeklyNow; window.WebSocket = class { close() {} }; }, now);
@@ -111,6 +111,19 @@ function pocPixels(buffer, cross) {
         if (target.pathname.endsWith(`/${asset}-spot-candles`)) return candlesReady.then(() => route.fulfill({ json: { symbol, venue: 'Binance Spot', interval: '1h',
           fetchedAt: iso(now), candles: candles(now), hasMore: false } }));
         if (target.pathname.endsWith(`/${asset}-spot-fractal-projections`)) return route.fulfill({ json: bundle(now) });
+        if (target.pathname === '/open-liquidity/v2/green-retest') {
+          const strategy = target.searchParams.get('strategy');
+          assert.equal(target.searchParams.get('market'), market);
+          assert.equal(target.searchParams.get('view'), 'trade-markers');
+          if (strategy === 'purple') retestReads++;
+          if (strategy === 'purple' && retestFailure) return route.fulfill({ status: 503 });
+          const through = Math.floor(now / HOUR) * HOUR;
+          return route.fulfill({ json: { market, strategy, from: start, through, markers: strategy === 'purple'
+            ? [3, 5].filter(offset => day + (offset + 1) * HOUR < through)
+              .map(offset => ({ time: (day + offset * HOUR) / 1000, closedAt: (day + (offset + 1) * HOUR) / 1000,
+                direction: offset === 3 ? 'long' : 'short', loss: false }))
+            : [] } });
+        }
         if (target.pathname.endsWith(`/${asset}-intrusion-spot-poc`)) {
           pocReads++;
           const hour = Number(target.searchParams.get('hour'));
@@ -131,10 +144,8 @@ function pocPixels(buffer, cross) {
               return { hour, status: 'ok', candle: { hour, startedAt: hour + 3300, closedAt: hour + 3600,
                 volumeBase: 100, takerBuyVolumeBase: buy, rawDeltaPct: (2 * buy / 100 - 1) * 100, fetchedAt: iso(now) } }; }) } });
         }
-        if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return intrusionFailure
-          ? route.fulfill({ status: 503, json: { error: 'Fixture read failure' } }) : route.fulfill({ json: payload(now) });
+        if (target.pathname === '/open-liquidity/v2/liquidity-timelapse') return route.fulfill({ json: payload(now) });
         if (target.pathname === '/decentrader/liquidity-timelapse') {
-          intrusionReads++;
           return route.fulfill({ status: 503, json: { error: 'Legacy source is not used' } });
         }
         if (target.pathname === '/decentrader/manual-override') return route.fulfill({ json: { enabled: true, market, overrides: [] } });
@@ -148,8 +159,10 @@ function pocPixels(buffer, cross) {
       releaseCandles();
       await page.waitForFunction(() => window.btcSpotChart?.getGapWeeklyBreakouts()?.signals.length === 1);
       await page.waitForFunction(() => window.btcSpotChart?.getGapDailyBreakouts()?.signals.length === 1);
-      assert.equal(await page.locator('#spotChartGapWeeklyBreaks').isChecked(), true);
-      assert.equal(await page.locator('#spotChartGapDailyBreaks').isChecked(), true);
+      assert.equal(await page.locator('#spotChartGapWeeklyBreaks').isChecked(), false);
+      assert.equal(await page.locator('#spotChartGapDailyBreaks').isChecked(), false);
+      assert.equal(await page.locator('#spotChartIntrusionDailyBreaks').isChecked(), false);
+      await page.locator('#spotChartIntrusionDailyBreaks').check();
       await page.waitForFunction(() => window.btcSpotChart?.getIntrusionDailyBreakouts()?.signals.length === 1);
       assert.equal(await page.locator('#spotChartIntrusionDailyBreaks').isChecked(), true);
       let state = await page.evaluate(() => window.btcSpotChart.getGapWeeklyBreakouts());
@@ -170,8 +183,8 @@ function pocPixels(buffer, cross) {
       await page.waitForFunction(() => window.btcSpotChart?.getIntrusionDailyBreakouts()?.signals.length === 2);
       const intrusionState = await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts());
       assert.deepEqual(intrusionState.signals.map(s => [s.time, s.direction]), state.signals.map(s => [s.time, s.direction]));
-      assert.equal(intrusionState.signals[0].intrusion.alertTime, iso(day + 3 * HOUR), 'Use alert open time, not SMTP time');
-      assert.deepEqual(intrusionState.signals.map(s => [s.gap.lower, s.gap.upper]), state.signals.map(s => [s.gap.lower, s.gap.upper]));
+      assert.equal(intrusionState.intrusionSource, 'retest-trades');
+      assert(!intrusionState.signals.some(s => s.time === (day + 4 * HOUR) / 1000), 'A raw intrusion absent from the retest has no Purple line');
       await page.locator('#spotChartGapIntrusions').uncheck();
       const reverted = await page.evaluate(time => {
         const original = window.BTC_SPOT_GAP_TIMELINE;
@@ -181,7 +194,7 @@ function pocPixels(buffer, cross) {
         window.dispatchEvent(new CustomEvent('btc-spot-chart:gap-timeline', { detail: original }));
         return { directions, restored: window.btcSpotChart.getIntrusionDailyBreakouts().signals.length };
       }, (day + 3 * HOUR) / 1000);
-      assert.deepEqual(reverted, { directions: ['short'], restored: 2 }, 'Purple follows gap-only updates independently of Green visibility');
+      assert.deepEqual(reverted, { directions: ['long', 'short'], restored: 2 }, 'Gap edits cannot change the retest entries displayed');
       await page.locator('#spotChartIntrusionDailyBreaks').uncheck();
       for (const id of ['spotChartGapWeeklyBreaks', 'spotChartGapDailyBreaks']) await page.locator('#' + id).uncheck();
       await page.evaluate(time => {
@@ -313,17 +326,19 @@ function pocPixels(buffer, cross) {
       assert(purpleXs.every(x => purpleColumn(fs.readFileSync(purpleFile), x) > 200), 'PNG includes purple markers');
       assert(pocCrosses.every(cross => pocPixels(fs.readFileSync(purpleFile), cross) >= 8), 'PNG includes horizontal POC crossbars');
       await page.locator('#btcSpotChartPanel').screenshot({ path: path.join(output, `intrusion-daily-${mobile ? 'mobile' : 'desktop'}.png`) });
-      intrusionFailure = true;
-      await page.evaluate(() => window.__weeklyFixtureRefresh().catch(() => {}));
-      await page.waitForFunction(() => document.getElementById('spotChartIntrusionDailyStatus').textContent.includes('stale'));
+      retestFailure = true;
+      now += HOUR;
+      await page.evaluate(time => { window.__weeklyNow = time; }, now);
+      await page.locator('#spotChartRefresh').click();
+      await page.waitForFunction(() => document.getElementById('spotChartIntrusionDailyStatus').dataset.stale === 'true');
       assert.equal((await page.evaluate(() => window.btcSpotChart.getIntrusionDailyBreakouts())).signals.length, 2, 'Read failure preserves saved evidence');
       await page.locator('#spotChartIntrusionDailyBreaks').uncheck();
-      const readsWhenOff = intrusionReads;
+      const readsWhenOff = retestReads;
       const deltaReadsWhenOff = deltaReads;
       const pocReadsWhenOff = pocReads;
       await page.locator('#spotChartRefresh').click();
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      assert.equal(intrusionReads, readsWhenOff, 'Disabled intrusion overlay performs no additional dashboard reads');
+      assert.equal(retestReads, readsWhenOff, 'Disabled Purple overlay performs no additional retest reads');
       assert.equal(deltaReads, deltaReadsWhenOff, 'Disabled overlay stops annotation reads');
       assert.equal(pocReads, pocReadsWhenOff, 'Disabled overlay stops POC reads');
       assert.deepEqual(await page.evaluate(() => window.btcSpotChart.getIntrusionPocCrosses()), []);
@@ -334,8 +349,8 @@ function pocPixels(buffer, cross) {
       assert.deepEqual(wrongMarketReads, []);
       results.push({ mobile, symbol, layerPixels, wrongMarketReads, automaticClosedHourUpdate: true, longAndShort: true, previousBoxUsed: true,
         independentCheckboxes: true, orangePixels: pixels, yellowPixels, weeklyWinsOverlap: true,
-        pngIncludesBothOverlays: true, purplePixels, intrusionAlertTimeNotMailTime: true,
-        readFailureRetainsIntrusions: true, disabledIntrusionStopsReads: true, deltaReads, deltaLabels, pocReads, pocCrosses,
+        pngIncludesBothOverlays: true, purplePixels, purpleMatchesRetest: true,
+        readFailureRetainsMarkers: true, disabledPurpleStopsReads: true, deltaReads, deltaLabels, pocReads, pocCrosses,
         noHorizontalOverflow: true, writes });
       await context.close();
     }

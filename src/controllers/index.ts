@@ -15,7 +15,7 @@ import {
   fetchDydxHourlyCandlesForMarket
 } from '../services/decentraderGapMonitor';
 import { retestFractalRows } from '../research/greenRetest';
-import { buildGreenRetestWithHistory, closedRetestLossSignalTimes, readRetestHistory, recentAtrRetest } from '../research/greenRetestHistory';
+import { buildGreenRetestWithHistory, closedRetestLossSignalTimes, readRetestHistory, recentAtrRetest, retestTradeMarkers } from '../research/greenRetestHistory';
 import { archivedContinuation, canBridgeContinuation, greenContinuationMarkers, readRecentContinuation } from '../research/greenContinuation';
 import { PURPLE_LINE_SETUPS, purpleLineSetupForMarket, type PurpleLineMarket } from '../services/purpleLineSetup';
 import {
@@ -953,7 +953,7 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
   const id = req.query.id;
   if (id !== undefined && (typeof id !== 'string' || !/^\d{13}$/.test(id))) return res.status(400).send({ error: 'Invalid trade.' });
   const view = req.query.view;
-  if (view !== undefined && (id !== undefined || !(view === 'loss-markers' || view === 'markers' && usesAtr))) {
+  if (view !== undefined && (id !== undefined || !(view === 'trade-markers' || view === 'loss-markers' || view === 'markers' && usesAtr))) {
     return res.status(400).send({ error: 'Invalid retest view.' });
   }
   const now = Date.now();
@@ -997,6 +997,8 @@ router.get(['/open-liquidity/v2/green-retest', '/open-liquidity/v2/btc-green-ret
       await cache.pending;
     }
     const { candles, trades, atrMarkers, ...coverage } = cache.data!;
+    if (view === 'trade-markers') return res.send({ market, strategy: mode, from: coverage.from,
+      through: coverage.through, incompleteAt: coverage.incompleteAt, markers: retestTradeMarkers(trades) });
     if (view === 'markers' || view === 'loss-markers') return res.send({ market, strategy: mode,
       from: coverage.from, through: coverage.through, historyCoverage: coverage.historyCoverage,
       lossTimes: closedRetestLossSignalTimes(trades), ...(view === 'markers' && { markers: atrMarkers ?? [] }) });

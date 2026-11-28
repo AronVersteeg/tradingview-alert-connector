@@ -15,10 +15,17 @@ type Context = RetestContext;
 export type RetestMode = 'green' | 'purple' | 'atr' | 'atr-purple';
 type LossCandidate = { signalAt: number; status: string; grossPnl?: number };
 
+const closedRetestLoss = (trade: LossCandidate) => trade.status === 'CLOSED' && typeof trade.grossPnl === 'number' &&
+  Number.isFinite(trade.grossPnl) && trade.grossPnl < 0;
+
 export function closedRetestLossSignalTimes(trades: readonly LossCandidate[]): number[] {
-  return trades.flatMap(trade => trade.status === 'CLOSED' && typeof trade.grossPnl === 'number' &&
-    Number.isFinite(trade.grossPnl) && trade.grossPnl < 0
-    ? [trade.signalAt / 1000] : []);
+  return trades.filter(closedRetestLoss).map(trade => trade.signalAt / 1000);
+}
+
+export function retestTradeMarkers(trades: readonly (LossCandidate & { direction: 'long' | 'short' })[]) {
+  // Marker closedAt is the signal candle's close (entry boundary), not the trade exit.
+  return trades.map(trade => ({ time: trade.signalAt / 1000, closedAt: (trade.signalAt + HOUR) / 1000,
+    direction: trade.direction, loss: closedRetestLoss(trade) }));
 }
 
 type AtrMarker = { time: number; ratio: number };

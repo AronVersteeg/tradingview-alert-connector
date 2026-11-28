@@ -15,7 +15,7 @@
   {
     const toggle = document.getElementById('spotChartIntrusionDailyBreaks').parentElement;
     toggle.lastChild.textContent = intrusionLabel;
-    toggle.title = `Same closed ${symbol} Spot candle: gap intrusion, fresh gap box break and fresh Daily fractal break in the same direction. F5m is observe-only.`;
+    toggle.title = `${symbol} Purple retest entries. F5m is observe-only.`;
     document.getElementById('spotChartIntrusionDailyStatus').textContent = `${intrusionLabel} pending`;
   }
   panel.hidden = false;
@@ -27,8 +27,6 @@
   const gapBoxes = window.BtcSpotGapBoxes;
   const gapWeeklyBreaks = window.BtcSpotGapWeeklyBreakouts;
   const intrusionDailyBreaks = window.BtcSpotIntrusionDailyBreakouts;
-  const historicalReplay = window.BtcSpotHistoricalReplay;
-  const greenReplay = window.BtcGreenPositionReplay;
   const futuresDelta = window.BtcIntrusionFuturesDelta;
   const spotPoc = window.BtcIntrusionSpotPoc;
   const manualLevels = window.BtcSpotManualLevels;
@@ -54,22 +52,16 @@
   let closedDataVersion = 0;
   const savedIntrusions = window.BTC_SPOT_INTRUSION_HISTORY;
   let intrusionLayer, intrusionHistory = savedIntrusions?.market === market && savedIntrusions.source === 'binance-spot-recorded-intrusions'
-    ? savedIntrusions : undefined, intrusionModel, intrusionInputs;
+    ? savedIntrusions : undefined, intrusionModel;
   let intrusionReadFailed = false;
   let yellowLayer, yellowMarkers = [], yellowInputs;
-  const replayOverlays = [{ kind: 'green', label: 'Green', toggle: 'spotChartGapIntrusions', color: gapBoxes.GAP_COLOR, markers: [] }];
-  if (asset === 'btc') replayOverlays.push({ kind: 'purple', label: 'Purple', toggle: 'spotChartIntrusionDailyBreaks', color: '#ba68c8', markers: [] });
-  let gapIntrusionLayer, gapIntrusionMarkers = [];
-  let visibleGapIntrusionMarkers = [];
-  let gapIntrusionInputs;
-  let greenDirections, greenDirectionsRequest, greenRetryAt = 0;
-  const atrOverlays = [
-    { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', color: '#238554', width: 3, entryMarkers: true },
-    { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', color: '#f18ebc', width: 2, entryMarkers: true }
+  const greenRetestLines = { mode: 'green', label: 'Green', toggle: 'spotChartGapIntrusions', status: 'spotChartGreenReplayStatus', color: gapBoxes.GAP_COLOR };
+  const purpleRetestLines = { mode: 'purple', label: intrusionLabel, toggle: 'spotChartIntrusionDailyBreaks', status: 'spotChartIntrusionDailyStatus' };
+  const retestLineOverlays = [
+    greenRetestLines, purpleRetestLines,
+    { mode: 'atr', label: 'ATR', toggle: 'spotChartAtr', status: 'spotChartAtrStatus', color: '#238554', width: 3 },
+    { mode: 'atr-purple', label: 'ATR Purple', toggle: 'spotChartAtrPurple', status: 'spotChartAtrPurpleStatus', color: '#f18ebc', width: 2 }
   ];
-  const greenRetestLines = { mode: 'green', toggle: 'spotChartGapIntrusions', baseLayers: () => [gapIntrusionLayer, greenHistory.layer] };
-  const purpleRetestLines = { mode: 'purple', toggle: 'spotChartIntrusionDailyBreaks', baseLayers: () => [intrusionLayer, purpleHistory?.layer] };
-  const retestLineOverlays = [greenRetestLines, purpleRetestLines, ...atrOverlays];
   for (const overlay of retestLineOverlays) { overlay.retryAt = 0; overlay.through = 0; }
   const deltaRecords = new Map();
   let deltaPending, deltaController, deltaLastRequestAt = 0;
@@ -88,7 +80,7 @@
   const standardHistoryLimit = 12000;
   const chartHistoryLimit = () => candles.length
     ? Math.max(standardHistoryLimit,
-      ...[...replayOverlays.map(overlay => overlay.data?.first), ...retestLineOverlays.map(overlay => overlay.firstLoss)]
+      ...retestLineOverlays.map(overlay => overlay.markers?.[0]?.time)
         .filter(Number.isFinite).map(first => Math.ceil((candles.at(-1).time - first) / 3600) + 1000))
     : standardHistoryLimit;
   const mergeChartCandles = incoming => data.mergeCandles(candles, incoming, chartHistoryLimit());
@@ -100,7 +92,7 @@
   };
   desktopOrderBlockLabels.addEventListener('change', updateOrderBlockFont);
   byId('spotChartGapIntrusions').parentElement.title =
-    `Same-hour intrusion and gap close break in the direction of the latest earlier Purple. At most one simulated ${symbol} Spot position.`;
+    `${symbol} Green retest entries with an earlier Purple in the same direction.`;
   byId('spotChartOrderBlocks').parentElement.title = `LuxAlgo order blocks. PV = summed unique origin-candle Spot volume in ${baseAsset}, not volume inside the price zone or resting orders. #1 = largest active cluster by PV.`;
 
   function updateOrderBlocks() {
@@ -184,8 +176,6 @@
       status.dataset.stale = 'true';
     }
     updateGapFractalBreakouts();
-    updateGapIntrusionMarkers();
-    updateIntrusionDailyBreakouts();
   }
 
   function updateGapFractalBreakouts() {
@@ -216,100 +206,33 @@
       [state.levelsKey]: signal[state.levelsKey].map(level => ({ ...level })) })) } : null;
   }
 
-  function updateHistoricalReplay(overlay) {
-    if (!overlay?.layer || !overlay.data) return;
-    const purple = overlay.kind === 'purple', recorded = purple ? intrusionModel?.signals : undefined;
-    const gap = purple ? gapTimeline : undefined;
-    if (overlay.inputs?.version === closedDataVersion && overlay.inputs.recorded === recorded && overlay.inputs.gap === gap) return;
-    if (purple) {
-      try { overlay.markers = historicalReplay.loadedPurpleReplaySignals(overlay.data, candles, recorded || [], market, gap); }
-      catch { overlay.markers = []; }
-    } else overlay.markers = historicalReplay.loadedReplaySignals(overlay.data, candles, [], market);
-    overlay.layer.setData(overlay.markers);
-    overlay.inputs = { version: closedDataVersion, recorded, gap };
-    byId(`spotChart${overlay.label}ReplayStatus`).textContent =
-      purple ? `Purple replay (dashed): ${overlay.markers.length} verified box breaks on loaded candles`
-        : `${overlay.label} replay (dashed): ${overlay.markers.length}/${overlay.data.signals.length} on loaded candles`;
-  }
-
-  async function loadHistoricalReplay(overlay) {
-    if (!overlay?.layer || !historicalReplay || overlay.requested || destroyed) return;
-    overlay.requested = true;
-    const status = byId(`spotChart${overlay.label}ReplayStatus`);
-    status.hidden = false;
-    status.textContent = `${overlay.label} replay pending`;
-    try {
-      const response = await fetch(new URL(`${asset}-${overlay.kind}-replay.json`, assetBase), { signal: AbortSignal.timeout(15000) });
-      if (!response.ok) throw new Error('Historical replay unavailable');
-      const payload = await response.json();
-      if (destroyed) return;
-      overlay.data = historicalReplay.readReplay(payload, overlay.kind, symbol);
-      updateHistoricalReplay(overlay);
-    } catch {
-      if (!destroyed) {
-        overlay.requested = false;
-        status.textContent = `${overlay.label} replay unavailable`;
-      }
-    }
-  }
-
-  const greenHistory = replayOverlays.find(o => o.kind === 'green');
-  const purpleHistory = replayOverlays.find(o => o.kind === 'purple');
-  function attachHistoricalReplay(overlay) {
-    if (!overlay) return;
-    overlay.layer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(overlay.color, 1, [5, 4]);
-    overlay.layer.setVisible(byId(overlay.toggle).checked);
-    candlesSeries.attachPrimitive(overlay.layer);
-  }
-  function loadEnabledHistoricalReplays() {
-    if (purpleHistory && byId(purpleHistory.toggle).checked) void loadHistoricalReplay(purpleHistory);
-    void refreshGreenDirections();
-    refreshRetestOverlays();
-  }
-
-  function updateIntrusionDailyBreakouts() {
-    const status = byId('spotChartIntrusionDailyStatus');
-    if (!intrusionHistory || !fractalModel || !gapTimeline) {
-      updateHistoricalReplay(purpleHistory);
-      return;
-    }
-    const hour = Math.floor(Date.now() / 3_600_000), inputs = intrusionInputs;
-    try {
-      if (!inputs || inputs.history !== intrusionHistory || inputs.fractals !== fractalModel || inputs.gap !== gapTimeline ||
-          inputs.version !== closedDataVersion || inputs.hour !== hour) {
-        intrusionModel = intrusionDailyBreaks.buildPurpleLineBreakouts(analysisCandles(), intrusionHistory, gapTimeline, fractalModel, Date.now(), market);
-        intrusionLayer?.setData(intrusionModel.signals);
-        intrusionInputs = { history: intrusionHistory, fractals: fractalModel, gap: gapTimeline, version: closedDataVersion, hour };
-      }
-      const stale = intrusionReadFailed || !intrusionModel.evaluatedThrough ||
-        Date.parse(intrusionModel.evaluatedThrough) < hour * 3_600_000;
-      status.textContent = `${intrusionLabel}: ${intrusionModel.signals.length}${stale ? ' | stale' : ''}`;
-      intrusionLayer?.setDeltaRecords(deltaRecords);
-      const available = intrusionModel.signals.filter(signal => deltaRecords.get(signal.time)?.status === 'ok').length;
-      status.textContent += ` | F5m: ${available}/${intrusionModel.signals.length}`;
-      intrusionLayer?.setPocRecords(pocRecords);
-      status.textContent += ` | POC: ${intrusionModel.signals.filter(signal => pocRecords.get(signal.time)?.status === 'ok').length}/${intrusionModel.signals.length}`;
-      const loadingPoc = pocRecords.get(pocWorkingHour);
-      if (loadingPoc?.status === 'pending') status.textContent += Number.isInteger(loadingPoc.tradesRead) && loadingPoc.tradesTotal > 0
-        ? ` (loading: ${loadingPoc.tradesRead.toLocaleString('en-US')}/${loadingPoc.tradesTotal.toLocaleString('en-US')} trades)`
-        : Number.isInteger(loadingPoc.pages) ? ` (loading: ${loadingPoc.pages} pages)` : ' (queued)';
-      const unavailablePocs = intrusionModel.signals.filter(signal => pocRecords.get(signal.time)?.status === 'unavailable').length;
-      if (unavailablePocs) status.textContent += ` (${unavailablePocs} unavailable)`;
-      void refreshIntrusionDelta();
-      void refreshIntrusionPoc();
-      status.dataset.stale = String(stale);
-    } catch (error) {
-      intrusionInputs = undefined; intrusionModel = undefined; intrusionLayer?.setData([]);
-      status.textContent = `${intrusionLabel} pending: ${error.message}`;
-      status.dataset.stale = 'true';
-    }
-    updateHistoricalReplay(purpleHistory);
+  function updatePurpleAnnotations() {
+    if (!intrusionModel || !byId(purpleRetestLines.toggle).checked) return;
+    const status = byId(purpleRetestLines.status);
+    const signals = intrusionModel.signals;
+    const stale = Date.parse(intrusionModel.evaluatedThrough) < Math.floor(Date.now() / 3_600_000) * 3_600_000;
+    status.textContent = `${intrusionLabel}: ${signals.length}${stale ? ' | stale' : ''}`;
+    intrusionLayer?.setDeltaRecords(deltaRecords);
+    status.textContent += ` | F5m: ${signals.filter(signal => deltaRecords.get(signal.time)?.status === 'ok').length}/${signals.length}`;
+    intrusionLayer?.setPocRecords(pocRecords);
+    status.textContent += ` | POC: ${signals.filter(signal => pocRecords.get(signal.time)?.status === 'ok').length}/${signals.length}`;
+    const loadingPoc = pocRecords.get(pocWorkingHour);
+    if (loadingPoc?.status === 'pending') status.textContent += Number.isInteger(loadingPoc.tradesRead) && loadingPoc.tradesTotal > 0
+      ? ` (loading: ${loadingPoc.tradesRead.toLocaleString('en-US')}/${loadingPoc.tradesTotal.toLocaleString('en-US')} trades)`
+      : Number.isInteger(loadingPoc.pages) ? ` (loading: ${loadingPoc.pages} pages)` : ' (queued)';
+    const unavailablePocs = signals.filter(signal => pocRecords.get(signal.time)?.status === 'unavailable').length;
+    if (unavailablePocs) status.textContent += ` (${unavailablePocs} unavailable)`;
+    status.dataset.stale = String(stale);
+    void refreshIntrusionDelta();
+    void refreshIntrusionPoc();
   }
 
   async function refreshIntrusionDelta() {
     if (!active || destroyed || !initialData || !byId('spotChartIntrusionDailyBreaks').checked ||
       !intrusionModel || deltaPending || Date.now() - deltaLastRequestAt < 2000) return deltaPending;
-    const hours = [...new Set(intrusionModel.signals.map(signal => signal.time))].sort((a, b) => b - a).filter(hour => {
+    const range = chart?.timeScale().getVisibleRange();
+    const hours = intrusionModel.signals.filter(signal => !range || signal.time >= range.from && signal.time <= range.to)
+      .map(signal => signal.time).sort((a, b) => b - a).filter(hour => {
       const record = deltaRecords.get(hour);
       return !record || record.status !== 'ok' && Date.parse(record.retryAt) <= Date.now();
     }).slice(0, 8);
@@ -330,12 +253,12 @@
           deltaRecords.set(hour, record || { hour, status: 'unavailable', retryAt: new Date(Date.now() + 60_000).toISOString() });
         }
         while (deltaRecords.size > 5000) deltaRecords.delete(deltaRecords.keys().next().value);
-        updateIntrusionDailyBreakouts();
+        updatePurpleAnnotations();
       } catch {
         if (!destroyed && !controller.signal.aborted) {
           for (const hour of hours) if (deltaRecords.get(hour)?.status !== 'ok') deltaRecords.set(hour,
             { hour, status: 'unavailable', retryAt: new Date(Date.now() + 60_000).toISOString() });
-          updateIntrusionDailyBreakouts();
+          updatePurpleAnnotations();
         }
       } finally { clearTimeout(timeout); deltaPending = undefined; if (deltaController === controller) deltaController = undefined; }
     })();
@@ -346,7 +269,9 @@
     if (!active || destroyed || !initialData || !byId('spotChartIntrusionDailyBreaks').checked ||
         !intrusionModel || pocPending || Date.now() - pocLastRequestAt < 5000) return pocPending;
     const range = chart?.timeScale().getVisibleRange();
-    const hour = spotPoc.nextPocHour(intrusionModel.signals, pocRecords, pocWorkingHour, range);
+    const signals = intrusionModel.signals.filter(signal => !range || signal.time === pocWorkingHour ||
+      signal.time >= range.from && signal.time <= range.to);
+    const hour = spotPoc.nextPocHour(signals, pocRecords, pocWorkingHour, range);
     if (hour === undefined) return;
     pocWorkingHour = hour;
     pocLastRequestAt = Date.now(); pocController = new AbortController();
@@ -361,11 +286,11 @@
         pocRecords.set(hour, record);
         if (record.status !== 'pending') pocWorkingHour = undefined;
         while (pocRecords.size > 5000) pocRecords.delete(pocRecords.keys().next().value);
-        updateIntrusionDailyBreakouts();
+        updatePurpleAnnotations();
       } catch {
         if (!destroyed && !controller.signal.aborted) {
           pocRecords.set(hour, { hour, status: 'unavailable', retryAt: new Date(Date.now() + 60_000).toISOString() });
-          pocWorkingHour = undefined; updateIntrusionDailyBreakouts();
+          pocWorkingHour = undefined; updatePurpleAnnotations();
         }
       } finally { clearTimeout(timeout); pocPending = undefined; if (pocController === controller) pocController = undefined; }
     })();
@@ -399,79 +324,12 @@
       status.dataset.stale = 'true';
     }
   }
-  function updateGapIntrusionMarkers() {
-    if (!gapIntrusionLayer) return;
-    const fractals = hourlyBoxModel?.fractals;
-    const last = candles.at(-1)?.time;
-    const input = gapIntrusionInputs;
-    if (input?.directions === greenDirections && input?.version === closedDataVersion && input?.last === last && input?.fractals === fractals) return;
-    gapIntrusionInputs = { directions: greenDirections, version: closedDataVersion, last, fractals };
-    const closes = new Map(candles.filter(row => row.closed).map(row => [row.time, row.close]));
-    gapIntrusionMarkers = (greenDirections?.markers || []).filter(row => closes.get(row.time) === row.close);
-    const selected = greenReplay.filterGreenPositions(candles, gapIntrusionMarkers, fractals || []);
-    const cutoff = (greenDirections?.archivedThrough ?? 0) / 1000;
-    const archived = selected.filter(row => row.closedAt <= cutoff);
-    visibleGapIntrusionMarkers = selected.filter(row => row.closedAt > cutoff);
-    greenHistory.markers = archived;
-    greenHistory.layer?.setData(archived);
-    gapIntrusionLayer.setData(visibleGapIntrusionMarkers);
-    if (greenDirections) {
-      const status = byId('spotChartGreenReplayStatus');
-      const stale = greenDirections.through < Math.floor(Date.now() / 3_600_000) * 3_600_000;
-      status.textContent = `Green: ${selected.length} | t/m ${dateText(greenDirections.through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
-      status.dataset.stale = String(stale);
-    }
-  }
-
-  async function refreshGreenDirections() {
-    const toggle = byId('spotChartGapIntrusions');
-    const close = Math.floor(Date.now() / 3_600_000) * 3_600_000;
-    if (!active || !initialData || destroyed || !toggle.checked || greenDirectionsRequest || Date.now() < greenRetryAt ||
-      greenDirections?.through >= close) return;
-    const status = byId('spotChartGreenReplayStatus');
-    status.hidden = false;
-    if (greenDirections) status.dataset.stale = 'true';
-    const controller = new AbortController();
-    greenDirectionsRequest = controller;
-    const timeout = setTimeout(() => controller.abort(), 15_000);
-    try {
-      const response = await fetch(`/open-liquidity/v2/green-continuation?market=${encodeURIComponent(market)}`,
-        { signal: controller.signal, cache: 'no-store' });
-      if (!response.ok) throw new Error('Green direction unavailable');
-      const result = await response.json();
-      if (result.market !== market || !Number.isSafeInteger(result.from) || !Number.isSafeInteger(result.through) ||
-        result.from >= result.through || !Array.isArray(result.markers) || result.markers.some(row =>
-          !Number.isSafeInteger(row.time) || row.time % 3600 !== 0 || row.closedAt !== row.time + 3600 ||
-          row.closedAt * 1000 > result.through || !['long', 'short'].includes(row.direction) ||
-          !Number.isFinite(row.close) || row.close <= 0)) throw new Error('Invalid Green direction data');
-      if (destroyed || controller.signal.aborted) return;
-      greenDirections = result;
-      greenHistory.data = { first: result.from / 1000 };
-      updateGapIntrusionMarkers();
-    } catch {
-      if (!destroyed && toggle.checked && !greenDirections) {
-        status.textContent = 'Green: richtingdata nog niet beschikbaar';
-        status.dataset.stale = 'true';
-      }
-    } finally {
-      clearTimeout(timeout);
-      greenDirectionsRequest = undefined;
-      greenRetryAt = Date.now() + 30_000;
-    }
-  }
-
-  function attachAtrOverlay(overlay) {
-    overlay.layer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(overlay.color, overlay.width);
+  function attachRetestOverlay(overlay) {
+    if (!overlay.layer) overlay.layer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(overlay.color, overlay.width);
+    overlay.lossLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(overlay.layer.color, overlay.layer.lineWidth, [7, 4, 1, 4]);
     overlay.layer.setVisible(byId(overlay.toggle).checked);
-    candlesSeries.attachPrimitive(overlay.layer);
-  }
-
-  const baseRetestLineLayers = overlay => (overlay.baseLayers?.() ?? [overlay.layer]).filter(Boolean);
-
-  function attachRetestLossOverlay(overlay) {
-    const [base] = baseRetestLineLayers(overlay);
-    overlay.lossLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(base.color, base.lineWidth, [7, 4, 1, 4]);
     overlay.lossLayer.setVisible(byId(overlay.toggle).checked);
+    candlesSeries.attachPrimitive(overlay.layer);
     candlesSeries.attachPrimitive(overlay.lossLayer);
   }
 
@@ -485,53 +343,55 @@
     const controller = new AbortController();
     overlay.controller = controller;
     const timeout = setTimeout(() => controller.abort(), 15_000);
-    const status = overlay.entryMarkers ? byId(`${overlay.toggle}Status`) : null;
+    const status = byId(overlay.status);
     try {
-      const query = new URLSearchParams({ market, strategy: overlay.mode, view: overlay.entryMarkers ? 'markers' : 'loss-markers' });
+      const query = new URLSearchParams({ market, strategy: overlay.mode, view: 'trade-markers' });
       const response = await fetch(`/open-liquidity/v2/green-retest?${query}`, { signal: controller.signal, cache: 'no-store' });
       if (!response.ok) throw new Error('Retest markers temporarily unavailable');
       const result = await response.json();
-      if (result.market !== market || result.strategy !== overlay.mode || !Number.isFinite(result.through) ||
-          !Array.isArray(result.lossTimes) || result.lossTimes.some(time => !Number.isSafeInteger(time) ||
-            time <= 0 || time % 3600 !== 0 || time * 1000 >= result.through) ||
-          overlay.entryMarkers && (!Array.isArray(result.markers) || result.markers.some(marker => !Number.isSafeInteger(marker.time) ||
-            marker.time % 3600 !== 0 || !Number.isFinite(marker.ratio) || marker.ratio < 2))) throw new Error('Invalid retest markers');
+      const through = result.incompleteAt ?? result.through;
+      if (result.market !== market || result.strategy !== overlay.mode || !Number.isSafeInteger(result.from) ||
+          !Number.isSafeInteger(result.through) || !Number.isSafeInteger(through) || result.from >= through || through > result.through ||
+          !Array.isArray(result.markers) || result.markers.some((marker, i) => !Number.isSafeInteger(marker.time) ||
+            marker.time % 3600 !== 0 || marker.time * 1000 < result.from || marker.closedAt !== marker.time + 3600 ||
+            marker.closedAt * 1000 >= through ||
+            (i > 0 && result.markers[i - 1].time >= marker.time) ||
+            !['long', 'short'].includes(marker.direction) || typeof marker.loss !== 'boolean')) throw new Error('Invalid retest markers');
       if (!destroyed && !controller.signal.aborted) {
         overlay.through = result.through;
-        const times = new Set(result.lossTimes);
-        overlay.firstLoss = times.size ? Math.min(...times) : undefined;
-        // Replace only the vertical stroke; the existing Purple POC and delta labels still use the original signals.
-        for (const layer of baseRetestLineLayers(overlay)) layer.setOmittedLineTimes(times);
-        overlay.lossLayer.setData([...times].map(time => ({ time })));
-        if (status) {
-          overlay.layer.setData(result.markers);
-          status.textContent = `${overlay.label}: ${result.markers.length} | t/m ${dateText(result.through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
-          status.dataset.stale = String(result.through < Math.floor(Date.now() / 3_600_000) * 3_600_000);
+        overlay.markers = result.markers;
+        const losses = result.markers.filter(marker => marker.loss);
+        overlay.layer.setOmittedLineTimes(new Set(losses.map(marker => marker.time)));
+        overlay.layer.setData(result.markers);
+        overlay.lossLayer.setData(losses);
+        if (overlay === purpleRetestLines) {
+          intrusionModel = { symbol, market, venue: 'Binance Spot', intrusionSource: 'retest-trades',
+            evaluatedThrough: new Date(through).toISOString(), signals: result.markers };
+          updatePurpleAnnotations();
+        } else {
+          status.textContent = `${overlay.label}: ${result.markers.length} | t/m ${dateText(through / 1000, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`;
+          status.dataset.stale = String(through < Math.floor(Date.now() / 3_600_000) * 3_600_000);
         }
       }
     } catch {
-      if (status && !destroyed && byId(overlay.toggle).checked) {
-        status.textContent = `${overlay.label}: data nog niet beschikbaar`; status.dataset.stale = 'true';
+      if (!destroyed && active && byId(overlay.toggle).checked) {
+        if (!overlay.markers) status.textContent = `${overlay.label}: data nog niet beschikbaar`;
+        status.dataset.stale = 'true';
       }
     } finally {
       clearTimeout(timeout);
       overlay.controller = undefined;
-      overlay.retryAt = Date.now() + 60_000;
+      overlay.retryAt = active && byId(overlay.toggle).checked ? Date.now() + 60_000 : 0;
     }
   }
   window.addEventListener('btc-spot-chart:intrusion-history', event => {
     if (event.detail?.market !== market || event.detail.source !== 'binance-spot-recorded-intrusions') return;
     intrusionHistory = event.detail; intrusionReadFailed = false;
     updateYellows();
-    updateGapIntrusionMarkers();
-    updateIntrusionDailyBreakouts();
   });
   window.addEventListener('btc-spot-chart:intrusion-error', () => {
     intrusionReadFailed = true;
     updateYellows();
-    byId('spotChartIntrusionDailyStatus').textContent = intrusionHistory
-      ? `${intrusionLabel} stale | saved history retained` : `${intrusionLabel} unavailable`;
-    byId('spotChartIntrusionDailyStatus').dataset.stale = 'true';
   });
   window.addEventListener('btc-spot-chart:gap-timeline', (event) => { gapTimeline = event.detail; updateGapProjection(); });
   window.addEventListener('btc-spot-chart:gap-error', (event) => {
@@ -549,7 +409,6 @@
       fractalModel = fractals.projectFractals(fractalBundle, analysisCandles(), symbol);
       fractalLayer.setData(fractalModel.levels);
       updateGapFractalBreakouts();
-      updateIntrusionDailyBreakouts();
       projectionStatus(`D/W/M closed through ${dateText(Date.parse(fractalModel.evaluatedThrough) / 1000, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
       if (fitFractals) candlesSeries.applyOptions({ autoscaleInfoProvider: fractalAutoscale });
     } catch (error) {
@@ -662,7 +521,6 @@
       updateOrderBlocks();
       updateYellows();
       updateGapProjection();
-      updateIntrusionDailyBreakouts();
     }
     if (key !== fractalKey || !singleUpdate) { fractalKey = key; projectLoadedCandles(); }
     if (gestureActive && oldFirst !== candles[0]?.time) gestures?.rebase();
@@ -727,11 +585,6 @@
       candlesSeries.attachPrimitive(yellowLayer);
       yellowInputs = undefined;
       updateYellows();
-      gapIntrusionLayer = new gapWeeklyBreaks.GapWeeklyBreakoutPrimitive(gapBoxes.GAP_COLOR);
-      gapIntrusionLayer.setVisible(byId('spotChartGapIntrusions').checked);
-      attachHistoricalReplay(greenHistory);
-      candlesSeries.attachPrimitive(gapIntrusionLayer);
-      attachAtrOverlay(atrOverlays[0]);
       // Draw Weekly last so orange remains visible when both mark the same candle.
       for (const state of [...breakoutStates].reverse()) {
         state.layer = new gapWeeklyBreaks[`Gap${state.name}BreakoutPrimitive`]();
@@ -739,16 +592,12 @@
         candlesSeries.attachPrimitive(state.layer);
       }
       updateGapFractalBreakouts();
-      attachHistoricalReplay(purpleHistory);
       intrusionLayer = new intrusionDailyBreaks.IntrusionDailyBreakoutPrimitive();
+      purpleRetestLines.layer = intrusionLayer;
       intrusionLayer.setDeltaEnabled(true);
       intrusionLayer.setPocEnabled(true);
       updateOrderBlockFont();
-      intrusionLayer.setVisible(byId('spotChartIntrusionDailyBreaks').checked);
-      candlesSeries.attachPrimitive(intrusionLayer);
-      attachAtrOverlay(atrOverlays[1]);
-      for (const overlay of retestLineOverlays) attachRetestLossOverlay(overlay);
-      updateIntrusionDailyBreakouts();
+      for (const overlay of retestLineOverlays) attachRetestOverlay(overlay);
       gestures = interactions.install(chartCanvas, {
         read: () => {
           if (!initialData || destroyed) return null;
@@ -800,15 +649,13 @@
         getOrderBlockLabels: () => orderBlockLayer?.getLabels() || [],
         getBrokenOrderBlockRankLabels: () => orderBlockLayer?.getBrokenRankLabels() || [],
         getGapProjections: () => gapModel ? { ...gapModel, boxes: gapModel.boxes.map((box) => ({ ...box })) } : null,
-        getGapIntrusionMarkers: () => gapIntrusionMarkers.map(marker => ({ ...marker })),
+        getGapIntrusionMarkers: () => (greenRetestLines.markers || []).map(marker => ({ ...marker })),
         getYellowIntrusionMarkers: () => yellowMarkers.map(marker => ({ ...marker })),
-        getVisibleGapIntrusionMarkers: () => visibleGapIntrusionMarkers.map(marker => ({ ...marker })),
+        getVisibleGapIntrusionMarkers: () => byId(greenRetestLines.toggle).checked ? (greenRetestLines.markers || []).map(marker => ({ ...marker })) : [],
         getGapWeeklyBreakouts: () => breakoutSnapshot('W'),
         getGapDailyBreakouts: () => breakoutSnapshot('D'),
-        getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({
-          ...signal, gap: { ...signal.gap }, intrusion: { ...signal.intrusion }, dailyLevels: signal.dailyLevels.map(level => ({ ...level })) })) } : null,
-        getPurpleReplayMarkers: () => purpleHistory?.markers.map(marker => ({ ...marker })) || [],
-        getGreenReplayMarkers: () => greenHistory?.markers.map(marker => ({ ...marker })) || [],
+        getIntrusionDailyBreakouts: () => intrusionModel ? { ...intrusionModel, signals: intrusionModel.signals.map(signal => ({ ...signal })) } : null,
+        getRetestMarkers: (mode) => (retestLineOverlays.find(overlay => overlay.mode === mode)?.markers || []).map(marker => ({ ...marker })),
         getIntrusionDeltaLabels: () => intrusionLayer?.getDeltaLabels() || [],
         getIntrusionPocCrosses: () => intrusionLayer?.getPocCrosses() || [],
         getIntrusionSpotPoc: () => [...pocRecords.values()].map(record => ({ ...record, ...(record.poc ? { poc: { ...record.poc } } : {}) })),
@@ -826,7 +673,6 @@
         void refreshIntrusionHistory();
         void refreshIntrusionDelta();
         void refreshIntrusionPoc();
-        void refreshGreenDirections();
         refreshRetestOverlays();
         if (!lastTickAt || Date.now() - lastTickAt > 12_000) {
           if (Date.now() - lastRestAt >= 30_000) void loadRecent();
@@ -937,7 +783,6 @@
     active = inView && !document.hidden && navigator.onLine;
     if (!active) {
       deltaController?.abort(); pocController?.abort();
-      greenDirectionsRequest?.abort();
       for (const overlay of retestLineOverlays) overlay.controller?.abort();
       clearTimeout(orderBlockHistoryTimer); orderBlockHistoryTimer = undefined; gestures?.cancel(); disconnect(); feedText(); return;
     }
@@ -945,7 +790,7 @@
       await ensureChart();
       if (!active || destroyed) return;
       openStream();
-      loadEnabledHistoricalReplays();
+      refreshRetestOverlays();
       if (!initialData || Date.now() - lastRestAt > 30_000) void loadRecent();
       feedText();
       scheduleOrderBlockHistory();
@@ -953,7 +798,7 @@
   }
 
   byId('spotChartRefresh').addEventListener('click', async () => {
-    try { await ensureChart(); await loadRecent(); await refreshFractals(true); void refreshIntrusionHistory(true); loadEnabledHistoricalReplays(); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
+    try { await ensureChart(); await loadRecent(); await refreshFractals(true); void refreshIntrusionHistory(true); if (active) openStream(); } catch { /* Visible error remains retryable. */ }
   });
   for (const [id, key] of [['spotChartDaily', 'daily'], ['spotChartWeekly', 'weekly'], ['spotChartMonthly', 'monthly'], ['spotChartBroken', 'broken']]) {
     byId(id).addEventListener('change', (event) => {
@@ -987,35 +832,23 @@
     updateYellows();
     if (event.target.checked) refreshIntrusionHistory();
   });
-  byId('spotChartGapIntrusions').addEventListener('change', event => {
-    gapIntrusionLayer?.setVisible(event.target.checked);
-    greenHistory?.layer?.setVisible(event.target.checked);
-    byId('spotChartGreenReplayStatus').hidden = !event.target.checked;
-    if (event.target.checked) void refreshGreenDirections();
-    else greenDirectionsRequest?.abort();
-  });
-  for (const overlay of atrOverlays) byId(overlay.toggle).addEventListener('change', event => {
+  for (const overlay of retestLineOverlays) byId(overlay.toggle).addEventListener('change', event => {
     overlay.layer?.setVisible(event.target.checked);
-    const status = byId(`${overlay.toggle}Status`);
+    overlay.lossLayer?.setVisible(event.target.checked);
+    const status = byId(overlay.status);
     status.hidden = !event.target.checked;
     if (event.target.checked) {
       if (!status.textContent) status.textContent = `${overlay.label}: laden\u2026`;
+      void refreshRetestMarkers(overlay);
+      if (overlay === purpleRetestLines) updatePurpleAnnotations();
+    } else {
+      overlay.controller?.abort();
+      if (overlay === purpleRetestLines) { deltaController?.abort(); pocController?.abort(); }
     }
-  });
-  for (const overlay of retestLineOverlays) byId(overlay.toggle).addEventListener('change', event => {
-    overlay.lossLayer?.setVisible(event.target.checked);
-    if (event.target.checked) void refreshRetestMarkers(overlay);
-    else overlay.controller?.abort();
   });
   for (const state of breakoutStates) {
     byId(`spotChartGap${state.name}Breaks`).addEventListener('change', (event) => state.layer?.setVisible(event.target.checked));
   }
-  byId('spotChartIntrusionDailyBreaks').addEventListener('change', (event) => {
-    intrusionLayer?.setVisible(event.target.checked);
-    purpleHistory?.layer?.setVisible(event.target.checked);
-    if (event.target.checked) { void loadHistoricalReplay(purpleHistory); void refreshIntrusionHistory(); void refreshIntrusionDelta(); void refreshIntrusionPoc(); }
-    else { deltaController?.abort(); pocController?.abort(); }
-  });
   byId('spotChartManual').addEventListener('change', (event) => {
     manualLayer?.setVisible(event.target.checked);
     ensureProjectionRoom();
@@ -1080,7 +913,6 @@
   observer.observe(panel);
   window.addEventListener('pagehide', () => {
     destroyed = true;
-    greenDirectionsRequest?.abort();
     for (const overlay of retestLineOverlays) overlay.controller?.abort();
     deltaController?.abort();
     pocController?.abort();
