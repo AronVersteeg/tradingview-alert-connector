@@ -5,16 +5,33 @@ const HOUR = 3_600_000, base = Date.UTC(2026, 9, 1);
 const at = (offset: number) => base + offset * HOUR;
 const signal = (offset: number, direction: 'long' | 'short') => ({ closedAt: at(offset) / 1000, direction });
 const loss = (offset: number, direction: 'long' | 'short') =>
-  ({ signalAt: at(offset - 2), closedAt: at(offset), status: 'CLOSED', grossPnl: -2, direction });
+  ({ signalAt: at(offset - 2), openedAt: at(offset - 1), closedAt: at(offset), status: 'CLOSED', grossPnl: -2, direction });
 
 test('takes the first Purple of the same direction only when the losing exit candle has closed', () => {
   const purples = [signal(2, 'long'), signal(5, 'short'), signal(6, 'long'), signal(7, 'long'), signal(8, 'long'),
-    signal(10, 'long'), signal(11, 'short'), signal(12, 'short'), signal(13, 'long')];
-  const baseline = [loss(6, 'long'), loss(8, 'short'), loss(9, 'short'),
-    { ...loss(9, 'long'), status: 'OPEN' }, { ...loss(11, 'long'), grossPnl: 2 }];
-  const atrQualified = new Set([at(7) / 1000, at(11) / 1000]);
-  expect(atrPurplePlusSignals(purples, baseline, atrQualified)).toEqual([signal(8, 'long'), signal(12, 'short')]);
+    signal(9, 'long'), signal(13, 'long'), signal(14, 'short'), signal(15, 'short')];
+  const baseline = [loss(6, 'long'), loss(12, 'short')];
+  const atrQualified = new Set([at(7) / 1000]);
+  expect(atrPurplePlusSignals(purples, baseline, atrQualified)).toEqual([signal(8, 'long'), signal(14, 'short')]);
   expect(atrPurplePlusSignals(purples.slice(0, 3), baseline, atrQualified)).toEqual([]);
+});
+
+test.each([
+  ['opposite loss', loss(6, 'short')],
+  ['same-direction win', { ...loss(6, 'long'), grossPnl: 2 }],
+  ['new trade still open', { ...loss(6, 'long'), status: 'OPEN', closedAt: undefined }],
+  ['new exit candle still open', loss(8, 'long')]
+] as const)('does not reuse an earlier loss after a %s', (_label, newer) => {
+  expect(atrPurplePlusSignals([signal(8, 'long')], [loss(4, 'long'), newer], new Set())).toEqual([]);
+});
+
+test('BTC April 22 Long cannot use the March 4 Long loss after the March 27 Short', () => {
+  const march4 = { ...loss(1, 'long'), openedAt: Date.UTC(2026, 2, 4, 9), closedAt: Date.UTC(2026, 2, 5, 7) };
+  const march27 = { ...loss(1, 'short'), openedAt: Date.UTC(2026, 2, 27, 11), closedAt: Date.UTC(2026, 2, 30, 5) };
+  const closedAt = Date.UTC(2026, 3, 22, 14) / 1000;
+  expect(atrPurplePlusSignals([{ closedAt, direction: 'long' }], [march4, march27], new Set())).toEqual([]);
+  expect(atrPurplePlusSignals([{ closedAt, direction: 'short' }], [march4, march27], new Set()))
+    .toEqual([{ closedAt, direction: 'short' }]);
 });
 
 test.each(Object.keys(PURPLE_LINE_SETUPS) as PurpleLineMarket[])('%s ATR Purple + selects from Binance Purple only and keeps the usual trade controls', market => {

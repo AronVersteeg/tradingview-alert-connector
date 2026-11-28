@@ -242,19 +242,26 @@ export function buildGreenRetestWithHistory(history: Series | undefined, recent:
     reconstructedThrough: history?.context.through };
 }
 
-type AtrPurpleLoss = LossCandidate & { direction: Direction; closedAt?: number };
+type AtrPurpleTrade = LossCandidate & { direction: Direction; openedAt: number; closedAt?: number };
 
 export function atrPurplePlusSignals<T extends Pick<SpotSignal, 'closedAt' | 'direction'>>(
-  purples: readonly T[], atrPurpleTrades: readonly AtrPurpleLoss[], atrPurpleCloses: ReadonlySet<number>
+  purples: readonly T[], atrPurpleTrades: readonly AtrPurpleTrade[], atrPurpleCloses: ReadonlySet<number>
 ): T[] {
-  const losses = atrPurpleTrades.flatMap(trade => closedRetestLoss(trade) && trade.closedAt !== undefined
-    ? [{ knownAt: trade.closedAt + HOUR, direction: trade.direction }] : []).sort((a, b) => a.knownAt - b.knownAt);
-  const pending = new Set<Direction>();
+  const trades = [...atrPurpleTrades].sort((a, b) => a.openedAt - b.openedAt);
+  let latest: AtrPurpleTrade | undefined;
+  let consumed = false;
   let next = 0;
   // closedAt on a retest trade is the open of the exit candle; its loss is known by that candle's close.
   return [...purples].sort((a, b) => a.closedAt - b.closedAt).filter(signal => {
-    while (next < losses.length && losses[next].knownAt <= signal.closedAt * 1000) pending.add(losses[next++].direction);
-    return !atrPurpleCloses.has(signal.closedAt) && pending.delete(signal.direction);
+    const signalClose = signal.closedAt * 1000;
+    while (next < trades.length && trades[next].openedAt <= signalClose) {
+      latest = trades[next++];
+      consumed = false;
+    }
+    if (consumed || !latest || latest.direction !== signal.direction || !closedRetestLoss(latest) ||
+        latest.closedAt === undefined || latest.closedAt + HOUR > signalClose || atrPurpleCloses.has(signal.closedAt)) return false;
+    consumed = true;
+    return true;
   });
 }
 
